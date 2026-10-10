@@ -2961,9 +2961,8 @@ fn page_driver_contexts(
         .iter()
         .enumerate()
         .filter_map(|(index, page)| {
-            let file_name = page.file_name.as_deref()?;
             Some((
-                crate::connectivity::kicad::normalize_file_name(file_name),
+                crate::sheet_file("", page.file_name.as_deref()?).ok()?,
                 index,
             ))
         })

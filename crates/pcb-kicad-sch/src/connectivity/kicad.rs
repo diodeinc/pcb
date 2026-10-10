@@ -1,7 +1,4 @@
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    path::Path,
-};
+use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{Context, Result, anyhow, bail};
 use petgraph::unionfind::UnionFind;
@@ -12,7 +9,6 @@ use super::{
 };
 use crate::{
     Label, LabelKind, Point, SchDocument, SchItem, SchPage, Symbol, SymbolSlotKey,
-    identity::normalize_schematic_path,
     symbol::{self, PowerScope},
 };
 
@@ -197,7 +193,7 @@ pub(crate) fn page_instances(document: &SchDocument) -> Result<Vec<PageInstance<
         let Some(file_name) = page.file_name.as_deref() else {
             continue;
         };
-        let file_name = normalize_file_name(file_name);
+        let file_name = crate::sheet_file("", file_name)?;
         if by_file.insert(file_name.clone(), page).is_some() {
             bail!("multiple schematic pages use file name {file_name}");
         }
@@ -237,7 +233,11 @@ fn collect_page_instances<'a>(
     active_files: &mut BTreeSet<String>,
     instances: &mut Vec<PageInstance<'a>>,
 ) -> Result<()> {
-    let file_name = page.file_name.as_deref().map(normalize_file_name);
+    let file_name = page
+        .file_name
+        .as_deref()
+        .map(|name| crate::sheet_file("", name))
+        .transpose()?;
     if let Some(file_name) = &file_name
         && !active_files.insert(file_name.clone())
     {
@@ -283,13 +283,6 @@ fn collect_page_instances<'a>(
         active_files.remove(&file_name);
     }
     Ok(())
-}
-
-/// KiCad accepts Windows separators in sheet paths (SCH_SHEET::SetFileName).
-pub(crate) fn normalize_file_name(name: &str) -> String {
-    normalize_schematic_path(Path::new(&name.replace('\\', "/")))
-        .to_string_lossy()
-        .replace('\\', "/")
 }
 
 pub(crate) fn resolve_file_name(parent: &SchPage, child: &str) -> Result<String> {

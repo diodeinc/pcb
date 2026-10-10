@@ -5,7 +5,7 @@ use pcb_sexpr::Sexpr;
 use serde::{Deserialize, Serialize};
 
 pub type Id = String;
-pub type LibId = String;
+pub(crate) type LibId = String;
 
 const fn default_true() -> bool {
     true
@@ -151,7 +151,7 @@ pub struct GraphicText {
 }
 
 impl GraphicKind {
-    pub fn kicad_tag(&self) -> &'static str {
+    pub(crate) fn kicad_tag(&self) -> &'static str {
         match self {
             Self::Rectangle { .. } => "rectangle",
             Self::Polyline { .. } => "polyline",

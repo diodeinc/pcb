@@ -67,12 +67,8 @@ fn make_sheet_file_ids_unique(
     root_schematic: &Path,
     schematic_files: &[PathBuf],
 ) -> Result<()> {
-    let root = pcb_kicad_sch::normalize_schematic_path(root_schematic);
-    let mut files = schematic_files
-        .iter()
-        .map(|relative| pcb_kicad_sch::normalize_schematic_path(relative))
-        .collect::<Vec<_>>();
-    files.sort_by_key(|relative| *relative != root);
+    let mut files = schematic_files.to_vec();
+    files.sort_by_key(|relative| relative != root_schematic);
 
     let mut seen = std::collections::BTreeSet::new();
     for relative in files {
