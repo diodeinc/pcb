@@ -408,7 +408,6 @@ fn build_schematic_sheet_tree(
     netlist_components: &BTreeMap<KiCadUuidPathKey, ImportComponentData>,
     sheet_symbols: &SheetSymbols,
 ) -> ImportSheetTree {
-    let root_file = pcb_kicad_sch::normalize_schematic_path(root_schematic_rel);
     let mut all_paths: BTreeSet<KiCadSheetPath> = BTreeSet::new();
     all_paths.insert(KiCadSheetPath::root());
 
@@ -449,7 +448,7 @@ fn build_schematic_sheet_tree(
 
         let sheet_uuid = path.last_uuid().map(|s| s.to_string());
         let (sheet_name, schematic_file) = sheet_symbols
-            .resolve(&root_file, path.segments())
+            .resolve(root_schematic_rel, path.segments())
             .map(|meta| (meta.sheet_name.clone(), meta.sheet_file.clone()))
             .unwrap_or((None, None));
 

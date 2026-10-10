@@ -1081,15 +1081,19 @@ fn arrange_new_page_blocks(
     blocks: &[&PlacementBlock],
     excluded_symbol_ids: &BTreeSet<String>,
 ) -> Result<(GridPacker, GridRect, Vec<GridPoint>)> {
-    for paper in placement_paper_candidates(&page.paper) {
-        let packer = occupied_page_packer(page, &paper, excluded_symbol_ids)?;
+    let mut candidates = placement_paper_candidates(&page.paper);
+    for paper in &candidates {
+        let packer = occupied_page_packer(page, paper, excluded_symbol_ids)?;
         if let Some((bounds, offsets)) = arrange_placement_blocks(blocks, &packer)
             && packer.can_place_without_overlap(bounds)
         {
-            page.paper = paper;
+            page.paper = paper.clone();
             return Ok((packer, bounds, offsets));
         }
     }
+    page.paper = candidates
+        .pop()
+        .expect("candidates include the current paper");
     arrange_existing_page_blocks(page, blocks, excluded_symbol_ids)
 }
 
@@ -2961,9 +2965,8 @@ fn page_driver_contexts(
         .iter()
         .enumerate()
         .filter_map(|(index, page)| {
-            let file_name = page.file_name.as_deref()?;
             Some((
-                crate::connectivity::kicad::normalize_file_name(file_name),
+                crate::sheet_file("", page.file_name.as_deref()?).ok()?,
                 index,
             ))
         })
@@ -4124,15 +4127,17 @@ mod tests {
                 max_y: 2000,
             },
         );
-        for paper in [
-            Paper::default(),
-            Paper::Custom {
-                width_mm: 5.0,
-                height_mm: 5.0,
-            },
-        ] {
+        let a0 = Paper::Named {
+            name: "A0".to_string(),
+            portrait: false,
+        };
+        let custom = Paper::Custom {
+            width_mm: 5.0,
+            height_mm: 5.0,
+        };
+        for (paper, largest) in [(Paper::default(), a0), (custom.clone(), custom)] {
             let mut page = SchPage::new("overflow");
-            page.paper = paper.clone();
+            page.paper = paper;
             for new_page in [false, true] {
                 let (mut packer, bounds, offsets) = if new_page {
                     arrange_new_page_blocks(&mut page, &[&block], &BTreeSet::new())
@@ -4143,8 +4148,8 @@ mod tests {
                 let placed = bounds.translated(packer.place_anchored(bounds));
                 assert!(placed.min_x > packer.usable_bounds().max_x);
                 assert_eq!(offsets.len(), 1);
-                assert_eq!(page.paper, paper);
             }
+            assert_eq!(page.paper, largest);
         }
     }
 

@@ -15,8 +15,8 @@ pub use diagnostics::{has_unsuppressed_schematic_diagnostics, linked_schematic_d
 use serde_json::{Value, json};
 
 use pcb_kicad_sch::{
-    SchDocument, analysis::inspect_schematic, patch_page_source, reconcile::plan_reconciliation,
-    sync_sheet_placements,
+    SchDocument, analysis::inspect_schematic, off_page_warnings, patch_page_source,
+    reconcile::plan_reconciliation, sync_sheet_placements,
 };
 
 mod project;
@@ -32,6 +32,7 @@ pub struct SchematicApplyResult {
     pub schematic_files: Vec<PathBuf>,
     pub changed: bool,
     pub created: bool,
+    pub warnings: Vec<String>,
 }
 
 /// Reconcile the linked KiCad schematic project with the evaluated Zener netlist.
@@ -143,23 +144,27 @@ fn apply_existing(mut project: KicadProject, netlist: &Schematic) -> Result<Sche
             next: Some(next),
         });
     }
-    if writes.is_empty() {
-        return Ok(unchanged(project, root_schematic));
+    let changed = !writes.is_empty();
+    if changed {
+        commit_and_verify(
+            &writes,
+            &project.project_file,
+            netlist,
+            "schematic apply failed",
+        )?;
     }
-
-    commit_and_verify(
-        &writes,
-        &project.project_file,
-        netlist,
-        "schematic apply failed",
-    )?;
 
     Ok(SchematicApplyResult {
         project_file: project.project_file,
         root_schematic,
-        schematic_files: desired_paths,
-        changed: true,
+        schematic_files: if changed {
+            desired_paths
+        } else {
+            project.schematic_files
+        },
+        changed,
         created: false,
+        warnings: off_page_warnings(&desired)?,
     })
 }
 
@@ -167,16 +172,6 @@ struct PendingWrite {
     path: PathBuf,
     source: Option<String>,
     next: Option<String>,
-}
-
-fn unchanged(project: KicadProject, root_schematic: PathBuf) -> SchematicApplyResult {
-    SchematicApplyResult {
-        project_file: project.project_file,
-        root_schematic,
-        schematic_files: project.schematic_files,
-        changed: false,
-        created: false,
-    }
 }
 
 /// Write every pending file, then verify the reloaded project against the
@@ -297,6 +292,7 @@ fn initialize_project(
         schematic_files,
         changed: true,
         created: true,
+        warnings: off_page_warnings(&document)?,
     })
 }
 

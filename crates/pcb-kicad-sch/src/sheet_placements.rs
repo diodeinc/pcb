@@ -1,6 +1,4 @@
-use std::path::{Component, Path, PathBuf};
-
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -25,42 +23,6 @@ fn entries(project: &Value) -> Result<Option<Vec<Entry>>> {
         .map(Some)
 }
 
-pub(crate) fn normalized(base: &str, child: &str) -> Result<PathBuf> {
-    // KiCad accepts Windows separators (SCH_SHEET::SetFileName) and expands
-    // ${KIPRJMOD} to the project directory.
-    let child = child.replace('\\', "/");
-    let (base, child) = match child.strip_prefix("${KIPRJMOD}/") {
-        Some(rooted) => ("", rooted),
-        None => (base, child.as_str()),
-    };
-    let child = Path::new(child);
-    if child.as_os_str().is_empty() || child.is_absolute() {
-        bail!(
-            "schematic sheet path '{child}' must be relative",
-            child = child.display()
-        );
-    }
-    let mut out = PathBuf::new();
-    if let Some(parent) = Path::new(base).parent() {
-        out.push(parent);
-    }
-    out.push(child);
-    let mut clean = PathBuf::new();
-    for component in out.components() {
-        match component {
-            Component::Normal(value) => clean.push(value),
-            Component::CurDir => {}
-            Component::ParentDir => {
-                if !clean.pop() {
-                    bail!("schematic sheet path escapes project directory");
-                }
-            }
-            _ => bail!("schematic sheet path escapes project directory"),
-        }
-    }
-    Ok(clean)
-}
-
 /// Restore logical relationships retained in project metadata for one parent page.
 pub fn restore_sheet_placements(page: &mut SchPage, project: &Value) -> Result<()> {
     let Some(parent_file) = page.file_name.as_deref() else {
@@ -80,7 +42,7 @@ pub fn restore_sheet_placements(page: &mut SchPage, project: &Value) -> Result<(
         None => e.parent_file == parent_file,
     }) {
         let mut sheet = crate::kicad::parse_sheet_source(&entry.sheet)?;
-        normalized(parent_file, sheet.file_name())?;
+        crate::sheet_file(parent_file, sheet.file_name())?;
         if !existing_ids.insert(sheet.id.clone()) {
             continue;
         }

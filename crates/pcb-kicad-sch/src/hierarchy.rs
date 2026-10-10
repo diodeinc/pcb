@@ -3,11 +3,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use anyhow::{Context, Result, bail};
 use pcb_sch::InstanceRef;
 
-use crate::{
-    SchDocument, SchItem,
-    connectivity::kicad::{normalize_file_name, resolve_file_name},
-    deterministic_uuid,
-};
+use crate::{SchDocument, SchItem, connectivity::kicad::resolve_file_name, deterministic_uuid};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct LinkedModule {
@@ -37,7 +33,7 @@ impl HierarchyPlan {
         self.root_page
     }
 
-    pub fn page_for_new_component(&self, component_path: &str) -> Result<usize> {
+    pub(crate) fn page_for_new_component(&self, component_path: &str) -> Result<usize> {
         if let Some(sheet) = self
             .sheets
             .iter()
@@ -215,7 +211,8 @@ pub(crate) fn prune_obsolete_pages(
         .filter_map(|(index, page)| {
             page.file_name
                 .as_deref()
-                .map(|name| (normalize_file_name(name), index))
+                .and_then(|name| crate::sheet_file("", name).ok())
+                .map(|name| (name, index))
         })
         .collect::<BTreeMap<_, _>>();
     let mut retained = BTreeSet::new();
