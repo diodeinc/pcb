@@ -544,20 +544,25 @@ fn publish_board(zen_path: &Path, args: &PublishArgs) -> Result<()> {
     } else {
         resolve_remote(&workspace.root, args.force)?
     };
-    eprintln!("Syncing with {}...", remote.cyan());
-    if args.check || args.no_push {
-        git::fetch_tags_without_pruning(&workspace.root, &remote)?;
+    // A check reads the remote's tags, which a real publish prunes local tags to, without
+    // touching local ones.
+    let all_tags = if args.check {
+        git::list_remote_tags(&workspace.root, &remote)?
     } else {
-        git::fetch_tags(&workspace.root, &remote)?;
-        if !args.force {
-            git::fetch_branch(&workspace.root, &remote, "main")?;
-            preflight_checks(&workspace.root, &remote)?;
+        eprintln!("Syncing with {}...", remote.cyan());
+        if args.no_push {
+            git::fetch_tags_without_pruning(&workspace.root, &remote)?;
+        } else {
+            git::fetch_tags(&workspace.root, &remote)?;
+            if !args.force {
+                git::fetch_branch(&workspace.root, &remote, "main")?;
+                preflight_checks(&workspace.root, &remote)?;
+            }
         }
-    }
+        git::list_all_tags(&workspace.root).unwrap_or_default()
+    };
 
-    // Compute current version from tags (after fetch)
     let tag_prefix = tags::compute_tag_prefix(Some(&package_relative_path), workspace.path());
-    let all_tags = git::list_all_tags(&workspace.root).unwrap_or_default();
     let current = tags::find_latest_version(&all_tags, &tag_prefix);
 
     // Resolve bump type (interactive prompt if --bump was passed without a value)
