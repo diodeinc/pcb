@@ -339,6 +339,8 @@ fn test_release_check_reports_bumped_version() {
     sb.cmd("git", ["push", "-q", "origin", "main", "--tags"])
         .run()
         .unwrap();
+    // A local-only tag is pruned by a real publish, so the check ignores it.
+    sb.tag("boards/v9.0.0");
 
     let output = sb
         .run(
@@ -351,7 +353,10 @@ fn test_release_check_reports_bumped_version() {
         .unwrap();
     let report: Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(report["version"], "v0.4.0");
-    assert_eq!(sb.cmd("git", ["tag"]).read().unwrap(), "boards/v0.3.0");
+    assert_eq!(
+        sb.cmd("git", ["tag"]).read().unwrap(),
+        "boards/v0.3.0\nboards/v9.0.0"
+    );
 }
 
 #[test]
