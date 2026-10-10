@@ -43,13 +43,14 @@ pub(crate) fn reconcile_document(
     issue_selection: Option<&BTreeSet<SchematicIssueKey>>,
     placement_page_id: Option<&str>,
     inspection_before: Option<&ConnectivityInspection>,
-) -> Result<(SchDocument, ConnectivityInspection)> {
+) -> Result<(SchDocument, ConnectivityInspection, Vec<String>)> {
     if issue_selection.is_some_and(BTreeSet::is_empty) {
         let document =
             existing.context("repairing selected issues requires an existing document")?;
         return Ok((
             document.clone(),
             crate::analysis::inspect_schematic(document, netlist)?,
+            Vec::new(),
         ));
     }
     let complete = issue_selection.is_none();
@@ -228,7 +229,7 @@ pub(crate) fn reconcile_document(
     }
 
     let mut placed = placed_symbols_from_document(&document, &expected_slots)?;
-    pack_generated_symbols(
+    let warnings = pack_generated_symbols(
         &mut document,
         netlist,
         &mut placed,
@@ -350,7 +351,7 @@ pub(crate) fn reconcile_document(
             issue_summaries(inspection.analysis.issues().iter())
         );
     }
-    Ok((document, inspection))
+    Ok((document, inspection, warnings))
 }
 
 fn is_connectivity_issue(issue: &SchematicIssue) -> bool {
@@ -992,9 +993,9 @@ fn pack_generated_symbols(
     relocatable_slots: &BTreeSet<SymbolSlotKey>,
     net_symbol_specs: &BTreeMap<String, net_symbols::NetSymbolSpec>,
     preserved_page_count: usize,
-) -> Result<()> {
+) -> Result<Vec<String>> {
     if relocatable_slots.is_empty() {
-        return Ok(());
+        return Ok(Vec::new());
     }
     let all_nets = named_connected_nets(netlist)
         .map(|net| net.name.clone())
@@ -1025,6 +1026,7 @@ fn pack_generated_symbols(
         &bounds_by_slot,
     )?;
 
+    let mut warnings = Vec::new();
     for page_index in 0..document.pages.len() {
         let relocatable = relocatable_slots
             .iter()
@@ -1044,8 +1046,8 @@ fn pack_generated_symbols(
             .collect::<Vec<_>>();
         // Fit and placement share one occupancy: the title block, hierarchy
         // sheets, and preserved items with known bounds. A new page grows up
-        // to the largest paper or fails; on an existing page, placement that
-        // does not fit spills outside it rather than covering that work.
+        // to the largest paper; placement that still does not fit spills
+        // outside the page rather than covering that work, with a warning.
         let relocatable_ids = relocatable
             .iter()
             .map(|slot| slot.symbol_id())
@@ -1063,6 +1065,11 @@ fn pack_generated_symbols(
                 &relocatable_ids,
             )?
         };
+        warnings.extend(placement_overflow_warning(
+            &document.pages[page_index],
+            &packer,
+            grid_bounds,
+        ));
         let grid_origin = packer.place_anchored(grid_bounds);
         for (block, block_offset) in page_blocks.into_iter().zip(block_offsets) {
             let block_origin = grid_origin.translated(block_offset);
@@ -1074,7 +1081,7 @@ fn pack_generated_symbols(
     }
 
     add_capacitor_bank_wires(document, netlist, placed, &blocks)?;
-    Ok(())
+    Ok(warnings)
 }
 
 fn arrange_new_page_blocks(
@@ -1082,35 +1089,45 @@ fn arrange_new_page_blocks(
     blocks: &[&PlacementBlock],
     excluded_symbol_ids: &BTreeSet<String>,
 ) -> Result<(GridPacker, GridRect, Vec<GridPoint>)> {
-    let mut content = None;
+    // The smallest paper that fits, else the largest.
+    let mut arranged = None;
     for paper in placement_paper_candidates(&page.paper) {
         let packer = occupied_page_packer(page, &paper, excluded_symbol_ids)?;
         let (bounds, offsets) =
             arrange_placement_blocks(blocks, &packer).expect("a generated cohort has blocks");
-        if packer.can_place_without_overlap(bounds) {
-            page.paper = paper;
-            return Ok((packer, bounds, offsets));
+        let fits = packer.can_place_without_overlap(bounds);
+        arranged = Some((paper, packer, bounds, offsets));
+        if fits {
+            break;
         }
-        content = Some((paper, bounds));
     }
-    let (largest, bounds) = content.expect("paper candidates include the current paper");
-    bail!(
-        "schematic sheet '{}' needs {:.0}×{:.0} mm for its generated content, which does not fit on {}",
-        page.file_name.as_deref().unwrap_or(page.id.as_str()),
-        f64::from(bounds.width()) * CONNECTION_GRID_MM,
-        f64::from(bounds.height()) * CONNECTION_GRID_MM,
-        paper_name(&largest),
-    )
+    let (paper, packer, bounds, offsets) =
+        arranged.expect("paper candidates include the current paper");
+    page.paper = paper;
+    Ok((packer, bounds, offsets))
 }
 
-fn paper_name(paper: &Paper) -> String {
-    match paper {
+fn placement_overflow_warning(
+    page: &SchPage,
+    packer: &GridPacker,
+    bounds: GridRect,
+) -> Option<String> {
+    if packer.can_place_without_overlap(bounds) {
+        return None;
+    }
+    let paper = match &page.paper {
         Paper::Named { name, .. } => name.clone(),
         Paper::Custom {
             width_mm,
             height_mm,
-        } => format!("the {width_mm:.0}×{height_mm:.0} mm page"),
-    }
+        } => format!("a {width_mm:.0}×{height_mm:.0} mm page"),
+    };
+    Some(format!(
+        "schematic sheet '{}': generated symbols need {:.0}×{:.0} mm and do not fit on {paper}; they are placed outside the page",
+        page.file_name.as_deref().unwrap_or(page.id.as_str()),
+        f64::from(bounds.width()) * CONNECTION_GRID_MM,
+        f64::from(bounds.height()) * CONNECTION_GRID_MM,
+    ))
 }
 
 fn arrange_existing_page_blocks(
@@ -3950,27 +3967,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn new_page_larger_than_a0_fails() {
-        let block = test_placement_block(
-            "huge",
-            GridRect {
-                min_x: 0,
-                min_y: 0,
-                max_x: 1000,
-                max_y: 100,
-            },
-        );
-        let mut page = SchPage::new("huge-page");
-        let error = arrange_new_page_blocks(&mut page, &[&block], &BTreeSet::new())
-            .err()
-            .unwrap();
-        assert_eq!(
-            error.to_string(),
-            "schematic sheet 'huge-page' needs 1270×127 mm for its generated content, which does not fit on A0"
-        );
-    }
-
     /// A hierarchy sheet covering most of an A4 page, as a page keeps
     /// between incremental applies.
     fn test_page_with_sheet(id: &str) -> SchPage {
@@ -4155,7 +4151,7 @@ mod tests {
     }
 
     #[test]
-    fn oversized_batches_spill_outside_existing_pages() {
+    fn oversized_batches_spill_outside_new_and_existing_pages() {
         let block = test_placement_block(
             "oversized",
             GridRect {
@@ -4165,20 +4161,31 @@ mod tests {
                 max_y: 2000,
             },
         );
-        for paper in [
-            Paper::default(),
-            Paper::Custom {
-                width_mm: 5.0,
-                height_mm: 5.0,
-            },
-        ] {
+        let a0 = Paper::Named {
+            name: "A0".to_string(),
+            portrait: false,
+        };
+        let custom = Paper::Custom {
+            width_mm: 5.0,
+            height_mm: 5.0,
+        };
+        for (paper, largest) in [(Paper::default(), a0), (custom.clone(), custom)] {
             let mut page = SchPage::new("overflow");
-            page.paper = paper;
-            let (mut packer, bounds, offsets) =
-                arrange_existing_page_blocks(&page, &[&block], &BTreeSet::new()).unwrap();
-            let placed = bounds.translated(packer.place_anchored(bounds));
-            assert!(placed.min_x > packer.usable_bounds().max_x);
-            assert_eq!(offsets.len(), 1);
+            page.paper = paper.clone();
+            for new_page in [false, true] {
+                let (mut packer, bounds, offsets) = if new_page {
+                    arrange_new_page_blocks(&mut page, &[&block], &BTreeSet::new())
+                } else {
+                    arrange_existing_page_blocks(&page, &[&block], &BTreeSet::new())
+                }
+                .unwrap();
+                let warning = placement_overflow_warning(&page, &packer, bounds).unwrap();
+                assert!(warning.starts_with("schematic sheet 'overflow': generated symbols need "));
+                let placed = bounds.translated(packer.place_anchored(bounds));
+                assert!(placed.min_x > packer.usable_bounds().max_x);
+                assert_eq!(offsets.len(), 1);
+            }
+            assert_eq!(page.paper, largest);
         }
     }
 

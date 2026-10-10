@@ -32,6 +32,7 @@ pub struct SchematicApplyResult {
     pub schematic_files: Vec<PathBuf>,
     pub changed: bool,
     pub created: bool,
+    pub warnings: Vec<String>,
 }
 
 /// Reconcile the linked KiCad schematic project with the evaluated Zener netlist.
@@ -160,6 +161,7 @@ fn apply_existing(mut project: KicadProject, netlist: &Schematic) -> Result<Sche
         schematic_files: desired_paths,
         changed: true,
         created: false,
+        warnings: plan.warnings().to_vec(),
     })
 }
 
@@ -176,6 +178,7 @@ fn unchanged(project: KicadProject, root_schematic: PathBuf) -> SchematicApplyRe
         schematic_files: project.schematic_files,
         changed: false,
         created: false,
+        warnings: Vec::new(),
     }
 }
 
@@ -297,6 +300,7 @@ fn initialize_project(
         schematic_files,
         changed: true,
         created: true,
+        warnings: plan.warnings().to_vec(),
     })
 }
 

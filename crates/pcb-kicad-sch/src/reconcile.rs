@@ -42,6 +42,7 @@ pub struct ReconciliationPlan {
     edits: Vec<DocumentEdit>,
     initial_inspection: InitialInspection,
     inspection_after: ConnectivityInspection,
+    warnings: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -62,6 +63,12 @@ impl ReconciliationPlan {
 
     pub fn inspection_after(&self) -> &ConnectivityInspection {
         &self.inspection_after
+    }
+
+    /// Placement problems the plan works around, such as symbols that do not
+    /// fit on their page.
+    pub fn warnings(&self) -> &[String] {
+        &self.warnings
     }
 
     pub fn is_empty(&self) -> bool {
@@ -214,14 +221,15 @@ pub fn reconcile_read_only(
 ) -> Result<(SchDocument, ConnectivityInspection)> {
     component_slots::validate_symbol_library_versions(netlist)?;
     let inspection = inspect_schematic(document, netlist).ok();
-    compose::reconcile_document(
+    let (document, inspection, _) = compose::reconcile_document(
         Some(document),
         netlist,
         None,
         None,
         None,
         inspection.as_ref(),
-    )
+    )?;
+    Ok((document, inspection))
 }
 
 /// Refresh assembly properties owned by the Zener netlist without changing
@@ -325,7 +333,7 @@ fn build_plan(
         InitialInspection::Available(inspection) => Some(inspection),
         InitialInspection::NoDocument | InitialInspection::Invalid { .. } => None,
     };
-    let (desired, inspection_after) = compose::reconcile_document(
+    let (desired, inspection_after, warnings) = compose::reconcile_document(
         document,
         netlist,
         root_file_name,
@@ -343,6 +351,7 @@ fn build_plan(
         edits: document_edits(document.unwrap_or(&SchDocument::default()), &desired)?,
         initial_inspection,
         inspection_after,
+        warnings,
     })
 }
 
