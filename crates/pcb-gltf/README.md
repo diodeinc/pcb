@@ -7,8 +7,9 @@ KiCad or OCCT. It backs `pcb gltf export`:
 pcb gltf export board.kicad_pcb -o board.glb
 ```
 
-It takes the same arguments as `pcb step export`, as `kicad-cli pcb export
-glb` takes those of `kicad-cli pcb export step`, and exports the same
+It takes the arguments of `pcb step export`, as `kicad-cli pcb export glb`
+takes those of `kicad-cli pcb export step`, except the copper flags: outer
+copper is always exported, as KiCad's VRML export does. It exports the same
 assembly: the board side comes from `pcb-step`'s scene, and every embedded
 STEP model is tessellated with [foxtrot](https://github.com/diodeinc/foxtrot).
 Models come from the board's embedded files; nothing is looked up on disk.
@@ -24,7 +25,8 @@ Models come from the board's embedded files; nothing is looked up on disk.
   arcs and round holes within 0.01 mm, and curved walls carry the
   exact normal of the arc or cylinder they lie on. Copper is flat, as in
   KiCad's VRML export: its top and bottom faces without walls, less the
-  faces resting on the body and copper inside it.
+  faces resting on the body and copper inside it. Every layer but the body
+  is flat, so it is written without normals and loaders shade it flat.
 - **Models**: one mesh per distinct embedded payload, with a primitive per
   STEP colour, drawn for every footprint that uses it with
   `EXT_mesh_gpu_instancing`; the node's `extras.references` lists the

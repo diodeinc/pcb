@@ -137,12 +137,14 @@ struct Encoded {
     positions: Vec<u8>,
     /// Grid bounds of the positions.
     bounds: [[u16; 3]; 2],
-    normals: Vec<u8>,
+    normals: Option<Vec<u8>>,
     indices: Vec<u8>,
     index_count: usize,
 }
 
-fn encode(primitive: &Primitive, grid: Grid) -> Encoded {
+/// Encode `primitive`, with its normals unless it is flat: loaders shade a
+/// primitive without normals flat, which is exact for planar faces.
+fn encode(primitive: &Primitive, grid: Grid, flat: bool) -> Encoded {
     let positions: Vec<[u16; 4]> = primitive
         .positions
         .iter()
@@ -163,13 +165,16 @@ fn encode(primitive: &Primitive, grid: Grid) -> Encoded {
     // Normals take the octahedral filter: two 8-bit components that the
     // decoder expands back to a unit vector, which compress better than
     // three independent ones.
-    let unit: Vec<[f32; 4]> = primitive
-        .normals
-        .iter()
-        .map(|&[x, y, z]| [x, y, z, 0.0])
-        .collect();
-    let mut normals = vec![[0u8; 4]; unit.len()];
-    encode_filter_oct_8(normals.iter_mut(), 8, unit.iter());
+    let normals = (!flat).then(|| {
+        let unit: Vec<[f32; 4]> = primitive
+            .normals
+            .iter()
+            .map(|&[x, y, z]| [x, y, z, 0.0])
+            .collect();
+        let mut normals = vec![[0u8; 4]; unit.len()];
+        encode_filter_oct_8(normals.iter_mut(), 8, unit.iter());
+        encode_vertices(&normals)
+    });
     let mut indices = vec![0; encode_index_buffer_bound(primitive.indices.len(), positions.len())];
     let size = encode_index_buffer(&mut indices, &primitive.indices, IndexEncodingVersion::V1)
         .expect("buffer is at the bound");
@@ -178,7 +183,7 @@ fn encode(primitive: &Primitive, grid: Grid) -> Encoded {
         vertices: positions.len(),
         positions: encode_vertices(&positions),
         bounds,
-        normals: encode_vertices(&normals),
+        normals,
         indices,
         index_count: primitive.indices.len(),
     }
@@ -289,21 +294,24 @@ impl Gltf {
             "min": encoded.bounds[0],
             "max": encoded.bounds[1],
         }));
-        let view = self.compressed_view(
-            &encoded.normals,
-            4,
-            encoded.vertices,
-            "ATTRIBUTES",
-            Some("OCTAHEDRAL"),
-            ARRAY_BUFFER,
-        );
-        let normal = self.accessor(json!({
-            "bufferView": view,
-            "componentType": BYTE,
-            "normalized": true,
-            "count": encoded.vertices,
-            "type": "VEC3",
-        }));
+        let mut attributes = json!({ "POSITION": position });
+        if let Some(normals) = &encoded.normals {
+            let view = self.compressed_view(
+                normals,
+                4,
+                encoded.vertices,
+                "ATTRIBUTES",
+                Some("OCTAHEDRAL"),
+                ARRAY_BUFFER,
+            );
+            attributes["NORMAL"] = json!(self.accessor(json!({
+                "bufferView": view,
+                "componentType": BYTE,
+                "normalized": true,
+                "count": encoded.vertices,
+                "type": "VEC3",
+            })));
+        }
         // The largest index value is reserved for primitive restart.
         let (stride, component) = if encoded.vertices <= u16::MAX as usize {
             (2, UNSIGNED_SHORT)
@@ -332,7 +340,7 @@ impl Gltf {
             }
         };
         json!({
-            "attributes": { "POSITION": position, "NORMAL": normal },
+            "attributes": attributes,
             "indices": indices,
             "material": material,
         })
@@ -364,18 +372,24 @@ pub(crate) fn write(
         .collect();
 
     // Quantize and compress every primitive in parallel, in output order.
-    let jobs: Vec<(&Primitive, Grid)> = board
+    // Every board layer but the body is flat.
+    let jobs: Vec<(&Primitive, Grid, bool)> = board
         .iter()
-        .map(|(_, p)| (*p, board_grid))
+        .map(|(layer, p)| (*p, board_grid, layer.kind != LayerKind::Body))
         .chain(
             models
                 .meshes
                 .iter()
                 .zip(&model_grids)
-                .flat_map(|(mesh, grid)| mesh.primitives.iter().map(move |(_, p)| (p, *grid))),
+                .flat_map(|(mesh, grid)| {
+                    mesh.primitives.iter().map(move |(_, p)| (p, *grid, false))
+                }),
         )
         .collect();
-    let encoded: Vec<Encoded> = jobs.par_iter().map(|(p, grid)| encode(p, *grid)).collect();
+    let encoded: Vec<Encoded> = jobs
+        .par_iter()
+        .map(|(p, grid, flat)| encode(p, *grid, *flat))
+        .collect();
     let mut encoded = encoded.iter();
 
     let mut gltf = Gltf::default();
