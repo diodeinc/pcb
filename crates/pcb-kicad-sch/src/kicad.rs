@@ -16,8 +16,8 @@ use crate::model::{
 };
 
 pub const KICAD_SCH_VERSION: i64 = 20260306;
-pub const GENERATOR: &str = "diode";
-pub const GENERATOR_VERSION: &str = env!("CARGO_PKG_VERSION");
+pub(crate) const GENERATOR: &str = "diode";
+pub(crate) const GENERATOR_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 impl SchDocument {
     pub fn from_kicad_sch(content: &str) -> Result<Self> {
@@ -50,13 +50,6 @@ impl SymbolDefinition {
             )
         })?;
         Ok(definition)
-    }
-
-    pub fn to_kicad_symbol_library_sexpr(&self) -> String {
-        format!(
-            "(kicad_symbol_lib {})",
-            format_tree(&self.sexpr, FormatMode::Normal).trim()
-        )
     }
 
     /// Rename the library/cache key and unit-section prefixes, preserving all content.
@@ -2376,14 +2369,6 @@ mod tests {
         .expect("parse symbol definition");
 
         assert_eq!(definition.lib_id, "Device:C");
-        let reparsed = parse(&definition.to_kicad_symbol_library_sexpr()).expect("reparse wrapper");
-        assert_eq!(
-            reparsed
-                .as_list()
-                .and_then(|items| items.first())
-                .and_then(Sexpr::as_sym),
-            Some("kicad_symbol_lib")
-        );
     }
 
     #[test]

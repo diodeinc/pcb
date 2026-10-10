@@ -33,8 +33,8 @@ mod compose;
 pub use analysis::NoConnectTarget;
 pub use field_autoplace::Bounds;
 pub use identity::{
-    KiCadUuidPath, ROOT_PAGE_KEY, SymbolSlotKey, UUID_NAMESPACE_URL, canonical_component_path,
-    deterministic_page_id, deterministic_uuid, normalize_schematic_path, root_page_id,
+    KiCadUuidPath, SymbolSlotKey, UUID_NAMESPACE_URL, canonical_component_path, deterministic_uuid,
+    normalize_schematic_path, root_page_id,
 };
 pub use kicad::parse_kicad_sch_page;
 pub use model::{
@@ -44,6 +44,7 @@ pub use model::{
     SymbolField, SymbolInstance, SymbolLibrary, TextEffects, TextSize, Wire,
 };
 pub use net_symbols::NetSymbolSpec;
+pub use placement::off_page_warnings;
 pub use project::{LoadedProject, load_project, project_root_schematics, sheet_file};
 pub use repair::{
     ConnectivityRepairIntent, NetDriverKind, plan_connectivity_repair, verify_connectivity_repair,
