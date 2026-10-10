@@ -23,6 +23,8 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - `moved()` is deprecated and warns on each use (`deprecated.moved`); it still works for now.
 - `pcb publish` checks BOM supplier offers only with `--bump`; local builds and `--check` no longer contact the BOM API.
 - `pcb import` rejects projects with more than one top-level sheet instead of importing only one of them.
+- `pcb publish` lists each diagnostic that blocks it with its file, severity, kind and message, and says when local main is off `main`, behind, ahead of or diverged from the remote.
+- `pcb publish` explains that a missing workspace name comes from `[workspace].name` in pcb.toml.
 
 ### Fixed
 

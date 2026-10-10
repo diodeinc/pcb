@@ -16,6 +16,7 @@ use petgraph::Direction;
 use petgraph::graph::{DiGraph, NodeIndex};
 use rayon::prelude::*;
 use semver::Version;
+use starlark::errors::EvalSeverity;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::env;
 use std::fmt;
@@ -1055,6 +1056,7 @@ fn build_workspace(
     let eval_state = crate::build::BuildEvalState::new(resolution);
     let mut has_errors = false;
     let mut has_warnings = false;
+    let mut blockers = Vec::new();
     for zen_path in &zen_files {
         let file_name = zen_path.file_name().unwrap().to_string_lossy();
         let result = eval_state.build(
@@ -1065,18 +1067,55 @@ fn build_workspace(
             &mut has_errors,
             &mut has_warnings,
         );
-        if pcbc::kicad_schematic::has_unsuppressed_schematic_diagnostics(&result.diagnostics) {
-            has_errors = true;
-        }
+        blockers.extend(publish_blockers(&result.diagnostics, &workspace.root));
         if let Some(schematic) = result.schematic {
             crate::build::print_build_success(&file_name, &schematic);
         }
     }
 
-    if has_errors {
-        bail!("Build failed. Fix errors before publishing.");
+    if !blockers.is_empty() {
+        bail!(
+            "Publish blocked by {} diagnostic(s):\n{}\n\n\
+             Errors and linked KiCad schematic (sch.*) diagnostics of any severity block publishing.",
+            blockers.len(),
+            blockers.join("\n")
+        );
     }
     Ok(())
+}
+
+/// One line per unsuppressed error or `sch.*` diagnostic: location, severity, kind and message.
+fn publish_blockers(diagnostics: &pcb_zen_core::Diagnostics, root: &Path) -> Vec<String> {
+    let root = format!("{}/", root.display());
+    diagnostics
+        .iter()
+        .filter(|diagnostic| !diagnostic.suppressed)
+        .map(|diagnostic| {
+            (
+                diagnostic.severity,
+                pcb_zen_core::diagnostics::DiagnosticReport::from_diagnostic(diagnostic),
+            )
+        })
+        .filter(|(severity, report)| {
+            *severity == EvalSeverity::Error
+                || report
+                    .kind
+                    .as_deref()
+                    .is_some_and(|kind| kind == "sch" || kind.starts_with("sch."))
+        })
+        .map(|(severity, report)| {
+            format!(
+                "  {}: {} {}: {}",
+                report
+                    .location
+                    .strip_prefix(&root)
+                    .unwrap_or(&report.location),
+                severity.to_string().to_lowercase(),
+                report.kind.as_deref().unwrap_or("unknown"),
+                report.body
+            )
+        })
+        .collect()
 }
 
 fn resolve_remote(repo_root: &Path, force: bool) -> Result<String> {
@@ -1084,7 +1123,7 @@ fn resolve_remote(repo_root: &Path, force: bool) -> Result<String> {
         anyhow::anyhow!("Not on a branch (detached HEAD state). Switch to main before publishing.")
     })?;
     if !force && branch != "main" {
-        bail!("Must be on 'main' branch to publish.");
+        bail!("On branch '{branch}'. Publishing runs only from 'main'; switch to main first.");
     }
     git::get_branch_remote(repo_root, &branch).ok_or_else(|| {
         anyhow::anyhow!(
@@ -1130,12 +1169,18 @@ fn preflight_checks(repo_root: &Path, remote: &str) -> Result<()> {
         .ok_or_else(|| anyhow::anyhow!("Failed to resolve {}", remote_ref))?;
 
     if local_sha != remote_sha {
-        bail!(
-            "Local main ({}) is out of sync with {}/main ({}).\nPull or push changes before publishing.",
-            &local_sha[..8],
-            remote,
-            &remote_sha[..8]
-        );
+        let range = format!("HEAD...{remote_ref}");
+        let counts = git::run_output(repo_root, &["rev-list", "--left-right", "--count", &range])?;
+        let state = match counts.split_whitespace().collect::<Vec<_>>()[..] {
+            ["0", behind] => {
+                format!("{behind} commit(s) behind {remote_ref}. Pull before publishing.")
+            }
+            [ahead, "0"] => {
+                format!("{ahead} commit(s) ahead of {remote_ref}. Push before publishing.")
+            }
+            _ => format!("diverged from {remote_ref}. Reconcile before publishing."),
+        };
+        bail!("Local main ({}) is {state}", &local_sha[..8]);
     }
 
     println!("{} on main @ {}", "✓".green(), &local_sha[..8]);
@@ -1583,6 +1628,26 @@ P1 = io(Net)
         assert_eq!(
             resolve_fetch_remote(&sb.root_path().join("src")).unwrap(),
             "origin"
+        );
+    }
+
+    #[test]
+    fn preflight_reports_main_behind_remote() {
+        let mut sb = Sandbox::new();
+        setup_publish_workspace(&mut sb, &[]);
+        sb.write("notes.txt", "x").commit("chore: notes");
+        for args in [
+            ["update-ref", "refs/remotes/origin/main", "HEAD"],
+            ["reset", "--hard", "HEAD~1"],
+        ] {
+            sb.cwd("src").cmd("git", args).stdout_null().run().unwrap();
+        }
+
+        let error = preflight_checks(&sb.root_path().join("src"), "origin").unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .ends_with("is 1 commit(s) behind origin/main. Pull before publishing.")
         );
     }
 

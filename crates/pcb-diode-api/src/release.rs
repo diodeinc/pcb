@@ -122,7 +122,10 @@ fn create_release(
         StatusCode::NOT_FOUND if msg.contains("artifact") => {
             "Staged artifact not found. The upload may have expired.".into()
         }
-        StatusCode::NOT_FOUND => format!("Workspace '{workspace}' not found"),
+        StatusCode::NOT_FOUND => format!(
+            "Workspace '{workspace}' not found. The name comes from [workspace].name in pcb.toml \
+             (or the owner in [workspace].repository)."
+        ),
         StatusCode::CONFLICT => "Release version already exists".into(),
         StatusCode::BAD_REQUEST if msg.contains("metadata.json") => {
             "Invalid release archive: missing or malformed metadata.json".into()
