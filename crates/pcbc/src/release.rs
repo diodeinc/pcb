@@ -704,14 +704,16 @@ fn run_release_preflight(
     )?;
 
     if let Some(layout) = &info.layout {
+        stages.layout = StageStatus::Failed;
         ensure_board_compatible_with_installed_kicad(
             &layout_utils::KiCadLayoutFiles {
                 kicad_pro: info.workspace_root().join(&layout.kicad_pro_rel),
             }
             .kicad_pcb(),
         )?;
-        if !options.exclude.contains(&ArtifactType::Drc) {
-            stages.layout = StageStatus::Failed;
+        if options.exclude.contains(&ArtifactType::Drc) {
+            stages.layout = StageStatus::Skipped;
+        } else {
             execute_task(
                 info,
                 "Running KiCad DRC checks",
