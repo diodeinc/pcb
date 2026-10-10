@@ -177,6 +177,7 @@ pub fn transform_board_instance_footprint_to_standalone(
                 has_fp_text = true;
                 children.push(deinstance_node(child, &pose, DeinstanceCtx::default())?);
             }
+            "embedded_files" => children.push(inline_embedded_files(list, board_items)),
             _ => children.push(deinstance_node(child, &pose, DeinstanceCtx::default())?),
         }
     }
@@ -195,6 +196,31 @@ pub fn transform_board_instance_footprint_to_standalone(
     out_items.extend(children);
 
     Ok(Sexpr::list(out_items).to_string())
+}
+
+/// A board stores every footprint's embedded blobs in its own `(embedded_files ...)`;
+/// the placed footprint only lists data-less `(file (name ...) (checksum ...))` stubs.
+/// Swap each stub for the board's full entry so the standalone footprint is self-contained.
+fn inline_embedded_files(stubs: &[Sexpr], board_items: &[Sexpr]) -> Sexpr {
+    fn file_name(file: &Sexpr) -> Option<&str> {
+        file.find_list("name")?.get(1)?.as_atom()
+    }
+    let board_files = direct_child(board_items, "embedded_files")
+        .and_then(Sexpr::as_list)
+        .unwrap_or_default();
+    Sexpr::list(
+        stubs
+            .iter()
+            .map(|stub| {
+                let name = file_name(stub);
+                board_files
+                    .iter()
+                    .find(|file| name.is_some() && file_name(file) == name)
+                    .unwrap_or(stub)
+                    .clone()
+            })
+            .collect(),
+    )
 }
 
 /// Convert a KiCad footprint identifier like `lib:fpname` to the footprint name `fpname`.
@@ -1560,5 +1586,46 @@ mod tests {
 
         assert!((x - (-3.22001)).abs() < 1e-5);
         assert!((y - 5.72989).abs() < 1e-5);
+    }
+
+    #[test]
+    fn standalone_footprint_inlines_embedded_files_from_board() {
+        // KiCad writes a placed footprint's embedded files as data-less stubs and keeps
+        // the blobs in the board-level block. The standalone footprint must carry the data.
+        let input = r#"(kicad_pcb (version 20241229) (generator "pcbnew")
+            (footprint "Lib:Part" (layer "F.Cu") (at 10 20)
+                (embedded_files
+                    (file (name part.step) (type model) (checksum "sha-part"))
+                    (file (name "orphan name.step") (type model) (checksum "sha-orphan"))
+                )
+                (model "kicad-embed://part.step" (offset (xyz 0 0 0)))
+            )
+            (embedded_files
+                (file (name part.step) (type model) (data |KLUv/QBYhQAA|) (checksum "sha-part"))
+                (file (name other.step) (type model) (data |AAAA|) (checksum "sha-other"))
+            )
+        )"#;
+        let board = parse(input).unwrap();
+        let fp = direct_child(board.as_list().unwrap(), "footprint").unwrap();
+        let out = transform_board_instance_footprint_to_standalone(
+            &input[fp.span.start..fp.span.end],
+            &board,
+        )
+        .unwrap();
+
+        let out = parse(&out).unwrap();
+        let expected = parse(
+            r#"(embedded_files
+                (file (name part.step) (type model) (data |KLUv/QBYhQAA|) (checksum "sha-part"))
+                (file (name "orphan name.step") (type model) (checksum "sha-orphan"))
+            )"#,
+        )
+        .unwrap();
+        assert_eq!(out.find_list("embedded_files"), expected.as_list());
+        assert_eq!(
+            out.find_list("model")
+                .and_then(|model| model.get(1)?.as_str()),
+            Some("kicad-embed://part.step")
+        );
     }
 }
