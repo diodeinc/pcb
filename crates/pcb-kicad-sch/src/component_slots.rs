@@ -5,10 +5,7 @@ use pcb_sch::{
     ATTR_SYMBOL_FORMAT_VERSION, AttributeValue, Instance, InstanceKind, InstanceRef, Schematic,
 };
 
-use crate::{
-    SchDocument, SchItem, Symbol, SymbolDefinition, SymbolSlotKey, canonical_component_path,
-    connectivity::kicad::page_instances, symbol,
-};
+use crate::{Symbol, SymbolDefinition, SymbolSlotKey, canonical_component_path, symbol};
 
 pub(crate) const SYMBOL_VALUE_ATTR: &str = "__symbol_value";
 pub(crate) const SYMBOL_PATH_ATTR: &str = "symbol_path";
@@ -113,49 +110,6 @@ pub(crate) fn component_instances(netlist: &Schematic) -> Result<BTreeMap<String
         }
     }
     Ok(result)
-}
-
-/// Keep native annotations consistent with the refreshed Reference fields.
-/// KiCad looks up instances by sheet UUID path, even after a project rename;
-/// annotations outside this document's hierarchy belong to other instances.
-pub(crate) fn sync_symbol_instance_references(
-    document: &mut SchDocument,
-    slots: &BTreeSet<SymbolSlotKey>,
-) -> Result<()> {
-    let mut paths_by_page = BTreeMap::<String, BTreeSet<String>>::new();
-    for instance in page_instances(document)? {
-        paths_by_page
-            .entry(instance.page.id.clone())
-            .or_default()
-            .insert(format!("/{}", instance.id));
-    }
-    for page in &mut document.pages {
-        let Some(paths) = paths_by_page.get(&page.id) else {
-            continue;
-        };
-        for item in &mut page.items {
-            let SchItem::Symbol(symbol) = item else {
-                continue;
-            };
-            let Some(slot) = symbol
-                .field_value("Path")
-                .and_then(|path| SymbolSlotKey::new(path, symbol.unit))
-                .filter(|slot| slots.contains(slot))
-            else {
-                continue;
-            };
-            let reference = symbol
-                .reference()
-                .with_context(|| format!("managed symbol '{slot}' has no Reference field"))?
-                .to_string();
-            for instance in &mut symbol.instances {
-                if paths.contains(&instance.path) && instance.reference.is_some() {
-                    instance.reference = Some(reference.clone());
-                }
-            }
-        }
-    }
-    Ok(())
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

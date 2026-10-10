@@ -1703,6 +1703,7 @@ mod tests {
 
     fn power_symbol(id: String, at: Point) -> Symbol {
         Symbol {
+            exclude_from_sim: false,
             id,
             lib_id: "power:GND".to_string(),
             lib_name: None,

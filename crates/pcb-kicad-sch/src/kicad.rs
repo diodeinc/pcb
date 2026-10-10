@@ -10,9 +10,10 @@ use pcb_sexpr::{
 
 use crate::model::{
     FieldHorizontalJustify, FieldJustify, FieldVerticalJustify, Graphic, GraphicKind, GraphicText,
-    Junction, Label, LabelKind, LabelShape, LabelSpin, MirrorAxis, NoConnect, Paper, PinInstance,
-    Point, Rotation, SchDocument, SchItem, SchPage, Sheet, SheetPin, Symbol, SymbolDefinition,
-    SymbolField, SymbolInstance, SymbolLibrary, TextEffects, TextSize, Wire,
+    Junction, Label, LabelKind, LabelShape, LabelSpin, MANDATORY_FIELDS, MirrorAxis, NoConnect,
+    Paper, PinInstance, Point, Rotation, SchDocument, SchItem, SchPage, Sheet, SheetInstance,
+    SheetPin, Symbol, SymbolDefinition, SymbolField, SymbolInstance, SymbolLibrary, TextEffects,
+    TextSize, Wire,
 };
 
 pub const KICAD_SCH_VERSION: i64 = 20260306;
@@ -268,17 +269,69 @@ fn format_kicad_sch_page(page: &SchPage) -> String {
         library_to_sexpr(&page.library),
     ];
 
-    root.extend(
-        page.items
-            .iter()
-            .filter(|item| !matches!(item, SchItem::Sheet(sheet) if !sheet.placed))
-            .map(|item| item_to_sexpr(item, page)),
-    );
+    // KiCad saves items ordered by item type, then UUID.
+    let mut items = page
+        .items
+        .iter()
+        .filter(|item| !matches!(item, SchItem::Sheet(sheet) if !sheet.placed))
+        .collect::<Vec<_>>();
+    items.sort_by_key(|item| {
+        let id = match item {
+            SchItem::Unsupported(sexpr) => sexpr
+                .as_list()
+                .and_then(|items| find_child(items, "uuid"))
+                .and_then(|uuid| uuid.get(1))
+                .and_then(Sexpr::as_atom),
+            item => item.id(),
+        };
+        (item_save_rank(item), id)
+    });
+    root.extend(items.into_iter().map(|item| item_to_sexpr(item, page)));
 
     format!(
         "{}\n",
         format_tree(&Sexpr::list(root), FormatMode::Normal).trim_end()
     )
+}
+
+/// KiCad's `KICAD_T` save order. An unfilled `polyline` is a line, not a shape.
+fn item_save_rank(item: &SchItem) -> u8 {
+    let tag = match item {
+        SchItem::Graphic(graphic) => match &graphic.kind {
+            GraphicKind::Polyline { .. } if !has_tag(&graphic.unsupported, "fill") => "wire",
+            kind => kind.kicad_tag(),
+        },
+        SchItem::Wire(_) => "wire",
+        SchItem::Junction(_) => "junction",
+        SchItem::NoConnect(_) => "no_connect",
+        SchItem::Label(label) => label_kind_token(label.kind),
+        SchItem::Symbol(_) => "symbol",
+        SchItem::Sheet(_) => "sheet",
+        SchItem::Unsupported(sexpr) => sexpr.as_list().and_then(list_tag).unwrap_or(""),
+    };
+    match tag {
+        "rectangle" | "polyline" | "circle" | "arc" | "bezier" => 0,
+        "text" => 1,
+        "text_box" => 2,
+        "junction" => 3,
+        "no_connect" => 4,
+        "bus_entry" => 5,
+        "wire" | "bus" => 6,
+        "image" => 7,
+        "table" => 8,
+        "label" => 9,
+        "global_label" => 10,
+        "hierarchical_label" => 11,
+        "rule_area" => 12,
+        "netclass_flag" | "directive_label" => 13,
+        "symbol" => 14,
+        "group" => 15,
+        "sheet" => 16,
+        "sheet_instances" => 17,
+        "embedded_fonts" => 18,
+        "embedded_files" => 19,
+        _ => 20,
+    }
 }
 
 fn parse_lib_symbols(items: SexprList<'_>) -> Result<SymbolLibrary> {
@@ -352,6 +405,7 @@ fn parse_symbol(items: SexprList<'_>) -> Result<Symbol> {
     let mut body_style = 1;
     let mut at = None;
     let mut mirror = None;
+    let mut exclude_from_sim = false;
     let mut dnp = false;
     let mut in_bom = true;
     let mut on_board = true;
@@ -400,6 +454,9 @@ fn parse_symbol(items: SexprList<'_>) -> Result<Symbol> {
                         .context("symbol mirror must be x or y")?,
                 );
             }
+            Some("exclude_from_sim") => {
+                exclude_from_sim = list.bool_or(1, true, "symbol exclude_from_sim")?;
+            }
             Some("dnp") => {
                 dnp = list.bool_or(1, true, "symbol dnp")?;
             }
@@ -442,6 +499,7 @@ fn parse_symbol(items: SexprList<'_>) -> Result<Symbol> {
         at,
         rotation,
         mirror,
+        exclude_from_sim,
         dnp,
         in_bom,
         on_board,
@@ -454,38 +512,46 @@ fn parse_symbol(items: SexprList<'_>) -> Result<Symbol> {
     })
 }
 
-fn parse_symbol_instances(list: SexprList<'_>) -> Result<Vec<SymbolInstance>> {
-    let mut instances = Vec::new();
+fn parse_instance_paths(list: SexprList<'_>) -> Result<Vec<(String, SexprList<'_>)>> {
+    let mut paths = Vec::new();
     for project in list.children_from(1) {
         let project = SexprList::from_sexpr(project)
             .filter(|project| project.tag() == Some("project"))
-            .context("symbol instances must contain projects")?;
+            .context("instances must contain projects")?;
         let name = project.string(1).context("instance project has no name")?;
         for path in project.children_from(2) {
             let path = SexprList::from_sexpr(path)
                 .filter(|path| path.tag() == Some("path"))
                 .context("instance project must contain paths")?;
-            let mut instance = SymbolInstance {
-                project: name.clone(),
-                path: path.string(1).context("instance path is not a string")?,
-                reference: None,
-                unit: None,
-                unsupported: Vec::new(),
-            };
-            for child in path.children_from(2) {
-                match SexprList::from_sexpr(child) {
-                    Some(item) if item.tag() == Some("reference") => {
-                        instance.reference = item.string(1);
-                    }
-                    Some(item) if item.tag() == Some("unit") => {
-                        let unit = item.i64(1).context("instance unit is not an integer")?;
-                        instance.unit = Some(positive_u32("instance unit", unit)?);
-                    }
-                    _ => instance.unsupported.push(child.clone()),
-                }
-            }
-            instances.push(instance);
+            paths.push((name.clone(), path));
         }
+    }
+    Ok(paths)
+}
+
+fn parse_symbol_instances(list: SexprList<'_>) -> Result<Vec<SymbolInstance>> {
+    let mut instances = Vec::new();
+    for (project, path) in parse_instance_paths(list)? {
+        let mut instance = SymbolInstance {
+            project,
+            path: path.string(1).context("instance path is not a string")?,
+            reference: None,
+            unit: None,
+            unsupported: Vec::new(),
+        };
+        for child in path.children_from(2) {
+            match SexprList::from_sexpr(child) {
+                Some(item) if item.tag() == Some("reference") => {
+                    instance.reference = item.string(1);
+                }
+                Some(item) if item.tag() == Some("unit") => {
+                    let unit = item.i64(1).context("instance unit is not an integer")?;
+                    instance.unit = Some(positive_u32("instance unit", unit)?);
+                }
+                _ => instance.unsupported.push(child.clone()),
+            }
+        }
+        instances.push(instance);
     }
     Ok(instances)
 }
@@ -598,6 +664,7 @@ fn parse_sheet(items: SexprList<'_>) -> Result<Sheet> {
     let mut file = None;
     let mut pins = Vec::new();
     let mut unsupported = Vec::new();
+    let mut instances = Vec::new();
 
     for child in items.children_from(1) {
         let Some(list) = SexprList::from_sexpr(child) else {
@@ -617,6 +684,22 @@ fn parse_sheet(items: SexprList<'_>) -> Result<Sheet> {
             Some("pin") => {
                 pins.push(parse_sheet_pin(list)?);
             }
+            Some("instances") => {
+                for (project, path) in parse_instance_paths(list)? {
+                    let page = path
+                        .children_from(2)
+                        .find_map(|child| {
+                            SexprList::from_sexpr(child).filter(|item| item.tag() == Some("page"))
+                        })
+                        .and_then(|page| page.string(1))
+                        .unwrap_or_default();
+                    instances.push(SheetInstance {
+                        project,
+                        path: path.string(1).context("instance path is not a string")?,
+                        page,
+                    });
+                }
+            }
             _ => unsupported.push(child.clone()),
         }
     }
@@ -630,6 +713,7 @@ fn parse_sheet(items: SexprList<'_>) -> Result<Sheet> {
         file: file.context("sheet missing Sheetfile property")?,
         pins,
         unsupported,
+        instances,
     })
 }
 
@@ -641,6 +725,7 @@ fn parse_sheet_pin(items: SexprList<'_>) -> Result<SheetPin> {
         .with_context(|| format!("sheet pin {name} missing or invalid shape"))?;
     let mut id = None;
     let mut at = None;
+    let mut effects = TextEffects::default();
     let mut unsupported = Vec::new();
     for child in items.children_from(3) {
         let Some(list) = SexprList::from_sexpr(child) else {
@@ -650,6 +735,8 @@ fn parse_sheet_pin(items: SexprList<'_>) -> Result<SheetPin> {
         match list.tag() {
             Some("at") => at = Some(parse_at(list)?),
             Some("uuid") => id = list.string(1),
+            // Justification is derived from the sheet side on write.
+            Some("effects") => effects = parse_effects(list)?.effects,
             _ => unsupported.push(child.clone()),
         }
     }
@@ -660,6 +747,7 @@ fn parse_sheet_pin(items: SexprList<'_>) -> Result<SheetPin> {
         at,
         rotation,
         shape,
+        effects,
         unsupported,
     })
 }
@@ -730,7 +818,7 @@ fn parse_label(items: SexprList<'_>) -> Result<Label> {
     };
     let at = at.with_context(|| format!("{tag} {text} missing at"))?;
 
-    Ok(Label {
+    let mut label = Label {
         id: id.ok_or_else(|| anyhow!("{tag} {text} missing uuid"))?,
         text,
         at,
@@ -740,7 +828,20 @@ fn parse_label(items: SexprList<'_>) -> Result<Label> {
         fields_autoplaced,
         fields,
         unsupported,
-    })
+    };
+    // Derived on write so it follows the label.
+    if label.fields.get(INTERSHEET_REFS) == Some(&intersheet_refs_field(&label)) {
+        label.fields.remove(INTERSHEET_REFS);
+    }
+    Ok(label)
+}
+
+const INTERSHEET_REFS: &str = "Intersheetrefs";
+
+fn intersheet_refs_field(label: &Label) -> SymbolField {
+    let mut field = SymbolField::new(INTERSHEET_REFS, "${INTERSHEET_REFS}", label.at);
+    field.hidden = true;
+    field
 }
 
 fn parse_label_at(items: SexprList<'_>) -> Result<(Point, LabelSpin)> {
@@ -822,6 +923,9 @@ fn parse_property(items: SexprList<'_>) -> Result<SymbolField> {
             }
             Some("hide") => {
                 field.hidden = list.bool_or(1, true, "property hide")?;
+            }
+            Some("show_name") => {
+                field.show_name = list.bool_or(1, true, "property show_name")?;
             }
             Some("do_not_autoplace") => {
                 field.do_not_autoplace = list.bool_or(1, true, "property do_not_autoplace")?;
@@ -1199,17 +1303,34 @@ pub(crate) fn sheet_to_sexpr(sheet: &Sheet) -> Sexpr {
         ]));
     }
     items.extend(sheet.unsupported.iter().cloned());
-    items.extend(sheet.name.iter().map(field_to_sexpr));
-    items.push(field_to_sexpr(&sheet.file));
-    items.extend(sheet.pins.iter().map(sheet_pin_to_sexpr));
     items.push(Sexpr::list(vec![
         Sexpr::symbol("uuid"),
         Sexpr::string(&sheet.id),
     ]));
+    items.extend(sheet.name.iter().map(field_to_sexpr));
+    items.push(field_to_sexpr(&sheet.file));
+    items.extend(sheet.pins.iter().map(sheet_pin_to_sexpr));
+    if !sheet.instances.is_empty() {
+        items.push(instances_to_sexpr(sheet.instances.iter().map(|instance| {
+            (
+                instance.project.as_str(),
+                instance.path.as_str(),
+                vec![Sexpr::list(vec![
+                    Sexpr::symbol("page"),
+                    Sexpr::string(&instance.page),
+                ])],
+            )
+        })));
+    }
     Sexpr::list(items)
 }
 
 fn sheet_pin_to_sexpr(pin: &SheetPin) -> Sexpr {
+    // KiCad justifies the pin label away from the sheet edge it sits on.
+    let justify = match pin.rotation {
+        Rotation::Deg180 | Rotation::Deg270 => FieldHorizontalJustify::Left,
+        Rotation::Deg0 | Rotation::Deg90 => FieldHorizontalJustify::Right,
+    };
     let mut items = vec![
         Sexpr::symbol("pin"),
         Sexpr::string(&pin.name),
@@ -1220,18 +1341,28 @@ fn sheet_pin_to_sexpr(pin: &SheetPin) -> Sexpr {
             Sexpr::float(pin.at.y),
             Sexpr::int(pin.rotation.degrees()),
         ]),
+        Sexpr::list(vec![Sexpr::symbol("uuid"), Sexpr::string(&pin.id)]),
+        text_effects_to_sexpr(
+            &pin.effects,
+            Some(FieldJustify {
+                horizontal: Some(justify),
+                vertical: None,
+            }),
+        ),
     ];
     items.extend(pin.unsupported.iter().cloned());
-    items.push(Sexpr::list(vec![
-        Sexpr::symbol("uuid"),
-        Sexpr::string(&pin.id),
-    ]));
     Sexpr::list(items)
 }
 
 fn symbol_to_sexpr(symbol: &Symbol) -> Sexpr {
-    let mut items = vec![
-        Sexpr::symbol("symbol"),
+    let mut items = vec![Sexpr::symbol("symbol")];
+    if let Some(lib_name) = &symbol.lib_name {
+        items.push(Sexpr::list(vec![
+            Sexpr::symbol("lib_name"),
+            Sexpr::string(lib_name),
+        ]));
+    }
+    items.extend([
         Sexpr::list(vec![Sexpr::symbol("lib_id"), Sexpr::string(&symbol.lib_id)]),
         Sexpr::list(vec![
             Sexpr::symbol("at"),
@@ -1239,20 +1370,7 @@ fn symbol_to_sexpr(symbol: &Symbol) -> Sexpr {
             Sexpr::float(symbol.at.y),
             Sexpr::int(symbol.rotation.degrees()),
         ]),
-        Sexpr::list(vec![Sexpr::symbol("unit"), Sexpr::int(symbol.unit as i64)]),
-        Sexpr::list(vec![
-            Sexpr::symbol("body_style"),
-            Sexpr::int(symbol.body_style as i64),
-        ]),
-    ];
-
-    if let Some(lib_name) = &symbol.lib_name {
-        items.push(Sexpr::list(vec![
-            Sexpr::symbol("lib_name"),
-            Sexpr::string(lib_name),
-        ]));
-    }
-
+    ]);
     if let Some(axis) = symbol.mirror {
         items.push(Sexpr::list(vec![
             Sexpr::symbol("mirror"),
@@ -1262,8 +1380,13 @@ fn symbol_to_sexpr(symbol: &Symbol) -> Sexpr {
             }),
         ]));
     }
-
     items.extend([
+        Sexpr::list(vec![Sexpr::symbol("unit"), Sexpr::int(symbol.unit as i64)]),
+        Sexpr::list(vec![
+            Sexpr::symbol("body_style"),
+            Sexpr::int(symbol.body_style as i64),
+        ]),
+        bool_property_to_sexpr("exclude_from_sim", symbol.exclude_from_sim),
         bool_property_to_sexpr("in_bom", symbol.in_bom),
         bool_property_to_sexpr("on_board", symbol.on_board),
         bool_property_to_sexpr("in_pos_files", symbol.in_pos_files),
@@ -1282,35 +1405,42 @@ fn symbol_to_sexpr(symbol: &Symbol) -> Sexpr {
         Sexpr::string(&symbol.id),
     ]));
 
-    items.extend(symbol.fields.values().map(field_to_sexpr));
+    items.extend(sorted_fields(symbol.fields.values()).map(field_to_sexpr));
     items.extend(symbol.pins.iter().map(pin_to_sexpr));
     items.extend(symbol.unsupported.iter().cloned());
     if !symbol.instances.is_empty() {
-        items.push(symbol_instances_to_sexpr(&symbol.instances));
+        items.push(instances_to_sexpr(symbol.instances.iter().map(
+            |instance| {
+                let mut path = Vec::new();
+                path.extend(instance.reference.iter().map(|reference| {
+                    Sexpr::list(vec![Sexpr::symbol("reference"), Sexpr::string(reference)])
+                }));
+                path.extend(
+                    instance.unit.map(|unit| {
+                        Sexpr::list(vec![Sexpr::symbol("unit"), Sexpr::int(unit as i64)])
+                    }),
+                );
+                path.extend(instance.unsupported.iter().cloned());
+                (instance.project.as_str(), instance.path.as_str(), path)
+            },
+        )));
     }
 
     Sexpr::list(items)
 }
 
-fn symbol_instances_to_sexpr(instances: &[SymbolInstance]) -> Sexpr {
+fn instances_to_sexpr<'a>(
+    instances: impl Iterator<Item = (&'a str, &'a str, Vec<Sexpr>)>,
+) -> Sexpr {
     let mut projects: Vec<Vec<Sexpr>> = Vec::new();
-    for (index, instance) in instances.iter().enumerate() {
-        if index == 0 || instances[index - 1].project != instance.project {
-            projects.push(vec![
-                Sexpr::symbol("project"),
-                Sexpr::string(&instance.project),
-            ]);
+    let mut previous_project = None;
+    for (project, path, children) in instances {
+        if previous_project != Some(project) {
+            projects.push(vec![Sexpr::symbol("project"), Sexpr::string(project)]);
+            previous_project = Some(project);
         }
-        let mut path = vec![Sexpr::symbol("path"), Sexpr::string(&instance.path)];
-        path.extend(instance.reference.iter().map(|reference| {
-            Sexpr::list(vec![Sexpr::symbol("reference"), Sexpr::string(reference)])
-        }));
-        path.extend(
-            instance
-                .unit
-                .map(|unit| Sexpr::list(vec![Sexpr::symbol("unit"), Sexpr::int(unit as i64)])),
-        );
-        path.extend(instance.unsupported.iter().cloned());
+        let mut path = vec![Sexpr::symbol("path"), Sexpr::string(path)];
+        path.extend(children);
         projects
             .last_mut()
             .expect("project started above")
@@ -1321,6 +1451,28 @@ fn symbol_instances_to_sexpr(instances: &[SymbolInstance]) -> Sexpr {
             .chain(projects.into_iter().map(Sexpr::list))
             .collect(),
     )
+}
+
+/// Mandatory fields in field-id order, then the rest, then library metadata.
+fn field_rank(name: &str) -> u8 {
+    match name {
+        INTERSHEET_REFS => 0,
+        "ki_locked" => 6,
+        "ki_keywords" => 7,
+        "ki_fp_filters" => 8,
+        _ => MANDATORY_FIELDS
+            .iter()
+            .position(|field| *field == name)
+            .map_or(5, |rank| rank as u8),
+    }
+}
+
+fn sorted_fields<'a>(
+    fields: impl Iterator<Item = &'a SymbolField>,
+) -> impl Iterator<Item = &'a SymbolField> {
+    let mut fields = fields.collect::<Vec<_>>();
+    fields.sort_by_key(|field| field_rank(&field.name));
+    fields.into_iter()
 }
 
 fn bool_property_to_sexpr(name: &str, value: bool) -> Sexpr {
@@ -1339,6 +1491,13 @@ fn wire_to_sexpr(wire: &Wire) -> Sexpr {
             xy_to_sexpr(wire.b),
         ]),
     ];
+    if !has_tag(&wire.unsupported, "stroke") {
+        items.push(Sexpr::list(vec![
+            Sexpr::symbol("stroke"),
+            Sexpr::list(vec![Sexpr::symbol("width"), Sexpr::int(0)]),
+            Sexpr::list(vec![Sexpr::symbol("type"), Sexpr::symbol("default")]),
+        ]));
+    }
     items.extend(wire.unsupported.iter().cloned());
     items.push(Sexpr::list(vec![
         Sexpr::symbol("uuid"),
@@ -1399,13 +1558,24 @@ fn label_to_sexpr(label: &Label) -> Sexpr {
         Sexpr::symbol("uuid"),
         Sexpr::string(&label.id),
     ]));
-    items.extend(label.fields.values().map(field_to_sexpr));
+    let intersheet_refs = (matches!(label.kind, LabelKind::Global { .. })
+        && !label.fields.contains_key(INTERSHEET_REFS))
+    .then(|| intersheet_refs_field(label));
+    items.extend(
+        sorted_fields(intersheet_refs.iter().chain(label.fields.values())).map(field_to_sexpr),
+    );
     items.extend(label.unsupported.iter().cloned());
 
     Sexpr::list(items)
 }
 
 fn field_to_sexpr(field: &SymbolField) -> Sexpr {
+    property_to_sexpr(field, false)
+}
+
+/// KiCad writes `hide` before `show_name` on a schematic property and after
+/// `do_not_autoplace` on a library property.
+fn property_to_sexpr(field: &SymbolField, library: bool) -> Sexpr {
     let mut items = vec![Sexpr::symbol("property")];
     if field.private {
         items.push(Sexpr::symbol("private"));
@@ -1420,25 +1590,21 @@ fn field_to_sexpr(field: &SymbolField) -> Sexpr {
             angle_to_sexpr(field.rotation_deg.rem_euclid(360.0)),
         ]),
     ]);
-
-    if field.hidden || is_internal_kicad_metadata_property(&field.name) {
-        items.push(Sexpr::list(vec![
-            Sexpr::symbol("hide"),
-            Sexpr::symbol("yes"),
-        ]));
+    let hide = (field.hidden || is_internal_kicad_metadata_property(&field.name))
+        .then(|| bool_property_to_sexpr("hide", true));
+    let flags = [
+        bool_property_to_sexpr("show_name", field.show_name),
+        bool_property_to_sexpr("do_not_autoplace", field.do_not_autoplace),
+    ];
+    if library {
+        items.extend(flags);
+        items.extend(hide);
+    } else {
+        items.extend(hide);
+        items.extend(flags);
     }
-
-    if field.do_not_autoplace {
-        items.push(Sexpr::list(vec![
-            Sexpr::symbol("do_not_autoplace"),
-            Sexpr::symbol("yes"),
-        ]));
-    }
-
     items.push(text_effects_to_sexpr(&field.effects, field.justify));
-
     items.extend(field.unsupported.iter().cloned());
-
     Sexpr::list(items)
 }
 
@@ -1471,36 +1637,37 @@ fn library_to_sexpr(library: &SymbolLibrary) -> Sexpr {
 }
 
 fn normalize_internal_metadata_properties(sexpr: &mut Sexpr) {
+    if sexpr.as_list().and_then(list_tag) == Some("property") {
+        // Round-trip through the field model so library properties serialize
+        // the way KiCad 10 writes them.
+        if let Some(field) = SexprList::from_sexpr(sexpr).and_then(|list| parse_property(list).ok())
+        {
+            *sexpr = property_to_sexpr(&field, true);
+        }
+        return;
+    }
     let SexprKind::List(items) = &mut sexpr.kind else {
         return;
     };
-
-    if list_tag(items) == Some("property")
-        && property_name(items).is_some_and(is_internal_kicad_metadata_property)
-    {
-        ensure_property_hidden(items);
-    }
-
     for item in items.iter_mut() {
         normalize_internal_metadata_properties(item);
     }
-
     if list_tag(items) == Some("symbol") {
         canonicalize_symbol_children(items);
     }
 }
 
 /// KiCad writes a library symbol as its header attributes, then properties,
-/// then unit sub-symbols, then `embedded_fonts`. Impose that order, with the
-/// properties sorted by name, so a definition compares and serializes the
-/// same however its source ordered the children: a flattened derived symbol
-/// must not read as a changed schematic on every apply.
+/// then unit sub-symbols, then `embedded_fonts`, and sorts each unit's draw
+/// items. Impose that order so a definition compares and serializes the same
+/// however its source ordered the children.
 fn canonicalize_symbol_children(items: &mut Vec<Sexpr>) {
     if items.len() <= 2 {
         return;
     }
     let mut leading = Vec::new();
     let mut properties = Vec::new();
+    let mut draw_items = Vec::new();
     let mut units = Vec::new();
     let mut embedded_fonts = Vec::new();
     for child in items.split_off(2) {
@@ -1508,14 +1675,112 @@ fn canonicalize_symbol_children(items: &mut Vec<Sexpr>) {
             Some("property") => properties.push(child),
             Some("symbol") => units.push(child),
             Some("embedded_fonts") => embedded_fonts.push(child),
+            Some(
+                "arc" | "bezier" | "circle" | "polyline" | "rectangle" | "text" | "text_box"
+                | "pin",
+            ) => draw_items.push(child),
             _ => leading.push(child),
         }
     }
-    properties.sort_by(|a, b| symbol_property_name(a).cmp(symbol_property_name(b)));
+    properties.sort_by_cached_key(|property| {
+        let name = symbol_property_name(property);
+        (field_rank(name), name.to_owned())
+    });
+    draw_items.sort_by(|a, b| {
+        let (a, b) = (
+            a.as_list().unwrap_or_default(),
+            b.as_list().unwrap_or_default(),
+        );
+        draw_item_rank(a)
+            .cmp(&draw_item_rank(b))
+            .then_with(|| natord::compare(pin_number(a), pin_number(b)))
+            .then_with(|| draw_item_sort_key(a).cmp(&draw_item_sort_key(b)))
+    });
+    // Unit names end in `_<unit>_<body_style>`, KiCad's unit sort key.
+    units.sort_by_cached_key(|unit| {
+        let name = unit.as_list().and_then(|list| list.get(1)?.as_str());
+        let mut suffix = name
+            .unwrap_or("")
+            .rsplit('_')
+            .map(|part| part.parse::<u32>().ok());
+        let body_style = suffix.next().flatten();
+        (suffix.next().flatten(), body_style)
+    });
     items.extend(leading);
     items.extend(properties);
+    items.extend(draw_items);
     items.extend(units);
     items.extend(embedded_fonts);
+}
+
+/// `KICAD_T` order of the items a library unit can hold.
+fn draw_item_rank(items: &[Sexpr]) -> u8 {
+    match list_tag(items) {
+        Some("text") => 1,
+        Some("text_box") => 2,
+        Some("pin") => 3,
+        _ => 0,
+    }
+}
+
+fn pin_number(items: &[Sexpr]) -> &str {
+    find_child(items, "number")
+        .and_then(|number| number.get(1)?.as_atom())
+        .unwrap_or("")
+}
+
+/// `SCH_ITEM::compare` in library coordinates (internal units, y up): the
+/// item's anchor, then its shape and remaining points.
+fn draw_item_sort_key(items: &[Sexpr]) -> Vec<i64> {
+    let iu = |value: f64| (value * 10_000.0).round() as i64;
+    let point = |list: &[Sexpr]| -> Option<[i64; 2]> {
+        Some([iu(atom_f64(list.get(1)?)?), -iu(atom_f64(list.get(2)?)?)])
+    };
+    let named = |tags: &[&str]| -> Vec<[i64; 2]> {
+        tags.iter()
+            .filter_map(|tag| point(find_child(items, tag)?))
+            .collect()
+    };
+    let (shape, points) = match list_tag(items) {
+        Some("rectangle") => (1, named(&["start", "end"])),
+        Some("arc") => {
+            let mut points = named(&["start", "mid", "end"]);
+            if let [a, b, c] = points[..] {
+                points.insert(0, circumcenter(a, b, c));
+            }
+            (2, points)
+        }
+        Some("circle") => (3, named(&["center"])),
+        Some(tag @ ("polyline" | "bezier")) => {
+            let points = find_child(items, "pts")
+                .map(|pts| {
+                    pts[1..]
+                        .iter()
+                        .filter_map(|xy| point(xy.as_list()?))
+                        .collect()
+                })
+                .unwrap_or_default();
+            (if tag == "polyline" { 4 } else { 5 }, points)
+        }
+        _ => (0, named(&["at"])),
+    };
+    let mut key = points.first().map_or(Vec::new(), |anchor| anchor.to_vec());
+    key.push(shape);
+    key.extend(points.iter().flatten());
+    key
+}
+
+fn circumcenter(a: [i64; 2], b: [i64; 2], c: [i64; 2]) -> [i64; 2] {
+    let [ax, ay, bx, by, cx, cy] = [a[0], a[1], b[0], b[1], c[0], c[1]].map(|v| v as f64);
+    let d = 2.0 * (ax * (by - cy) + bx * (cy - ay) + cx * (ay - by));
+    if d == 0.0 {
+        return a;
+    }
+    let (a2, b2, c2) = (ax * ax + ay * ay, bx * bx + by * by, cx * cx + cy * cy);
+    [
+        ((a2 * (by - cy) + b2 * (cy - ay) + c2 * (ay - by)) / d).round() as i64,
+        ((a2 * (cx - bx) + b2 * (ax - cx) + c2 * (bx - ax)) / d).round() as i64,
+    ]
 }
 
 fn symbol_property_name(property: &Sexpr) -> &str {
@@ -1558,46 +1823,6 @@ fn property_name(items: &[Sexpr]) -> Option<&str> {
         cursor += 1;
     }
     items.get(cursor).and_then(Sexpr::as_atom)
-}
-
-fn ensure_property_hidden(items: &mut Vec<Sexpr>) {
-    if items.iter_mut().any(force_existing_hide_marker) {
-        return;
-    }
-
-    let insert_at = items
-        .iter()
-        .position(|item| {
-            item.as_list()
-                .is_some_and(|list| list_tag(list) == Some("effects"))
-        })
-        .unwrap_or(items.len());
-    items.insert(
-        insert_at,
-        Sexpr::list(vec![Sexpr::symbol("hide"), Sexpr::symbol("yes")]),
-    );
-}
-
-fn force_existing_hide_marker(item: &mut Sexpr) -> bool {
-    if item.as_atom() == Some("hide") {
-        return true;
-    }
-
-    let SexprKind::List(items) = &mut item.kind else {
-        return false;
-    };
-    match list_tag(items) {
-        Some("hide") => {
-            if items.len() == 1 {
-                items.push(Sexpr::symbol("yes"));
-            } else {
-                items[1] = Sexpr::symbol("yes");
-            }
-            true
-        }
-        Some("effects") => items[1..].iter_mut().any(force_existing_hide_marker),
-        _ => false,
-    }
 }
 
 fn is_internal_kicad_metadata_property(name: &str) -> bool {
@@ -1881,15 +2106,13 @@ impl<'a> SexprList<'a> {
     }
 }
 
-#[cfg(test)]
-fn find_child<'a>(items: &'a [Sexpr], tag: &str) -> Option<&'a [Sexpr]> {
+pub(crate) fn find_child<'a>(items: &'a [Sexpr], tag: &str) -> Option<&'a [Sexpr]> {
     items.iter().find_map(|item| {
         let list = item.as_list()?;
         (list_tag(list) == Some(tag)).then_some(list)
     })
 }
 
-#[cfg(test)]
 fn has_tag(items: &[Sexpr], tag: &str) -> bool {
     items.iter().any(|item| {
         item.as_list()
@@ -2022,6 +2245,8 @@ mod tests {
     const KICAD_10_SYMBOL_FIXTURE: &str = include_str!("../test-data/kicad-10/shared1.kicad_sch");
     const KICAD_10_UNSUPPORTED_FIXTURE: &str =
         include_str!("../test-data/kicad-10/unsupported-items.kicad_sch");
+    const KICAD_10_RESAVED_FIXTURE: &str =
+        include_str!("../test-data/kicad-10/resaved-child-sheet.kicad_sch");
 
     const SAMPLE: &str = r#"
 (kicad_sch
@@ -2040,16 +2265,16 @@ mod tests {
       )
     )
   )
-  (wire
-    (pts (xy 10 20) (xy 30 20))
-    (stroke (width 0) (type solid) (color 0 0 0 0))
-    (uuid "wire-1")
-  )
   (junction
     (at 20 20)
     (diameter 0)
     (color 0 0 0 0)
     (uuid "junction-1")
+  )
+  (wire
+    (pts (xy 10 20) (xy 30 20))
+    (stroke (width 0) (type solid) (color 0 0 0 0))
+    (uuid "wire-1")
   )
   (symbol
     (lib_id "Device:R")
@@ -2108,13 +2333,13 @@ mod tests {
         assert!(symbol.field("Footprint").unwrap().hidden);
         assert_eq!(symbol.pins.len(), 2);
 
-        let SchItem::Wire(wire) = &document.pages[0].items[0] else {
+        let SchItem::Wire(wire) = &document.pages[0].items[1] else {
             panic!("expected wire");
         };
         assert_eq!(wire.a, Point::new(10.0, 20.0));
         assert_eq!(wire.b, Point::new(30.0, 20.0));
 
-        let SchItem::Junction(junction) = &document.pages[0].items[1] else {
+        let SchItem::Junction(junction) = &document.pages[0].items[0] else {
             panic!("expected junction");
         };
         assert_eq!(junction.id, "junction-1");
@@ -2223,11 +2448,17 @@ mod tests {
     #[test]
     fn parses_and_formats_label_items() {
         let content = SAMPLE.replace(
-            r#"  (sheet_instances"#,
+            r#"  (symbol
+"#,
             r#"  (label "SDA"
     (at 40 20 180)
     (effects (font (size 1.5 1.5) (thickness 0.15) (bold yes) (italic yes)) (justify right bottom))
     (uuid "label-local")
+  )
+  (label "RAW_ANGLE"
+    (at 70 20 181.5)
+    (effects (font (size 1.27 1.27)))
+    (uuid "label-raw-angle")
   )
   (global_label "RESET"
     (shape input)
@@ -2241,11 +2472,6 @@ mod tests {
     (effects (font (size 1.27 1.27)) (justify right))
     (uuid "label-hier")
   )
-  (label "RAW_ANGLE"
-    (at 70 20 181.5)
-    (effects (font (size 1.27 1.27)))
-    (uuid "label-raw-angle")
-  )
   (netclass_flag ""
     (length 2.54)
     (shape round)
@@ -2254,11 +2480,12 @@ mod tests {
     (uuid "directive")
     (property "Net Class" "Power" (at 80 20 0))
   )
-  (sheet_instances"#,
+  (symbol
+"#,
         );
         let document = SchDocument::from_kicad_sch(&content).expect("parse schematic");
 
-        let SchItem::Label(local) = &document.pages[0].items[3] else {
+        let SchItem::Label(local) = &document.pages[0].items[2] else {
             panic!("expected local label");
         };
         assert_eq!(local.kind, LabelKind::Local);
@@ -2269,6 +2496,11 @@ mod tests {
         assert_eq!(local.effects.thickness, Some(0.15));
         assert!(local.effects.bold);
         assert!(local.effects.italic);
+
+        let SchItem::Label(raw_angle) = &document.pages[0].items[3] else {
+            panic!("expected raw-angle label");
+        };
+        assert_eq!(raw_angle.spin, LabelSpin::Right);
 
         let SchItem::Label(global) = &document.pages[0].items[4] else {
             panic!("expected global label");
@@ -2292,12 +2524,7 @@ mod tests {
         );
         assert_eq!(hierarchical.spin, LabelSpin::Bottom);
 
-        let SchItem::Label(raw_angle) = &document.pages[0].items[6] else {
-            panic!("expected raw-angle label");
-        };
-        assert_eq!(raw_angle.spin, LabelSpin::Right);
-
-        let SchItem::Label(directive) = &document.pages[0].items[7] else {
+        let SchItem::Label(directive) = &document.pages[0].items[6] else {
             panic!("expected directive label");
         };
         assert_eq!(
@@ -2318,11 +2545,13 @@ mod tests {
     #[test]
     fn semantic_text_effect_edits_are_serialized() {
         let content = SAMPLE.replace(
-            r#"  (sheet_instances"#,
+            r#"  (symbol
+"#,
             r#"  (label "EDIT" (at 40 20 0)
     (effects (font (size 1.27 1.27)) (justify left bottom))
     (uuid "label-edit"))
-  (sheet_instances"#,
+  (symbol
+"#,
         );
         let mut document = SchDocument::from_kicad_sch(&content).unwrap();
         let label = document.pages[0]
@@ -2338,7 +2567,7 @@ mod tests {
 
         let formatted = document.pages[0].to_kicad_sch();
         let reparsed = SchDocument::from_kicad_sch(&formatted).unwrap();
-        let SchItem::Label(label) = &reparsed.pages[0].items[3] else {
+        let SchItem::Label(label) = &reparsed.pages[0].items[2] else {
             panic!("expected label");
         };
         assert_eq!(label.effects.font_size, TextSize::new(2.0, 2.0));
@@ -2505,15 +2734,26 @@ mod tests {
         assert!(symbol.in_pos_files);
         assert!(!symbol.dnp);
         assert!(!symbol.instances.is_empty());
-        assert!(has_tag(
-            &symbol.field("Reference").unwrap().unsupported,
-            "show_name"
-        ));
+        assert!(symbol.field("Reference").unwrap().unsupported.is_empty());
 
         let formatted = document.pages[0].to_kicad_sch();
         assert!(formatted.contains(&format!("(generator_version \"{GENERATOR_VERSION}\")")));
         let reparsed = SchDocument::from_kicad_sch(&formatted).expect("reparse KiCad 10 fixture");
         assert_eq!(reparsed, document);
+    }
+
+    #[test]
+    fn kicad_10_saved_sheet_round_trips_byte_identically() {
+        // Git may check the fixture out with CRLF on Windows.
+        let fixture = KICAD_10_RESAVED_FIXTURE.replace("\r\n", "\n");
+        let document = SchDocument::from_kicad_sch(&fixture).unwrap();
+        let expected = fixture
+            .replace("(generator \"eeschema\")", "(generator \"diode\")")
+            .replace(
+                "(generator_version \"10.0\")",
+                &format!("(generator_version \"{GENERATOR_VERSION}\")"),
+            );
+        assert_eq!(document.pages[0].to_kicad_sch(), expected);
     }
 
     #[test]

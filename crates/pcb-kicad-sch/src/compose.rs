@@ -17,6 +17,7 @@ use crate::{
     },
     deterministic_uuid, field_autoplace, hierarchy, net_symbols,
     placement::{GridPacker, GridPoint, GridRect, point_rect},
+    project,
     repair::{
         ConnectivityRepairIntent, NetDriverKind, item_matches, plan_connectivity_repair_core,
         point_on_segment, remove_items,
@@ -60,18 +61,20 @@ pub(crate) fn reconcile_document(
     let creating = existing.is_none();
     let mut document = match existing {
         Some(existing) => existing.clone(),
-        None => SchDocument {
-            pages: vec![SchPage {
-                file_name: Some(
-                    root_file_name
-                        .context("initializing a schematic requires a root filename")?
-                        .to_string(),
-                ),
-                ..SchPage::new(root_page_id())
-            }],
-            root_page_ids: vec![root_page_id()],
-            ..SchDocument::default()
-        },
+        None => {
+            let root_file_name =
+                root_file_name.context("initializing a schematic requires a root filename")?;
+            SchDocument {
+                pages: vec![SchPage {
+                    file_name: Some(root_file_name.to_string()),
+                    ..SchPage::new(root_page_id())
+                }],
+                root_page_ids: vec![root_page_id()],
+                // pcb pairs a new root schematic with a same-stem project.
+                project_name: project::file_stem(root_file_name),
+                ..SchDocument::default()
+            }
+        }
     };
     if document.pages.is_empty() {
         bail!("KiCad schematic project has no pages");
@@ -327,9 +330,7 @@ pub(crate) fn reconcile_document(
         )?;
     }
 
-    // Native saves persist per-sheet annotations separately from Reference.
-    // Refresh even when only the instance annotation (not the field) is stale.
-    component_slots::sync_symbol_instance_references(&mut document, &project_slots)?;
+    hierarchy::sync_instances(&mut document, &project_slots)?;
 
     // Cleanup is a whole-document concern; a scoped repair must not
     // touch pages outside its selection.
@@ -544,6 +545,7 @@ fn initial_component_rotation(
         at: Point::default(),
         rotation: Rotation::default(),
         mirror: None,
+        exclude_from_sim: false,
         dnp: false,
         in_bom: true,
         on_board: true,
@@ -888,6 +890,7 @@ fn materialize_hierarchy(
                 at: Point::new(at.x, at.y + (index as f64 + 2.0) * SHEET_PIN_SPACING_MM),
                 rotation: Rotation::Deg180,
                 shape: LabelShape::Bidirectional,
+                effects: crate::TextEffects::default(),
                 unsupported: Vec::new(),
             })
             .collect();
@@ -920,6 +923,7 @@ fn materialize_hierarchy(
             file: file_field,
             pins,
             unsupported: generated_sheet_style(),
+            instances: Vec::new(),
         };
         document.pages[sheet_plan.parent_page]
             .items
@@ -1742,6 +1746,7 @@ fn build_component_symbol(
         at,
         rotation,
         mirror,
+        exclude_from_sim: previous.is_some_and(|symbol| symbol.exclude_from_sim),
         dnp: false,
         in_bom: true,
         on_board: true,
@@ -1774,9 +1779,8 @@ fn reconcile_pin_instances(
     previous: &[crate::PinInstance],
 ) -> Result<()> {
     let parsed = symbol::ParsedSymbolDefinition::parse(definition)?;
-    let definition_pins = parsed.placed_pins(symbol)?;
     let mut pins_by_number = BTreeMap::<String, Vec<_>>::new();
-    for pin in definition_pins {
+    for pin in parsed.instance_pins(symbol) {
         if !pin.number.is_empty() {
             pins_by_number
                 .entry(pin.number.clone())
@@ -1844,17 +1848,13 @@ fn component_fields(
         SymbolField::new("Footprint", footprint_id, at).with_hidden(true),
         SymbolField::new("Path", slot.component_path(), at).with_hidden(true),
     ];
-    if let Some(datasheet) = component_slots::attribute_string(instance, "datasheet")? {
-        fields.push(SymbolField::new("Datasheet", datasheet, at).with_hidden(true));
-    }
-    // Imported boards persist the original schematic Description; an explicitly
-    // empty one is meaningful.
-    let description = match component_slots::attribute_string(instance, "schematic_description")? {
-        Some(description) => Some(description),
-        None => component_slots::attribute_string(instance, "description")?,
-    };
-    if let Some(description) = description {
-        fields.push(SymbolField::new("Description", description, at).with_hidden(true));
+    // KiCad always writes the mandatory Datasheet and Description fields.
+    // Imported boards persist the original schematic Description.
+    let datasheet = component_slots::attribute_string(instance, "datasheet")?;
+    let description = component_slots::attribute_string(instance, "schematic_description")?
+        .or(component_slots::attribute_string(instance, "description")?);
+    for (name, value) in [("Datasheet", datasheet), ("Description", description)] {
+        fields.push(SymbolField::new(name, value.unwrap_or_default(), at).with_hidden(true));
     }
     Ok(fields)
 }
@@ -3284,6 +3284,7 @@ fn build_net_symbol(
         at: Point::default(),
         rotation: Rotation::default(),
         mirror: None,
+        exclude_from_sim: false,
         dnp: false,
         in_bom: true,
         on_board: true,
@@ -3938,6 +3939,7 @@ mod tests {
     fn test_page_with_sheet(id: &str) -> SchPage {
         let mut page = SchPage::new(id);
         page.items.push(SchItem::Sheet(Box::new(Sheet {
+            instances: Vec::new(),
             id: format!("{id}-sheet"),
             placed: true,
             at: Some(Point::new(10.0, 10.0)),
@@ -4171,6 +4173,7 @@ mod tests {
         .unwrap();
         let slot = SymbolSlotKey::new("MQ-7.MQ-7", 1).unwrap();
         let symbol = Symbol {
+            exclude_from_sim: false,
             id: slot.symbol_id(),
             lib_id: definition.lib_id.clone(),
             lib_name: None,

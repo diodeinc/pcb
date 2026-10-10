@@ -3,7 +3,13 @@ use std::collections::{BTreeMap, BTreeSet};
 use anyhow::{Context, Result, bail};
 use pcb_sch::InstanceRef;
 
-use crate::{SchDocument, SchItem, connectivity::kicad::resolve_file_name, deterministic_uuid};
+use crate::{
+    SchDocument, SchItem, SchPage, SymbolInstance, SymbolSlotKey,
+    connectivity::kicad::{page_instances, resolve_file_name},
+    deterministic_uuid,
+    kicad::find_child,
+    model::SheetInstance,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct LinkedModule {
@@ -309,6 +315,197 @@ fn path_depth(path: &str) -> usize {
     path.split('.').count()
 }
 
+/// Fill in symbol annotations and sheet page numbers per sheet-instance path
+/// the way KiCad does on load: unnumbered sheets take the lowest unused page
+/// numbers in sheet-list order, and paths under this project's roots belong
+/// to this project even after a rename.
+pub(crate) fn sync_instances(
+    document: &mut SchDocument,
+    slots: &BTreeSet<SymbolSlotKey>,
+) -> Result<()> {
+    let project = document.project_name.clone();
+    let instances = page_instances(document)?;
+    let page_of = instances
+        .iter()
+        .map(|instance| (instance.id.as_str(), instance.page))
+        .collect::<BTreeMap<_, _>>();
+    let mut paths_by_page = BTreeMap::<String, Vec<String>>::new();
+    let mut used = BTreeSet::new();
+    let mut unnumbered = Vec::new();
+    // Sheets KiCad cannot reach (unplaced, or below an unplaced sheet) take no page number.
+    let mut unreachable = BTreeSet::new();
+    for instance in &instances {
+        paths_by_page
+            .entry(instance.page.id.clone())
+            .or_default()
+            .push(format!("/{}", instance.id));
+        // Roots are numbered by `sheet_instances`, child sheets by their sheet item.
+        let (page, sheet) = match instance.id.rsplit_once('/') {
+            None => (
+                root_page_number(instance.page),
+                (instance.page.id.clone(), None),
+            ),
+            Some((parent_id, sheet_id)) => {
+                let parent = page_of[parent_id];
+                let sheet = parent
+                    .items
+                    .iter()
+                    .find_map(|item| match item {
+                        SchItem::Sheet(sheet) if sheet.id == sheet_id => Some(sheet),
+                        _ => None,
+                    })
+                    .context("sheet instance without a sheet item")?;
+                if !sheet.placed || unreachable.contains(parent_id) {
+                    unreachable.insert(instance.id.as_str());
+                    continue;
+                }
+                let parent_path = format!("/{parent_id}");
+                let page = sheet
+                    .instances
+                    .iter()
+                    .find(|instance| instance.path == parent_path)
+                    .map(|instance| instance.page.clone());
+                (
+                    page,
+                    (parent.id.clone(), Some((sheet_id.to_string(), parent_path))),
+                )
+            }
+        };
+        match page {
+            Some(page) => {
+                used.insert(page);
+            }
+            None => unnumbered.push(sheet),
+        }
+    }
+    drop(instances);
+    // Keyed by page and sheet item; `None` is the page's own root `sheet_instances`.
+    let mut new_pages = BTreeMap::<(String, Option<String>), Vec<SheetInstance>>::new();
+    let free = (1..).map(|n| n.to_string()).filter(|n| !used.contains(n));
+    for ((page_id, sheet), page) in unnumbered.into_iter().zip(free) {
+        let (sheet_id, path) = sheet.map_or((None, "/".to_string()), |(id, path)| (Some(id), path));
+        new_pages
+            .entry((page_id, sheet_id))
+            .or_default()
+            .push(SheetInstance {
+                project: project.to_string(),
+                path,
+                page,
+            });
+    }
+
+    let SchDocument {
+        pages,
+        root_page_ids,
+        ..
+    } = document;
+    let is_root_path = |path: &str| {
+        let root = path
+            .strip_prefix('/')
+            .and_then(|path| path.split('/').next());
+        !project.is_empty() && root.is_some_and(|root| root_page_ids.iter().any(|id| id == root))
+    };
+    for page in pages {
+        let Some(paths) = paths_by_page.get(&page.id) else {
+            continue;
+        };
+        if let Some(root) = new_pages.remove(&(page.id.clone(), None)) {
+            // A root without a page number usually lacks KiCad's other trailing section too.
+            let number = &root[0].page;
+            for (tag, source) in [
+                (
+                    "sheet_instances",
+                    format!(r#"(sheet_instances (path "/" (page "{number}")))"#),
+                ),
+                ("embedded_fonts", "(embedded_fonts no)".to_string()),
+            ] {
+                let present = page.items.iter().any(|item| {
+                    matches!(item, SchItem::Unsupported(sexpr)
+                        if find_child(std::slice::from_ref(sexpr), tag).is_some())
+                });
+                if !present {
+                    page.items
+                        .push(SchItem::Unsupported(pcb_sexpr::parse(&source)?));
+                }
+            }
+        }
+        for item in &mut page.items {
+            match item {
+                SchItem::Symbol(symbol) => {
+                    let slot = symbol
+                        .field_value("Path")
+                        .and_then(|path| SymbolSlotKey::new(path, symbol.unit))
+                        .filter(|slot| slots.contains(slot));
+                    let reference = match (symbol.reference(), &slot) {
+                        (Some(reference), _) => reference.to_string(),
+                        (None, Some(slot)) => {
+                            bail!("managed symbol '{slot}' has no Reference field")
+                        }
+                        (None, None) => continue,
+                    };
+                    for path in paths {
+                        match symbol.instances.iter_mut().find(|i| &i.path == path) {
+                            // Only managed annotations follow the Reference field.
+                            Some(instance) => {
+                                if slot.is_some() {
+                                    instance.reference = Some(reference.clone());
+                                    instance.unit = Some(symbol.unit);
+                                }
+                            }
+                            None => symbol.instances.push(SymbolInstance {
+                                project: project.to_string(),
+                                path: path.clone(),
+                                reference: Some(reference.clone()),
+                                unit: Some(symbol.unit),
+                                unsupported: Vec::new(),
+                            }),
+                        }
+                    }
+                    for instance in &mut symbol.instances {
+                        if is_root_path(&instance.path) {
+                            instance.project = project.to_string();
+                        }
+                    }
+                    symbol.instances.sort_by(|a, b| a.path.cmp(&b.path));
+                }
+                SchItem::Sheet(sheet) => {
+                    if let Some(added) =
+                        new_pages.remove(&(page.id.clone(), Some(sheet.id.clone())))
+                    {
+                        sheet.instances.extend(added);
+                    }
+                    for instance in &mut sheet.instances {
+                        if is_root_path(&instance.path) {
+                            instance.project = project.to_string();
+                        }
+                    }
+                    sheet.instances.sort_by(|a, b| a.path.cmp(&b.path));
+                }
+                _ => {}
+            }
+        }
+    }
+    Ok(())
+}
+
+/// The root page number from `(sheet_instances (path "/" (page "N")))`.
+fn root_page_number(page: &SchPage) -> Option<String> {
+    page.items.iter().find_map(|item| {
+        let SchItem::Unsupported(sexpr) = item else {
+            return None;
+        };
+        let path = find_child(
+            find_child(std::slice::from_ref(sexpr), "sheet_instances")?,
+            "path",
+        )?;
+        (path.get(1)?.as_atom()? == "/").then_some(())?;
+        find_child(path, "page")?
+            .get(1)?
+            .as_atom()
+            .map(str::to_string)
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::Path;
@@ -344,6 +541,7 @@ mod tests {
             .iter()
             .map(|child| {
                 SchItem::Sheet(Box::new(crate::Sheet {
+                    instances: Vec::new(),
                     id: sheet_id(child),
                     placed: true,
                     at: None,

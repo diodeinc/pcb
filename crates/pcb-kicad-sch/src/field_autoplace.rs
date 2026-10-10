@@ -918,6 +918,7 @@ mod tests {
 
     fn test_symbol(at: Point, rotation: Rotation, mirror: Option<MirrorAxis>) -> Symbol {
         Symbol {
+            exclude_from_sim: false,
             id: "symbol".to_string(),
             lib_id: "Test:IC".to_string(),
             lib_name: None,

@@ -17,6 +17,10 @@ use crate::{
 /// One exact, reversible change to the typed schematic document.
 #[derive(Debug, Clone, PartialEq)]
 pub enum DocumentEdit {
+    SetProjectName {
+        before: String,
+        after: String,
+    },
     SetRootPages {
         before: Vec<String>,
         after: Vec<String>,
@@ -83,6 +87,12 @@ fn apply_document_edits(document: &SchDocument, edits: &[DocumentEdit]) -> Resul
     let mut result = document.clone();
     for edit in edits {
         match edit {
+            DocumentEdit::SetProjectName { before, after } => {
+                if &result.project_name != before {
+                    bail!("reconciliation plan project name does not match the input document");
+                }
+                result.project_name.clone_from(after);
+            }
             DocumentEdit::SetRootPages { before, after } => {
                 if &result.root_page_ids != before {
                     bail!("reconciliation plan root pages do not match the input document");
@@ -130,6 +140,12 @@ fn revert_document_edits(document: &SchDocument, edits: &[DocumentEdit]) -> Resu
     let mut result = document.clone();
     for edit in edits.iter().rev() {
         match edit {
+            DocumentEdit::SetProjectName { before, after } => {
+                if &result.project_name != after {
+                    bail!("reconciliation plan project name does not match the repaired document");
+                }
+                result.project_name.clone_from(before);
+            }
             DocumentEdit::SetRootPages { before, after } => {
                 if &result.root_page_ids != after {
                     bail!("reconciliation plan root pages do not match the repaired document");
@@ -348,6 +364,12 @@ fn build_plan(
 
 fn document_edits(before: &SchDocument, after: &SchDocument) -> Result<Vec<DocumentEdit>> {
     let mut edits = Vec::new();
+    if before.project_name != after.project_name {
+        edits.push(DocumentEdit::SetProjectName {
+            before: before.project_name.clone(),
+            after: after.project_name.clone(),
+        });
+    }
     if before.root_page_ids != after.root_page_ids {
         edits.push(DocumentEdit::SetRootPages {
             before: before.root_page_ids.clone(),
@@ -402,6 +424,7 @@ mod tests {
         let after = SchDocument {
             root_page_ids: vec![root_page_id()],
             pages: vec![first, SchPage::new("child")],
+            project_name: "main".to_string(),
             ..Default::default()
         };
         let edits = document_edits(&before, &after).unwrap();

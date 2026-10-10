@@ -1,3 +1,4 @@
+use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{Context, Result, anyhow, bail};
@@ -8,7 +9,7 @@ use super::{
     ConnectivityGraph, IslandRef, SymbolLocation, Terminal,
 };
 use crate::{
-    Label, LabelKind, Point, SchDocument, SchItem, SchPage, Symbol, SymbolSlotKey,
+    Label, LabelKind, Point, SchDocument, SchItem, SchPage, Sheet, Symbol, SymbolSlotKey,
     symbol::{self, PowerScope},
 };
 
@@ -181,7 +182,7 @@ pub(crate) fn reduce_with_provenance(
 pub(crate) struct PageInstance<'a> {
     pub(crate) page: &'a SchPage,
     pub(crate) id: String,
-    child_ids: BTreeMap<String, String>,
+    pub(crate) child_ids: BTreeMap<String, String>,
 }
 
 pub(crate) fn page_instances(document: &SchDocument) -> Result<Vec<PageInstance<'_>>> {
@@ -244,14 +245,25 @@ fn collect_page_instances<'a>(
         bail!("recursive schematic hierarchy through {file_name}");
     }
 
-    let mut child_ids = BTreeMap::new();
-    let children = page
+    // KiCad's sheet list visits child sheets by position, then UUID.
+    let mut sheets = page
         .items
         .iter()
         .filter_map(|item| match item {
             SchItem::Sheet(sheet) => Some(sheet),
             _ => None,
         })
+        .collect::<Vec<_>>();
+    sheets.sort_by(|a, b| {
+        let position = |sheet: &Sheet| sheet.at.map(|at| (at.x, at.y)).unwrap_or_default();
+        position(a)
+            .partial_cmp(&position(b))
+            .unwrap_or(Ordering::Equal)
+            .then_with(|| a.id.cmp(&b.id))
+    });
+    let mut child_ids = BTreeMap::new();
+    let children = sheets
+        .into_iter()
         .map(|sheet| {
             let child_file = resolve_file_name(page, sheet.file_name())?;
             let child_page = by_file.get(&child_file).copied().ok_or_else(|| {

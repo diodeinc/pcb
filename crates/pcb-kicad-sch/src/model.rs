@@ -18,6 +18,9 @@ pub struct SchDocument {
     pub root_page_ids: Vec<Id>,
     /// KiCad 10 project bus aliases (`schematic.bus_aliases`).
     pub bus_aliases: BTreeMap<String, Vec<String>>,
+    /// The project file stem, which names this project's symbol and sheet instances.
+    #[serde(default)]
+    pub project_name: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
@@ -212,6 +215,17 @@ pub struct Sheet {
     pub pins: Vec<SheetPin>,
     /// Direct child expressions not represented by the semantic fields above.
     pub unsupported: Vec<Sexpr>,
+    /// Per-parent-sheet-instance page numbers from `(instances (project ... (path ... (page ...))))`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub instances: Vec<SheetInstance>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SheetInstance {
+    pub project: String,
+    /// Parent sheet UUID path, e.g. `/root-uuid`.
+    pub path: String,
+    pub page: String,
 }
 
 impl Sheet {
@@ -233,6 +247,9 @@ pub struct SheetPin {
     pub at: Point,
     pub rotation: Rotation,
     pub shape: LabelShape,
+    /// Text effects; the justification is derived from `rotation` (the sheet side).
+    #[serde(default)]
+    pub effects: TextEffects,
     /// Direct child expressions not represented by the semantic fields above.
     pub unsupported: Vec<Sexpr>,
 }
@@ -249,6 +266,8 @@ pub struct Symbol {
     pub at: Point,
     pub rotation: Rotation,
     pub mirror: Option<MirrorAxis>,
+    #[serde(default)]
+    pub exclude_from_sim: bool,
     #[serde(default)]
     pub dnp: bool,
     #[serde(default = "default_true")]
@@ -306,22 +325,40 @@ pub struct SymbolField {
     pub effects: TextEffects,
     pub justify: Option<FieldJustify>,
     pub hidden: bool,
+    #[serde(default)]
+    pub show_name: bool,
     pub do_not_autoplace: bool,
     /// Direct child expressions not represented by the semantic fields above.
     pub unsupported: Vec<Sexpr>,
 }
 
+/// KiCad's mandatory symbol fields, in field-id order. KiCad strips their
+/// text of surrounding whitespace on load.
+pub(crate) const MANDATORY_FIELDS: [&str; 5] = [
+    "Reference",
+    "Value",
+    "Footprint",
+    "Datasheet",
+    "Description",
+];
+
 impl SymbolField {
     pub fn new(name: impl Into<String>, value: impl Into<String>, at: Point) -> Self {
+        let name = name.into();
+        let mut value = value.into();
+        if MANDATORY_FIELDS.contains(&name.as_str()) {
+            value = value.trim().to_owned();
+        }
         Self {
             private: false,
-            name: name.into(),
-            value: value.into(),
+            name,
+            value,
             at,
             rotation_deg: 0.0,
             effects: TextEffects::default(),
             justify: None,
             hidden: false,
+            show_name: false,
             do_not_autoplace: false,
             unsupported: Vec::new(),
         }

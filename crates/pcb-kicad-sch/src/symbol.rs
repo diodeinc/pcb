@@ -175,6 +175,15 @@ impl ParsedSymbolDefinition {
             && self.sections.iter().all(|section| section.pins.is_empty())
     }
 
+    /// The pins KiCad instantiates on a placed symbol: every unit's, in the
+    /// symbol's body style.
+    pub(crate) fn instance_pins(&self, symbol: &Symbol) -> impl Iterator<Item = &PlacedPin> {
+        self.sections
+            .iter()
+            .filter(|section| matches_body_style(section.body_style, symbol.body_style))
+            .flat_map(|section| section.pins.iter())
+    }
+
     pub fn placed_pins(&self, symbol: &Symbol) -> Result<Vec<PlacedPin>> {
         let mut pins = self
             .sections
@@ -554,6 +563,7 @@ mod tests {
         assert_eq!(definition.unit_indices(), &[1, 2]);
 
         let symbol = Symbol {
+            exclude_from_sim: false,
             id: "symbol".into(),
             lib_id: "Device:Multi".into(),
             lib_name: None,
@@ -591,6 +601,7 @@ mod tests {
     #[test]
     fn transforms_pins_with_kicad_rotation_then_mirror_matrix() {
         let mut symbol = Symbol {
+            exclude_from_sim: false,
             id: "symbol".into(),
             lib_id: "Test:Symbol".into(),
             lib_name: None,

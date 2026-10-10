@@ -9,12 +9,16 @@ use crate::{SchItem, SchPage, SymbolLibrary, parse_kicad_sch_page};
 ///
 /// Unchanged semantic items and unsupported source sections retain their
 /// original text. The function performs no I/O and returns `None` when the
-/// desired page is semantically unchanged. An actual edit to a KiCad 9 page
-/// rewrites it as KiCad 10, rather than mixing modern nodes with legacy
-/// version-dependent string and body-style semantics.
+/// desired page is semantically unchanged. Pages pcb itself wrote are kept
+/// canonical instead, so an older pcb layout migrates in one rewrite. An
+/// actual edit to a KiCad 9 page rewrites it as KiCad 10, rather than mixing
+/// modern nodes with legacy version-dependent string and body-style semantics.
 pub fn patch_page_source(source: &str, desired_page: &SchPage) -> Result<Option<String>> {
     let desired_source = desired_page.to_kicad_sch();
     let source_root = pcb_sexpr::parse(source).context("failed to parse source schematic")?;
+    if header(&source_root, "generator").and_then(Sexpr::as_atom) == Some(crate::kicad::GENERATOR) {
+        return Ok((desired_source != source).then_some(desired_source));
+    }
     let desired_root =
         pcb_sexpr::parse(&desired_source).context("failed to parse desired schematic")?;
     let source_nodes = managed_nodes(&source_root)?;
@@ -29,51 +33,53 @@ pub fn patch_page_source(source: &str, desired_page: &SchPage) -> Result<Option<
             (Some(desired_node), Some(desired_value))
                 if source_values.get(key) != Some(desired_value) =>
             {
-                patches.replace_raw(
-                    source_node.span,
-                    pcb_sexpr::formatter::format_tree(desired_node, FormatMode::Normal)
-                        .trim()
-                        .to_string(),
-                )
+                patches.replace_raw(source_node.span, format_node(desired_node))
             }
             (Some(_), Some(_)) => {}
-            (None, None) => patches.replace_raw(source_node.span, String::new()),
+            (None, None) => patches.replace_raw(line_span(source, source_node.span), String::new()),
             _ => bail!("managed schematic identity '{key}' has inconsistent semantic data"),
         }
     }
 
-    let additions = desired_nodes
-        .iter()
-        .filter(|(key, _)| !source_nodes.contains_key(*key))
-        .map(|(_, node)| {
-            pcb_sexpr::formatter::format_tree(node, FormatMode::Normal)
-                .trim()
-                .to_string()
-        })
-        .collect::<Vec<_>>();
-    if !additions.is_empty() {
-        let insertion = trailing_section_start(&source_root)?.unwrap_or(
+    // New nodes go before the next node the source already has.
+    let mut pending = Vec::new();
+    let mut insert = |at: usize, nodes: &mut Vec<String>| {
+        let text = nodes
+            .drain(..)
+            .map(|node| format!("\t{node}\n"))
+            .collect::<String>();
+        patches.replace_raw(pcb_sexpr::Span::new(at, at), text);
+    };
+    for node in &desired_root
+        .as_list()
+        .context("expected kicad_sch root list")?[1..]
+    {
+        let Some(key) = managed_node_key(node) else {
+            continue;
+        };
+        match source_nodes.get(&key) {
+            Some(source_node) if !pending.is_empty() => {
+                insert(line_start(source, source_node.span.start), &mut pending)
+            }
+            Some(_) => {}
+            None => pending.push(format_node(node)),
+        }
+    }
+    if !pending.is_empty() {
+        let end = trailing_section_start(&source_root)?.unwrap_or(
             source_root
                 .span
                 .end
                 .checked_sub(1)
                 .context("schematic root has an invalid span")?,
         );
-        patches.replace_raw(
-            pcb_sexpr::Span::new(insertion, insertion),
-            format!("\n{}\n", additions.join("\n")),
-        );
+        insert(line_start(source, end), &mut pending);
     }
 
     if patches.is_empty() {
         return Ok(None);
     }
-    let source_version = source_root
-        .as_list()
-        .and_then(|items| pcb_sexpr::find_child_list(items, "version"))
-        .and_then(|items| items.get(1))
-        .and_then(Sexpr::as_int);
-    if source_version == Some(20250114) {
+    if header(&source_root, "version").and_then(Sexpr::as_int) == Some(20250114) {
         return Ok(Some(desired_source));
     }
     let mut patched = Vec::new();
@@ -81,6 +87,38 @@ pub fn patch_page_source(source: &str, desired_page: &SchPage) -> Result<Option<
     String::from_utf8(patched)
         .context("patched schematic is not UTF-8")
         .map(Some)
+}
+
+fn header<'a>(root: &'a Sexpr, tag: &str) -> Option<&'a Sexpr> {
+    pcb_sexpr::find_child_list(root.as_list()?, tag)?.get(1)
+}
+
+fn format_node(node: &Sexpr) -> String {
+    pcb_sexpr::formatter::format_tree(node, FormatMode::Normal)
+        .trim()
+        .replace('\n', "\n\t")
+}
+
+/// Start of `offset`'s line, unless another node precedes it on that line.
+fn line_start(source: &str, offset: usize) -> usize {
+    let start = source[..offset].rfind('\n').map_or(0, |index| index + 1);
+    if source[start..offset].trim().is_empty() {
+        start
+    } else {
+        offset
+    }
+}
+
+fn line_span(source: &str, span: pcb_sexpr::Span) -> pcb_sexpr::Span {
+    let start = line_start(source, span.start);
+    let end = source[span.end..]
+        .find('\n')
+        .map_or(source.len(), |index| span.end + index + 1);
+    if source[span.end..end].trim().is_empty() {
+        pcb_sexpr::Span::new(start, end)
+    } else {
+        span
+    }
 }
 
 #[derive(PartialEq)]
