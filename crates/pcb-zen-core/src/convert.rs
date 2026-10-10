@@ -1177,15 +1177,21 @@ fn diagnose_ignored_schematic_option(
             .into_iter()
             .filter(|option| module.properties().contains_key(*option))
         {
-            diagnostics.push(Diagnostic::categorized(
-                module.source_path(),
-                &format!(
-                    "`schematic=\"{option}\"` only affects legacy schematics; module '{path}' \
-                     is a sheet because it declares Project()"
-                ),
-                "module.schematic.ignored",
-                EvalSeverity::Warning,
-            ));
+            let body = format!(
+                "`schematic=\"{option}\"` only affects legacy schematics; module '{path}' is a \
+                 sheet because it declares Project()"
+            );
+            let call_site = module.call_site();
+            diagnostics.push(
+                Diagnostic::categorized(
+                    call_site.map_or(module.source_path(), |(file, ..)| file),
+                    &body,
+                    "module.schematic.ignored",
+                    EvalSeverity::Warning,
+                )
+                .with_span(call_site.map(|(_, span, _)| *span))
+                .with_call_stack(call_site.map(|(.., stack)| stack.clone())),
+            );
         }
     }
 }

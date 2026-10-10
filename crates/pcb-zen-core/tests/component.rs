@@ -1965,7 +1965,7 @@ Component(
 
 #[test]
 fn schematic_option_on_project_module_warns_only_for_linked_projects() {
-    let ignored_kinds = |root_project: &str| {
+    let ignored = |root_project: &str| {
         let result = common::eval_zen(vec![
             (
                 "Sub.zen".to_string(),
@@ -1992,12 +1992,14 @@ Component(name = "R1", footprint = "0402", pin_defs = {"1": "1"}, pins = {"1": p
                 diag.downcast_error_ref::<CategorizedDiagnostic>()
                     .is_some_and(|c| c.kind == "module.schematic.ignored")
             })
-            .count()
+            .map(|diag| (diag.path.ends_with("test.zen"), diag.span.is_some()))
+            .collect::<Vec<_>>()
     };
 
+    // Attributed to the instantiation so `# suppress:` there works.
     assert_eq!(
-        ignored_kinds(r#"builtin.add_property("schematic_path", ".")"#),
-        1
+        ignored(r#"builtin.add_property("schematic_path", ".")"#),
+        [(true, true)]
     );
-    assert_eq!(ignored_kinds(""), 0);
+    assert!(ignored("").is_empty());
 }
