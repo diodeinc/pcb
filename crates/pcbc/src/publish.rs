@@ -11,7 +11,8 @@ use inquire::{Confirm, Select};
 use pcb_zen::workspace::{WorkspaceInfo, WorkspaceInfoExt, WorkspacePackage, get_workspace_info};
 use pcb_zen::{git, tags};
 use pcb_zen_core::config::{DependencySpec, PcbToml, find_workspace_root};
-use pcb_zen_core::{DefaultFileProvider, initial_package_version};
+use pcb_zen_core::diagnostics::diagnostic_kind;
+use pcb_zen_core::{DefaultFileProvider, Diagnostics, DiagnosticsPass, initial_package_version};
 use petgraph::Direction;
 use petgraph::graph::{DiGraph, NodeIndex};
 use rayon::prelude::*;
@@ -1055,6 +1056,7 @@ fn build_workspace(
     let eval_state = crate::build::BuildEvalState::new(resolution);
     let mut has_errors = false;
     let mut has_warnings = false;
+    let mut blocking = Diagnostics::default();
     for zen_path in &zen_files {
         let file_name = zen_path.file_name().unwrap().to_string_lossy();
         let result = eval_state.build(
@@ -1065,16 +1067,28 @@ fn build_workspace(
             &mut has_errors,
             &mut has_warnings,
         );
-        if pcbc::kicad_schematic::has_unsuppressed_schematic_diagnostics(&result.diagnostics) {
-            has_errors = true;
-        }
+        blocking.diagnostics.extend(
+            result
+                .diagnostics
+                .iter()
+                .filter(|d| {
+                    !d.suppressed
+                        && (d.is_error()
+                            || diagnostic_kind(d)
+                                .is_some_and(|k| k == "sch" || k.starts_with("sch.")))
+                })
+                .cloned(),
+        );
         if let Some(schematic) = result.schematic {
             crate::build::print_build_success(&file_name, &schematic);
         }
     }
 
-    if has_errors {
-        bail!("Build failed. Fix errors before publishing.");
+    if !blocking.diagnostics.is_empty() {
+        let count = blocking.diagnostics.len();
+        eprintln!("\n{}", "Blocking publish:".red().bold());
+        pcb_zen::diagnostics::RenderPass.apply(&mut blocking);
+        bail!("Publish blocked by {count} diagnostic(s) above; sch.* warnings block like errors.");
     }
     Ok(())
 }
@@ -1084,7 +1098,7 @@ fn resolve_remote(repo_root: &Path, force: bool) -> Result<String> {
         anyhow::anyhow!("Not on a branch (detached HEAD state). Switch to main before publishing.")
     })?;
     if !force && branch != "main" {
-        bail!("Must be on 'main' branch to publish.");
+        bail!("On branch '{branch}'. Publishing runs only from 'main'; switch to main first.");
     }
     git::get_branch_remote(repo_root, &branch).ok_or_else(|| {
         anyhow::anyhow!(
@@ -1130,11 +1144,12 @@ fn preflight_checks(repo_root: &Path, remote: &str) -> Result<()> {
         .ok_or_else(|| anyhow::anyhow!("Failed to resolve {}", remote_ref))?;
 
     if local_sha != remote_sha {
+        let range = format!("HEAD...{remote_ref}");
+        let counts = git::run_output(repo_root, &["rev-list", "--left-right", "--count", &range])?;
+        let (ahead, behind) = counts.split_once('\t').unwrap_or(("?", "?"));
         bail!(
-            "Local main ({}) is out of sync with {}/main ({}).\nPull or push changes before publishing.",
-            &local_sha[..8],
-            remote,
-            &remote_sha[..8]
+            "Local main is {ahead} commit(s) ahead of and {behind} behind {remote_ref}. \
+             Pull or push before publishing."
         );
     }
 
