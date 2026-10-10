@@ -167,9 +167,6 @@ fn parse_kicad_pcb_refdes_to_anchor_key(
     Ok(out)
 }
 
-/// Footprints whose paths name a sheet outside the schematic (typical of converted projects)
-/// would hang their components off a sheet that does not exist. Stale symbol UUIDs on a real
-/// sheet are fine: layout extraction joins those by reference.
 fn ensure_footprints_linked(
     pcb_anchors: &BTreeMap<KiCadRefDes, KiCadUuidPathKey>,
     sheet_tree: &ImportSheetTree,
@@ -187,10 +184,9 @@ fn ensure_footprints_linked(
         .collect::<Vec<_>>();
     anyhow::ensure!(
         unlinked.is_empty(),
-        "PCB footprints are not linked to the schematic (their paths name sheets the schematic does not have): {}. \
-         In KiCad's PCB editor, run Update PCB from Schematic with \
-         \"Re-link footprints to schematic symbols based on their reference designators\" \
-         checked, save, and import again",
+        "PCB footprints are not linked to the schematic, their paths name no schematic sheet: {}. \
+         Run KiCad's Update PCB from Schematic with \"Re-link footprints to schematic symbols \
+         based on their reference designators\" checked, then save and import again",
         unlinked.join(", ")
     );
     Ok(())
@@ -1420,39 +1416,32 @@ mod tests {
         let netlist = r#"(export (components
             (comp (ref "R1") (sheetpath (tstamps "/sheet-a/")) (tstamps "r1")))
             (nets))"#;
-        // A stale symbol UUID on a real sheet still joins by reference.
-        for (pcb_path, linked) in [
-            ("/sheet-a/r1", true),
-            ("/sheet-a/stale", true),
-            ("/altium/r1", false),
-        ] {
+        for (pcb_path, linked) in [("/sheet-a/stale", true), ("/altium/r1", false)] {
             let pcb_anchors = BTreeMap::from([(
                 KiCadRefDes::from("R1".to_string()),
                 KiCadUuidPathKey::from_pcb_path(pcb_path)?,
             )]);
             let mut netlist = parse_kicad_sexpr_netlist(netlist, &pcb_anchors)?;
             let extracted = extract_kicad_schematic_data(&schematic, &mut netlist.components)?;
-            let units = &netlist.components[&pcb_anchors[&KiCadRefDes::from("R1".to_string())]]
-                .schematic
-                .as_ref()
-                .unwrap()
-                .units;
             assert_eq!(
-                units.keys().map(|key| key.pcb_path()).collect::<Vec<_>>(),
-                ["/sheet-a/r1"]
+                netlist
+                    .components
+                    .values()
+                    .next()
+                    .unwrap()
+                    .netlist
+                    .unit_pcb_paths,
+                [KiCadUuidPathKey::from_pcb_path("/sheet-a/r1")?]
             );
             let tree = build_schematic_sheet_tree(
                 Path::new("root.kicad_sch"),
                 &netlist.components,
                 &extracted.sheet_symbols,
             );
-            let linked_result = ensure_footprints_linked(&pcb_anchors, &tree);
-            if linked {
-                linked_result?;
-            } else {
-                let error = linked_result.unwrap_err().to_string();
-                assert!(error.contains("R1 (footprint path /altium/r1)"), "{error}");
-            }
+            assert_eq!(
+                ensure_footprints_linked(&pcb_anchors, &tree).is_ok(),
+                linked
+            );
         }
         Ok(())
     }

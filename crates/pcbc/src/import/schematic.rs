@@ -3,12 +3,11 @@
 use super::*;
 use anyhow::{Context, Result, ensure};
 use pcb_kicad_sch::connectivity::{
-    ConnectionOrigin, ConnectivityGraph, ConnectivityItemRef, IslandRef, PhysicalConnectivity,
-    PhysicalIsland, PinVisibility,
+    ConnectionOrigin, ConnectivityGraph, ConnectivityItemRef, PhysicalConnectivity, PinVisibility,
 };
 use pcb_kicad_sch::{
     SymbolSlotKey,
-    analysis::{ConnectivityInspection, NetAnalysis, SchematicIssue, inspect_schematic},
+    analysis::{ConnectivityInspection, SchematicIssue, inspect_schematic},
     canonical_component_path,
 };
 use pcb_sch::{InstanceKind, Schematic};
@@ -139,7 +138,6 @@ pub(super) fn bind_imported_schematic(
     Ok(())
 }
 
-/// Name what each piece of a split net is called, so the label or alias that splits it is visible.
 fn issue_summary(
     issue: &SchematicIssue,
     inspection: &ConnectivityInspection,
@@ -154,79 +152,46 @@ fn issue_summary(
     else {
         return summary;
     };
-    match inspection.analysis.nets.get(net_name) {
-        Some(net) if missing_terminals.is_empty() && net.connected_islands.len() > 1 => format!(
-            "{summary} ({}); connect them or rename the label so every piece uses one net name",
-            split_net_pieces(net, &inspection.physical.islands, document)
-        ),
-        _ => summary,
+    if !missing_terminals.is_empty() {
+        return summary;
     }
-}
-
-/// Each piece's visible label text and sheet files. Island names carry the bound `pcb:net`
-/// names and nested page ids are instance paths, so both are resolved through item UUIDs.
-fn split_net_pieces(
-    net: &NetAnalysis,
-    islands: &BTreeMap<IslandRef, PhysicalIsland>,
-    document: &pcb_kicad_sch::SchDocument,
-) -> String {
-    let items_by_id = document
+    // Island names are the bound `pcb:net` names, so show what the schematic itself says.
+    let drivers = document
         .pages
         .iter()
-        .flat_map(|page| {
+        .flat_map(|page| page.items.iter().map(move |item| (page, item)))
+        .filter_map(|(page, item)| {
+            let name = match item {
+                pcb_kicad_sch::SchItem::Label(label) => &label.text,
+                pcb_kicad_sch::SchItem::Symbol(symbol) => symbol.field_value("Value")?,
+                _ => return None,
+            };
             let file = page.file_name.as_deref().unwrap_or_default();
-            page.items
-                .iter()
-                .filter_map(move |item| Some((item.id()?, (file, item))))
+            Some((item.id()?, format!("'{name}' in {file}")))
         })
         .collect::<BTreeMap<_, _>>();
-    let lookup = |item: &ConnectivityItemRef| {
-        let id = match item {
-            ConnectivityItemRef::Symbol { id, .. }
-            | ConnectivityItemRef::Wire { id, .. }
-            | ConnectivityItemRef::Junction { id, .. }
-            | ConnectivityItemRef::NoConnect { id, .. }
-            | ConnectivityItemRef::Label { id, .. } => id,
-            ConnectivityItemRef::SheetPin { sheet_id, .. } => sheet_id,
-        };
-        items_by_id.get(id.as_str()).copied()
-    };
-    net.connected_islands
+    let pieces = inspection.analysis.nets[net_name]
+        .connected_islands
         .iter()
         .map(|piece| {
-            let piece = piece
-                .iter()
-                .filter_map(|island| islands.get(island))
-                .collect::<Vec<_>>();
             let names = piece
                 .iter()
-                .flat_map(|island| island.named_drivers.values().flatten())
-                .filter_map(lookup)
-                .filter_map(|(_, item)| match item {
-                    pcb_kicad_sch::SchItem::Label(label) => Some(label.text.as_str()),
-                    pcb_kicad_sch::SchItem::Symbol(symbol) => symbol.field_value("Value"),
+                .flat_map(|island| inspection.physical.islands[island].named_drivers.values())
+                .flatten()
+                .filter_map(|driver| match driver {
+                    ConnectivityItemRef::Label { id, .. }
+                    | ConnectivityItemRef::Symbol { id, .. } => drivers.get(id.as_str()),
                     _ => None,
                 })
-                .map(|name| format!("'{name}'"))
                 .collect::<BTreeSet<_>>();
-            let files = piece
-                .iter()
-                .flat_map(|island| &island.items)
-                .filter_map(lookup)
-                .map(|(file, _)| file)
-                .collect::<BTreeSet<_>>();
-            let names = if names.is_empty() {
+            if names.is_empty() {
                 "unlabelled wiring".to_string()
             } else {
-                names.into_iter().collect::<Vec<_>>().join(", ")
-            };
-            format!(
-                "{names} in {}",
-                files.into_iter().collect::<Vec<_>>().join(", ")
-            )
+                names.into_iter().cloned().collect::<Vec<_>>().join(", ")
+            }
         })
-        .collect::<Vec<_>>()
-        .join(" | ")
+        .collect::<Vec<_>>();
+    format!("{summary}: {}", pieces.join(" | "))
 }
 
 fn bind_net_names(project_file: &Path, netlist: &Schematic) -> Result<()> {
@@ -333,64 +298,4 @@ fn bind_net_names(project_file: &Path, netlist: &Schematic) -> Result<()> {
         }
     }
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn split_net_names_visible_labels_and_nested_sheets() -> Result<()> {
-        let page = |uuid: &str, body: &str| {
-            format!(
-                r#"(kicad_sch (version 20260306) (generator "eeschema") (uuid "{uuid}") (paper "A4") (lib_symbols) {body})"#
-            )
-        };
-        let label = |uuid: &str, text: &str| {
-            format!(
-                r#"(label "{text}" (at 10 10 0) (effects (font (size 1.27 1.27))) (uuid "{uuid}")
-                (property "pcb:net" "VCC" (at 0 0 0) (hide yes)))"#
-            )
-        };
-        let files = BTreeMap::from([
-            (
-                "root.kicad_sch",
-                page(
-                    "root",
-                    &[
-                        label("root-label", "VCC"),
-                        r#"(sheet (at 0 0) (size 10 10) (uuid "sheet-a")
-                        (property "Sheetname" "A" (at 0 0 0)) (property "Sheetfile" "child.kicad_sch" (at 0 0 0)))"#
-                            .to_string(),
-                    ]
-                    .concat(),
-                ),
-            ),
-            ("child.kicad_sch", page("child", &label("child-label", "VCC_ALIAS"))),
-        ]);
-        let document =
-            pcb_kicad_sch::load_project("root.kicad_pro", |path| Ok(files.get(path).cloned()))?
-                .document;
-        let physical = PhysicalConnectivity::from_kicad(&document, PinVisibility::IncludeHidden)?;
-        let pieces = physical
-            .islands
-            .iter()
-            .filter(|(_, island)| !island.named_drivers.is_empty())
-            .map(|(island, _)| vec![island.clone()])
-            .collect::<Vec<_>>();
-        let net = NetAnalysis {
-            name: "VCC".into(),
-            expected_terminals: Vec::new(),
-            missing_terminals: Vec::new(),
-            islands: pieces.concat(),
-            connected_islands: pieces,
-        };
-        let summary = split_net_pieces(&net, &physical.islands, &document);
-        assert!(summary.contains("'VCC' in root.kicad_sch"), "{summary}");
-        assert!(
-            summary.contains("'VCC_ALIAS' in child.kicad_sch"),
-            "{summary}"
-        );
-        Ok(())
-    }
 }

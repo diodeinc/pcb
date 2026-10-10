@@ -369,7 +369,6 @@ pub(super) struct ImportSheetTree {
 }
 
 impl ImportSheetTree {
-    /// The schematic file a placed unit of `refdes` lives in.
     pub(super) fn unit_file(&self, refdes: &KiCadRefDes, key: &KiCadUuidPathKey) -> Result<&Path> {
         let sheet = KiCadSheetPath::from_sheetpath_tstamps(&key.sheetpath_tstamps);
         self.nodes
