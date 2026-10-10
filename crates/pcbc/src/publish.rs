@@ -11,12 +11,12 @@ use inquire::{Confirm, Select};
 use pcb_zen::workspace::{WorkspaceInfo, WorkspaceInfoExt, WorkspacePackage, get_workspace_info};
 use pcb_zen::{git, tags};
 use pcb_zen_core::config::{DependencySpec, PcbToml, find_workspace_root};
-use pcb_zen_core::{DefaultFileProvider, initial_package_version};
+use pcb_zen_core::diagnostics::diagnostic_kind;
+use pcb_zen_core::{DefaultFileProvider, Diagnostics, DiagnosticsPass, initial_package_version};
 use petgraph::Direction;
 use petgraph::graph::{DiGraph, NodeIndex};
 use rayon::prelude::*;
 use semver::Version;
-use starlark::errors::EvalSeverity;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::env;
 use std::fmt;
@@ -1056,7 +1056,7 @@ fn build_workspace(
     let eval_state = crate::build::BuildEvalState::new(resolution);
     let mut has_errors = false;
     let mut has_warnings = false;
-    let mut blockers = Vec::new();
+    let mut blocking = Diagnostics::default();
     for zen_path in &zen_files {
         let file_name = zen_path.file_name().unwrap().to_string_lossy();
         let result = eval_state.build(
@@ -1067,41 +1067,28 @@ fn build_workspace(
             &mut has_errors,
             &mut has_warnings,
         );
-        for diagnostic in result.diagnostics.iter().filter(|d| !d.suppressed) {
-            let report = pcb_zen_core::diagnostics::DiagnosticReport::from_diagnostic(diagnostic);
-            let sch = report.kind.as_deref().and_then(|k| k.split('.').next()) == Some("sch");
-            if diagnostic.severity != EvalSeverity::Error && !sch {
-                continue;
-            }
-            let location = if report.location.is_empty() {
-                zen_path.display().to_string()
-            } else {
-                report.location
-            };
-            blockers.push(format!(
-                "  {}: {}{}: {}",
-                Path::new(&location)
-                    .strip_prefix(&workspace.root)
-                    .map_or(location.clone(), |path| path.display().to_string()),
-                diagnostic.severity.to_string().to_lowercase(),
-                report
-                    .kind
-                    .map(|kind| format!(" {kind}"))
-                    .unwrap_or_default(),
-                report.body
-            ));
-        }
+        blocking.diagnostics.extend(
+            result
+                .diagnostics
+                .iter()
+                .filter(|d| {
+                    !d.suppressed
+                        && (d.is_error()
+                            || diagnostic_kind(d)
+                                .is_some_and(|k| k == "sch" || k.starts_with("sch.")))
+                })
+                .cloned(),
+        );
         if let Some(schematic) = result.schematic {
             crate::build::print_build_success(&file_name, &schematic);
         }
     }
 
-    if !blockers.is_empty() {
-        bail!(
-            "Publish blocked by {} diagnostic(s); sch.* warnings block like errors:\n{}",
-            blockers.len(),
-            blockers.join("\n")
-        );
+    if !blocking.diagnostics.is_empty() {
+        let count = blocking.diagnostics.len();
+        eprintln!("\n{}", "Blocking publish:".red().bold());
+        pcb_zen::diagnostics::RenderPass.apply(&mut blocking);
+        bail!("Publish blocked by {count} diagnostic(s) above; sch.* warnings block like errors.");
     }
     Ok(())
 }
