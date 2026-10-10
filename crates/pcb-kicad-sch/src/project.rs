@@ -99,9 +99,17 @@ pub fn load_project(
             pages,
             root_page_ids,
             bus_aliases,
+            project_name: file_stem(project_file),
         },
         project,
     })
+}
+
+pub(crate) fn file_stem(path: &str) -> String {
+    Path::new(path)
+        .file_stem()
+        .map(|stem| stem.to_string_lossy().into_owned())
+        .unwrap_or_default()
 }
 
 /// The root schematics a project declares, which need not exist yet.

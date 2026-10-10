@@ -28,6 +28,7 @@ fn user_reorganized_page_stays_reconcilable() {
     user_page.items = moved_items;
     document.pages.push(user_page);
     document.pages[0].items.push(SchItem::Sheet(Box::new(Sheet {
+        instances: Vec::new(),
         id: "user-sheet".to_string(),
         placed: true,
         at: Some(Point::new(200.0, 100.0)),
@@ -106,6 +107,7 @@ fn cross_page_net_with_stale_page_scoped_drivers_repairs_to_global() {
     user_page.items = moved;
     document.pages.push(user_page);
     document.pages[0].items.push(SchItem::Sheet(Box::new(Sheet {
+        instances: Vec::new(),
         id: "user-sheet".to_string(),
         placed: true,
         at: Some(Point::new(200.0, 100.0)),

@@ -107,6 +107,7 @@ impl KicadBuilder {
         let pins = pins
             .iter()
             .map(|(name, at)| SheetPin {
+                effects: Default::default(),
                 id: self.id("sheet-pin"),
                 name: (*name).to_string(),
                 at: point(*at),
@@ -116,6 +117,7 @@ impl KicadBuilder {
             })
             .collect();
         self.push(SchItem::Sheet(Box::new(Sheet {
+            instances: Vec::new(),
             id,
             placed: true,
             at: None,
@@ -189,6 +191,7 @@ impl KicadBuilder {
         }
         let id = self.id("symbol");
         self.push(SchItem::Symbol(Symbol {
+            exclude_from_sim: false,
             id,
             lib_id: lib_id.to_string(),
             lib_name: None,

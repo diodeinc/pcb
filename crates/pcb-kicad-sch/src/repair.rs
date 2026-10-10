@@ -1672,6 +1672,7 @@ mod tests {
 
     fn part(at: Point, field_at: Point) -> Symbol {
         Symbol {
+            exclude_from_sim: false,
             id: "part".to_string(),
             lib_id: "Test:Part".to_string(),
             lib_name: None,
@@ -2060,6 +2061,7 @@ mod tests {
             unsupported: Vec::new(),
         });
         let sheet = SchItem::Sheet(Box::new(Sheet {
+            instances: Vec::new(),
             id: "sheet".to_string(),
             placed: true,
             at: Some(Point::new(10.0, 0.0)),
@@ -2067,6 +2069,7 @@ mod tests {
             name: None,
             file: SymbolField::new("Sheetfile", "child.kicad_sch", Point::default()),
             pins: vec![SheetPin {
+                effects: Default::default(),
                 id: "pin".to_string(),
                 name: "NET".to_string(),
                 at: Point::new(10.0, 0.0),

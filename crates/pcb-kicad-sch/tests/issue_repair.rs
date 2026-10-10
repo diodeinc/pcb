@@ -224,7 +224,7 @@ fn relocating_shorted_symbols_reconnects_their_other_nets() {
     // MID, which is valid before repair and must survive moving the symbols.
     document.pages[0]
         .items
-        .retain(|item| matches!(item, SchItem::Symbol(_)));
+        .retain(|item| matches!(item, SchItem::Symbol(_) | SchItem::Unsupported(_)));
     let target = common::pin_point(&document, "R1.R", "1");
     let source = common::pin_point(&document, "R2.R", "2");
     let symbol = managed_symbol_mut(&mut document, "R2.R");
@@ -1607,6 +1607,7 @@ fn nets_split_into_a_user_created_subsheet_are_repairable() {
             .expect("composed port label")
     };
     let sheet = Sheet {
+        instances: Vec::new(),
         id: "sheet-sub".to_string(),
         placed: true,
         at: Some(Point::new(0.0, 0.0)),
@@ -1616,6 +1617,7 @@ fn nets_split_into_a_user_created_subsheet_are_repairable() {
         pins: ["INPUT", "OUTPUT"]
             .into_iter()
             .map(|name| SheetPin {
+                effects: Default::default(),
                 id: format!("pin-{name}"),
                 name: name.to_string(),
                 at: pin_at(name),

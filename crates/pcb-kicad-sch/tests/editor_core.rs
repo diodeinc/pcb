@@ -84,9 +84,7 @@ fn reconciliation_refreshes_netlist_derived_symbol_properties() {
     symbol.in_bom = true;
     symbol.on_board = false;
     symbol.in_pos_files = true;
-    symbol.unsupported.push(
-        pcb_sexpr::parse("(exclude_from_sim yes)").expect("parse unsupported symbol property"),
-    );
+    symbol.exclude_from_sim = true;
     let stale = SchDocument::from_kicad_sch(&stale.pages[0].to_kicad_sch()).unwrap();
 
     let instance = netlist

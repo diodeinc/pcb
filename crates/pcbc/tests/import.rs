@@ -540,7 +540,13 @@ fn assert_preserved_schematic(path: &std::path::Path, original: &str, applied: b
     use pcb_kicad_sch::{SchDocument, SchItem, SymbolSlotKey};
     let mut imported = SchDocument::from_kicad_sch(&fs::read_to_string(path).unwrap()).unwrap();
     let mut source = SchDocument::from_kicad_sch(original).unwrap();
-    let library = source.pages[0].library.clone();
+    // Apply writes items in KiCad's save order; pair them by identity.
+    for page in imported.pages.iter_mut().chain(source.pages.iter_mut()) {
+        page.items.sort_by_cached_key(|item| match item {
+            SchItem::Symbol(symbol) => format!("symbol {:?} {}", symbol.at, symbol.unit),
+            item => format!("{:?}", item.id()),
+        });
+    }
     // Only managed symbol identity may differ. This checks the whole parsed page, including
     // library definitions, wires, graphics, no-connects, fields, hierarchy, and unit placement.
     for (imported, original) in imported.pages[0]
@@ -568,15 +574,20 @@ fn assert_preserved_schematic(path: &std::path::Path, original: &str, applied: b
                 imported.fields.remove("Footprint");
                 original.fields.remove("Footprint");
                 if applied {
-                    // KiCad may store all units' pin UUIDs on each unit. Apply keeps only the
-                    // selected unit's records, without changing its physical pin identity.
-                    let pins = library.definitions[original.library_key()]
-                        .placed_pins(original)
-                        .unwrap()
-                        .into_iter()
-                        .map(|pin| pin.number)
+                    // Apply always writes the mandatory fields.
+                    for name in ["Datasheet", "Description"] {
+                        if !original.fields.contains_key(name) {
+                            imported.fields.remove(name);
+                        }
+                    }
+                    // Apply lists every unit's pins, like KiCad; the source may list only
+                    // the placed unit's. Pins the source lists must keep their identity.
+                    let pins = original
+                        .pins
+                        .iter()
+                        .map(|pin| pin.number.clone())
                         .collect::<BTreeSet<_>>();
-                    original.pins.retain(|pin| pins.contains(&pin.number));
+                    imported.pins.retain(|pin| pins.contains(&pin.number));
                     original.pins.sort_by(|a, b| a.number.cmp(&b.number));
                     imported.pins.sort_by(|a, b| a.number.cmp(&b.number));
                 }
@@ -1347,6 +1358,9 @@ fn unwired_hidden_power_net_preserves_native_name_with_logical_binding() {
     assert_repeated_schematic_apply(&mut sandbox, "out/layout.zen", &[]);
     let applied =
         pcb_kicad_sch::SchDocument::from_kicad_sch(&fs::read_to_string(output).unwrap()).unwrap();
+    // Island numbering follows KiCad's save order.
+    let document =
+        pcb_kicad_sch::SchDocument::from_kicad_sch(&document.pages[0].to_kicad_sch()).unwrap();
     assert_eq!(
         pcb_kicad_sch::connectivity::ConnectivityGraph::from_kicad(&applied).unwrap(),
         pcb_kicad_sch::connectivity::ConnectivityGraph::from_kicad(&document).unwrap()
