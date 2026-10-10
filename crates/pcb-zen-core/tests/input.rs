@@ -1244,6 +1244,7 @@ fn errors_for_legacy_mpn_without_manufacturer_as_underspecified() {
                 && *kind == "bom.underspecified"
                 && body.contains("Component 'R1'")
                 && body.contains("missing manufacturer")
+                && body.contains("Set `Manufacturer_Name` on the symbol, or pass `part=Part(...)`")
         }),
         "expected mpn-only component to error as bom.underspecified, got: {categorized:?}"
     );

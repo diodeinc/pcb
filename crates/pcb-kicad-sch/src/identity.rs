@@ -14,7 +14,7 @@ pub use pcb_sch::kicad_identity::UUID_NAMESPACE_URL;
 use crate::model::Id;
 
 /// Python's `uuid.NAMESPACE_URL`, matching the layout sync code in pcb.
-pub const ROOT_PAGE_KEY: &str = "root";
+pub(crate) const ROOT_PAGE_KEY: &str = "root";
 
 const PAGE_UUID_PREFIX: &str = "sch2:page:";
 
@@ -25,7 +25,7 @@ pub fn deterministic_uuid(key: impl AsRef<str>) -> Id {
 }
 
 /// Deterministic page UUID for pages created by sch2.
-pub fn deterministic_page_id(page_key: impl AsRef<str>) -> Id {
+pub(crate) fn deterministic_page_id(page_key: impl AsRef<str>) -> Id {
     deterministic_uuid(format!("{PAGE_UUID_PREFIX}{}", page_key.as_ref()))
 }
 
@@ -113,7 +113,7 @@ impl SymbolSlotKey {
     ///
     /// Unit 1 intentionally uses the bare component path so single-unit symbol
     /// IDs match the existing pcb layout UUID convention.
-    pub fn uuid_key(&self) -> String {
+    pub(crate) fn uuid_key(&self) -> String {
         if self.unit == 1 {
             self.component_path.clone()
         } else {
@@ -133,12 +133,6 @@ impl SymbolSlotKey {
     pub fn layout_sync_footprint_path(&self) -> KiCadUuidPath {
         let id = self.component_id();
         KiCadUuidPath::from_segments([id.clone(), id])
-    }
-
-    /// Native KiCad schematic/layout association path for this symbol under a
-    /// particular sheet path.
-    pub fn symbol_path_in_sheet(&self, sheet_path: &KiCadUuidPath) -> KiCadUuidPath {
-        sheet_path.with_child(self.symbol_id())
     }
 }
 
@@ -161,10 +155,6 @@ impl KiCadUuidPath {
         Self {
             segments: segments.into_iter().map(Into::into).collect(),
         }
-    }
-
-    pub fn for_page(page_id: impl Into<Id>) -> Self {
-        Self::from_segments([page_id.into()])
     }
 
     pub fn segments(&self) -> &[Id] {
@@ -250,16 +240,6 @@ mod tests {
     #[test]
     fn derives_native_symbol_and_layout_sync_paths() {
         let slot = SymbolSlotKey::new("R1", 1).expect("valid slot");
-        let sheet_path = KiCadUuidPath::for_page(root_page_id());
-
-        assert_eq!(
-            sheet_path.to_kicad_string(),
-            "/513d9cc1-d27a-514d-a37c-2f1ca04dddfa"
-        );
-        assert_eq!(
-            slot.symbol_path_in_sheet(&sheet_path).to_kicad_string(),
-            "/513d9cc1-d27a-514d-a37c-2f1ca04dddfa/993684ed-29bc-53ba-bc0d-39d7d84da9bd"
-        );
         assert_eq!(
             slot.layout_sync_footprint_path().to_kicad_string(),
             pcb_sch::kicad_identity::footprint_kiid_path("R1")

@@ -462,14 +462,14 @@ impl ModuleConverter {
                 Some(_) => (
                     "bom.underspecified",
                     format!(
-                        "Component '{name}' is included in the BOM but is missing manufacturer information. Specify `part=Part(...)`."
+                        "Component '{name}' is included in the BOM but is missing manufacturer information. Set `Manufacturer_Name` on the symbol, or pass `part=Part(...)`."
                     ),
                 ),
                 None if Self::is_api_bom_match_eligible(instance) => continue,
                 None => (
                     "bom.unspecified",
                     format!(
-                        "Component '{name}' is included in the BOM but is missing part information. Specify `part=Part(...)`."
+                        "Component '{name}' is included in the BOM but is missing part information. Set `Manufacturer_Part_Number` and `Manufacturer_Name` on the symbol, or pass `part=Part(...)`."
                     ),
                 ),
             };
