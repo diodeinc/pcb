@@ -589,11 +589,11 @@ fn test_inventory_pins_selected_release_not_checkout_contents() {
         .tag("parts/a/v0.9.0")
         .tag("parts/lightweight/v0.4.0");
     let release_commit = sandbox.cmd("git", ["rev-parse", "HEAD"]).read().unwrap();
-    let content_hash = "h1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
-    // No v prefix in the selected tag. Ignore manifest and other-package hashes.
-    sandbox.cmd("git", ["tag", "-a", "parts/a/0.10.0", "-m", &format!(
-        "example.com/registry/parts/a v0.10.0/pcb.toml h1:manifest\nexample.com/registry/parts/other v0.10.0 h1:other\nexample.com/registry/parts/a v0.10.0 {content_hash}"
-    )]).run().unwrap();
+    // No v prefix in the selected tag.
+    sandbox
+        .cmd("git", ["tag", "-a", "parts/a/0.10.0", "-m", "release"])
+        .run()
+        .unwrap();
     sandbox
         .cmd(
             "git",
@@ -615,9 +615,9 @@ fn test_inventory_pins_selected_release_not_checkout_contents() {
         .commit("unpublished package edits");
     sandbox.write("parts/a/dirty.zen", "dirty bytes");
     let expected = json!({"packages": [
-        {"path": "parts/a", "preferred": true, "release": {"version": "0.10.0", "commit": release_commit, "contentHash": content_hash}},
-        {"path": "parts/legacy", "preferred": false, "release": {"version": "0.2.0", "commit": release_commit, "contentHash": null}},
-        {"path": "parts/lightweight", "preferred": false, "release": {"version": "0.4.0", "commit": release_commit, "contentHash": null}},
+        {"path": "parts/a", "preferred": true, "release": {"version": "0.10.0", "commit": release_commit}},
+        {"path": "parts/legacy", "preferred": false, "release": {"version": "0.2.0", "commit": release_commit}},
+        {"path": "parts/lightweight", "preferred": false, "release": {"version": "0.4.0", "commit": release_commit}},
         {"path": "parts/unpublished", "preferred": false, "release": null}
     ]});
     assert_eq!(inventory(&sandbox), expected);
@@ -648,7 +648,7 @@ fn test_inventory_physical_membership_and_repository_relative_paths() {
         inventory(&sandbox),
         json!({"packages": [
             {"path": "registry/parent", "preferred": false, "release": null},
-            {"path": "registry/parent/child", "preferred": false, "release": {"version": "1.2.0", "commit": commit, "contentHash": null}}
+            {"path": "registry/parent/child", "preferred": false, "release": {"version": "1.2.0", "commit": commit}}
         ]})
     );
     sandbox.cwd("outside");

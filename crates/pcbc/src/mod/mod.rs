@@ -5,7 +5,7 @@ mod writeback;
 use anyhow::{Result, bail};
 use clap::Args;
 use pcb_zen::WorkspaceInfo;
-use pcb_zen::cache_index::{CacheIndex, ensure_workspace_cache_symlink};
+use pcb_zen::cache_index::ensure_workspace_cache_symlink;
 use pcb_zen::package_resolver::{
     DepGraph, DepGraphNode, PackageResolver, build_frozen_resolution_maps, plan_vendor_selected,
     target_package_urls_for_path,
@@ -142,8 +142,7 @@ pub fn execute_mod_download(args: ModDownloadArgs) -> Result<()> {
 
     if let Some(dependency) = args.dependency {
         let (module_path, version) = parse_download_dependency(&dependency)?;
-        let index = CacheIndex::open()?;
-        ensure_package_manifest_in_cache(&module_path, &version, &index)?;
+        ensure_package_manifest_in_cache(&module_path, &version)?;
         return Ok(());
     }
 

@@ -3,7 +3,6 @@ use crate::pcb_mod::request::{available_versions_for_module, resolve_module_requ
 use crate::pcb_mod::target::discover_package_target;
 use anyhow::{Context, Result, bail};
 use clap::Args;
-use pcb_zen::cache_index::CacheIndex;
 use pcb_zen::package_resolver::{PackageResolver, compatibility_lane};
 use pcb_zen::resolve::ensure_package_manifest_in_cache;
 use pcb_zen::workspace::get_workspace_info;
@@ -199,7 +198,7 @@ fn find_module(package: &str) -> Result<Module> {
 
 fn fetch_module(package: &str) -> Result<Module> {
     let (path, version) = resolve_module_request(package)?;
-    let mut dir = ensure_package_manifest_in_cache(&path, &version, &CacheIndex::open()?)
+    let mut dir = ensure_package_manifest_in_cache(&path, &version)
         .with_context(|| format!("Failed to fetch {path}@{version}"))?;
     dir.pop();
     Ok(Module {

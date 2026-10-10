@@ -48,7 +48,6 @@ r2d2_sqlite = { workspace = true }
 
 pcb-sch = { workspace = true }
 pcb-zen-core = { workspace = true }
-pcb-canonical = { workspace = true }
 pcb-sim = { workspace = true }
 pcb-ui = { workspace = true }
 path-slash = { workspace = true }

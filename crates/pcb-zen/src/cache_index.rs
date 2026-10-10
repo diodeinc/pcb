@@ -65,14 +65,7 @@ impl CacheIndex {
 
         let conn = pool.get()?;
         conn.execute_batch(
-            "CREATE TABLE IF NOT EXISTS packages (
-                module_path TEXT NOT NULL,
-                version TEXT NOT NULL,
-                content_hash TEXT NOT NULL,
-                manifest_hash TEXT NOT NULL,
-                PRIMARY KEY (module_path, version)
-            );
-            CREATE TABLE IF NOT EXISTS remote_packages (
+            "CREATE TABLE IF NOT EXISTS remote_packages (
                 repo_url TEXT NOT NULL,
                 package_path TEXT NOT NULL,
                 latest_version TEXT NOT NULL,
@@ -99,35 +92,6 @@ impl CacheIndex {
 
     fn conn(&self) -> PooledConnection<SqliteConnectionManager> {
         self.pool.get().expect("failed to get connection from pool")
-    }
-
-    // Packages (dependencies with manifest hash)
-
-    pub fn get_package(&self, module_path: &str, version: &str) -> Option<(String, String)> {
-        self.conn()
-            .query_row(
-                "SELECT content_hash, manifest_hash FROM packages WHERE module_path = ?1 AND version = ?2",
-                params![module_path, version],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )
-            .optional()
-            .ok()
-            .flatten()
-    }
-
-    pub fn set_package(
-        &self,
-        module_path: &str,
-        version: &str,
-        content_hash: &str,
-        manifest_hash: &str,
-    ) -> Result<()> {
-        self.conn().execute(
-            "INSERT OR REPLACE INTO packages (module_path, version, content_hash, manifest_hash)
-             VALUES (?1, ?2, ?3, ?4)",
-            params![module_path, version, content_hash, manifest_hash],
-        )?;
-        Ok(())
     }
 
     // Remote packages (discovered from git tags)
@@ -348,32 +312,6 @@ mod tests {
         let pool = Pool::builder().max_size(4).build(manager).unwrap();
         pool.get().unwrap().execute_batch(schema).unwrap();
         CacheIndex { pool }
-    }
-
-    #[test]
-    fn test_packages() -> Result<()> {
-        let temp = tempfile::tempdir()?;
-        let db_path = temp.path().join("index.sqlite");
-        let index = test_index(
-            &db_path,
-            "CREATE TABLE packages (
-                module_path TEXT NOT NULL,
-                version TEXT NOT NULL,
-                content_hash TEXT NOT NULL,
-                manifest_hash TEXT NOT NULL,
-                PRIMARY KEY (module_path, version)
-            );",
-        );
-
-        assert!(index.get_package("github.com/foo/bar", "1.0.0").is_none());
-
-        index.set_package("github.com/foo/bar", "1.0.0", "hash123", "manifest456")?;
-
-        let (content, manifest) = index.get_package("github.com/foo/bar", "1.0.0").unwrap();
-        assert_eq!(content, "hash123");
-        assert_eq!(manifest, "manifest456");
-
-        Ok(())
     }
 
     #[test]
