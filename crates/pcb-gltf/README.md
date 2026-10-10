@@ -22,9 +22,9 @@ Models come from the board's embedded files; nothing is looked up on disk.
   is not metallic, so it does not render black without an environment map.
   The board outline, cutouts and drills are chords within 0.005 mm, other
   arcs and round holes within 0.01 mm, and curved walls carry the
-  exact normal of the arc or cylinder they lie on. Copper faces the body
-  hides are left out: caps resting on it, copper inside it, and via barrels
-  when vias are not cut.
+  exact normal of the arc or cylinder they lie on. Copper is flat, as in
+  KiCad's VRML export: its top and bottom faces without walls, less the
+  faces resting on the body and copper inside it.
 - **Models**: one mesh per distinct embedded payload, with a primitive per
   STEP colour, drawn for every footprint that uses it with
   `EXT_mesh_gpu_instancing`; the node's `extras.references` lists the

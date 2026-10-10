@@ -4,8 +4,9 @@
 //! the exact normal of the arc or cylinder they lie on; everything else is
 //! flat shaded.
 //!
-//! Copper faces that the board body hides are left out: caps resting on
-//! the body, copper inside it, and via barrels when vias are not cut.
+//! Copper is drawn flat, as KiCad's VRML export draws it: caps without
+//! walls. Caps resting on the board body and copper inside it are left
+//! out.
 
 use std::f64::consts::TAU;
 
@@ -29,46 +30,37 @@ const OUTLINE_ERROR: f64 = 0.005;
 /// Tolerance for a copper face to count as resting on the body.
 const TOUCHING: f64 = 1e-6;
 
-/// What the board body hides.
+/// A copper prism, drawn flat: the board body's bottom and top, when it
+/// is exported, hide the caps resting on it and the copper inside it.
 #[derive(Clone, Copy)]
-struct Hidden {
-    /// The body's bottom and top, when it is exported.
+struct Copper {
     body: Option<(f64, f64)>,
-    /// Whether via barrels are inside the body, its drills not cut.
-    barrels: bool,
 }
 
 /// One optimized primitive per layer, in order.
-pub(crate) fn mesh(layers: &[Layer], cut_vias: bool) -> Vec<Primitive> {
+pub(crate) fn mesh(layers: &[Layer]) -> Vec<Primitive> {
     let body = layers
         .iter()
         .find_map(|layer| match (&layer.kind, &layer.shape) {
             (LayerKind::Body, Shape::Solids(prisms)) => prisms.first().map(|p| (p.z0, p.z1)),
             _ => None,
         });
-    let hidden = Hidden {
-        body,
-        barrels: body.is_some() && !cut_vias,
-    };
     layers
         .par_iter()
         .map(|layer| {
-            let mut primitive = self::layer(layer, hidden);
+            let mut primitive = self::layer(layer, Copper { body });
             primitive.optimize();
             primitive
         })
         .collect()
 }
 
-fn layer(layer: &Layer, hidden: Hidden) -> Primitive {
+fn layer(layer: &Layer, copper: Copper) -> Primitive {
     let copper = matches!(
         layer.kind,
         LayerKind::Copper | LayerKind::Pads | LayerKind::Vias
-    );
-    let hidden = Hidden {
-        body: hidden.body.filter(|_| copper),
-        barrels: hidden.barrels && layer.kind == LayerKind::Vias,
-    };
+    )
+    .then_some(copper);
     let parts: Vec<Primitive> = match &layer.shape {
         Shape::Solids(prisms) => {
             let error = if layer.kind == LayerKind::Body {
@@ -76,7 +68,7 @@ fn layer(layer: &Layer, hidden: Hidden) -> Primitive {
             } else {
                 MAX_ERROR
             };
-            prisms.par_iter().map(|p| prism(p, hidden, error)).collect()
+            prisms.par_iter().map(|p| prism(p, copper, error)).collect()
         }
         Shape::Faces { z, up, faces } => faces
             .par_iter()
@@ -98,13 +90,14 @@ fn layer(layer: &Layer, hidden: Hidden) -> Primitive {
     out
 }
 
-/// A prism's faces, with curves chorded within `error` millimetres.
-fn prism(prism: &Prism, hidden: Hidden, error: f64) -> Primitive {
+/// A prism's faces, with curves chorded within `error` millimetres; only
+/// its visible caps when it is copper.
+fn prism(prism: &Prism, copper: Option<Copper>, error: f64) -> Primitive {
     let Prism { z0, z1, solid } = prism;
     let (z0, z1) = (*z0, *z1);
     // Which faces the body hides: all of copper inside it, and a cap
     // resting on it.
-    let (top_hidden, bottom_hidden) = match hidden.body {
+    let (top_hidden, bottom_hidden) = match copper.and_then(|c| c.body) {
         Some((b0, b1)) if z0 >= b0 - TOUCHING && z1 <= b1 + TOUCHING => {
             return Primitive::default();
         }
@@ -132,7 +125,9 @@ fn prism(prism: &Prism, hidden: Hidden, error: f64) -> Primitive {
         if z_bottom <= z0 + 1e-9 && r_bottom > 0.0 {
             bottom.push(circle(hole.center, r_bottom, n));
         }
-        round_hole(&mut out, hole, n);
+        if copper.is_none() {
+            round_hole(&mut out, hole, n);
+        }
     }
     if !top_hidden {
         cap(&mut out, &top, z1, true);
@@ -140,7 +135,7 @@ fn prism(prism: &Prism, hidden: Hidden, error: f64) -> Primitive {
     if !bottom_hidden {
         cap(&mut out, &bottom, z0, false);
     }
-    if !hidden.barrels {
+    if copper.is_none() {
         walls(&mut out, &outer, true, z0, z1);
         for hole in &holes {
             walls(&mut out, hole, false, z0, z1);
