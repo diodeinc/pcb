@@ -146,7 +146,7 @@ fn execute_task<T>(
     start_time: Instant,
     task: impl FnOnce(&ReleaseInfo, &Spinner) -> Result<T>,
 ) -> Result<T> {
-    let spinner = Spinner::builder(name).hidden(info.quiet).start();
+    let spinner = Spinner::builder(name).start();
     let task_start = Instant::now();
     let output = task(info, &spinner)?;
     let task_duration = task_start.elapsed().as_secs_f64();
@@ -238,6 +238,7 @@ pub fn build_board_release(
     let start_time = Instant::now();
     let temporary = options.check.then(tempfile::tempdir).transpose()?;
     if let Some(temporary) = &temporary {
+        pcb_ui::hide_spinners();
         // A terminated check never drops its TempDir.
         let path = temporary.path().to_path_buf();
         ctrlc::set_handler(move || {
@@ -319,9 +320,7 @@ fn preflight_board_release(
     stages.build = StageStatus::Failed;
 
     let release_info = {
-        let info_spinner = Spinner::builder("Gathering release information")
-            .hidden(options.check)
-            .start();
+        let info_spinner = Spinner::builder("Gathering release information").start();
 
         info_spinner.set_message("Resolving dependencies");
         let resolution = crate::resolve::resolve(Some(&zen_path), false)?;

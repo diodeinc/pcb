@@ -20,7 +20,7 @@ mod style;
 mod terminal;
 
 pub use progress::{ProgressBar, ProgressBarBuilder};
-pub use spinner::{Spinner, SpinnerBuilder};
+pub use spinner::{Spinner, SpinnerBuilder, hide_spinners};
 pub use style::{Style, StyledText, icons};
 pub use terminal::{
     Alignment, TerminalSize, get_terminal_size, pad_text, truncate_text, write_stdout,

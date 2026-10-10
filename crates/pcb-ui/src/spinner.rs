@@ -1,11 +1,18 @@
 use colored::Colorize;
 use indicatif::{MultiProgress, ProgressBar, ProgressDrawTarget, ProgressStyle};
 use std::sync::LazyLock;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use crate::style::Style;
 
 static MULTI: LazyLock<MultiProgress> = LazyLock::new(MultiProgress::new);
+static HIDE_ALL: AtomicBool = AtomicBool::new(false);
+
+/// Hide every spinner started from now on.
+pub fn hide_spinners() {
+    HIDE_ALL.store(true, Ordering::Relaxed);
+}
 
 /// Default spinner tick characters (same as used in CLI)
 const DEFAULT_TICK_CHARS: &str = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏";
@@ -13,6 +20,7 @@ const DEFAULT_TICK_CHARS: &str = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏";
 /// A spinner for showing indeterminate progress
 pub struct Spinner {
     progress_bar: ProgressBar,
+    hidden: bool,
 }
 
 impl Spinner {
@@ -76,9 +84,11 @@ impl Spinner {
         self.progress_bar
             .set_draw_target(ProgressDrawTarget::hidden());
         let result = f();
-        self.progress_bar
-            .set_draw_target(ProgressDrawTarget::stderr());
-        self.progress_bar.tick();
+        if !self.hidden {
+            self.progress_bar
+                .set_draw_target(ProgressDrawTarget::stderr());
+            self.progress_bar.tick();
+        }
         result
     }
 }
@@ -150,10 +160,14 @@ impl SpinnerBuilder {
         progress_bar.set_message(self.message);
         progress_bar.enable_steady_tick(self.tick_interval);
 
-        if self.hidden {
+        let hidden = self.hidden || HIDE_ALL.load(Ordering::Relaxed);
+        if hidden {
             progress_bar.set_draw_target(ProgressDrawTarget::hidden());
         }
 
-        Spinner { progress_bar }
+        Spinner {
+            progress_bar,
+            hidden,
+        }
     }
 }
