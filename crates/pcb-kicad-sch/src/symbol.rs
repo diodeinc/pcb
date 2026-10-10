@@ -570,6 +570,7 @@ mod tests {
             fields: BTreeMap::<String, SymbolField>::new(),
             pins: Vec::new(),
             unsupported: Vec::new(),
+            instances: Vec::new(),
         };
         assert_eq!(
             definition.placed_pins(&symbol).unwrap(),
@@ -606,6 +607,7 @@ mod tests {
             fields: BTreeMap::new(),
             pins: Vec::new(),
             unsupported: Vec::new(),
+            instances: Vec::new(),
         };
 
         // KiCad's matrix is MirrorX * R90: (2, 3) -> (3, -2) -> (3, 2).

@@ -105,7 +105,7 @@ fn build_discovered_files(portable: &PortableKicadProject) -> KicadDiscoveredFil
     }
 
     // Ensure all reachable schematics are always included in the list used by extraction.
-    out.kicad_sch = portable.schematic_files_rel.clone();
+    out.kicad_sch = portable.schematic_files_rel();
     sort_discovered_files(&mut out);
     out
 }

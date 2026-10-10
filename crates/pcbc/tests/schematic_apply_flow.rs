@@ -67,16 +67,10 @@ fn linked_hierarchy_fixture(path: &std::path::Path) -> pcb_sch::Schematic {
 
 fn instance_reference<'a>(symbol: &'a pcb_kicad_sch::Symbol, path: &str) -> &'a str {
     symbol
-        .unsupported
+        .instances
         .iter()
-        .filter_map(|node| node.as_list())
-        .filter(|items| items.first().and_then(Sexpr::as_sym) == Some("instances"))
-        .flat_map(|items| pcb_sexpr::find_all_child_lists(items, "project"))
-        .flat_map(|items| pcb_sexpr::find_all_child_lists(items, "path"))
-        .find(|items| items.get(1).and_then(Sexpr::as_str) == Some(path))
-        .and_then(|items| pcb_sexpr::find_child_list(items, "reference"))
-        .and_then(|items| items.get(1))
-        .and_then(Sexpr::as_str)
+        .find(|instance| instance.path == path)
+        .and_then(|instance| instance.reference.as_deref())
         .expect("instance reference")
 }
 
@@ -105,16 +99,13 @@ fn apply_renumbers_instance_references_after_component_insertion_and_removal() {
             SchItem::Symbol(symbol) if symbol.field_value("Path").is_some() => Some(symbol),
             _ => None,
         }) {
-            symbol.unsupported.retain(|node| {
-                node.as_list()
-                    .and_then(|items| items.first())
-                    .and_then(Sexpr::as_sym)
-                    != Some("instances")
-            });
-            symbol.unsupported.push(pcb_sexpr::parse(&format!(
-                r#"(instances (project "Renumber" (path "{path}" (reference "{}") (unit {}))))"#,
-                symbol.reference().unwrap(), symbol.unit
-            )).unwrap());
+            symbol.instances = vec![pcb_kicad_sch::SymbolInstance {
+                project: "Renumber".to_string(),
+                path: path.clone(),
+                reference: symbol.reference().map(str::to_string),
+                unit: Some(symbol.unit),
+                unsupported: Vec::new(),
+            }];
             // Non-default field presentation must survive reference changes.
             symbol.fields.get_mut("Reference").unwrap().at.y += 2.54;
             symbol.fields.get_mut("Reference").unwrap().hidden = true;
@@ -151,15 +142,11 @@ fn apply_renumbers_instance_references_after_component_insertion_and_removal() {
                 assert_eq!(instance_reference(symbol, &path), reference);
                 let mut expected = previous.clone();
                 expected.fields.get_mut("Reference").unwrap().value = reference.to_string();
-                expected.unsupported = symbol.unsupported.clone();
+                expected.instances = symbol.instances.clone();
                 assert_eq!(**symbol, expected, "only annotation may change");
             }
             // New symbols without an instances section use their property.
-            let actual = if symbol
-                .unsupported
-                .iter()
-                .any(|node| node.find_list("project").is_some())
-            {
+            let actual = if !symbol.instances.is_empty() {
                 instance_reference(symbol, &path)
             } else {
                 symbol.reference().unwrap()
@@ -264,12 +251,12 @@ fn apply_repairs_stale_child_instance_reference_without_touching_other_paths() {
         })
         .unwrap();
     // Derive the expected edit independently: change just the stale leaf.
-    expected_symbol.unsupported[0] = pcb_sexpr::parse(
-        &expected_symbol.unsupported[0]
-            .to_string()
-            .replace("(reference \"R1\")", "(reference \"R2\")"),
-    )
-    .unwrap();
+    expected_symbol
+        .instances
+        .iter_mut()
+        .find(|instance| instance.reference.as_deref() == Some("R1"))
+        .unwrap()
+        .reference = Some("R2".to_string());
     assert_eq!(
         repaired.document, expected,
         "placement, wiring, hierarchy and foreign annotations must be preserved"

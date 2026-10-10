@@ -41,10 +41,10 @@ pub use model::{
     FieldHorizontalJustify, FieldJustify, FieldVerticalJustify, Graphic, GraphicKind, GraphicText,
     Junction, Label, LabelKind, LabelShape, LabelSpin, MirrorAxis, NoConnect, Paper, PinInstance,
     Point, Rotation, SchDocument, SchItem, SchPage, Sheet, SheetPin, Symbol, SymbolDefinition,
-    SymbolField, SymbolLibrary, TextEffects, TextSize, Wire,
+    SymbolField, SymbolInstance, SymbolLibrary, TextEffects, TextSize, Wire,
 };
 pub use net_symbols::NetSymbolSpec;
-pub use project::{LoadedProject, load_project, project_root_schematics};
+pub use project::{LoadedProject, load_project, project_root_schematics, sheet_file};
 pub use repair::{
     ConnectivityRepairIntent, NetDriverKind, plan_connectivity_repair, verify_connectivity_repair,
 };

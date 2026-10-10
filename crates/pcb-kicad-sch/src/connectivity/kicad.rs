@@ -253,7 +253,7 @@ fn collect_page_instances<'a>(
             _ => None,
         })
         .map(|sheet| {
-            let child_file = resolve_file_name(page, sheet.file_name());
+            let child_file = resolve_file_name(page, sheet.file_name())?;
             let child_page = by_file.get(&child_file).copied().ok_or_else(|| {
                 anyhow!(
                     "sheet {} on page {} references missing page {child_file}",
@@ -292,13 +292,8 @@ pub(crate) fn normalize_file_name(name: &str) -> String {
         .replace('\\', "/")
 }
 
-pub(crate) fn resolve_file_name(parent: &SchPage, child: &str) -> String {
-    let parent = parent
-        .file_name
-        .as_deref()
-        .and_then(|name| Path::new(name).parent())
-        .unwrap_or_else(|| Path::new(""));
-    normalize_file_name(&parent.join(child.replace('\\', "/")).to_string_lossy())
+pub(crate) fn resolve_file_name(parent: &SchPage, child: &str) -> Result<String> {
+    crate::sheet_file(parent.file_name.as_deref().unwrap_or_default(), child)
 }
 
 struct PageConnectivity {

@@ -262,6 +262,19 @@ pub struct Symbol {
     pub pins: Vec<PinInstance>,
     /// Direct child expressions not represented by the semantic fields above.
     pub unsupported: Vec<Sexpr>,
+    /// Per-sheet-instance annotations from `(instances (project ... (path ...)))`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub instances: Vec<SymbolInstance>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SymbolInstance {
+    pub project: String,
+    /// Sheet UUID path, e.g. `/root-uuid/sheet-uuid`.
+    pub path: String,
+    pub reference: Option<String>,
+    pub unit: Option<u32>,
+    pub unsupported: Vec<Sexpr>,
 }
 
 impl Symbol {

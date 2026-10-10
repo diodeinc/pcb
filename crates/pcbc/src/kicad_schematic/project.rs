@@ -76,7 +76,8 @@ pub(crate) fn declared_root_schematics(project_file: &Path) -> Result<Vec<PathBu
         .collect()
 }
 
-fn read_project_file(directory: &Path, relative: &str) -> Result<Option<String>> {
+/// Read a project-relative file, keeping reads inside the project directory.
+pub fn read_project_file(directory: &Path, relative: &str) -> Result<Option<String>> {
     let path = project_schematic_path(directory, directory, relative)?;
     match fs::read_to_string(&path) {
         Ok(content) => Ok(Some(content)),
