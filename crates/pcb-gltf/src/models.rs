@@ -145,6 +145,7 @@ fn tessellate_one(key: &str, bytes: &[u8], simplify_error: f32) -> Outcome {
             stats.num_faces
         ));
     }
+    let tessellated_any = tessellated.submeshes.iter().any(|s| !s.indices.is_empty());
     let mut primitives: Vec<([f32; 4], Primitive)> = tessellated
         .submeshes
         .into_iter()
@@ -170,7 +171,7 @@ fn tessellate_one(key: &str, bytes: &[u8], simplify_error: f32) -> Outcome {
         .filter(|(_, p)| !p.indices.is_empty())
         .collect();
     if primitives.is_empty() {
-        let mesh = match stats.failures.is_empty() {
+        let mesh = match tessellated_any || stats.failures.is_empty() {
             true => Ok(None),
             false => Err("no faces could be tessellated".to_owned()),
         };
