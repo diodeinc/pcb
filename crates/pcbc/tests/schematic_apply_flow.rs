@@ -4,7 +4,7 @@ use std::{collections::BTreeSet, fs};
 
 use pcb_kicad_sch::{
     Label, LabelKind, LabelShape, LabelSpin, MirrorAxis, PinInstance, Point, Rotation, SchItem,
-    SymbolDefinition, Wire,
+    SchPage, Symbol, SymbolDefinition, Wire,
     analysis::{SchematicIssue, inspect_schematic},
     plan_connectivity_repair,
     reconcile::plan_repairs,
@@ -14,6 +14,21 @@ use pcb_sexpr::Sexpr;
 use pcbc::kicad_schematic::{KicadProject, apply_linked_schematic};
 
 const CONNECTION_GRID_MM: f64 = 1.27;
+
+/// The page as KiCad reads it back: coordinates quantized to schematic internal units.
+fn as_written(page: &SchPage) -> SchPage {
+    pcb_kicad_sch::parse_kicad_sch_page(page.file_name.as_deref(), &page.to_kicad_sch()).unwrap()
+}
+
+fn managed_symbol(page: &SchPage) -> &Symbol {
+    page.items
+        .iter()
+        .find_map(|item| match item {
+            SchItem::Symbol(symbol) if symbol.field_value("Path").is_some() => Some(symbol),
+            _ => None,
+        })
+        .expect("managed symbol")
+}
 
 fn assert_on_connection_grid(point: Point) {
     for coordinate in [point.x, point.y] {
@@ -1061,9 +1076,11 @@ fn preserves_user_symbol_and_equivalent_label_geometry() {
     symbol.fields.get_mut("Value").unwrap().at.y += 7.62;
     symbol.fields.get_mut("Reference").unwrap().hidden = true;
     symbol.fields.get_mut("Value").unwrap().hidden = true;
-    let expected_at = symbol.at;
-    let expected_reference_at = symbol.field("Reference").unwrap().at;
-    let expected_value_at = symbol.field("Value").unwrap().at;
+    let expected = as_written(&project.document.pages[0]);
+    let expected_symbol = managed_symbol(&expected);
+    let expected_at = expected_symbol.at;
+    let expected_reference_at = expected_symbol.field("Reference").unwrap().at;
+    let expected_value_at = expected_symbol.field("Value").unwrap().at;
     let label = project.document.pages[0]
         .items
         .iter_mut()
@@ -1087,14 +1104,7 @@ fn preserves_user_symbol_and_equivalent_label_geometry() {
     apply_linked_schematic(&netlist).unwrap().unwrap();
 
     let repaired = KicadProject::load(&project_dir).unwrap();
-    let symbol = repaired.document.pages[0]
-        .items
-        .iter()
-        .find_map(|item| match item {
-            SchItem::Symbol(symbol) if symbol.field_value("Path").is_some() => Some(symbol),
-            _ => None,
-        })
-        .unwrap();
+    let symbol = managed_symbol(&repaired.document.pages[0]);
     assert_eq!(symbol.at, expected_at);
     assert_eq!(symbol.field("Reference").unwrap().at, expected_reference_at);
     assert_eq!(symbol.field("Value").unwrap().at, expected_value_at);
@@ -1905,6 +1915,7 @@ fn ambiguous_short_uses_the_same_repair_as_the_shared_issue_planner() {
     assert_eq!(repaired.document.root_page_ids, expected.root_page_ids);
     assert_eq!(repaired.document.pages.len(), expected.pages.len());
     for (repaired, expected) in repaired.document.pages.iter().zip(&expected.pages) {
+        let expected = as_written(expected);
         assert_eq!(repaired.id, expected.id);
         assert_eq!(repaired.file_name, expected.file_name);
         let mut repaired_items = repaired.items.iter().collect::<Vec<_>>();
