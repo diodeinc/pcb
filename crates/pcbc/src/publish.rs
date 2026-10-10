@@ -798,7 +798,8 @@ fn publish_packages(start_path: &Path, args: &PublishArgs) -> Result<()> {
     // These need to be published because their pcb.toml will be bumped
     let dirty_urls = expand_dirty_set(&workspace, &directly_dirty);
     if args.check {
-        return print_publish_plan(&workspace, &dirty_urls, args.bump);
+        let remote_tags = git::list_remote_tags(&workspace.root, &remote)?;
+        return print_publish_plan(&workspace, &dirty_urls, &remote_tags, args.bump);
     }
 
     if !args.no_build {
@@ -913,16 +914,16 @@ fn publish_packages(start_path: &Path, args: &PublishArgs) -> Result<()> {
 fn print_publish_plan(
     workspace: &WorkspaceInfo,
     dirty_urls: &HashSet<String>,
+    all_tags: &[String],
     bump: Option<BumpType>,
 ) -> Result<()> {
     if bump == Some(BumpType::Interactive) {
         bail!("--check needs --bump=patch, --bump=minor, --bump=major or --bump=infer");
     }
     let waves = compute_publish_waves(workspace, dirty_urls)?;
-    let all_tags = git::list_all_tags_vec(&workspace.root);
     let bumps = match bump.and_then(BumpType::release) {
         Some(bump) => uniform_bump_map(&waves, bump),
-        None => infer_all_bumps(workspace, &waves, &all_tags),
+        None => infer_all_bumps(workspace, &waves, all_tags),
     };
     let packages = waves
         .into_iter()
@@ -932,7 +933,7 @@ fn print_publish_plan(
         })
         .map(|url| {
             let pkg = &workspace.packages[&url];
-            let current = current_package_version(pkg, workspace.path(), &all_tags);
+            let current = current_package_version(pkg, workspace.path(), all_tags);
             let next = compute_next_version(current.as_ref(), bumps[&url]);
             serde_json::json!({
                 "path": pkg.rel_path.to_string_lossy(),

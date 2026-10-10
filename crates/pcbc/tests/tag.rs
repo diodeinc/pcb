@@ -94,6 +94,13 @@ fn test_publish_check_reports_package_versions() {
         .write("modules/Bar/pcb.toml", "")
         .write("modules/Bar/Bar.zen", "P1 = io(Net)\n")
         .commit("feat: add Bar, extend Foo");
+    sb.cmd("git", ["push", "-q", "origin", "main", "--tags"])
+        .run()
+        .unwrap();
+    // A local-only tag is pruned by a real publish, so the plan ignores it.
+    sb.cmd("git", ["tag", "modules/Foo/v5.0.0", "HEAD~1"])
+        .run()
+        .unwrap();
 
     let output = sb
         .run("pcbc", ["publish", "--check"])
@@ -109,5 +116,8 @@ fn test_publish_check_reports_package_versions() {
             { "path": "modules/Foo", "current": "0.2.0", "version": "0.2.1", "tag": "modules/Foo/v0.2.1" },
         ]})
     );
-    assert_eq!(sb.cmd("git", ["tag"]).read().unwrap(), "modules/Foo/v0.2.0");
+    assert_eq!(
+        sb.cmd("git", ["tag"]).read().unwrap(),
+        "modules/Foo/v0.2.0\nmodules/Foo/v5.0.0"
+    );
 }
