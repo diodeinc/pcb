@@ -1812,10 +1812,13 @@ fn parse_text<'a>(
                 at = p.xy("text at")?;
                 // `(at x y [angle] [unlocked])`: the angle is optional.
                 let mut rest = p.atom()?;
-                if let Some(a) = rest.and_then(|a| a.parse().ok()) {
-                    angle = a;
-                    rest = p.atom()?;
-                }
+                angle = match rest {
+                    None | Some("unlocked") => 0.0,
+                    Some(a) => {
+                        rest = p.atom()?;
+                        a.parse().map_err(|_| Error::Number("text angle"))?
+                    }
+                };
                 if rest == Some("unlocked") {
                     keep_upright = false;
                 }
