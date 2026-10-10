@@ -26,9 +26,14 @@ fn entries(project: &Value) -> Result<Option<Vec<Entry>>> {
 }
 
 pub(crate) fn normalized(base: &str, child: &str) -> Result<PathBuf> {
-    // KiCad accepts Windows separators in sheet paths (SCH_SHEET::SetFileName).
+    // KiCad accepts Windows separators (SCH_SHEET::SetFileName) and expands
+    // ${KIPRJMOD} to the project directory.
     let child = child.replace('\\', "/");
-    let child = Path::new(&child);
+    let (base, child) = match child.strip_prefix("${KIPRJMOD}/") {
+        Some(rooted) => ("", rooted),
+        None => (base, child.as_str()),
+    };
+    let child = Path::new(child);
     if child.as_os_str().is_empty() || child.is_absolute() {
         bail!(
             "schematic sheet path '{child}' must be relative",

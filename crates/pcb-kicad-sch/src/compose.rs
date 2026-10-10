@@ -2978,11 +2978,12 @@ fn page_driver_contexts(
                 let SchItem::Sheet(sheet) = item else {
                     continue;
                 };
-                let child_file = crate::connectivity::kicad::resolve_file_name(
+                let Some(&child_index) = crate::connectivity::kicad::resolve_file_name(
                     &document.pages[parent_index],
                     sheet.file_name(),
-                );
-                let Some(&child_index) = page_by_file.get(&child_file) else {
+                )
+                .ok()
+                .and_then(|file| page_by_file.get(&file)) else {
                     continue;
                 };
                 if child_index == parent_index || contexts.contains_key(&child_index) {

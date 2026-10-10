@@ -258,7 +258,10 @@ pub(crate) fn prune_obsolete_pages(
             SchItem::Sheet(sheet) => Some(sheet),
             _ => None,
         }) {
-            let Some(&child) = by_file.get(&resolve_file_name(page, sheet.file_name())) else {
+            let Some(&child) = resolve_file_name(page, sheet.file_name())
+                .ok()
+                .and_then(|file| by_file.get(&file))
+            else {
                 continue;
             };
             if module_paths[child].as_ref().is_none_or(|path| {
