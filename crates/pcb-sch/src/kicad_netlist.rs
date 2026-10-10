@@ -2,7 +2,7 @@
 
 use anyhow::Context;
 use pathdiff::diff_paths;
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fmt::Write;
 use std::path::{Path, PathBuf};
 use uuid::Uuid;
@@ -27,11 +27,6 @@ struct NetInfo {
     code: u32,
     name: String,
     nodes: Vec<Node>,
-}
-
-#[derive(Default, Debug)]
-struct LibPartInfo {
-    pins: Vec<(String, String)>, // (num, name)
 }
 
 /// Escape quotes in a string for KiCad S-expression format.
@@ -262,43 +257,22 @@ pub fn to_kicad_netlist(sch: &Schematic) -> anyhow::Result<String> {
     //---------------------------------------------------------------------
     // 4. Libparts (unique component type definitions) – simplified version.
     //---------------------------------------------------------------------
-    let mut libparts: HashMap<String, LibPartInfo> = HashMap::new();
-
+    // Keyed by the same value as each component's `libsource (part …)`.
+    let mut libparts: BTreeMap<String, BTreeSet<(String, String)>> = BTreeMap::new();
     for comp in &components {
-        let mpn = comp
-            .instance
-            .attributes
-            .get("mpn")
-            .and_then(|v| match v {
-                AttributeValue::String(s) => Some(s.clone()),
-                _ => None,
-            })
-            .unwrap_or("?".to_owned());
-        let entry = libparts.entry(mpn.clone()).or_default();
-
-        // Collect pins from children
-        if let Some(ComponentChildren { pins }) = collect_pins_for_component(sch, &comp.reference) {
-            for (pad, name) in pins {
-                entry.pins.push((pad, name));
-            }
-        }
-    }
-
-    // Deduplicate and sort pins within each libpart.
-    for info in libparts.values_mut() {
-        let mut uniq: HashSet<(String, String)> = HashSet::new();
-        info.pins.retain(|p| uniq.insert(p.clone()));
-        info.pins.sort_by(|a, b| a.0.cmp(&b.0));
+        let pins = collect_pins_for_component(sch, &comp.reference).unwrap_or_default();
+        libparts
+            .entry(comp.instance.kicad_value())
+            .or_default()
+            .extend(pins);
     }
 
     writeln!(out, "  (libparts").unwrap();
-    let mut libparts_vec: Vec<_> = libparts.into_iter().collect();
-    libparts_vec.sort_by(|a, b| a.0.cmp(&b.0));
-    for (mpn, info) in libparts_vec {
+    for (part, pins) in libparts {
         writeln!(
             out,
             "    (libpart (lib \"lib\") (part \"{}\")",
-            escape_kicad_string(&mpn)
+            escape_kicad_string(&part)
         )
         .unwrap();
         writeln!(out, "      (description \"\")").unwrap();
@@ -306,7 +280,7 @@ pub fn to_kicad_netlist(sch: &Schematic) -> anyhow::Result<String> {
         writeln!(out, "      (footprints").unwrap();
         writeln!(out, "        (fp \"*\"))").unwrap();
         writeln!(out, "      (pins").unwrap();
-        for (num, name) in info.pins {
+        for (num, name) in pins {
             writeln!(
                 out,
                 "        (pin (num \"{}\") (name \"{}\") (type \"stereo\"))",
@@ -368,14 +342,11 @@ pub fn to_kicad_netlist(sch: &Schematic) -> anyhow::Result<String> {
 }
 
 // Helper returning all pins (pad, name) for a given component reference.
-struct ComponentChildren {
-    pins: Vec<(String, String)>,
-}
-
+/// A component's `(pad number, pin name)` pairs.
 fn collect_pins_for_component(
     sch: &Schematic,
     comp_ref: &InstanceRef,
-) -> Option<ComponentChildren> {
+) -> Option<Vec<(String, String)>> {
     let comp_inst = sch.instances.get(comp_ref)?;
     let mut pins = Vec::new();
     for child_ref in comp_inst.children.values() {
@@ -396,7 +367,7 @@ fn collect_pins_for_component(
             }
         }
     }
-    Some(ComponentChildren { pins })
+    Some(pins)
 }
 
 // -------------------------------------------------------------------------------------------------
