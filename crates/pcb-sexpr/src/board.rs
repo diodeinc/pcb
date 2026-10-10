@@ -203,7 +203,7 @@ pub fn transform_board_instance_footprint_to_standalone(
 /// Swap each stub for the board's full entry so the standalone footprint is self-contained.
 fn inline_embedded_files(stubs: &[Sexpr], board_items: &[Sexpr]) -> Sexpr {
     fn file_name(file: &Sexpr) -> Option<&str> {
-        file.find_list("name")?.get(1)?.as_str()
+        file.find_list("name")?.get(1)?.as_atom()
     }
     let board_files = direct_child(board_items, "embedded_files")
         .and_then(Sexpr::as_list)
@@ -1595,14 +1595,14 @@ mod tests {
         let input = r#"(kicad_pcb (version 20241229) (generator "pcbnew")
             (footprint "Lib:Part" (layer "F.Cu") (at 10 20)
                 (embedded_files
-                    (file (name "part.step") (type model) (checksum "sha-part"))
-                    (file (name "orphan.step") (type model) (checksum "sha-orphan"))
+                    (file (name part.step) (type model) (checksum "sha-part"))
+                    (file (name "orphan name.step") (type model) (checksum "sha-orphan"))
                 )
                 (model "kicad-embed://part.step" (offset (xyz 0 0 0)))
             )
             (embedded_files
-                (file (name "part.step") (type model) (data |KLUv/QBYhQAA|) (checksum "sha-part"))
-                (file (name "other.step") (type model) (data |AAAA|) (checksum "sha-other"))
+                (file (name part.step) (type model) (data |KLUv/QBYhQAA|) (checksum "sha-part"))
+                (file (name other.step) (type model) (data |AAAA|) (checksum "sha-other"))
             )
         )"#;
         let board = parse(input).unwrap();
@@ -1616,8 +1616,8 @@ mod tests {
         let out = parse(&out).unwrap();
         let expected = parse(
             r#"(embedded_files
-                (file (name "part.step") (type model) (data |KLUv/QBYhQAA|) (checksum "sha-part"))
-                (file (name "orphan.step") (type model) (checksum "sha-orphan"))
+                (file (name part.step) (type model) (data |KLUv/QBYhQAA|) (checksum "sha-part"))
+                (file (name "orphan name.step") (type model) (checksum "sha-orphan"))
             )"#,
         )
         .unwrap();
