@@ -1219,11 +1219,15 @@ fn graphic_to_sexpr(graphic: &Graphic) -> Sexpr {
             Sexpr::float(point.y),
         ])
     };
-    // KiCad writes a text item's `exclude_from_sim` right after its string.
+    // KiCad writes a text item's `exclude_from_sim` right after its string,
+    // and a text box's effects after its margins, stroke and fill.
     let leads_text = |item: &&Sexpr| {
-        matches!(graphic.kind, GraphicKind::Text(_))
-            && item.as_list().and_then(list_tag) == Some("exclude_from_sim")
+        matches!(
+            graphic.kind,
+            GraphicKind::Text(_) | GraphicKind::TextBox { .. }
+        ) && item.as_list().and_then(list_tag) == Some("exclude_from_sim")
     };
+    let mut trailing = None;
     match &graphic.kind {
         GraphicKind::Rectangle { start, end } => {
             items.extend([xy("start", *start), xy("end", *end)])
@@ -1256,7 +1260,10 @@ fn graphic_to_sexpr(graphic: &Graphic) -> Sexpr {
             if text.hidden {
                 effects.as_list_mut().unwrap().push(Sexpr::symbol("hide"));
             }
-            items.push(effects);
+            match graphic.kind {
+                GraphicKind::TextBox { .. } => trailing = Some(effects),
+                _ => items.push(effects),
+            }
         }
     }
     items.extend(
@@ -1266,6 +1273,7 @@ fn graphic_to_sexpr(graphic: &Graphic) -> Sexpr {
             .filter(|item| !leads_text(item))
             .cloned(),
     );
+    items.extend(trailing);
     items.push(Sexpr::list(vec![
         Sexpr::symbol("uuid"),
         Sexpr::string(&graphic.id),
@@ -1547,6 +1555,9 @@ fn label_to_sexpr(label: &Label) -> Sexpr {
         Sexpr::symbol(label_kind_token(label.kind)),
         Sexpr::string(&label.text),
     ];
+    // KiCad writes a netclass flag's `length` right after its text.
+    let leads = |item: &&Sexpr| item.as_list().and_then(list_tag) == Some("length");
+    items.extend(label.unsupported.iter().filter(leads).cloned());
 
     if let Some(shape) = label_shape(label.kind) {
         items.push(Sexpr::list(vec![
@@ -1583,7 +1594,13 @@ fn label_to_sexpr(label: &Label) -> Sexpr {
     items.extend(
         sorted_fields(intersheet_refs.iter().chain(label.fields.values())).map(field_to_sexpr),
     );
-    items.extend(label.unsupported.iter().cloned());
+    items.extend(
+        label
+            .unsupported
+            .iter()
+            .filter(|item| !leads(item))
+            .cloned(),
+    );
 
     Sexpr::list(items)
 }
@@ -2311,6 +2328,8 @@ mod tests {
     use super::*;
 
     const KICAD_10_SYMBOL_FIXTURE: &str = include_str!("../test-data/kicad-10/shared1.kicad_sch");
+    const KICAD_10_ITEM_KINDS_FIXTURE: &str =
+        include_str!("../test-data/kicad-10/item-kinds.kicad_sch");
     const KICAD_10_UNSUPPORTED_FIXTURE: &str =
         include_str!("../test-data/kicad-10/unsupported-items.kicad_sch");
     const KICAD_10_RESAVED_FIXTURE: &str =
@@ -2812,7 +2831,11 @@ mod tests {
 
     #[test]
     fn kicad_10_saved_sheet_round_trips_byte_identically() {
-        for fixture in [KICAD_10_RESAVED_FIXTURE, KICAD_10_UNSUPPORTED_FIXTURE] {
+        for fixture in [
+            KICAD_10_RESAVED_FIXTURE,
+            KICAD_10_UNSUPPORTED_FIXTURE,
+            KICAD_10_ITEM_KINDS_FIXTURE,
+        ] {
             // Git may check the fixture out with CRLF on Windows.
             let fixture = fixture.replace("\r\n", "\n");
             let document = SchDocument::from_kicad_sch(&fixture).unwrap();
