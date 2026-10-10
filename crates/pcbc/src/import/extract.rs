@@ -337,27 +337,23 @@ fn extract_kicad_schematic_data(
             // Without instance data for a sheet, as in files KiCad has not re-saved
             // since an Altium import, KiCad reads the reference and unit from the
             // symbol itself, so its netlist decides where the symbol lives.
-            let fallback_instance = instances
-                .is_empty()
-                .then(|| {
-                    let reference = symbol.reference()?.to_string();
-                    let anchor = refdes_to_anchor.get(&KiCadRefDes::from(reference.clone()))?;
-                    let unit = netlist_components[anchor]
-                        .netlist
-                        .unit_pcb_paths
-                        .iter()
-                        .find(|unit| unit.symbol_uuid == symbol.id)?;
-                    Some(pcb_kicad_sch::SymbolInstance {
-                        project: String::new(),
-                        path: format!("/{}{}", root.id, unit.sheetpath_tstamps),
-                        reference: Some(reference),
-                        unit: None,
-                        unsupported: Vec::new(),
-                    })
+            let fallback_instance = instances.is_empty().then(|| {
+                let reference = symbol.reference()?.to_string();
+                let anchor = refdes_to_anchor.get(&KiCadRefDes::from(reference.clone()))?;
+                let unit = netlist_components[anchor]
+                    .netlist
+                    .unit_pcb_paths
+                    .iter()
+                    .find(|unit| unit.symbol_uuid == symbol.id)?;
+                Some(pcb_kicad_sch::SymbolInstance {
+                    project: String::new(),
+                    path: format!("/{}{}", root.id, unit.sheetpath_tstamps),
+                    reference: Some(reference),
+                    unit: None,
+                    unsupported: Vec::new(),
                 })
-                .flatten()
-                .filter(|instance| targets_file(&instance.path));
-            for instance in fallback_instance.iter().chain(instances) {
+            });
+            for instance in fallback_instance.flatten().iter().chain(instances) {
                 let Some(anchor) = instance.reference.as_ref().and_then(|reference| {
                     refdes_to_anchor.get(&KiCadRefDes::from(reference.clone()))
                 }) else {
