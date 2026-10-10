@@ -1,5 +1,6 @@
 use super::*;
 use anyhow::{Context, Result};
+use std::path::PathBuf;
 
 pub(super) fn execute(args: ImportArgs) -> Result<()> {
     let ctx = ImportContext::new(args)?;
@@ -124,7 +125,22 @@ fn prepare_output(
     }
 
     if args.force {
-        remove_generated_output(paths, &selection.board_name, source_board)?;
+        let portable = &selection.portable;
+        let inputs: Vec<PathBuf> = std::iter::once(paths.kicad_input_abs.clone())
+            .chain(
+                portable
+                    .files_to_bundle_rel
+                    .iter()
+                    .map(|relative| portable.project_dir.join(relative)),
+            )
+            .chain(
+                portable
+                    .extra_files_to_bundle
+                    .iter()
+                    .map(|extra| extra.source_path.clone()),
+            )
+            .collect();
+        remove_generated_output(paths, &selection.board_name, source_board, &inputs)?;
     }
 
     if !existing_board_repo {
@@ -141,6 +157,7 @@ fn remove_generated_output(
     import_paths: &ImportPaths,
     board_name: &str,
     source_board: bool,
+    inputs: &[PathBuf],
 ) -> Result<()> {
     let board_dir = &import_paths.workspace_root;
     let mut paths = vec![
@@ -153,6 +170,16 @@ fn remove_generated_output(
     ];
     if source_board {
         paths.push(import_paths.project_dir());
+    }
+
+    for path in &paths {
+        if let Some(input) = inputs.iter().find(|input| input.starts_with(path)) {
+            anyhow::bail!(
+                "--force would remove {}, which contains the import input {}. Move the KiCad project outside the generated output and reimport.",
+                path.display(),
+                input.display()
+            );
+        }
     }
 
     for path in paths {
@@ -341,7 +368,7 @@ mod tests {
         std::fs::write(&layout_file, "user layout").expect("write layout");
         std::fs::write(&archive_file, "stale project archive").expect("write archive");
 
-        remove_generated_output(&import_paths(board_dir), "board", false)
+        remove_generated_output(&import_paths(board_dir), "board", false, &[])
             .expect("clean standalone output");
 
         assert_eq!(
@@ -361,9 +388,29 @@ mod tests {
         let board_zen = board_dir.join("board.zen");
         symlink(board_dir.join("missing-target"), &board_zen).expect("create dangling symlink");
 
-        remove_generated_output(&import_paths(board_dir), "board", false)
+        remove_generated_output(&import_paths(board_dir), "board", false, &[])
             .expect("clean standalone output");
 
         assert!(std::fs::symlink_metadata(board_zen).is_err());
+    }
+
+    #[test]
+    fn cleanup_refuses_to_remove_import_input() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let board_dir = temp.path();
+        let source = board_dir.join("eda/board.kicad_sch");
+        std::fs::create_dir_all(source.parent().unwrap()).expect("create eda");
+        std::fs::write(&source, "source").expect("write source");
+
+        let error = remove_generated_output(
+            &import_paths(board_dir),
+            "board",
+            true,
+            std::slice::from_ref(&source),
+        )
+        .expect_err("cleanup must not remove its input");
+
+        assert!(error.to_string().contains("contains the import input"));
+        assert!(source.is_file());
     }
 }
