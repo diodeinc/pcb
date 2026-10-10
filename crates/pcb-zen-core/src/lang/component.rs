@@ -2067,9 +2067,11 @@ where
             let mut properties_map = parse_component_properties(properties_val)?;
             // Older imports persisted the source schematic's footprint ID; apply now derives it.
             properties_map.shift_remove("Footprint");
+            // Remove both legacy keys; `Value` wins over `Val`.
             let legacy_value = ["Value", "Val"]
+                .map(|key| properties_map.shift_remove(key))
                 .into_iter()
-                .filter_map(|key| properties_map.shift_remove(key))
+                .flatten()
                 .next();
             if let Some(value) = legacy_value
                 && !properties_map.contains_key(crate::attrs::VALUE)

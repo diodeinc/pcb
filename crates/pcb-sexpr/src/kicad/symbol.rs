@@ -116,12 +116,14 @@ pub fn find_symbol_index(kicad_symbol_lib: &[Sexpr], name: &str) -> Option<usize
 
 /// The name and value of a `(property [private] "<name>" "<value>" ...)`.
 pub fn property_name_value(property: &[Sexpr]) -> Option<(&Sexpr, &Sexpr)> {
-    let fields = &property[1 + private_offset(property)..];
+    let fields = property.get(1 + private_offset(property)..)?;
     Some((fields.first()?, fields.get(1)?))
 }
 
-/// One when a property starts with KiCad's `private` flag.
-fn private_offset(property: &[Sexpr]) -> usize {
+/// One when a property starts with KiCad's bare `private` flag, zero otherwise.
+///
+/// A quoted `"private"` is a property name, not the flag.
+pub fn private_offset(property: &[Sexpr]) -> usize {
     usize::from(property.get(1).and_then(Sexpr::as_sym) == Some("private"))
 }
 

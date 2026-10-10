@@ -5,7 +5,7 @@ use pcb_sch::InstanceRef;
 
 use crate::{
     SchDocument, SchItem, SchPage, SymbolInstance, SymbolSlotKey,
-    connectivity::kicad::{page_instances, resolve_file_name},
+    connectivity::kicad::{PagesByFile, page_instances},
     deterministic_uuid,
     kicad::find_child,
     model::SheetInstance,
@@ -210,17 +210,7 @@ pub(crate) fn prune_obsolete_pages(
             (page.id == page_id(path)).then(|| path.to_string())
         })
         .collect::<Vec<_>>();
-    let by_file = document
-        .pages
-        .iter()
-        .enumerate()
-        .filter_map(|(index, page)| {
-            page.file_name
-                .as_deref()
-                .and_then(|name| crate::sheet_file("", name).ok())
-                .map(|name| (name, index))
-        })
-        .collect::<BTreeMap<_, _>>();
+    let by_file = PagesByFile::new(&document.pages);
     let mut retained = BTreeSet::new();
     for (index, page) in document.pages.iter().enumerate() {
         let mut keep = module_paths[index]
@@ -261,10 +251,7 @@ pub(crate) fn prune_obsolete_pages(
             SchItem::Sheet(sheet) => Some(sheet),
             _ => None,
         }) {
-            let Some(&child) = resolve_file_name(page, sheet.file_name())
-                .ok()
-                .and_then(|file| by_file.get(&file))
-            else {
+            let Some(child) = by_file.child(page, sheet) else {
                 continue;
             };
             if module_paths[child].as_ref().is_none_or(|path| {
@@ -373,7 +360,10 @@ pub(crate) fn sync_instances(
         };
         // Like KiCad's `RepairPageNumbers`: the first sheet claims a number;
         // blank and repeated numbers get the lowest unused ones.
-        if !page.is_some_and(|page| used.insert(page)) {
+        if !page
+            .filter(|page| !page.trim().is_empty())
+            .is_some_and(|page| used.insert(page))
+        {
             unnumbered.push(sheet);
         }
     }

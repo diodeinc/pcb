@@ -21,8 +21,12 @@ pub(super) fn extract_ir(
         })
         .transpose()?
         .unwrap_or_default();
-    let pcb_refdes_to_anchor_key =
-        linked_pcb_anchors(&selection.portable.schematic, pcb_refdes_to_anchor_key)?;
+    let sheet_symbols = SheetSymbols::from_pages(&selection.portable.schematic.document.pages)?;
+    let pcb_refdes_to_anchor_key = linked_pcb_anchors(
+        &selection.portable.schematic,
+        &sheet_symbols,
+        pcb_refdes_to_anchor_key,
+    )?;
 
     let mut netlist = extract_kicad_netlist(
         staged_root,
@@ -30,8 +34,11 @@ pub(super) fn extract_ir(
         &pcb_refdes_to_anchor_key,
     )?;
 
-    let schematic =
-        extract_kicad_schematic_data(&selection.portable.schematic, &mut netlist.components)?;
+    let schematic = extract_kicad_schematic_data(
+        &selection.portable.schematic,
+        &sheet_symbols,
+        &mut netlist.components,
+    )?;
     netlist.unit_to_anchor = netlist
         .components
         .iter()
@@ -47,7 +54,7 @@ pub(super) fn extract_ir(
     let schematic_sheet_tree = build_schematic_sheet_tree(
         &validation.summary.selected.kicad_sch,
         &netlist.components,
-        &schematic.sheet_symbols,
+        &sheet_symbols,
     );
 
     let layout_pcb = source_pcb
@@ -81,7 +88,6 @@ pub(super) fn extract_ir(
 struct KiCadSchematicExtraction {
     lib_symbol_ids: BTreeSet<KiCadLibId>,
     power_symbol_decls: Vec<ImportSchematicPowerSymbolDecl>,
-    sheet_symbols: SheetSymbols,
 }
 
 #[derive(Debug, Clone)]
@@ -196,10 +202,10 @@ fn parse_kicad_pcb_refdes_to_anchor_key(
 /// not native anchors; those footprints join by reference and take the netlist's identity.
 fn linked_pcb_anchors(
     schematic: &pcb_kicad_sch::LoadedProject,
+    sheet_symbols: &SheetSymbols,
     mut anchors: BTreeMap<KiCadRefDes, KiCadUuidPathKey>,
 ) -> Result<BTreeMap<KiCadRefDes, KiCadUuidPathKey>> {
     let pages = &schematic.document.pages;
-    let sheet_symbols = SheetSymbols::from_pages(pages)?;
     let root_file = PathBuf::from(
         pages
             .first()
@@ -218,6 +224,7 @@ fn linked_pcb_anchors(
 
 fn extract_kicad_schematic_data(
     schematic: &pcb_kicad_sch::LoadedProject,
+    sheet_symbols: &SheetSymbols,
     netlist_components: &mut BTreeMap<KiCadUuidPathKey, ImportComponentData>,
 ) -> Result<KiCadSchematicExtraction> {
     let pages = &schematic.document.pages;
@@ -229,8 +236,6 @@ fn extract_kicad_schematic_data(
         PathBuf::from(page.file_name.as_deref().unwrap_or_default())
     };
 
-    let sheet_symbols = SheetSymbols::from_pages(pages)?;
-
     let refdes_to_anchor = netlist_components
         .iter()
         .map(|(key, component)| (component.netlist.refdes.clone(), key.clone()))
@@ -239,7 +244,7 @@ fn extract_kicad_schematic_data(
     for page in pages {
         let file = page_file(page);
         let targets_file = |instance_path: &str| {
-            instance_path_targets_file(instance_path, &file, &root_file, &sheet_symbols)
+            instance_path_targets_file(instance_path, &file, &root_file, sheet_symbols)
         };
         for symbol in page.items.iter().filter_map(|item| match item {
             pcb_kicad_sch::SchItem::Symbol(symbol) => Some(symbol),
@@ -309,20 +314,6 @@ fn extract_kicad_schematic_data(
                 .iter()
                 .map(|pin| (pin.number.clone(), pin.id.clone()))
                 .collect::<BTreeMap<_, _>>();
-            let exclude_from_sim =
-                symbol
-                    .unsupported
-                    .iter()
-                    .find_map(|item| match item.as_list()? {
-                        [tag, value] if tag.as_sym() == Some("exclude_from_sim") => {
-                            match value.as_sym()? {
-                                "yes" => Some(true),
-                                "no" => Some(false),
-                                _ => None,
-                            }
-                        }
-                        _ => None,
-                    });
             // Placements of this symbol as (sheet path, reference, unit). A reused file
             // can retain instances from other projects or deleted sheets; their
             // references are unrelated even when the symbol UUID or reference matches.
@@ -375,7 +366,7 @@ fn extract_kicad_schematic_data(
                     in_bom: Some(symbol.in_bom),
                     on_board: Some(symbol.on_board),
                     dnp: Some(symbol.dnp),
-                    exclude_from_sim,
+                    exclude_from_sim: Some(symbol.exclude_from_sim),
                     instance_path: Some(path),
                     properties: properties.clone(),
                     pins: (!pins.is_empty()).then(|| pins.clone()),
@@ -406,7 +397,6 @@ fn extract_kicad_schematic_data(
             .map(|lib_id| KiCadLibId::from(lib_id.clone()))
             .collect(),
         power_symbol_decls,
-        sheet_symbols,
     })
 }
 
@@ -1169,6 +1159,10 @@ fn key_from_schematic_instance_path(
 mod tests {
     use super::*;
 
+    fn sheet_symbols(schematic: &pcb_kicad_sch::LoadedProject) -> Result<SheetSymbols> {
+        SheetSymbols::from_pages(&schematic.document.pages)
+    }
+
     #[test]
     fn layout_import_rejects_conflicting_native_identity_but_ignores_retained_sync_paths()
     -> Result<()> {
@@ -1381,7 +1375,11 @@ mod tests {
             (nets))"#,
                 &pcb_anchors,
             )?;
-            extract_kicad_schematic_data(&schematic, &mut netlist.components)?;
+            extract_kicad_schematic_data(
+                &schematic,
+                &sheet_symbols(&schematic)?,
+                &mut netlist.components,
+            )?;
             for (anchor, expected) in [
                 (
                     pcb_anchor.unwrap_or("/sheet-a/shared-symbol"),
@@ -1448,13 +1446,18 @@ mod tests {
         ] {
             let pcb_anchors = linked_pcb_anchors(
                 &schematic,
+                &sheet_symbols(&schematic)?,
                 BTreeMap::from([(
                     KiCadRefDes::from("R1".to_string()),
                     KiCadUuidPathKey::from_pcb_path(pcb_path)?,
                 )]),
             )?;
             let mut netlist = parse_kicad_sexpr_netlist(netlist, &pcb_anchors)?;
-            extract_kicad_schematic_data(&schematic, &mut netlist.components)?;
+            extract_kicad_schematic_data(
+                &schematic,
+                &sheet_symbols(&schematic)?,
+                &mut netlist.components,
+            )?;
             let component = &netlist.components[&KiCadUuidPathKey::from_pcb_path(anchor)?];
             assert_eq!(
                 component.netlist.unit_pcb_paths,
@@ -1524,9 +1527,10 @@ mod tests {
             (nets))"#,
             &BTreeMap::new(),
         )?;
-        let extracted = extract_kicad_schematic_data(&schematic, &mut netlist.components)?;
+        let sheet_symbols = sheet_symbols(&schematic)?;
+        extract_kicad_schematic_data(&schematic, &sheet_symbols, &mut netlist.components)?;
         let root = Path::new("root.kicad_sch");
-        let tree = build_schematic_sheet_tree(root, &netlist.components, &extracted.sheet_symbols);
+        let tree = build_schematic_sheet_tree(root, &netlist.components, &sheet_symbols);
         for (anchor, file) in [
             ("/sheet-a/nested/r-left", "left.kicad_sch"),
             ("/sheet-b/nested/r-right", "right.kicad_sch"),
@@ -1601,7 +1605,11 @@ mod tests {
             })
             .collect::<BTreeMap<_, _>>();
 
-        let extracted = extract_kicad_schematic_data(&schematic, &mut netlist_components)?;
+        let extracted = extract_kicad_schematic_data(
+            &schematic,
+            &sheet_symbols(&schematic)?,
+            &mut netlist_components,
+        )?;
 
         for (uuid, (x, y, rot)) in [("sym-a", (10.0, 20.0, 90.0)), ("sym-b", (30.5, 40.25, 0.0))] {
             let at = netlist_components[&anchor(uuid)]
@@ -1694,7 +1702,11 @@ mod tests {
         })
         .collect::<BTreeMap<_, _>>();
 
-        extract_kicad_schematic_data(&schematic, &mut netlist_components)?;
+        extract_kicad_schematic_data(
+            &schematic,
+            &sheet_symbols(&schematic)?,
+            &mut netlist_components,
+        )?;
 
         for (anchor_key, unit_key) in [
             (anchor("/", "sym-a"), anchor("/", "sym-a")),
@@ -1733,8 +1745,6 @@ mod tests {
                 kicad_pcb_rel: None,
                 schematic: pcb_kicad_sch::LoadedProject {
                     project: serde_json::Value::Null,
-                    root_schematics: vec!["root.kicad_sch".to_string()],
-                    schematic_files: vec!["root.kicad_sch".to_string()],
                     document: Default::default(),
                 },
                 files_to_bundle_rel: vec![PathBuf::from("root.kicad_sch")],

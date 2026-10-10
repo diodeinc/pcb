@@ -26,8 +26,9 @@ pub struct DfmReport {
     /// once, in its own coordinates, wherever and however often it is placed.
     pub frames: Vec<Frame>,
     pub findings: Vec<Finding>,
-    /// The checked material, for viewers to draw findings over.
-    pub scene: Scene,
+    /// The checked material, for viewers to draw findings over. Built only
+    /// for the database, the one consumer that reads it.
+    pub scene: Option<Scene>,
 }
 
 /// What a run prints: its identity, verdict and per-rule results.
@@ -89,6 +90,14 @@ pub enum Verdict {
 pub struct ToolIdentity {
     pub name: &'static str,
     pub version: &'static str,
+}
+
+impl ToolIdentity {
+    /// This tool, as reports name it.
+    pub const PCB: Self = Self {
+        name: "pcb",
+        version: env!("CARGO_PKG_VERSION"),
+    };
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -700,8 +709,9 @@ pub struct Subject {
     pub net: Option<String>,
     pub padstack_ref: Option<String>,
     pub source: Option<SourceLocator>,
-    /// Definition-local source coordinates plus its physical occurrence. `source`
-    /// retains the historical flattened locator for compatibility.
+    /// Definition-local source coordinates plus its physical occurrence. The
+    /// report stores this locator when present; `source`, the flattened
+    /// locator, still keys finding identity.
     pub provenance: Option<SourceLocator>,
     pub drill_span: Option<DrillSpan>,
     /// Where the source places a drilled subject. Identity only: the report

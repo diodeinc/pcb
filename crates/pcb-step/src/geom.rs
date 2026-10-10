@@ -146,3 +146,14 @@ pub(crate) fn bezier_point(p: [Vec2; 4], t: f64) -> Vec2 {
     let u = 1.0 - t;
     p[0] * (u * u * u) + p[1] * (3.0 * u * u * t) + p[2] * (3.0 * u * t * t) + p[3] * (t * t * t)
 }
+
+/// KiCad's default maximum chord error when it flattens arcs, in
+/// millimetres.
+pub const KICAD_MAX_ERROR: f64 = 0.005;
+
+/// Chords for an arc of radius `r` sweeping `sweep` radians, each within
+/// `max_error` of the arc; at least one.
+pub fn chord_count(r: f64, sweep: f64, max_error: f64) -> usize {
+    let step = 2.0 * (1.0 - max_error / r).clamp(-1.0, 1.0).acos();
+    ((sweep.abs() / step.max(1e-3)).ceil() as usize).max(1)
+}

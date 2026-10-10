@@ -3821,6 +3821,7 @@ version = "0.4.74"
 dependencies = [
  "anstream",
  "anyhow",
+ "atomicwrites",
  "chrono",
  "clap",
  "colored",

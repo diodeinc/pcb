@@ -504,5 +504,8 @@ mod tests {
 
         assert_eq!(diagnostics.diagnostics.len(), 1);
         assert_eq!(diagnostics.diagnostics[0].suppressed_count(), Some(2));
+        // The aggregate keeps its kind, so repeated warnings still match it.
+        assert!(diagnostics.has_unsuppressed_kind("pin"));
+        assert!(!diagnostics.has_unsuppressed_kind("pi"));
     }
 }

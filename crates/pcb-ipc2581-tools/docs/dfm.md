@@ -229,8 +229,8 @@ enclosures retain their own measurement constructions. The engine fails a
 minimum only when the measured value falls short beyond its own uncertainty,
 so curve tessellation by itself cannot manufacture a violation. A value that
 falls short by less than its uncertainty is neither a violation nor proof the
-limit is met: the rule lists it under `unresolved` with its value, uncertainty,
-location, and layers, `summary.unresolved` counts them, and the CLI reports how
+limit is met: the report's `unresolved` table lists it with its rule, value,
+uncertainty, location, and layers, `summary.unresolved` counts them, and the CLI reports how
 many measurements were within measurement uncertainty. They do not affect the
 verdict. Copper-width and soldermask-web candidates are extracted only where
 they are certainly below the limit, so those two rules list none. An aspect
@@ -452,9 +452,9 @@ pcb ipc dfm check board.xml -o board.dfm
 pcb dfm board.zen -o board.dfm
 ```
 
-`pcb dfm` prepares and synchronizes the board's KiCad layout before exporting
-temporary IPC-2581 and checking the canonical board. Use `pcb ipc dfm check`
-to inspect existing manufacturing files without changing their source layout.
+`pcb dfm` exports the board's saved KiCad layout to temporary IPC-2581, without
+synchronizing it first, and checks the canonical board. Use `pcb ipc dfm check`
+to inspect existing manufacturing files.
 
 `--pdk` defaults to `standard` and accepts an exact built-in name or a TOML
 path. `standard`, `jlcpcb-1oz` (`jlc`), and `ipc-1a` through `ipc-3c` are
@@ -553,7 +553,9 @@ findings or geometry.
   `support.copper_layers` range (`exact`, `minimum`, and `maximum`).
 - `summary`: rule counts by status, `findings`, `errors` and `warnings` by
   severity, and `unresolved`, the measurements no rule could decide.
-- `rules`: one result per lowered rule, as in the `rules` table below.
+- `rules`: one result per lowered rule with the fields of the `rules` table
+  below, except that the rule is `id` and its limit is one `limit` object of
+  `pdk_value`, `normalized_value` and `normalized_unit`.
 
 A complete verdict fails exactly when `summary.errors > 0` or a rule of error
 severity is `incomplete`.

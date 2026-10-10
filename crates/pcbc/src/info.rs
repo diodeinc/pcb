@@ -109,7 +109,8 @@ pub fn execute(args: InfoArgs) -> Result<()> {
         OutputFormat::Human => {
             let resolution = crate::resolve::resolve(Some(&start_path), false)?;
             let mut workspace_info = resolution.workspace_info.clone();
-            pcb_zen::workspace::enrich_git_metadata(&mut workspace_info);
+            let tags = pcb_zen::git::list_peeled_tags(&workspace_info.root);
+            pcb_zen::workspace::enrich_git_metadata(&mut workspace_info, tags);
             let mut errors = Vec::new();
             let external_dependencies =
                 external_dependencies(&workspace_info, &resolution, &mut errors);
@@ -169,7 +170,8 @@ fn info_json(start_path: &Path) -> InfoJson {
     } else {
         BTreeMap::new()
     };
-    pcb_zen::workspace::enrich_git_metadata(&mut ws);
+    let tags = pcb_zen::git::list_peeled_tags(&ws.root);
+    pcb_zen::workspace::enrich_git_metadata(&mut ws, tags);
     populate_package_file_discovery(&mut ws);
     errors.append(&mut ws.errors);
     let packages = ws

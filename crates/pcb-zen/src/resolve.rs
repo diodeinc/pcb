@@ -348,10 +348,13 @@ fn collect_stale_dir(
     Ok(())
 }
 
+/// A package's manifest, which also marks its cache entry as complete.
+const MANIFEST: &str = "pcb.toml";
+
 /// Returns a dependency manifest using the shared cache-backed materialization path.
 pub fn ensure_package_manifest_in_cache(module_path: &str, version: &Version) -> Result<PathBuf> {
     ensure_packages_in_cache([(module_path, version)])?;
-    Ok(package_cache_dir(module_path, version).join("pcb.toml"))
+    Ok(package_cache_dir(module_path, version).join(MANIFEST))
 }
 
 /// Materialize package versions into the shared cache.
@@ -369,12 +372,8 @@ pub fn ensure_packages_in_cache<'a>(
     fetch_package_contents(&uncached)?;
 
     uncached.into_iter().try_for_each(|(module_path, version)| {
-        ensure_sparse_checkout(
-            &package_cache_dir(module_path, version),
-            module_path,
-            &version.to_string(),
-        )
-        .with_context(|| format!("Failed to materialize {}@{}", module_path, version))
+        archive_package_to_cache(module_path, version)
+            .with_context(|| format!("Failed to materialize {}@{}", module_path, version))
     })
 }
 
@@ -384,7 +383,7 @@ fn package_cache_dir(module_path: &str, version: &Version) -> PathBuf {
 
 fn is_cached(module_path: &str, version: &Version) -> bool {
     package_cache_dir(module_path, version)
-        .join("pcb.toml")
+        .join(MANIFEST)
         .exists()
 }
 
@@ -460,18 +459,18 @@ pub fn build_frozen_symbol_parts(
 /// Populate a cache directory with exclusive locking.
 ///
 /// The fetch writes to a staging directory that is renamed into place, so
-/// `marker` only ever appears in a complete entry. If the fetching process
+/// [`MANIFEST`] only ever appears in a complete entry. If the fetching process
 /// crashes, the OS releases the lock and the next caller starts over.
-fn populate_cache<F>(cache_dir: &Path, marker: &str, fetch: F) -> Result<()>
+fn populate_cache<F>(cache_dir: &Path, fetch: F) -> Result<()>
 where
     F: FnOnce(&Path) -> Result<()>,
 {
-    if cache_dir.join(marker).exists() {
+    if cache_dir.join(MANIFEST).exists() {
         return Ok(());
     }
 
     let _lock = git::lock_dir(cache_dir)?;
-    if cache_dir.join(marker).exists() {
+    if cache_dir.join(MANIFEST).exists() {
         return Ok(());
     }
 
@@ -484,22 +483,25 @@ where
     Ok(())
 }
 
-/// Ensure a cached package checkout for a specific version.
+/// Ensure a cached package entry for a specific version.
 ///
 /// On a warm cache hit, this returns the existing immutable cache entry without
-/// touching Git. On a cold miss, it materializes the package once from the
-/// shared source repo into `~/.pcb/cache/...`, then later builds reuse that cache.
+/// touching Git. On a cold miss, it archives the package once from the shared
+/// source repo into `~/.pcb/cache/...`, then later builds reuse that cache.
 /// Tagged versions archive from the version tag; pseudo-versions archive from
 /// the pinned commit.
-fn ensure_sparse_checkout(checkout_dir: &Path, module_path: &str, version_str: &str) -> Result<()> {
-    let marker = "pcb.toml";
+fn archive_package_to_cache(module_path: &str, version: &Version) -> Result<()> {
     let (repo_url, subpath) = git::split_repo_and_subpath(module_path)?;
+    let ref_spec = package_ref(&subpath, &version.to_string());
 
-    populate_cache(checkout_dir, marker, |dest| {
-        let ref_spec = package_ref(&subpath, version_str);
-        fetch_via_git(dest, &repo_url, &ref_spec, &subpath)
-            .with_context(|| format!("Failed to fetch {} via git sparse checkout", module_path))
+    populate_cache(&package_cache_dir(module_path, version), |dest| {
+        let source_dir = ensure_source_repo(&repo_url)?;
+        // Tags are local once the source repo is fetched; a pseudo-version's
+        // commit may not be.
+        git::ensure_rev_in_source_repo(&source_dir, &ref_spec)?;
+        git::archive_to_dir(&source_dir, &package_tree(&ref_spec, &subpath), dest)
     })
+    .with_context(|| format!("Failed to fetch {module_path} via git archive"))
 }
 
 /// The ref a package version is archived from.
@@ -522,22 +524,6 @@ fn package_ref(subpath: &str, version_str: &str) -> String {
 /// so listing its objects covers one snapshot rather than the whole history.
 fn package_tree(ref_spec: &str, subpath: &str) -> String {
     format!("{ref_spec}:{subpath}")
-}
-
-/// Materialize a repo ref into a package directory.
-fn fetch_via_git(dest: &Path, repo_url: &str, ref_spec: &str, subpath: &str) -> Result<()> {
-    // Materialize packages directly from the shared source checkout instead of
-    // creating a temporary repo just to fetch, sparse-checkout, and flatten a
-    // subdirectory.
-    std::fs::create_dir_all(dest)?;
-    let source_dir = ensure_source_repo(repo_url)?;
-
-    // Tags are local once the source repo is fetched; a pseudo-version's
-    // commit may not be.
-    git::ensure_rev_in_source_repo(&source_dir, ref_spec)?;
-    git::archive_to_dir(&source_dir, &package_tree(ref_spec, subpath), dest)?;
-
-    Ok(())
 }
 
 #[cfg(test)]
@@ -577,14 +563,14 @@ mod tests {
     fn failed_cache_fetch_leaves_no_marker() -> Result<()> {
         let temp = TempDir::new()?;
         let dir = temp.path().join("pkg").join("1.0.0");
-        let result = populate_cache(&dir, "pcb.toml", |dest| {
+        let result = populate_cache(&dir, |dest| {
             fs::write(dest.join("pcb.toml"), "")?;
             anyhow::bail!("interrupted")
         });
         assert!(result.is_err());
         assert!(!dir.join("pcb.toml").exists());
 
-        populate_cache(&dir, "pcb.toml", |dest| {
+        populate_cache(&dir, |dest| {
             fs::write(dest.join("pcb.toml"), "")?;
             fs::write(dest.join("main.zen"), "")?;
             Ok(())

@@ -19,8 +19,6 @@ struct SymbolLocation {
     source_idx: usize,
     /// Byte range in the source content
     range: Range<usize>,
-    /// Name of parent symbol if this symbol uses `extends`
-    extends: Option<String>,
 }
 
 /// A KiCad symbol library that can contain multiple symbols.
@@ -180,12 +178,6 @@ impl KicadSymbolLibrary {
             }
         }
 
-        // Check if symbol exists
-        let location = match self.symbol_locations.get(name) {
-            Some(loc) => loc.clone(),
-            None => return Ok(None),
-        };
-
         // Parse just this symbol's substring
         let Some((_, _, definition)) = self.definition(name)? else {
             return Ok(None);
@@ -202,8 +194,9 @@ impl KicadSymbolLibrary {
         chain.insert(name.to_string());
 
         // Merge into the parent, itself resolved through its own extends
-        // chain; a parent that is not found leaves the child as it is.
-        let parent = match &location.extends {
+        // chain; a parent that is not found leaves the child as it is, and
+        // KiCad ignores an empty `extends`.
+        let parent = match base_symbol.extends().filter(|parent| !parent.is_empty()) {
             Some(parent_name) => self.get_symbol_with_chain(parent_name, chain)?,
             None => None,
         };
@@ -429,7 +422,7 @@ pub fn library_paths(path: &Path) -> Result<Vec<PathBuf>> {
 
 /// Scan content for symbol locations without parsing S-expressions.
 ///
-/// Returns a map from symbol name to its byte range and extends info.
+/// Returns a map from symbol name to its byte range.
 /// Uses containment-based filtering: symbols whose range is fully contained
 /// within another symbol's range are considered sub-symbols and excluded.
 #[instrument(name = "scan_symbols", skip(content), fields(content_len = content.len()))]
@@ -493,17 +486,12 @@ fn scan_symbol_locations(
             Err(_) => continue, // Skip malformed symbols
         };
 
-        // Look for extends within this symbol's content
-        let symbol_content = &content[symbol_start..symbol_end];
-        let extends = extract_extends(symbol_content);
-
         current_top_end = symbol_end;
         locations.insert(
             name,
             SymbolLocation {
                 source_idx,
                 range: symbol_start..symbol_end,
-                extends,
             },
         );
     }
@@ -545,20 +533,6 @@ fn find_matching_paren(bytes: &[u8], start: usize) -> Result<usize> {
     }
 
     Err(anyhow!("Unmatched parenthesis at position {}", start))
-}
-
-/// The `extends` target written in a symbol's content, quoted or not; KiCad
-/// ignores an empty one.
-fn extract_extends(content: &str) -> Option<String> {
-    let after = &content[content.find("(extends")? + "(extends".len()..];
-    let after = after
-        .strip_prefix(|c: char| c.is_whitespace())?
-        .trim_start();
-    let name = match after.strip_prefix('"') {
-        Some(inner) => &inner[..inner.find('"')?],
-        None => &after[..after.find(|c: char| c.is_whitespace() || c == ')')?],
-    };
-    (!name.is_empty()).then(|| name.to_string())
 }
 
 /// Merge parent and child symbols (child overrides parent)

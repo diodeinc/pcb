@@ -172,9 +172,14 @@ fn execute_tasks(info: &ReleaseInfo, tasks: &[(&str, TaskFn)], start_time: Insta
     Ok(())
 }
 
+/// Unsuppressed errors and unsuppressed `sch` / `sch.*` diagnostics block a
+/// board release and a package publish.
+pub(crate) fn blocks_release(diagnostic: &pcb_zen_core::Diagnostic) -> bool {
+    !diagnostic.suppressed && (diagnostic.is_error() || diagnostic.has_kind("sch"))
+}
+
 fn release_blocked(diagnostics: &Diagnostics) -> bool {
-    diagnostics.error_count() > 0
-        || pcbc::kicad_schematic::has_unsuppressed_schematic_diagnostics(diagnostics)
+    diagnostics.diagnostics.iter().any(blocks_release)
 }
 
 fn release_diagnostics(

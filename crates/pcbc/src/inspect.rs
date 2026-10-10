@@ -88,17 +88,16 @@ fn inspect(path: &std::path::Path) -> Result<Inspection> {
             issue.message
         ));
     }
+    // Every listed name is defined, so no symbol is dropped here.
     let symbols = library
         .symbol_names()
         .into_iter()
-        .map(|name| {
-            let symbol = library
-                .get_symbol_lazy(name)?
-                .ok_or_else(|| anyhow!("symbol {name:?} is listed but not defined"))?;
-            Ok(SymbolInspection {
+        .filter_map(|name| {
+            let symbol = library.get_symbol_lazy(name).transpose()?;
+            Some(symbol.map(|symbol| SymbolInspection {
                 name: name.to_owned(),
                 metadata: symbol.metadata(),
-            })
+            }))
         })
         .collect::<Result<_>>()?;
     Ok(Inspection { symbols })

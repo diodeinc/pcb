@@ -180,13 +180,18 @@ pub fn format_tree(sexpr: &Sexpr, mode: FormatMode) -> String {
 /// `FormatInternalUnits`, `FormatDouble2Str` and `FormatAngle`): ten
 /// significant digits, trailing zeros stripped. This erases arithmetic noise
 /// such as `153.67000000000002`, so a KiCad save of the file is a no-op.
-/// Unlike `%g` it never falls back to exponent notation.
+/// Unlike `%g` it never falls back to exponent notation. At most ten decimals
+/// are kept: KiCad formats whole internal units (1 nm at the finest), so noise
+/// near zero, such as `cos(90°)`, is written as `0` as a KiCad save would.
 fn format_float(f: f64) -> String {
     if f == 0.0 {
         return "0".to_string();
     }
-    let decimals = (9 - f.abs().log10().floor() as i32).max(0) as usize;
-    trim_float(format!("{f:.decimals$}"))
+    let decimals = (9 - f.abs().log10().floor() as i32).clamp(0, 10) as usize;
+    match trim_float(format!("{f:.decimals$}")) {
+        zero if zero == "-0" => "0".to_string(),
+        formatted => formatted,
+    }
 }
 
 fn serialize_compact(sexpr: &Sexpr) -> String {
@@ -344,6 +349,8 @@ mod tests {
             (-6.35, "-6.35"),
             (-3.220010000000002, "-3.22001"),
             (0.0000004, "0.0000004"),
+            (90f64.to_radians().cos() * 5.0, "0"),
+            (-(90f64.to_radians().cos()) * 5.0, "0"),
         ] {
             assert_eq!(format_float(value), expected, "{value}");
         }

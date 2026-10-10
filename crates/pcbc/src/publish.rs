@@ -10,7 +10,6 @@ use inquire::{Confirm, Select};
 use pcb_zen::workspace::{WorkspaceInfo, WorkspaceInfoExt, WorkspacePackage, get_workspace_info};
 use pcb_zen::{git, tags};
 use pcb_zen_core::config::{DependencySpec, PcbToml, find_workspace_root};
-use pcb_zen_core::diagnostics::diagnostic_kind;
 use pcb_zen_core::{DefaultFileProvider, Diagnostics, DiagnosticsPass, initial_package_version};
 use petgraph::Direction;
 use petgraph::graph::{DiGraph, NodeIndex};
@@ -774,7 +773,17 @@ fn publish_packages(start_path: &Path, args: &PublishArgs) -> Result<()> {
     }
 
     let mut workspace = get_workspace_info(&file_provider, start_path)?;
-    let changed_paths = pcb_zen::workspace::enrich_git_metadata(&mut workspace);
+    let mut tags = git::list_peeled_tags(&workspace.root);
+    if args.check {
+        // A real publish prunes local-only tags first; the check leaves them
+        // alone but measures against the remote's tags just the same.
+        let on_remote: HashSet<String> = git::list_remote_tags(&workspace.root, &remote)?
+            .into_iter()
+            .collect();
+        tags.retain(|tag| on_remote.contains(&tag.name));
+    }
+    let tag_names: Vec<String> = tags.iter().map(|tag| tag.name.clone()).collect();
+    let changed_paths = pcb_zen::workspace::enrich_git_metadata(&mut workspace, tags);
 
     // Fail on workspace discovery errors (invalid pcb.toml files)
     if !workspace.errors.is_empty() {
@@ -796,8 +805,7 @@ fn publish_packages(start_path: &Path, args: &PublishArgs) -> Result<()> {
     // These need to be published because their pcb.toml will be bumped
     let dirty_urls = expand_dirty_set(&workspace, &directly_dirty);
     if args.check {
-        let remote_tags = git::list_remote_tags(&workspace.root, &remote)?;
-        return print_publish_plan(&workspace, &dirty_urls, &remote_tags, args.bump);
+        return print_publish_plan(&workspace, &dirty_urls, &tag_names, args.bump);
     }
 
     if !args.no_build {
@@ -915,10 +923,7 @@ fn print_publish_plan(
     bump: Option<BumpType>,
 ) -> Result<()> {
     let waves = compute_publish_waves(workspace, dirty_urls)?;
-    let bumps = match bump.and_then(BumpType::release) {
-        Some(bump) => uniform_bump_map(&waves, bump),
-        None => infer_all_bumps(workspace, &waves, all_tags),
-    };
+    let bumps = planned_bumps(workspace, &waves, bump, all_tags);
     let packages = waves
         .into_iter()
         .flat_map(|mut wave| {
@@ -927,8 +932,8 @@ fn print_publish_plan(
         })
         .map(|url| {
             let pkg = &workspace.packages[&url];
-            let current = current_package_version(pkg, workspace.path(), all_tags);
-            let next = compute_next_version(current.as_ref(), bumps[&url]);
+            let (current, next) =
+                package_version_step(pkg, workspace.path(), all_tags, bumps[&url]);
             serde_json::json!({
                 "path": pkg.rel_path.to_string_lossy(),
                 "current": current.map(|version| version.to_string()),
@@ -999,7 +1004,7 @@ fn publish_wave(
 ) -> Result<()> {
     let all_tags = git::list_all_tags_vec(&workspace.root);
 
-    // Build candidates with fresh hashes after any wave-boundary sync commit.
+    // Build candidates with fresh tags after any wave-boundary sync commit.
     let candidates = build_candidates(workspace, bump_map, package_urls, &all_tags);
 
     for (url, c) in &candidates {
@@ -1028,9 +1033,7 @@ fn build_candidates(
         .filter(|(url, _)| url_set.contains(url))
         .map(|(url, pkg)| {
             let bump = bump_map.get(url).copied().unwrap_or(ReleaseBump::Minor);
-            let tag_prefix = tags::compute_tag_prefix(Some(&pkg.rel_path), ws_path);
-            let current = tags::find_latest_version(all_tags, &tag_prefix);
-            let next_version = compute_next_version(current.as_ref(), bump);
+            let (_, next_version) = package_version_step(pkg, ws_path, all_tags, bump);
             let tag_name = compute_tag_name(pkg, &next_version, workspace);
             (
                 url.clone(),
@@ -1097,8 +1100,6 @@ fn build_workspace(
     }
 
     let eval_state = crate::build::BuildEvalState::new(resolution);
-    let mut has_errors = false;
-    let mut has_warnings = false;
     let mut blocking = Diagnostics::default();
     for zen_path in &zen_files {
         let file_name = zen_path.file_name().unwrap().to_string_lossy();
@@ -1107,19 +1108,14 @@ fn build_workspace(
             Default::default(),
             crate::build::create_diagnostics_passes(suppress, &[]),
             false,
-            &mut has_errors,
-            &mut has_warnings,
+            &mut false,
+            &mut false,
         );
         blocking.diagnostics.extend(
             result
                 .diagnostics
                 .iter()
-                .filter(|d| {
-                    !d.suppressed
-                        && (d.is_error()
-                            || diagnostic_kind(d)
-                                .is_some_and(|k| k == "sch" || k.starts_with("sch.")))
-                })
+                .filter(|d| release::blocks_release(d))
                 .cloned(),
         );
         if let Some(schematic) = result.schematic {
@@ -1251,6 +1247,32 @@ fn current_package_version(
     tags::find_latest_version(all_tags, &tag_prefix)
 }
 
+/// The package's latest published version and the version `bump` takes it to.
+fn package_version_step(
+    pkg: &WorkspacePackage,
+    ws_path: Option<&str>,
+    all_tags: &[String],
+    bump: ReleaseBump,
+) -> (Option<Version>, Version) {
+    let current = current_package_version(pkg, ws_path, all_tags);
+    let next = compute_next_version(current.as_ref(), bump);
+    (current, next)
+}
+
+/// Bumps that need no prompt: the explicit `--bump` level for every package,
+/// otherwise the inferred bumps.
+fn planned_bumps(
+    workspace: &WorkspaceInfo,
+    waves: &[Vec<String>],
+    cli_bump: Option<BumpType>,
+    all_tags: &[String],
+) -> BTreeMap<String, ReleaseBump> {
+    match cli_bump.and_then(BumpType::release) {
+        Some(bump) => uniform_bump_map(waves, bump),
+        None => infer_all_bumps(workspace, waves, all_tags),
+    }
+}
+
 fn infer_all_bumps(
     workspace: &WorkspaceInfo,
     waves: &[Vec<String>],
@@ -1376,16 +1398,12 @@ fn collect_all_bumps(
     waves: &[Vec<String>],
     cli_bump: Option<BumpType>,
 ) -> Result<BTreeMap<String, ReleaseBump>> {
-    if let Some(bump) = cli_bump.and_then(BumpType::release) {
-        return Ok(uniform_bump_map(waves, bump));
-    }
-
     let all_tags = git::list_all_tags_vec(&workspace.root);
-    let ws_path = workspace.path();
-    let inferred_bumps = infer_all_bumps(workspace, waves, &all_tags);
+    let bumps = planned_bumps(workspace, waves, cli_bump, &all_tags);
 
-    if matches!(cli_bump, Some(BumpType::Infer)) {
-        return Ok(inferred_bumps);
+    // Explicit levels and `--bump=infer` never prompt.
+    if !matches!(cli_bump, None | Some(BumpType::Interactive)) {
+        return Ok(bumps);
     }
 
     let has_published_packages = waves.iter().flat_map(|w| w.iter()).any(|url| {
@@ -1397,19 +1415,19 @@ fn collect_all_bumps(
     });
 
     if !has_published_packages {
-        return Ok(inferred_bumps);
+        return Ok(bumps);
     }
 
-    collect_interactive_bumps(workspace, waves, &all_tags, ws_path, inferred_bumps)
+    collect_interactive_bumps(workspace, waves, &all_tags, bumps)
 }
 
 fn collect_interactive_bumps(
     workspace: &WorkspaceInfo,
     waves: &[Vec<String>],
     all_tags: &[String],
-    ws_path: Option<&str>,
     inferred_bumps: BTreeMap<String, ReleaseBump>,
 ) -> Result<BTreeMap<String, ReleaseBump>> {
+    let ws_path = workspace.path();
     println!();
     print_publish_summary("Packages to publish", workspace, &inferred_bumps, all_tags);
     println!();
@@ -1446,9 +1464,8 @@ fn print_publish_summary(
     let package_urls = bump_map.keys().cloned().collect::<HashSet<_>>();
 
     print_publish_tree(title, workspace, &package_urls, |url, pkg| {
-        let current = current_package_version(pkg, ws_path, all_tags);
         let bump = bump_map.get(url).copied().unwrap_or(ReleaseBump::Minor);
-        let next = compute_next_version(current.as_ref(), bump);
+        let (current, next) = package_version_step(pkg, ws_path, all_tags, bump);
         let version_str = match current {
             Some(v) => format!("{} → {}", v, next),
             None => format!("→ {}", next),

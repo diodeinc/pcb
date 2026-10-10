@@ -13,7 +13,7 @@ use pcb_ir::geom::{ContourBuf, ContourSet, FillRule, PathCmd, Point};
 
 use crate::Error;
 use crate::board::{Board, RawEdge};
-use crate::geom::{Vec2, ccw_sweep, circle_center, point_in_polygon, signed_area};
+use crate::geom::{Vec2, ccw_sweep, chord_count, circle_center, point_in_polygon, signed_area};
 use crate::holes::RoundHole;
 use crate::rings::raw_islands;
 
@@ -585,8 +585,7 @@ fn walk_chords(edges: &[Edge], max_error: f64, mut visit: impl FnMut(Vec2, Optio
                 let r = edge.radius();
                 let sweep = edge.sweep();
                 let from = angle_of(a - c);
-                let step = 2.0 * (1.0 - max_error / r).clamp(-1.0, 1.0).acos();
-                let n = ((sweep.abs() / step.max(1e-3)).ceil() as usize).max(1);
+                let n = chord_count(r, sweep, max_error);
                 for k in 0..n {
                     let angle = from + sweep * k as f64 / n as f64;
                     visit(c + Vec2::new(angle.cos(), angle.sin()) * r, Some(c));

@@ -15,7 +15,9 @@ use crate::copper::{
     stroke_contour,
 };
 use crate::font;
-use crate::geom::{Vec2, ccw_sweep, circle_center, point_in_polygon, rotate_kicad, signed_area};
+use crate::geom::{
+    KICAD_MAX_ERROR, Vec2, ccw_sweep, circle_center, point_in_polygon, rotate_kicad, signed_area,
+};
 use crate::outline::{Edge, Frame, Loop, Solid, board_solids, flatten, orient};
 use crate::outline_font::Fonts;
 use crate::rings::{IndexedRing, Nested, cleaned, fit, nest, nested_of, raw_islands, rings_of};
@@ -24,8 +26,6 @@ use crate::rings::{IndexedRing, Nested, cleaned, fit, nest, nested_of, raw_islan
 const SILK_ABOVE_COPPER: f64 = 0.04;
 /// Height of the solder mask above the outer copper.
 const MASK_ABOVE_COPPER: f64 = 0.015;
-/// Chord error for the board edge, KiCad's maximum.
-const OUTLINE_ERROR: f64 = 0.005;
 
 /// One face of a tech layer.
 pub struct Face {
@@ -108,9 +108,9 @@ impl BoardEdge {
     fn new(outline: &[Solid]) -> Self {
         let mut rings = Vec::new();
         for solid in outline {
-            rings.push(flatten(&solid.outer.edges, OUTLINE_ERROR));
+            rings.push(flatten(&solid.outer.edges, KICAD_MAX_ERROR));
             for hole in &solid.holes {
-                rings.push(flatten(&hole.edges, OUTLINE_ERROR));
+                rings.push(flatten(&hole.edges, KICAD_MAX_ERROR));
             }
         }
         let segments = rings

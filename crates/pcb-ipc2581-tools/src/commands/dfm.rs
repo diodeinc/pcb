@@ -79,6 +79,17 @@ pub fn check(
     request: CheckRequest<'_>,
     resolution: Resolution,
 ) -> Result<DfmReport> {
+    check_with_scene(imported, request, resolution, false)
+}
+
+/// [`check`], also drawing the report's scene when `scene` is set. Only the
+/// database reads the scene, so a summary-only run skips building it.
+fn check_with_scene(
+    imported: &ImportedDesign,
+    request: CheckRequest<'_>,
+    resolution: Resolution,
+    scene: bool,
+) -> Result<DfmReport> {
     let (pdk_path, pdk_source, selected_profile) = match request.pdk {
         PdkSource::Builtin(name) => {
             let pdk = builtin_pdks::find(name)
@@ -108,7 +119,7 @@ pub fn check(
         &rules,
         resolution,
     )?;
-    let mut checked = checks::run(&rules, &designs)?;
+    let checked = checks::run(&rules, &designs)?;
     let summary = summarize(&checked);
     let layout = designs[0].report_layout();
     let frames = checked
@@ -116,19 +127,17 @@ pub fn check(
         .iter()
         .map(|(design, placements)| designs[*design as usize].report_frame(placements))
         .collect::<Vec<_>>();
-    let scene = scene::export(
-        &designs,
-        &layout,
-        &checked.rules,
-        &frames,
-        &checked.findings,
-    )?;
-    checked
-        .findings
-        .iter_mut()
-        .flat_map(|finding| &mut finding.sites)
-        .flat_map(|site| &mut site.evidence)
-        .for_each(|evidence| evidence.shape.simplify());
+    let scene = scene
+        .then(|| {
+            scene::export(
+                &designs,
+                &layout,
+                &checked.rules,
+                &frames,
+                &checked.findings,
+            )
+        })
+        .transpose()?;
     Ok(DfmReport {
         schema_version: report::REPORT_SCHEMA_VERSION,
         generated_at: request.generated_at.to_rfc3339(),
@@ -139,10 +148,7 @@ pub fn check(
         } else {
             report::Verdict::Pass
         },
-        tool: report::ToolIdentity {
-            name: "pcb",
-            version: env!("CARGO_PKG_VERSION"),
-        },
+        tool: report::ToolIdentity::PCB,
         input: request.input,
         pdk: report::PdkIdentity::from_pdk(
             &pdk,
@@ -151,10 +157,7 @@ pub fn check(
             sha256(pdk_source.as_bytes()),
             pdk_source.to_owned(),
         ),
-        layout_target: match request.layout_target {
-            LayoutTarget::Board => "board",
-            LayoutTarget::BoardArray => "board_array",
-        },
+        layout_target: layout_target_label(request.layout_target),
         layout,
         coordinate_system: report::CoordinateSystem {
             unit: "mm",
@@ -274,27 +277,21 @@ pub fn execute_check(
 
 /// Preparation failures produce an incomplete report, never a passing result.
 /// This also handles `.zen` layout/export errors before the IPC input exists.
+/// The caller must already have checked `options` with [`validate_output`].
 #[cfg(feature = "cli")]
 pub fn write_error_report(
     file: &Path,
     options: &CheckOptions,
     error: &anyhow::Error,
 ) -> Result<()> {
-    validate_output(file, options)?;
     let incomplete = serde_json::json!({
         "schema_version": report::REPORT_SCHEMA_VERSION,
         "generated_at": generation_time().to_rfc3339(),
         "verdict": "incomplete",
-        "tool": report::ToolIdentity {
-            name: "pcb",
-            version: env!("CARGO_PKG_VERSION"),
-        },
+        "tool": report::ToolIdentity::PCB,
         "input": { "path": file.display().to_string() },
         "pdk": { "path": options.pdk.display().to_string() },
-        "layout_target": match options.layout_target {
-            LayoutTarget::Board => "board",
-            LayoutTarget::BoardArray => "board_array",
-        },
+        "layout_target": layout_target_label(options.layout_target),
         "error": { "message": format!("{error:#}") },
     });
     write_report(options, &incomplete, || {
@@ -322,7 +319,7 @@ fn build_report(file: &Path, options: &CheckOptions, resolution: Resolution) -> 
     drop(input_bytes);
     let imported =
         import_design(&ipc, resolution).context("failed to import IPC-2581 physical design")?;
-    check(
+    check_with_scene(
         &imported,
         CheckRequest {
             input,
@@ -337,7 +334,16 @@ fn build_report(file: &Path, options: &CheckOptions, resolution: Resolution) -> 
             generated_at,
         },
         resolution,
+        options.output.is_some(),
     )
+}
+
+/// How a report names its layout target.
+fn layout_target_label(target: LayoutTarget) -> &'static str {
+    match target {
+        LayoutTarget::Board => "board",
+        LayoutTarget::BoardArray => "board_array",
+    }
 }
 
 /// The non-verdict counts worth surfacing next to the pass/fail line.
@@ -402,22 +408,8 @@ fn write_report(
 ) -> Result<()> {
     if let Some(path) = options.output.as_deref() {
         let bytes = database()?;
-        let parent = path
-            .parent()
-            .filter(|parent| !parent.as_os_str().is_empty())
-            .unwrap_or_else(|| Path::new("."));
-        let mut temporary = tempfile::NamedTempFile::new_in(parent)
-            .with_context(|| format!("failed to create DFM report in {}", parent.display()))?;
-        temporary
-            .write_all(&bytes)
-            .with_context(|| format!("failed to write DFM report to {}", path.display()))?;
-        temporary
-            .as_file()
-            .sync_all()
-            .context("failed to flush DFM report to disk")?;
-        temporary
-            .persist(path)
-            .map_err(|error| error.error)
+        atomicwrites::AtomicFile::new(path, atomicwrites::OverwriteBehavior::AllowOverwrite)
+            .write(|file| file.write_all(&bytes))
             .with_context(|| format!("failed to replace DFM report {}", path.display()))?;
     }
     let mut line = serde_json::to_vec(summary)?;
@@ -462,12 +454,13 @@ mod fixtures {
         }
     }
 
-    /// The report of `xml` checked against a PDK source.
+    /// The report of `xml` checked against a PDK source, with its scene.
     pub fn report(xml: &str, pdk: &str, target: LayoutTarget) -> DfmReport {
-        check(
+        check_with_scene(
             &import(xml),
             request(xml, pdk, target),
             Resolution::default(),
+            true,
         )
         .unwrap()
     }
@@ -731,6 +724,7 @@ limit = { minimum = "300 mil" }
         assert!(!finding.sites.is_empty());
     }
 
+    #[cfg(feature = "cli")]
     #[test]
     fn database_report_is_reproducible_and_holds_every_finding() {
         let ipc = builtin_pdks::find("ipc").unwrap();

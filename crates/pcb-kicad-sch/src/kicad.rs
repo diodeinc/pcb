@@ -5,6 +5,7 @@ use anyhow::{Context, Result, anyhow, bail};
 use pcb_sexpr::{
     Sexpr, SexprKind,
     formatter::{FormatMode, format_tree},
+    kicad::symbol::private_offset,
     parse,
 };
 
@@ -124,7 +125,9 @@ pub fn parse_kicad_sch_page(file_name: Option<&str>, content: &str) -> Result<Sc
             "unsupported KiCad schematic version {version}; expected KiCad 9 version 20250114 or KiCad 10 version {KICAD_SCH_VERSION}"
         ),
     }
-    parse_kicad_sch_root(file_name, &root)
+    // Normalization rewrites descendants only; the root is still the checked list.
+    let root = SexprList::from_sexpr(&root).expect("kicad_sch root is a list");
+    parse_kicad_sch_root(file_name, root)
 }
 
 /// KiCad changed exact `~` field values and library pin names/numbers from
@@ -159,13 +162,7 @@ fn normalize_kicad_9(node: &mut Sexpr, parent: &str) {
         ]));
     }
     let value_index = match tag.as_str() {
-        "property" => Some(
-            if items.get(1).and_then(Sexpr::as_atom) == Some("private") {
-                3
-            } else {
-                2
-            },
-        ),
+        "property" => Some(2 + private_offset(items)),
         "name" | "number" if parent == "pin" => Some(1),
         "value" | "footprint" if matches!(parent, "default_instance" | "path") => Some(1),
         _ => None,
@@ -180,14 +177,8 @@ fn normalize_kicad_9(node: &mut Sexpr, parent: &str) {
     }
 }
 
-fn parse_kicad_sch_root(file_name: Option<&str>, root: &Sexpr) -> Result<SchPage> {
-    let root =
-        SexprList::from_sexpr(root).ok_or_else(|| anyhow!("expected kicad_sch root list"))?;
-
-    if root.tag() != Some("kicad_sch") {
-        bail!("expected kicad_sch root");
-    }
-
+/// Parse a `kicad_sch` root list whose tag the caller has checked.
+fn parse_kicad_sch_root(file_name: Option<&str>, root: SexprList<'_>) -> Result<SchPage> {
     let mut page_id = None;
     let mut paper = Paper::default();
     let mut items = Vec::new();
@@ -235,9 +226,6 @@ fn parse_kicad_sch_root(file_name: Option<&str>, root: &Sexpr) -> Result<SchPage
             Some("rectangle" | "polyline" | "circle" | "arc" | "text" | "text_box") => {
                 items.push(SchItem::Graphic(parse_graphic(list)?));
             }
-            Some("sheet_instances") => {
-                items.push(SchItem::Unsupported(child.clone()));
-            }
             _ => items.push(SchItem::Unsupported(child.clone())),
         }
     }
@@ -266,14 +254,27 @@ fn format_kicad_sch_page(page: &SchPage) -> String {
         ]),
         Sexpr::list(vec![Sexpr::symbol("uuid"), Sexpr::string(&page.id)]),
         paper_to_sexpr(&page.paper),
-        library_to_sexpr(&page.library),
     ];
 
+    let placed = || {
+        page.items
+            .iter()
+            .filter(|item| !matches!(item, SchItem::Sheet(sheet) if !sheet.placed))
+    };
+    let tagged = |tag: &'static str| {
+        placed()
+            .filter(move |item| item_tag(item) == tag)
+            .map(item_to_sexpr)
+    };
+    // KiCad writes the title block before the library, and KiCad 9 wrote a
+    // page's bus aliases after it.
+    root.extend(tagged("title_block"));
+    root.push(library_to_sexpr(&page.library));
+    root.extend(tagged("bus_alias"));
+
     // KiCad saves items ordered by item type, then UUID.
-    let mut items = page
-        .items
-        .iter()
-        .filter(|item| !matches!(item, SchItem::Sheet(sheet) if !sheet.placed))
+    let mut items = placed()
+        .filter(|item| !matches!(item_tag(item), "title_block" | "bus_alias"))
         .collect::<Vec<_>>();
     items.sort_by_key(|item| {
         let id = match item {
@@ -286,7 +287,7 @@ fn format_kicad_sch_page(page: &SchPage) -> String {
         };
         (item_save_rank(item), id)
     });
-    root.extend(items.into_iter().map(|item| item_to_sexpr(item, page)));
+    root.extend(items.into_iter().map(item_to_sexpr));
 
     format!(
         "{}\n",
@@ -294,9 +295,9 @@ fn format_kicad_sch_page(page: &SchPage) -> String {
     )
 }
 
-/// KiCad's `KICAD_T` save order. An unfilled `polyline` is a line, not a shape.
-fn item_save_rank(item: &SchItem) -> u8 {
-    let tag = match item {
+/// The item's save-order tag. An unfilled `polyline` is a line, not a shape.
+fn item_tag(item: &SchItem) -> &str {
+    match item {
         SchItem::Graphic(graphic) => match &graphic.kind {
             GraphicKind::Polyline { .. } if !has_tag(&graphic.unsupported, "fill") => "wire",
             kind => kind.kicad_tag(),
@@ -308,8 +309,12 @@ fn item_save_rank(item: &SchItem) -> u8 {
         SchItem::Symbol(_) => "symbol",
         SchItem::Sheet(_) => "sheet",
         SchItem::Unsupported(sexpr) => sexpr.as_list().and_then(list_tag).unwrap_or(""),
-    };
-    match tag {
+    }
+}
+
+/// KiCad's `KICAD_T` save order.
+fn item_save_rank(item: &SchItem) -> u8 {
+    match item_tag(item) {
         "rectangle" | "polyline" | "circle" | "arc" | "bezier" => 0,
         "text" => 1,
         "text_box" => 2,
@@ -895,11 +900,8 @@ fn parse_xy(items: SexprList<'_>) -> Result<Point> {
 }
 
 fn parse_property(items: SexprList<'_>) -> Result<SymbolField> {
-    let mut cursor = 1;
-    let private = items.atom(cursor) == Some("private");
-    if private {
-        cursor += 1;
-    }
+    let private = private_offset(items.items) == 1;
+    let cursor = 1 + usize::from(private);
 
     let name = items.string(cursor).context("property missing name")?;
     let value = items
@@ -1217,6 +1219,15 @@ fn graphic_to_sexpr(graphic: &Graphic) -> Sexpr {
             Sexpr::float(point.y),
         ])
     };
+    // KiCad writes a text item's `exclude_from_sim` right after its string,
+    // and a text box's effects after its margins, stroke and fill.
+    let leads_text = |item: &&Sexpr| {
+        matches!(
+            graphic.kind,
+            GraphicKind::Text(_) | GraphicKind::TextBox { .. }
+        ) && item.as_list().and_then(list_tag) == Some("exclude_from_sim")
+    };
+    let mut trailing = None;
     match &graphic.kind {
         GraphicKind::Rectangle { start, end } => {
             items.extend([xy("start", *start), xy("end", *end)])
@@ -1235,6 +1246,7 @@ fn graphic_to_sexpr(graphic: &Graphic) -> Sexpr {
         }
         GraphicKind::Text(text) | GraphicKind::TextBox { text, .. } => {
             items.push(Sexpr::string(&text.text));
+            items.extend(graphic.unsupported.iter().filter(leads_text).cloned());
             items.push(Sexpr::list(vec![
                 Sexpr::symbol("at"),
                 Sexpr::float(text.at.x),
@@ -1248,10 +1260,20 @@ fn graphic_to_sexpr(graphic: &Graphic) -> Sexpr {
             if text.hidden {
                 effects.as_list_mut().unwrap().push(Sexpr::symbol("hide"));
             }
-            items.push(effects);
+            match graphic.kind {
+                GraphicKind::TextBox { .. } => trailing = Some(effects),
+                _ => items.push(effects),
+            }
         }
     }
-    items.extend(graphic.unsupported.iter().cloned());
+    items.extend(
+        graphic
+            .unsupported
+            .iter()
+            .filter(|item| !leads_text(item))
+            .cloned(),
+    );
+    items.extend(trailing);
     items.push(Sexpr::list(vec![
         Sexpr::symbol("uuid"),
         Sexpr::string(&graphic.id),
@@ -1259,7 +1281,7 @@ fn graphic_to_sexpr(graphic: &Graphic) -> Sexpr {
     Sexpr::list(items)
 }
 
-fn item_to_sexpr(item: &SchItem, _page: &SchPage) -> Sexpr {
+fn item_to_sexpr(item: &SchItem) -> Sexpr {
     match item {
         SchItem::Symbol(symbol) => symbol_to_sexpr(symbol),
         SchItem::Wire(wire) => wire_to_sexpr(wire),
@@ -1533,6 +1555,9 @@ fn label_to_sexpr(label: &Label) -> Sexpr {
         Sexpr::symbol(label_kind_token(label.kind)),
         Sexpr::string(&label.text),
     ];
+    // KiCad writes a netclass flag's `length` right after its text.
+    let leads = |item: &&Sexpr| item.as_list().and_then(list_tag) == Some("length");
+    items.extend(label.unsupported.iter().filter(leads).cloned());
 
     if let Some(shape) = label_shape(label.kind) {
         items.push(Sexpr::list(vec![
@@ -1569,7 +1594,13 @@ fn label_to_sexpr(label: &Label) -> Sexpr {
     items.extend(
         sorted_fields(intersheet_refs.iter().chain(label.fields.values())).map(field_to_sexpr),
     );
-    items.extend(label.unsupported.iter().cloned());
+    items.extend(
+        label
+            .unsupported
+            .iter()
+            .filter(|item| !leads(item))
+            .cloned(),
+    );
 
     Sexpr::list(items)
 }
@@ -1876,11 +1907,7 @@ fn validate_symbol_graphics_for_kicad_10(sexpr: &Sexpr) -> Result<()> {
 }
 
 fn property_name(items: &[Sexpr]) -> Option<&str> {
-    let mut cursor = 1;
-    if items.get(cursor).and_then(Sexpr::as_atom) == Some("private") {
-        cursor += 1;
-    }
-    items.get(cursor).and_then(Sexpr::as_atom)
+    items.get(1 + private_offset(items))?.as_atom()
 }
 
 fn is_internal_kicad_metadata_property(name: &str) -> bool {
@@ -2301,6 +2328,8 @@ mod tests {
     use super::*;
 
     const KICAD_10_SYMBOL_FIXTURE: &str = include_str!("../test-data/kicad-10/shared1.kicad_sch");
+    const KICAD_10_ITEM_KINDS_FIXTURE: &str =
+        include_str!("../test-data/kicad-10/item-kinds.kicad_sch");
     const KICAD_10_UNSUPPORTED_FIXTURE: &str =
         include_str!("../test-data/kicad-10/unsupported-items.kicad_sch");
     const KICAD_10_RESAVED_FIXTURE: &str =
@@ -2802,16 +2831,22 @@ mod tests {
 
     #[test]
     fn kicad_10_saved_sheet_round_trips_byte_identically() {
-        // Git may check the fixture out with CRLF on Windows.
-        let fixture = KICAD_10_RESAVED_FIXTURE.replace("\r\n", "\n");
-        let document = SchDocument::from_kicad_sch(&fixture).unwrap();
-        let expected = fixture
-            .replace("(generator \"eeschema\")", "(generator \"diode\")")
-            .replace(
-                "(generator_version \"10.0\")",
-                &format!("(generator_version \"{GENERATOR_VERSION}\")"),
-            );
-        assert_eq!(document.pages[0].to_kicad_sch(), expected);
+        for fixture in [
+            KICAD_10_RESAVED_FIXTURE,
+            KICAD_10_UNSUPPORTED_FIXTURE,
+            KICAD_10_ITEM_KINDS_FIXTURE,
+        ] {
+            // Git may check the fixture out with CRLF on Windows.
+            let fixture = fixture.replace("\r\n", "\n");
+            let document = SchDocument::from_kicad_sch(&fixture).unwrap();
+            let expected = fixture
+                .replace("(generator \"eeschema\")", "(generator \"diode\")")
+                .replace(
+                    "(generator_version \"10.0\")",
+                    &format!("(generator_version \"{GENERATOR_VERSION}\")"),
+                );
+            assert_eq!(document.pages[0].to_kicad_sch(), expected);
+        }
     }
 
     #[test]

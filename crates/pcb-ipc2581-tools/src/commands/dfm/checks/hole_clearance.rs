@@ -325,7 +325,7 @@ limit = {{ minimum = "0.20 mm" }}"#
             ["copper", "drills", "board_outlines"]
         );
         for (feature, layer) in [("copper", "L0"), ("drills", "DRILL")] {
-            let mut passes = checked.scene.passes.iter();
+            let mut passes = checked.scene.as_ref().unwrap().passes.iter();
             assert!(
                 passes.any(|pass| pass.feature == feature && pass.layer.as_deref() == Some(layer))
             );

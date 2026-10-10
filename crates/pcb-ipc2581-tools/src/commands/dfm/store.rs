@@ -244,6 +244,10 @@ impl<'a> Writer<'a> {
     }
 
     fn report(&mut self, report: &DfmReport) -> Result<()> {
+        let scene = report
+            .scene
+            .as_ref()
+            .context("a DFM database needs the report's scene")?;
         let metadata = [
             ("schema_version", text(&report.schema_version)),
             ("generated_at", text(&report.generated_at)),
@@ -256,7 +260,7 @@ impl<'a> Writer<'a> {
             ("layout", text(&report.layout)),
             ("summary", text(&report.summary)),
             ("frames", text(&report.frames)),
-            ("scene", text(&json!({ "bounds": report.scene.bounds }))),
+            ("scene", text(&json!({ "bounds": scene.bounds }))),
         ];
         for (key, value) in metadata {
             self.report.execute(params![key, value])?;
@@ -301,7 +305,7 @@ impl<'a> Writer<'a> {
         for (finding, id) in report.findings.iter().zip(0_i64..) {
             let rule = rules
                 .get(finding.rule_id.as_str())
-                .with_context(|| format!("finding {} names no rule", finding.id))?;
+                .expect("checks create every finding from a configured rule");
             let point = finding.location.point.map(nanometres);
             let bbox = finding.location.bounding_box.map(bounds);
             let layers = self.layers(&finding.layers)?;
@@ -337,7 +341,13 @@ impl<'a> Writer<'a> {
                 let evidence = site
                     .evidence
                     .iter()
-                    .map(|item| Ok((self.role(item.role)?, self.shape(&item.shape)?)))
+                    .map(|item| {
+                        // Vertices finer than the simplification tolerance
+                        // only bloat the stored evidence.
+                        let mut shape = item.shape.clone();
+                        shape.simplify();
+                        Ok((self.role(item.role)?, self.shape(&shape)?))
+                    })
                     .collect::<Result<Vec<_>>>()?;
                 let note = site.note.as_ref().map(|note| self.note(note)).transpose()?;
                 self.site.execute(params![
@@ -359,7 +369,7 @@ impl<'a> Writer<'a> {
                 ])?;
             }
         }
-        for (pass, id) in report.scene.passes.iter().zip(0_i64..) {
+        for (pass, id) in scene.passes.iter().zip(0_i64..) {
             self.scene.execute(params![
                 id,
                 pass.label,

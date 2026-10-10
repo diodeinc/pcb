@@ -2,11 +2,10 @@
 //! tessellated once with foxtrot, largest first, on the rayon pool.
 
 use std::collections::HashMap;
-use std::hash::{DefaultHasher, Hash, Hasher};
 
 use glam::Vec3;
-use pcb_step::Board;
-use pcb_step::scene::Scene;
+use pcb_step::scene::{Model, Scene};
+use pcb_step::{Board, Report, content_hash};
 use rayon::prelude::*;
 use triangulate::colored_mesh::{ColoredSubmesh, tessellate_step_bytes};
 
@@ -28,9 +27,8 @@ pub(crate) struct Models {
     pub(crate) meshes: Vec<Mesh>,
     /// For each of the scene's models, its mesh, if it could be made.
     pub(crate) of_model: Vec<Option<usize>>,
-    pub(crate) warnings: Vec<String>,
-    /// Models that were found but could not be used.
-    pub(crate) failed: usize,
+    /// Warnings, and models that were found but could not be used.
+    pub(crate) report: Report,
 }
 
 pub(crate) fn tessellate(board: &Board, scene: &Scene) -> Models {
@@ -40,30 +38,26 @@ pub(crate) fn tessellate(board: &Board, scene: &Scene) -> Models {
         .map(|model| board.model(&model.key))
         .collect();
 
-    let mut warnings = Vec::new();
-    let mut failed = 0;
+    let mut report = Report::default();
     // Distinct payloads by content, so one file embedded under two names,
     // or used at two scales, is tessellated once. Each keeps the largest
     // scale it is placed at.
-    let mut payloads: Vec<(&str, Vec<u8>, f64)> = Vec::new();
+    let mut payloads: Vec<(&Model, Vec<u8>, f64)> = Vec::new();
     let mut by_hash: HashMap<u64, usize> = HashMap::new();
     let mut payload_of: Vec<Option<usize>> = Vec::with_capacity(decoded.len());
     for (model, decoded) in scene.models.iter().zip(decoded) {
         payload_of.push(match decoded {
             None => {
-                warnings.push(format!("could not find 3D model: {}", model.key));
+                report.missing_model(&model.key);
                 None
             }
             Some(Err(err)) => {
-                warnings.push(format!("could not load model {}: {err}", model.key));
-                failed += 1;
+                report.failed_model(&model.key, &err);
                 None
             }
             Some(Ok(bytes)) => {
-                let mut hasher = DefaultHasher::new();
-                bytes.hash(&mut hasher);
-                let i = *by_hash.entry(hasher.finish()).or_insert_with(|| {
-                    payloads.push((&model.key, bytes, 0.0));
+                let i = *by_hash.entry(content_hash(&bytes)).or_insert_with(|| {
+                    payloads.push((model, bytes, 0.0));
                     payloads.len() - 1
                 });
                 payloads[i].2 = payloads[i].2.max(model.scale);
@@ -78,10 +72,10 @@ pub(crate) fn tessellate(board: &Board, scene: &Scene) -> Models {
         .into_par_iter()
         .with_max_len(1)
         .map(|i| {
-            let (key, bytes, scale) = &payloads[i];
+            let (model, bytes, scale) = &payloads[i];
             (
                 i,
-                tessellate_one(key, bytes, SIMPLIFY_ERROR / *scale as f32),
+                tessellate_one(model, bytes, SIMPLIFY_ERROR / *scale as f32),
             )
         })
         .collect();
@@ -90,19 +84,18 @@ pub(crate) fn tessellate(board: &Board, scene: &Scene) -> Models {
     let mut meshes = Vec::new();
     let mut mesh_of_payload = Vec::with_capacity(outcomes.len());
     for (i, outcome) in outcomes {
-        warnings.extend(outcome.notes);
+        report.warnings.extend(outcome.notes);
         mesh_of_payload.push(match outcome.mesh {
             Ok(Some(mesh)) => {
                 meshes.push(mesh);
                 Some(meshes.len() - 1)
             }
             Ok(None) => {
-                warnings.push(format!("model has no solid geometry: {}", payloads[i].0));
+                report.empty_model(&payloads[i].0.key);
                 None
             }
             Err(err) => {
-                warnings.push(format!("could not load model {}: {err}", payloads[i].0));
-                failed += 1;
+                report.failed_model(&payloads[i].0.key, &err);
                 None
             }
         });
@@ -113,8 +106,7 @@ pub(crate) fn tessellate(board: &Board, scene: &Scene) -> Models {
             .into_iter()
             .map(|p| p.and_then(|p| mesh_of_payload[p]))
             .collect(),
-        warnings,
-        failed,
+        report,
     }
 }
 
@@ -127,7 +119,8 @@ struct Outcome {
 
 /// Tessellate one payload and simplify it within `simplify_error` model
 /// millimetres.
-fn tessellate_one(key: &str, bytes: &[u8], simplify_error: f32) -> Outcome {
+fn tessellate_one(model: &Model, bytes: &[u8], simplify_error: f32) -> Outcome {
+    let key = &model.key;
     let mut notes = Vec::new();
     let (tessellated, stats) = match tessellate_step_bytes(bytes) {
         Ok(ok) => ok,
@@ -177,13 +170,9 @@ fn tessellate_one(key: &str, bytes: &[u8], simplify_error: f32) -> Outcome {
         };
         return Outcome { mesh, notes };
     }
-    // Foxtrot buckets colours in a hash map; sort for stable output.
+    // Order primitives by colour.
     primitives.sort_by(|a, b| a.0.map(f32::to_bits).cmp(&b.0.map(f32::to_bits)));
-    let name = std::path::Path::new(key)
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or(key)
-        .to_owned();
+    let name = model.name().to_owned();
     Outcome {
         mesh: Ok(Some(Mesh { name, primitives })),
         notes,

@@ -1,0 +1,137 @@
+(kicad_sch
+	(version 20260306)
+	(generator "eeschema")
+	(generator_version "10.0")
+	(uuid "8d3c2f0e-0000-4000-8000-000000000001")
+	(paper "A4")
+	(title_block
+		(title "Items")
+		(company "Diode")
+	)
+	(lib_symbols)
+	(bezier
+		(pts
+			(xy 10 10) (xy 20 5) (xy 30 15) (xy 40 10)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(fill
+			(type none)
+		)
+		(uuid "8d3c2f0e-0000-4000-8000-000000000002")
+	)
+	(text_box "Box text"
+		(exclude_from_sim no)
+		(at 60 20 0)
+		(size 20 10)
+		(margins 0.9525 0.9525 0.9525 0.9525)
+		(stroke
+			(width 0)
+			(type solid)
+		)
+		(fill
+			(type none)
+		)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify left top)
+		)
+		(uuid "8d3c2f0e-0000-4000-8000-000000000003")
+	)
+	(bus_entry
+		(at 30 40)
+		(size 2.54 2.54)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "8d3c2f0e-0000-4000-8000-000000000004")
+	)
+	(bus
+		(pts
+			(xy 10 40) (xy 30 40)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "8d3c2f0e-0000-4000-8000-000000000005")
+	)
+	(image
+		(at 100 100)
+		(uuid "8d3c2f0e-0000-4000-8000-000000000006")
+		(data "iVBORw0KGgoAAAANSUhEUgAAAAgAAAAIAQMAAAD+wSzIAAAAIGNIUk0AAHomAACAhAAA+gAAAIDo"
+			"AAB1MAAA6mAAADqYAAAXcJy6UTwAAAAGUExURf8AAP///0EdNBEAAAABYktHRAH/Ai3eAAAAB3RJ"
+			"TUUH6goKFgMb5+UvbAAAACV0RVh0ZGF0ZTpjcmVhdGUAMjAyNi0xMC0xMFQyMjowMzoyNyswMDow"
+			"MHErP2EAAAAldEVYdGRhdGU6bW9kaWZ5ADIwMjYtMTAtMTBUMjI6MDM6MjcrMDA6MDAAdofdAAAA"
+			"KHRFWHRkYXRlOnRpbWVzdGFtcAAyMDI2LTEwLTEwVDIyOjAzOjI3KzAwOjAwV2OmAgAAAAtJREFU"
+			"CNdjYEAFAAAQAAGhxSHBAAAAAElFTkSuQmCC"
+		)
+	)
+	(label "D0"
+		(at 40 50 0)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify left bottom)
+		)
+		(uuid "8d3c2f0e-0000-4000-8000-000000000007")
+	)
+	(rule_area
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(polyline
+			(pts
+				(xy 120 20) (xy 140 20) (xy 140 40) (xy 120 40)
+			)
+			(stroke
+				(width 0)
+				(type dash)
+			)
+			(fill
+				(type none)
+			)
+			(uuid "8d3c2f0e-0000-4000-8000-000000000009")
+		)
+	)
+	(netclass_flag ""
+		(length 2.54)
+		(shape round)
+		(at 80 60 0)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify left)
+		)
+		(uuid "8d3c2f0e-0000-4000-8000-000000000008")
+		(property "Netclass" "Default"
+			(at 80.7 57.46 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+					(italic yes)
+				)
+				(justify left)
+			)
+		)
+	)
+	(group "Grp"
+		(uuid "8d3c2f0e-0000-4000-8000-00000000000a")
+		(members "8d3c2f0e-0000-4000-8000-000000000002" "8d3c2f0e-0000-4000-8000-000000000007")
+	)
+	(sheet_instances
+		(path "/"
+			(page "1")
+		)
+	)
+)

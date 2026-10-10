@@ -8,8 +8,12 @@ These fixtures come from the KiCad source QA data at revision `3aaf95cc32`
 - `issue24201/`: the complete two-sheet `qa/data/eeschema/issue24201`
   schematic hierarchy, paired with a minimal project marker for the loader test
 
-`resaved-child-sheet.kicad_sch` is a `pcb apply schematic` child sheet after a
+`resaved-child-sheet.kicad_sch` is a `pcb apply schematic` child sheet, given a title block, after a
 KiCad 10.0.7 save (`kicad-cli sch upgrade --force`); it pins KiCad's exact output order.
+
+`item-kinds.kicad_sch` is a hand-written page with a title block, bezier,
+text box, bus, bus entry, image, label, netclass flag, rule area and group
+after the same KiCad 10.0.7 save; it pins how KiCad writes each item kind.
 
 Both files declare `generator_version "10.0"`. They test semantic round trips
 through the supported model while retaining unmodeled S-expressions.

@@ -72,11 +72,8 @@ fn apply_existing(mut project: KicadProject, netlist: &Schematic) -> Result<Sche
         .first()
         .cloned()
         .context("linked KiCad project has no root schematic")?;
-    let root_file_name = root_schematic
-        .file_name()
-        .and_then(|name| name.to_str())
-        .context("linked KiCad project has no UTF-8 root schematic filename")?;
-    let plan = plan_reconciliation(Some(&project.document), netlist, root_file_name)?;
+    // The root filename only names the root page of a newly created document.
+    let plan = plan_reconciliation(Some(&project.document), netlist, "")?;
 
     // Semantic equality is the no-op boundary. Do not run a parsed KiCad file
     // through our serializer merely because its valid item ordering or
@@ -95,7 +92,7 @@ fn apply_existing(mut project: KicadProject, netlist: &Schematic) -> Result<Sche
             .file_name
             .as_deref()
             .with_context(|| format!("schematic page '{}' has no filename", page.id))?;
-        let path = project_schematic_path(&project.directory, &project.directory, file_name)?;
+        let path = project_schematic_path(&project.directory, file_name)?;
         if existing_page_ids.contains(page.id.as_str()) {
             let source = fs::read_to_string(&path)
                 .with_context(|| format!("failed to read {}", path.display()))?;
@@ -227,14 +224,8 @@ fn initialize_project(
     let plan = plan_reconciliation(None, netlist, file_name)?;
     let document = plan.apply(None)?;
     let schematic_files = desired_file_paths(&directory, &document)?;
-    let mut unique_paths = std::collections::BTreeSet::new();
+    // Planning already rejected pages that share a file name.
     for path in &schematic_files {
-        if !unique_paths.insert(path) {
-            bail!(
-                "two schematic pages resolve to the same file {}; rename the conflicting module",
-                path.display()
-            );
-        }
         if path.exists() {
             bail!(
                 "refusing to replace existing KiCad schematic {}",
@@ -372,7 +363,7 @@ fn desired_file_paths(directory: &Path, document: &SchDocument) -> Result<Vec<Pa
                 .file_name
                 .as_deref()
                 .with_context(|| format!("schematic page '{}' has no filename", page.id))?;
-            project_schematic_path(directory, directory, file_name)
+            project_schematic_path(directory, file_name)
         })
         .collect()
 }

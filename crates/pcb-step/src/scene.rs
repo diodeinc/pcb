@@ -10,6 +10,7 @@ use crate::outline::{Frame, board_solids, cut_holes, cut_round};
 use crate::{Error, Options, Origin, copper, faces, glob_match, holes, model_key, worker_threads};
 
 pub use crate::faces::Face;
+pub use crate::geom::{KICAD_MAX_ERROR, chord_count};
 pub use crate::holes::RoundHole;
 pub use crate::outline::{Loop, Solid, Vertex};
 
@@ -30,6 +31,16 @@ pub struct Model {
     /// The model's name among the board's embedded files.
     pub key: String,
     pub scale: f64,
+}
+
+impl Model {
+    /// The model's display name: the file stem of its key.
+    pub fn name(&self) -> &str {
+        std::path::Path::new(&self.key)
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or(&self.key)
+    }
 }
 
 /// One footprint's use of a model.
@@ -66,6 +77,13 @@ pub enum LayerKind {
     Soldermask {
         front: bool,
     },
+}
+
+impl LayerKind {
+    /// Copper of any kind: tracks, zones, via rings, pads and via barrels.
+    pub fn is_copper(self) -> bool {
+        matches!(self, LayerKind::Copper | LayerKind::Pads | LayerKind::Vias)
+    }
 }
 
 pub enum Shape {

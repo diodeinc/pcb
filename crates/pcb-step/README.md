@@ -136,8 +136,10 @@ would silently export its bounding box.
 | `fonts/` | Liberation Sans, the fallback face, under the SIL Open Font License. |
 | `src/donor.rs` | Donor STEP files: statement split, kind byte per statement, product tree, geometry closure, renumbered copy. |
 | `src/step.rs` | The output buffer, the STEP vocabulary, the extruded board solid, product structure. |
-| `src/lib.rs` | `Board::parse` and `export`: options, model batching across threads, placement math. |
-| `pcbc/src/step.rs` | The `pcb step` command and the release entry point. |
+| `src/scene.rs` | The scene shared with `pcb-gltf`: board layers, copper and faces, and model placements. |
+| `src/lib.rs` | `Board::parse` and `export`: options, model batching across threads. |
+| `src/cli.rs` | The `pcb step export` arguments and run: atomic write, warnings, failed models. Shared with `pcb gltf export`. |
+| `pcbc/src/step.rs` | The `pcb step` command, a thin wrapper over `cli.rs`. |
 
 Data lives in flat vectors indexed by integers. The board file is parsed
 once and never copied; names are borrowed slices. Donor files are owned

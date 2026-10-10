@@ -247,18 +247,21 @@ pub fn get_workspace_info<F: FileProvider>(
 /// versions (e.g. the workspace pins `pcb sync` writes back).
 #[instrument(name = "enrich_tag_versions", skip_all)]
 pub fn enrich_tag_versions(info: &mut WorkspaceInfo) {
-    apply_tag_versions(info);
+    let tags = git::list_peeled_tags(&info.root);
+    apply_tag_versions(info, tags);
 }
 
-/// Set each package's version from its newest tag merged into HEAD. Returns
-/// those tags and HEAD's history, newest commit first.
+/// Set each package's version from its newest tag in `tags` merged into HEAD.
+/// Returns those tags and HEAD's history, newest commit first.
 ///
 /// For forked packages, version is already set from the fork path, so only
 /// update if we find a tag (don't overwrite with None).
-fn apply_tag_versions(info: &mut WorkspaceInfo) -> (HashMap<String, PackageTagInfo>, Vec<String>) {
+fn apply_tag_versions(
+    info: &mut WorkspaceInfo,
+    mut tags: Vec<git::Tag>,
+) -> (HashMap<String, PackageTagInfo>, Vec<String>) {
     let history = git::rev_list(&info.root, "HEAD");
     let merged: HashSet<&str> = history.iter().map(String::as_str).collect();
-    let mut tags = git::list_peeled_tags(&info.root);
     tags.retain(|tag| merged.contains(tag.commit.as_str()));
 
     let latest_tags = latest_package_tags(info, &tags);
@@ -270,18 +273,18 @@ fn apply_tag_versions(info: &mut WorkspaceInfo) -> (HashMap<String, PackageTagIn
     (latest_tags, history)
 }
 
-/// Populate package `version`, `published_at`, and `dirty` from git tags and
-/// working-tree status. Runs several git commands, so it is opt-in for the
-/// commands that actually display this metadata.
-/// Returns the paths changed since the last publish.
+/// Populate package `version`, `published_at`, and `dirty` from `tags`
+/// (usually [`git::list_peeled_tags`]) and working-tree status. Runs several
+/// git commands, so it is opt-in for the commands that actually display this
+/// metadata. Returns the paths changed since the last publish.
 #[instrument(name = "enrich_git_metadata", skip_all)]
-pub fn enrich_git_metadata(info: &mut WorkspaceInfo) -> Vec<PathBuf> {
+pub fn enrich_git_metadata(info: &mut WorkspaceInfo, tags: Vec<git::Tag>) -> Vec<PathBuf> {
     let root = info.root.clone();
     let (latest_tags, tag_metadata, changed_paths, dirty) = thread::scope(|scope| {
         // The working-tree scan takes as long as everything else together.
         let status_paths = scope.spawn(|| git::status_paths_in_repo(&root));
 
-        let (latest_tags, history) = apply_tag_versions(info);
+        let (latest_tags, history) = apply_tag_versions(info, tags);
         let tags: Vec<_> = latest_tags.values().map(|info| info.tag.clone()).collect();
         let tag_metadata = git::get_tag_metadata(&root, &tags);
 

@@ -308,12 +308,19 @@ pcb publish                  # Publish all changed packages
 pcb publish --bump=infer     # Infer bumps from commit history and dependency waves
 pcb publish --bump=infer -y  # Skip the final publish confirmation
 pcb publish --force          # Skip preflight checks
+pcb publish --check          # Print the publish plan as JSON without tagging
 ```
 
 A package requires publication when:
 
 - No version tag exists.
-- A file in it changed since its latest tag.
+- A file in it changed since the last publish, including uncommitted changes.
+- It depends on a package that requires publication, since its `pcb.toml` is
+  bumped.
+
+`--check` prints one JSON object with a `packages` array. Each entry holds the
+package `path`, its `current` version, the next `version`, and the `tag` to
+create. Bumps are inferred from commit history unless `--bump` is given.
 
 Versions are computed automatically:
 

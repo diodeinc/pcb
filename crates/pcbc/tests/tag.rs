@@ -98,7 +98,7 @@ fn test_publish_check_reports_package_versions() {
         .run()
         .unwrap();
     // A local-only tag is pruned by a real publish, so the plan ignores it.
-    sb.cmd("git", ["tag", "modules/Foo/v5.0.0", "HEAD~1"])
+    sb.cmd("git", ["tag", "modules/Foo/v5.0.0", "HEAD"])
         .run()
         .unwrap();
 

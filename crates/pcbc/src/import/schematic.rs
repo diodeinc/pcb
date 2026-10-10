@@ -96,14 +96,7 @@ pub(super) fn bind_imported_schematic(
                 continue;
             };
             patches.replace_string(uuid.span, &slot.symbol_id());
-            let path = items
-                .iter()
-                .filter_map(Sexpr::as_list)
-                .find(|items| {
-                    items.first().and_then(Sexpr::as_sym) == Some("property")
-                        && items.get(1).and_then(Sexpr::as_str) == Some("Path")
-                })
-                .and_then(|items| items.get(2));
+            let path = property_value(items, "Path");
             if let Some(path) = path {
                 patches.replace_string(path.span, slot.component_path());
             } else {
@@ -291,15 +284,7 @@ fn bind_net_names(project_file: &Path, netlist: &Schematic) -> Result<()> {
             };
             let mut added = String::new();
             for (name, value) in fields {
-                if let Some(existing) = items
-                    .iter()
-                    .filter_map(Sexpr::as_list)
-                    .find(|items| {
-                        items.first().and_then(Sexpr::as_sym) == Some("property")
-                            && items.get(1).and_then(Sexpr::as_str) == Some(name)
-                    })
-                    .and_then(|items| items.get(2))
-                {
+                if let Some(existing) = property_value(items, name) {
                     patches.replace_string(existing.span, value);
                     continue;
                 }
@@ -318,4 +303,15 @@ fn bind_net_names(project_file: &Path, netlist: &Schematic) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// The value node of a symbol's direct `(property "<name>" ...)`.
+fn property_value<'a>(symbol: &'a [Sexpr], name: &str) -> Option<&'a Sexpr> {
+    symbol.iter().filter_map(Sexpr::as_list).find_map(|items| {
+        if items.first().and_then(Sexpr::as_sym) != Some("property") {
+            return None;
+        }
+        let (key, value) = pcb_sexpr::kicad::symbol::property_name_value(items)?;
+        (key.as_str() == Some(name)).then_some(value)
+    })
 }

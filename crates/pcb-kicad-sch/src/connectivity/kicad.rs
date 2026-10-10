@@ -301,6 +301,34 @@ pub(crate) fn resolve_file_name(parent: &SchPage, child: &str) -> Result<String>
     crate::sheet_file(parent.file_name.as_deref().unwrap_or_default(), child)
 }
 
+/// Page indices by project-relative file name, for best-effort hierarchy
+/// walks. Pages without a valid file name are skipped; among pages sharing a
+/// file name the last wins.
+pub(crate) struct PagesByFile(BTreeMap<String, usize>);
+
+impl PagesByFile {
+    pub(crate) fn new(pages: &[SchPage]) -> Self {
+        Self(
+            pages
+                .iter()
+                .enumerate()
+                .filter_map(|(index, page)| {
+                    Some((
+                        crate::sheet_file("", page.file_name.as_deref()?).ok()?,
+                        index,
+                    ))
+                })
+                .collect(),
+        )
+    }
+
+    /// The index of the page a sheet on `parent` refers to, if loaded.
+    pub(crate) fn child(&self, parent: &SchPage, sheet: &Sheet) -> Option<usize> {
+        let file = resolve_file_name(parent, sheet.file_name()).ok()?;
+        self.0.get(&file).copied()
+    }
+}
+
 struct PageConnectivity {
     id: String,
     components: Vec<ComponentNode>,

@@ -26,7 +26,6 @@ const MANIFEST_FILE_NAME: &str = "export_manifest.json";
 
 #[derive(Default)]
 struct SexprDiscovery {
-    sheetfile_refs: BTreeSet<String>,
     symbol_ids: BTreeSet<String>,
     footprint_ids: BTreeSet<String>,
     model_refs: BTreeSet<String>,
@@ -144,8 +143,7 @@ fn schematic_assets(
 ) -> SchematicAssets {
     let mut assets = SchematicAssets {
         files: schematic
-            .schematic_files
-            .iter()
+            .schematic_files()
             .map(|file| project_dir.join(file))
             .collect(),
         ..SchematicAssets::default()
@@ -304,11 +302,12 @@ pub(super) fn discover_and_validate(kicad_input_abs: &Path) -> Result<PortableKi
         pcb_kicad_sch::load_project(&format!("{project_name}.{KICAD_PRO_EXT}"), |relative| {
             pcbc::kicad_schematic::read_project_file(project_dir, relative)
         })?;
-    let [root_schematic] = schematic.root_schematics.as_slice() else {
+    let root_schematics = schematic.root_schematics().collect::<Vec<_>>();
+    let [root_schematic] = root_schematics.as_slice() else {
         bail!(
             "Import supports one top-level schematic, but {} lists {}",
-            kicad_input_abs.display(),
-            schematic.root_schematics.len()
+            kicad_input_abs.with_extension(KICAD_PRO_EXT).display(),
+            root_schematics.len()
         );
     };
     let root_schematic_abs = project_dir.join(root_schematic);
@@ -807,11 +806,7 @@ fn walk_sexpr(node: &Sexpr, discovery: &mut SexprDiscovery) {
                 }
             }
             "property" => {
-                if items.get(1).and_then(atom_or_string) == Some("Sheetfile") {
-                    if let Some(value) = items.get(2).and_then(atom_or_string) {
-                        discovery.sheetfile_refs.insert(value.to_string());
-                    }
-                } else if items.get(1).and_then(atom_or_string) == Some("Footprint")
+                if items.get(1).and_then(atom_or_string) == Some("Footprint")
                     && let Some(identifier) = items.get(2).and_then(atom_or_string)
                 {
                     discovery.footprint_ids.insert(identifier.to_string());

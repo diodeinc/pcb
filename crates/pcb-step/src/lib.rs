@@ -97,6 +97,27 @@ pub struct Report {
     pub failed_models: usize,
 }
 
+impl Report {
+    /// A model the board does not embed.
+    pub fn missing_model(&mut self, key: &str) {
+        self.warnings
+            .push(format!("could not find 3D model: {key}"));
+    }
+
+    /// A model with nothing to draw.
+    pub fn empty_model(&mut self, key: &str) {
+        self.warnings
+            .push(format!("model has no solid geometry: {key}"));
+    }
+
+    /// A model that was found but could not be used.
+    pub fn failed_model(&mut self, key: &str, err: &dyn fmt::Display) {
+        self.warnings
+            .push(format!("could not load model {key}: {err}"));
+        self.failed_models += 1;
+    }
+}
+
 #[derive(Debug)]
 pub enum Error {
     Utf8,
@@ -238,7 +259,10 @@ ENDSEC;\nDATA;\n",
             }
             (Shape::Solids(solids), _) => {
                 let style = w.style_assignment(srgb);
-                let weights: Vec<usize> = solids.iter().map(|s| solid_edges(&s.solid)).collect();
+                let weights: Vec<usize> = solids
+                    .iter()
+                    .map(|s| loop_edges(&s.solid.outer, &s.solid.holes))
+                    .collect();
                 let ids = write_batched(&mut w, sink, threads, &weights, |local, i| {
                     let s = &solids[i];
                     local.solid(&format!("{suffix} {}", i + 1), &s.solid, s.z0, s.z1)
@@ -257,9 +281,7 @@ ENDSEC;\nDATA;\n",
                 let style = w.style_assignment_with(srgb, layer.transparency);
                 let weights: Vec<usize> = faces
                     .iter()
-                    .map(|f| {
-                        f.outer.edges.len() + f.holes.iter().map(|h| h.edges.len()).sum::<usize>()
-                    })
+                    .map(|f| loop_edges(&f.outer, &f.holes))
                     .collect();
                 let ids = write_batched(&mut w, sink, threads, &weights, |local, i| {
                     let face = &faces[i];
@@ -379,9 +401,9 @@ fn line_chunks(text: &[u8], count: usize) -> Vec<&[u8]> {
     chunks
 }
 
-/// Loop edges of a solid, a proxy for its STEP text size.
-fn solid_edges(solid: &outline::Solid) -> usize {
-    solid.outer.edges.len() + solid.holes.iter().map(|h| h.edges.len()).sum::<usize>()
+/// Edges of an outer loop and its holes, a proxy for their STEP text size.
+fn loop_edges(outer: &outline::Loop, holes: &[outline::Loop]) -> usize {
+    outer.edges.len() + holes.iter().map(|h| h.edges.len()).sum::<usize>()
 }
 
 enum Loaded {
@@ -487,18 +509,9 @@ fn export_components(
             let index = first + offset;
             let model = &scene.models[index];
             match loaded {
-                Loaded::Missing => report
-                    .warnings
-                    .push(format!("could not find 3D model: {}", model.key)),
-                Loaded::Empty => report
-                    .warnings
-                    .push(format!("model has no solid geometry: {}", model.key)),
-                Loaded::Failed(err) => {
-                    report
-                        .warnings
-                        .push(format!("could not load model {}: {err}", model.key));
-                    report.failed_models += 1;
-                }
+                Loaded::Missing => report.missing_model(&model.key),
+                Loaded::Empty => report.empty_model(&model.key),
+                Loaded::Failed(err) => report.failed_model(&model.key, &err),
                 Loaded::Ready(ready) => {
                     let Ready {
                         hash,
@@ -537,14 +550,10 @@ fn export_components(
                 return Ok(None);
             }
             let mut local = Writer::new(job.base);
-            let key = &scene.models[job.index].key;
-            let stem = std::path::Path::new(key)
-                .file_stem()
-                .and_then(|s| s.to_str())
-                .unwrap_or(key);
+            let name = scene.models[job.index].name();
             let part = job
                 .analysis
-                .emit(&job.donor, &mut local, root, stem, job.scale)?;
+                .emit(&job.donor, &mut local, root, name, job.scale)?;
             debug_assert_eq!(local.next_id, job.base + job.analysis.id_budget());
             Ok(Some((local.buf, part)))
         });
@@ -582,7 +591,7 @@ fn export_components(
 }
 
 /// Cheap content fingerprint for deduplicating identical model payloads.
-fn content_hash(data: &[u8]) -> u64 {
+pub fn content_hash(data: &[u8]) -> u64 {
     let mut h: u64 = 0xcbf29ce484222325 ^ data.len() as u64;
     let (chunks, rest) = data.as_chunks::<8>();
     for chunk in chunks {

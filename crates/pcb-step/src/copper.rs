@@ -15,15 +15,13 @@ use pcb_ir::geom::{
 };
 
 use crate::board::{Board, Fill, Pad, PadKind, PadShape, Physical, Primitive, Track, Via};
-use crate::geom::{Vec2, ccw_sweep, circle_center, rotate_kicad};
+use crate::geom::{KICAD_MAX_ERROR, Vec2, ccw_sweep, circle_center, rotate_kicad};
 use crate::outline::{Edge, Frame, Loop, Solid, crosses, orient};
 use crate::rings::{IndexedRing, loops_of, polygons_of};
 use crate::scene::Prism;
 
 /// KiCad's plating thickness for through holes.
 pub(crate) const PLATING: f64 = 0.025;
-/// Chord error for flattened arcs, KiCad's default maximum error.
-const MAX_ERROR: f64 = 0.005;
 
 #[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct CopperOptions {
@@ -747,7 +745,7 @@ fn push_polygon(points: &[Vec2], width: f64, filled: bool, contours: &mut Vec<Co
 }
 
 pub(crate) fn resolution() -> Resolution {
-    Resolution::new(0.0005, GeometryAccuracy::new(MAX_ERROR).unwrap())
+    Resolution::new(0.0005, GeometryAccuracy::new(KICAD_MAX_ERROR).unwrap())
 }
 
 /// A closed edge list as a pcb-ir contour. Full circles are split in two
