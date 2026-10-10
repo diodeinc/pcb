@@ -1169,21 +1169,20 @@ fn diagnose_ignored_schematic_option(
         let Some((file, span)) = module.call_site.as_ref().filter(|_| linked(module)) else {
             continue;
         };
-        let Some(option) = ["collapse", "embed"]
+        for option in ["collapse", "embed"]
             .into_iter()
-            .find(|option| module.properties().contains_key(*option))
-        else {
-            continue;
-        };
-        diagnostics.push(
-            Diagnostic::categorized(
-                file,
-                &format!("`schematic=\"{option}\"` is ignored: '{path}' declares Project() in a linked schematic"),
-                "module.schematic.ignored",
-                EvalSeverity::Warning,
-            )
-            .with_span(Some(*span)),
-        );
+            .filter(|option| module.properties().contains_key(*option))
+        {
+            diagnostics.push(
+                Diagnostic::categorized(
+                    file,
+                    &format!("`schematic=\"{option}\"` is ignored: '{path}' declares Project() in a linked schematic"),
+                    "module.schematic.ignored",
+                    EvalSeverity::Warning,
+                )
+                .with_span(Some(*span)),
+            );
+        }
     }
 }
 
