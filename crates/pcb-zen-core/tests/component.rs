@@ -1962,3 +1962,42 @@ Component(
         "legacy do_not_populate should still set dnp"
     );
 }
+
+#[test]
+fn schematic_option_on_project_module_warns_only_for_linked_projects() {
+    let ignored_kinds = |root_project: &str| {
+        let result = common::eval_zen(vec![
+            (
+                "Sub.zen".to_string(),
+                r#"
+builtin.add_property("schematic_path", "sub")
+p = io(Net)
+Component(name = "R1", footprint = "0402", pin_defs = {"1": "1"}, pins = {"1": p})
+"#
+                .to_string(),
+            ),
+            (
+                "test.zen".to_string(),
+                format!(
+                    "{root_project}\nModule(\"Sub.zen\")(name = \"sub\", p = Net(\"P\"), schematic = \"collapse\")\n"
+                ),
+            ),
+        ]);
+        let output = result.output.expect("expected eval output");
+        output
+            .to_schematic_with_diagnostics()
+            .diagnostics
+            .iter()
+            .filter(|diag| {
+                diag.downcast_error_ref::<CategorizedDiagnostic>()
+                    .is_some_and(|c| c.kind == "module.schematic.ignored")
+            })
+            .count()
+    };
+
+    assert_eq!(
+        ignored_kinds(r#"builtin.add_property("schematic_path", ".")"#),
+        1
+    );
+    assert_eq!(ignored_kinds(""), 0);
+}

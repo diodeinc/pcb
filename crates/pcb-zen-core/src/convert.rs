@@ -359,6 +359,7 @@ impl ModuleConverter {
         // so emit them during schematic conversion rather than in layout sync.
         self.diagnose_missing_bom_part_components(&mut diagnostics);
         self.diagnose_unused_module_io(&module_tree, &mut diagnostics);
+        diagnose_ignored_schematic_option(&module_tree, &mut diagnostics);
         self.diagnose_not_connected_multi_port(root_module.source_path(), &mut diagnostics);
         let mut seen = HashSet::new();
         for conflict in std::mem::take(&mut self.net_property_conflicts) {
@@ -1148,6 +1149,44 @@ impl ModuleConverter {
         }
 
         (diagnostics, filtered)
+    }
+}
+
+/// `schematic="collapse"`/`"embed"` drives only legacy schematics; in a linked
+/// KiCad project a module is a sheet exactly when it declares `Project()`.
+fn diagnose_ignored_schematic_option(
+    module_tree: &BTreeMap<ModulePath, &FrozenModuleValue>,
+    diagnostics: &mut Diagnostics,
+) {
+    let declares_project = |module: &FrozenModuleValue| {
+        module
+            .properties()
+            .contains_key(pcb_sch::ATTR_SCHEMATIC_PATH)
+    };
+    if !module_tree
+        .get(&ModulePath::root())
+        .is_some_and(|root| declares_project(root))
+    {
+        return;
+    }
+    for (path, module) in module_tree.iter().filter(|(path, _)| !path.is_root()) {
+        if !declares_project(module) {
+            continue;
+        }
+        for option in ["collapse", "embed"]
+            .into_iter()
+            .filter(|option| module.properties().contains_key(*option))
+        {
+            diagnostics.push(Diagnostic::categorized(
+                module.source_path(),
+                &format!(
+                    "`schematic=\"{option}\"` only affects legacy schematics; module '{path}' \
+                     is a sheet because it declares Project()"
+                ),
+                "module.schematic.ignored",
+                EvalSeverity::Warning,
+            ));
+        }
     }
 }
 
