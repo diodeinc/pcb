@@ -25,6 +25,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - `pcb import` rejects projects with more than one top-level sheet instead of importing only one of them.
 - `pcb publish --check` reports the version it would publish (pass `--bump` for the next semver) and each stage as passed, failed or skipped; `layoutChecked` is gone and `schemaVersion` is 2.
 - `pcb publish --check` on a workspace prints each package's current version, next version and tag as JSON, inferring bumps unless `--bump` is given.
+- Missing BOM part errors suggest setting `Manufacturer_Part_Number` and `Manufacturer_Name` on the symbol as well as `part=Part(...)`.
 
 ### Fixed
 
