@@ -25,10 +25,12 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - `pcb import` rejects projects with more than one top-level sheet instead of importing only one of them.
 - `pcb publish --check` reports the version it would publish (pass `--bump` for the next semver) and each stage as passed, failed or skipped, replacing `layoutChecked`.
 - `pcb publish --check` on a workspace prints each package's current version, next version and tag as JSON, inferring bumps unless `--bump` is given.
+- `schematic="collapse"` and `"embed"` warn (`module.schematic.ignored`) when ignored, on a module that declares `Project()` in a linked KiCad schematic.
 - Missing BOM part errors suggest setting `Manufacturer_Part_Number` and `Manufacturer_Name` on the symbol as well as `part=Part(...)`.
 
 ### Fixed
 
+- `pcb apply schematic` grows a new sheet up to A0 instead of leaving it on A4, and warns on every run while a sheet has symbols outside its page.
 - `pcb apply schematic` reads KiCad 10 project bus aliases, so it no longer adds labels to bus nets after a KiCad save.
 - `pcb import` of a `.kicad_sch` uses its same-name `.kicad_pro`, keeping KiCad 10 bus aliases, and a `.kicad_pro` without a board imports.
 - `pcb import` accepts multi-unit symbols whose sheets keep stale caches of units they do not place.
