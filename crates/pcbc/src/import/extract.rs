@@ -30,6 +30,7 @@ pub(super) fn extract_ir(
 
     let schematic =
         extract_kicad_schematic_data(&selection.portable.schematic, &mut netlist.components)?;
+    ensure_footprints_linked(&pcb_refdes_to_anchor_key, &netlist.components)?;
     netlist.unit_to_anchor = netlist
         .components
         .iter()
@@ -164,6 +165,33 @@ fn parse_kicad_pcb_refdes_to_anchor_key(
         }
     }
     Ok(out)
+}
+
+/// Footprints join the schematic by UUID path; a path naming no placed symbol (typical of
+/// converted projects) would hang the component off a sheet that does not exist.
+fn ensure_footprints_linked(
+    pcb_anchors: &BTreeMap<KiCadRefDes, KiCadUuidPathKey>,
+    components: &BTreeMap<KiCadUuidPathKey, ImportComponentData>,
+) -> Result<()> {
+    let unlinked = pcb_anchors
+        .iter()
+        .filter(|(_, path)| {
+            components
+                .get(*path)
+                .and_then(|component| component.schematic.as_ref())
+                .is_some_and(|schematic| !schematic.units.contains_key(*path))
+        })
+        .map(|(refdes, path)| format!("{} (footprint path {})", refdes.as_str(), path.pcb_path()))
+        .collect::<Vec<_>>();
+    anyhow::ensure!(
+        unlinked.is_empty(),
+        "PCB footprints are not linked to the schematic (their paths match no placed symbol): {}. \
+         In KiCad's PCB editor, run Update PCB from Schematic with \
+         \"Re-link footprints to schematic symbols based on their reference designators\" \
+         checked, save, and import again",
+        unlinked.join(", ")
+    );
+    Ok(())
 }
 
 fn extract_kicad_schematic_data(
@@ -374,7 +402,7 @@ fn instance_path_targets_file(
     sheet_symbols
         .resolve(root_file, sheet_uuids)
         .and_then(|sheet| sheet.sheet_file.as_deref())
-        .is_none_or(|sheet_file| sheet_file == file)
+        == Some(file)
 }
 
 fn build_schematic_sheet_tree(
@@ -1359,6 +1387,59 @@ mod tests {
                     component.netlist.unit_pcb_paths,
                     units.keys().cloned().collect::<Vec<_>>()
                 );
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn extraction_ignores_stale_instances_and_rejects_unlinked_footprints() -> Result<()> {
+        let schematic = load(&[
+            (
+                "root.kicad_sch",
+                page("root", &sheet("sheet-a", "A", "child.kicad_sch")),
+            ),
+            (
+                "child.kicad_sch",
+                page(
+                    "child",
+                    &symbol(
+                        "Device:R",
+                        "r1",
+                        "0 0 0",
+                        &[("Reference", "R1")],
+                        r#"(project "demo"
+                            (path "/root/sheet-a" (reference "R1") (unit 1))
+                            (path "/root/deleted-sheet" (reference "R1") (unit 1)))"#,
+                    ),
+                ),
+            ),
+        ])?;
+        let netlist = r#"(export (components
+            (comp (ref "R1") (sheetpath (tstamps "/sheet-a/")) (tstamps "r1")))
+            (nets))"#;
+        for (pcb_path, linked) in [("/sheet-a/r1", true), ("/altium/r1", false)] {
+            let pcb_anchors = BTreeMap::from([(
+                KiCadRefDes::from("R1".to_string()),
+                KiCadUuidPathKey::from_pcb_path(pcb_path)?,
+            )]);
+            let mut netlist = parse_kicad_sexpr_netlist(netlist, &pcb_anchors)?;
+            extract_kicad_schematic_data(&schematic, &mut netlist.components)?;
+            let units = &netlist.components[&pcb_anchors[&KiCadRefDes::from("R1".to_string())]]
+                .schematic
+                .as_ref()
+                .unwrap()
+                .units;
+            assert_eq!(
+                units.keys().map(|key| key.pcb_path()).collect::<Vec<_>>(),
+                ["/sheet-a/r1"]
+            );
+            let linked_result = ensure_footprints_linked(&pcb_anchors, &netlist.components);
+            if linked {
+                linked_result?;
+            } else {
+                let error = linked_result.unwrap_err().to_string();
+                assert!(error.contains("R1 (footprint path /altium/r1)"), "{error}");
             }
         }
         Ok(())

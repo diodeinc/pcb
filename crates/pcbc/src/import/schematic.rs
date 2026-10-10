@@ -3,9 +3,14 @@
 use super::*;
 use anyhow::{Context, Result, ensure};
 use pcb_kicad_sch::connectivity::{
-    ConnectionOrigin, ConnectivityGraph, ConnectivityItemRef, PhysicalConnectivity, PinVisibility,
+    ConnectionOrigin, ConnectivityGraph, ConnectivityItemRef, IslandRef, PhysicalConnectivity,
+    PhysicalIsland, PinVisibility,
 };
-use pcb_kicad_sch::{SymbolSlotKey, analysis::inspect_schematic, canonical_component_path};
+use pcb_kicad_sch::{
+    SymbolSlotKey,
+    analysis::{ConnectivityInspection, NetAnalysis, SchematicIssue, inspect_schematic},
+    canonical_component_path,
+};
 use pcb_sch::{InstanceKind, Schematic};
 use pcb_sexpr::{PatchSet, Sexpr, Span, find_child_list, formatter::quote_string};
 use std::{
@@ -46,21 +51,22 @@ pub(super) fn bind_imported_schematic(
         for (key, unit) in &component
             .schematic
             .as_ref()
-            .context("Imported component has no schematic")?
+            .with_context(|| {
+                format!(
+                    "Component {} has no schematic symbol",
+                    component.netlist.refdes.as_str()
+                )
+            })?
             .units
         {
-            let sheet_path = KiCadSheetPath::from_sheetpath_tstamps(&key.sheetpath_tstamps);
             let file = ir
                 .schematic_sheet_tree
-                .nodes
-                .get(&sheet_path)
-                .and_then(|sheet| sheet.schematic_file.as_ref())
-                .context("Imported symbol has no source sheet")?;
+                .unit_file(&component.netlist.refdes, key)?;
             let slot = SymbolSlotKey::new(path.clone(), u32::try_from(unit.unit.unwrap_or(1))?)
                 .context("Imported symbol has an invalid unit")?;
             ensure!(
                 bindings
-                    .insert((file.clone(), key.symbol_uuid.clone()), slot)
+                    .insert((file.to_path_buf(), key.symbol_uuid.clone()), slot)
                     .is_none(),
                 "Persistent schematics do not support managed components on reused sheet files: {}",
                 file.display()
@@ -126,11 +132,73 @@ pub(super) fn bind_imported_schematic(
             .analysis
             .issues()
             .iter()
-            .map(|issue| issue.summary())
+            .map(|issue| issue_summary(issue, &inspection, &project.document))
             .collect::<Vec<_>>()
             .join("; ")
     );
     Ok(())
+}
+
+/// Name what each piece of a split net is called, so the label or alias that splits it is visible.
+fn issue_summary(
+    issue: &SchematicIssue,
+    inspection: &ConnectivityInspection,
+    document: &pcb_kicad_sch::SchDocument,
+) -> String {
+    let summary = issue.summary();
+    let SchematicIssue::DisconnectedNet {
+        net_name,
+        missing_terminals,
+        ..
+    } = issue
+    else {
+        return summary;
+    };
+    match inspection.analysis.nets.get(net_name) {
+        Some(net) if missing_terminals.is_empty() && net.connected_islands.len() > 1 => format!(
+            "{summary} ({}); connect them or rename the label so every piece uses one net name",
+            split_net_pieces(net, &inspection.physical.islands, document)
+        ),
+        _ => summary,
+    }
+}
+
+fn split_net_pieces(
+    net: &NetAnalysis,
+    islands: &BTreeMap<IslandRef, PhysicalIsland>,
+    document: &pcb_kicad_sch::SchDocument,
+) -> String {
+    net.connected_islands
+        .iter()
+        .map(|piece| {
+            let names = piece
+                .iter()
+                .filter_map(|island| islands.get(island))
+                .flat_map(|island| &island.names)
+                .map(|name| format!("'{name}'"))
+                .collect::<BTreeSet<_>>();
+            let files = piece
+                .iter()
+                .filter_map(|island| {
+                    let page = document
+                        .pages
+                        .iter()
+                        .find(|page| page.id == island.page_id)?;
+                    page.file_name.clone()
+                })
+                .collect::<BTreeSet<_>>();
+            let names = if names.is_empty() {
+                "unlabelled wiring".to_string()
+            } else {
+                names.into_iter().collect::<Vec<_>>().join(", ")
+            };
+            format!(
+                "{names} in {}",
+                files.into_iter().collect::<Vec<_>>().join(", ")
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(" | ")
 }
 
 fn bind_net_names(project_file: &Path, netlist: &Schematic) -> Result<()> {
@@ -237,4 +305,48 @@ fn bind_net_names(project_file: &Path, netlist: &Schematic) -> Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn split_net_names_each_piece_and_its_sheet() {
+        let island = |page_id: &str, index| IslandRef {
+            page_id: page_id.into(),
+            index,
+        };
+        let named = |names: &[&str]| {
+            let mut island = PhysicalIsland::default();
+            island.names = names.iter().map(|name| name.to_string()).collect();
+            island
+        };
+        let page = |id: &str, file: &str| pcb_kicad_sch::SchPage {
+            file_name: Some(file.into()),
+            ..pcb_kicad_sch::SchPage::new(id)
+        };
+        let net = NetAnalysis {
+            name: "VCC".into(),
+            expected_terminals: Vec::new(),
+            missing_terminals: Vec::new(),
+            islands: vec![island("root", 0), island("power", 0)],
+            connected_islands: vec![vec![island("root", 0)], vec![island("power", 0)]],
+        };
+        let islands = BTreeMap::from([
+            (island("root", 0), named(&["VCC"])),
+            (island("power", 0), named(&["/power/VCC_ALIAS"])),
+        ]);
+        let document = pcb_kicad_sch::SchDocument {
+            pages: vec![
+                page("root", "root.kicad_sch"),
+                page("power", "power.kicad_sch"),
+            ],
+            ..Default::default()
+        };
+        assert_eq!(
+            split_net_pieces(&net, &islands, &document),
+            "'VCC' in root.kicad_sch | '/power/VCC_ALIAS' in power.kicad_sch"
+        );
+    }
 }

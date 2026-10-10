@@ -1924,24 +1924,19 @@ fn component_symbol_definition(
     sheet_tree: &ImportSheetTree,
 ) -> Result<pcb_kicad_sch::SymbolDefinition> {
     let mut definition = None;
-    for key in component
+    let refdes = &component.netlist.refdes;
+    for (key, unit) in &component
         .schematic
         .as_ref()
-        .context("Imported component has no schematic")?
+        .with_context(|| format!("Component {} has no schematic symbol", refdes.as_str()))?
         .units
-        .keys()
     {
-        let sheet_path = KiCadSheetPath::from_sheetpath_tstamps(&key.sheetpath_tstamps);
-        let file = sheet_tree
-            .nodes
-            .get(&sheet_path)
-            .and_then(|sheet| sheet.schematic_file.as_ref())
-            .context("Imported symbol has no source sheet")?;
+        let file = sheet_tree.unit_file(refdes, key)?;
         let page = document
             .pages
             .iter()
-            .find(|page| page.file_name.as_deref().map(Path::new) == Some(file.as_path()))
-            .context("Imported symbol source sheet was not loaded")?;
+            .find(|page| page.file_name.as_deref().map(Path::new) == Some(file))
+            .with_context(|| format!("Schematic sheet {} was not loaded", file.display()))?;
         let symbol = page
             .items
             .iter()
@@ -1951,7 +1946,15 @@ fn component_symbol_definition(
                 }
                 _ => None,
             })
-            .context("Imported symbol was not found in its source sheet")?;
+            .with_context(|| {
+                format!(
+                    "Symbol {} (UUID {}) is not in {}, the sheet its instance path {} points to",
+                    refdes.as_str(),
+                    key.symbol_uuid,
+                    file.display(),
+                    unit.instance_path.as_deref().unwrap_or("/")
+                )
+            })?;
         let cached = page
             .library
             .definitions
