@@ -1067,7 +1067,11 @@ fn build_workspace(
             &mut has_errors,
             &mut has_warnings,
         );
-        blockers.extend(publish_blockers(&result.diagnostics, &workspace.root));
+        blockers.extend(publish_blockers(
+            &result.diagnostics,
+            zen_path,
+            &workspace.root,
+        ));
         if let Some(schematic) = result.schematic {
             crate::build::print_build_success(&file_name, &schematic);
         }
@@ -1085,8 +1089,14 @@ fn build_workspace(
 }
 
 /// One line per unsuppressed error or `sch.*` diagnostic: location, severity, kind and message.
-fn publish_blockers(diagnostics: &pcb_zen_core::Diagnostics, root: &Path) -> Vec<String> {
+/// Pathless diagnostics are attributed to the file being built.
+fn publish_blockers(
+    diagnostics: &pcb_zen_core::Diagnostics,
+    zen_path: &Path,
+    root: &Path,
+) -> Vec<String> {
     let root = format!("{}/", root.display());
+    let zen_path = zen_path.display().to_string();
     diagnostics
         .iter()
         .filter(|diagnostic| !diagnostic.suppressed)
@@ -1104,14 +1114,19 @@ fn publish_blockers(diagnostics: &pcb_zen_core::Diagnostics, root: &Path) -> Vec
                     .is_some_and(|kind| kind == "sch" || kind.starts_with("sch."))
         })
         .map(|(severity, report)| {
+            let location = if report.location.is_empty() {
+                &zen_path
+            } else {
+                &report.location
+            };
             format!(
-                "  {}: {} {}: {}",
-                report
-                    .location
-                    .strip_prefix(&root)
-                    .unwrap_or(&report.location),
+                "  {}: {}{}: {}",
+                location.strip_prefix(&root).unwrap_or(location),
                 severity.to_string().to_lowercase(),
-                report.kind.as_deref().unwrap_or("unknown"),
+                report
+                    .kind
+                    .map(|kind| format!(" {kind}"))
+                    .unwrap_or_default(),
                 report.body
             )
         })
