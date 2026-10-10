@@ -21,7 +21,7 @@ pub struct PlacedPin {
 }
 
 impl PlacedPin {
-    pub fn is_hidden_power_input(&self) -> bool {
+    pub(crate) fn is_hidden_power_input(&self) -> bool {
         self.hidden && self.electrical_type == "power_in"
     }
 
@@ -29,7 +29,7 @@ impl PlacedPin {
         self.electrical_type == "power_in"
     }
 
-    pub fn supports_alternate(&self, name: &str) -> bool {
+    pub(crate) fn supports_alternate(&self, name: &str) -> bool {
         self.alternates.contains_key(name)
     }
 }
@@ -110,7 +110,7 @@ impl ParsedSymbolDefinition {
         self.power_scope
     }
 
-    pub fn power_input_units(&self) -> Vec<u32> {
+    pub(crate) fn power_input_units(&self) -> Vec<u32> {
         self.unit_indices
             .iter()
             .copied()
@@ -168,7 +168,7 @@ impl ParsedSymbolDefinition {
 
     /// Off-board pinless artwork has no component identity in KiCad's PCB netlist.
     /// A Path still opts it into managed component validation.
-    pub fn is_unmanaged_graphic(&self, symbol: &Symbol) -> bool {
+    pub(crate) fn is_unmanaged_graphic(&self, symbol: &Symbol) -> bool {
         !symbol.on_board
             && symbol.field_value("Path").is_none_or(str::is_empty)
             && self.power_scope.is_none()

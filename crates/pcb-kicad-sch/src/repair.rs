@@ -57,11 +57,6 @@ impl ConnectivityRepairIntent {
         }
     }
 
-    /// The issues this intent resolves.
-    pub fn selected_keys(&self) -> &BTreeSet<SchematicIssueKey> {
-        &self.selected_keys
-    }
-
     /// Existing connectivity items that the repair will remove. Includes the
     /// caller's forced removals and any junction they leave behind.
     pub fn removals(&self) -> &BTreeSet<ConnectivityItemRef> {

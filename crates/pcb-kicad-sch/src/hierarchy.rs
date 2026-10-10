@@ -33,7 +33,7 @@ impl HierarchyPlan {
         self.root_page
     }
 
-    pub fn page_for_new_component(&self, component_path: &str) -> Result<usize> {
+    pub(crate) fn page_for_new_component(&self, component_path: &str) -> Result<usize> {
         if let Some(sheet) = self
             .sheets
             .iter()
