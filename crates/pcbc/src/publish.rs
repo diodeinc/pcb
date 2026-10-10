@@ -773,7 +773,17 @@ fn publish_packages(start_path: &Path, args: &PublishArgs) -> Result<()> {
     }
 
     let mut workspace = get_workspace_info(&file_provider, start_path)?;
-    let changed_paths = pcb_zen::workspace::enrich_git_metadata(&mut workspace);
+    let mut tags = git::list_peeled_tags(&workspace.root);
+    if args.check {
+        // A real publish prunes local-only tags first; the check leaves them
+        // alone but measures against the remote's tags just the same.
+        let on_remote: HashSet<String> = git::list_remote_tags(&workspace.root, &remote)?
+            .into_iter()
+            .collect();
+        tags.retain(|tag| on_remote.contains(&tag.name));
+    }
+    let tag_names: Vec<String> = tags.iter().map(|tag| tag.name.clone()).collect();
+    let changed_paths = pcb_zen::workspace::enrich_git_metadata(&mut workspace, tags);
 
     // Fail on workspace discovery errors (invalid pcb.toml files)
     if !workspace.errors.is_empty() {
@@ -795,8 +805,7 @@ fn publish_packages(start_path: &Path, args: &PublishArgs) -> Result<()> {
     // These need to be published because their pcb.toml will be bumped
     let dirty_urls = expand_dirty_set(&workspace, &directly_dirty);
     if args.check {
-        let remote_tags = git::list_remote_tags(&workspace.root, &remote)?;
-        return print_publish_plan(&workspace, &dirty_urls, &remote_tags, args.bump);
+        return print_publish_plan(&workspace, &dirty_urls, &tag_names, args.bump);
     }
 
     if !args.no_build {
