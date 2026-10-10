@@ -410,14 +410,23 @@ pub(crate) fn sync_instances(
             continue;
         };
         if let Some(root) = new_pages.remove(&(page.id.clone(), None)) {
-            // A root without a page number also lacks KiCad's other trailing section.
+            // A root without a page number usually lacks KiCad's other trailing section too.
             let number = &root[0].page;
-            for source in [
-                format!(r#"(sheet_instances (path "/" (page "{number}")))"#),
-                "(embedded_fonts no)".to_string(),
+            for (tag, source) in [
+                (
+                    "sheet_instances",
+                    format!(r#"(sheet_instances (path "/" (page "{number}")))"#),
+                ),
+                ("embedded_fonts", "(embedded_fonts no)".to_string()),
             ] {
-                page.items
-                    .push(SchItem::Unsupported(pcb_sexpr::parse(&source)?));
+                let present = page.items.iter().any(|item| {
+                    matches!(item, SchItem::Unsupported(sexpr)
+                        if find_child(std::slice::from_ref(sexpr), tag).is_some())
+                });
+                if !present {
+                    page.items
+                        .push(SchItem::Unsupported(pcb_sexpr::parse(&source)?));
+                }
             }
         }
         for item in &mut page.items {
