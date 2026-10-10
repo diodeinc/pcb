@@ -4,7 +4,6 @@ extern crate anstream;
 
 pub mod auth;
 pub mod bom;
-pub mod component;
 pub mod datasheet;
 mod endpoint;
 mod git_auth;
@@ -14,7 +13,6 @@ pub mod scan;
 
 pub use auth::{AuthArgs, AuthCommand, AuthTokens, execute as execute_auth};
 pub use bom::match_bom_with_context;
-pub use component::execute_component_from_local_dir;
 pub use endpoint::WorkspaceContext;
 pub use pcb_diode_uri::{DiodeUri, DiodeUriParseError, SandboxFileUri, is_diode_uri};
 pub use release::upload_release;

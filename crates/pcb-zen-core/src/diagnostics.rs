@@ -694,13 +694,6 @@ impl<T> WithDiagnostics<T> {
         }
     }
 
-    pub fn inspect_mut<O, F: FnOnce(&mut T) -> O>(mut self, f: F) -> Self {
-        if let Some(output) = self.output.as_mut() {
-            f(output);
-        }
-        self
-    }
-
     pub fn output_result(self) -> Result<T, Diagnostics> {
         self.into()
     }

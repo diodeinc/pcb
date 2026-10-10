@@ -769,11 +769,6 @@ impl Schematic {
         self
     }
 
-    /// Mutable access to an existing instance (if any).
-    pub fn instance_mut(&mut self, reference: &InstanceRef) -> Option<&mut Instance> {
-        self.instances.get_mut(reference)
-    }
-
     /// Resolve the owning component instance for a port by longest-prefix match.
     ///
     /// This is robust to `InstanceRef` string roundtrips where dotted port names

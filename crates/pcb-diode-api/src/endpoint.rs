@@ -208,6 +208,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn scope_without_workspace_uses_default_endpoint() {
         let scope = WorkspaceContext::default();
         assert_eq!(scope.api_base_url(), default_api_base_url());
