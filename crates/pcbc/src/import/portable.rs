@@ -442,7 +442,19 @@ pub(super) fn stage_project_files(project: &PortableKicadProject) -> Result<temp
         fs::copy(&source, &destination)
             .with_context(|| format!("Failed to stage KiCad source {}", source.display()))?;
     }
+    for extra in &project.extra_files_to_bundle {
+        let destination = staged_model(temp.path(), extra);
+        fs::create_dir_all(destination.parent().context("Staged model has no parent")?)?;
+        fs::copy(&extra.source_path, &destination)
+            .with_context(|| format!("Failed to stage model {}", extra.source_path.display()))?;
+    }
     Ok(temp)
+}
+
+fn staged_model(staged_root: &Path, extra: &PortableExtraFile) -> PathBuf {
+    staged_root
+        .join(".pcb-import-models")
+        .join(&extra.archive_relative_path)
 }
 
 /// Write the portable KiCad source archive using the established streaming project-import path.
@@ -479,7 +491,7 @@ pub(super) fn write_portable_zip(
     for extra in &project.extra_files_to_bundle {
         add_file_to_zip(
             &mut zip,
-            &extra.source_path,
+            &staged_model(staged_root, extra),
             &extra.archive_relative_path.replace('\\', "/"),
         )?;
     }
@@ -1481,7 +1493,8 @@ mod tests {
         project.project_name = "layout board".to_string();
         let dir = tempfile::tempdir()?;
         let zip_path = dir.path().join("out.zip");
-        write_portable_zip(&project, &project.project_dir, &zip_path)?;
+        let staged = stage_project_files(&project)?;
+        write_portable_zip(&project, staged.path(), &zip_path)?;
 
         let file = fs::File::open(&zip_path)?;
         let mut zip = ZipArchive::new(file)?;
@@ -1834,7 +1847,8 @@ mod tests {
 
         let project = discover_and_validate(&dir.path().join("demo.kicad_pro"))?;
         let zip_path = dir.path().join("out.zip");
-        write_portable_zip(&project, &project.project_dir, &zip_path)?;
+        let staged = stage_project_files(&project)?;
+        write_portable_zip(&project, staged.path(), &zip_path)?;
 
         let file = fs::File::open(&zip_path)?;
         let mut zip = ZipArchive::new(file)?;

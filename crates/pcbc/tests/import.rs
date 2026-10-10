@@ -712,6 +712,43 @@ fn reimport_refuses_without_force_and_force_regenerates() {
 }
 
 #[test]
+fn force_reimports_from_its_own_project_directory() {
+    let mut sandbox = sandbox();
+    sandbox.write("layout.kicad_sch", STANDALONE_FIXTURE);
+    sandbox.write("layout.kicad_pro", PROJECT_FIXTURE);
+    sandbox.write(
+        "layout.kicad_pcb",
+        PCB_FIXTURE.replace("(attr smd)", "(attr smd) (model \"${KIPRJMOD}/m.step\")"),
+    );
+    let import = |sandbox: &mut Sandbox, input: &str| {
+        let import = sandbox
+            .run("pcbc", ["import", input, "out", "--force"])
+            .stderr_capture()
+            .unchecked()
+            .run()
+            .unwrap();
+        assert!(
+            import.status.success(),
+            "{}",
+            String::from_utf8_lossy(&import.stderr)
+        );
+    };
+    import(&mut sandbox, "layout.kicad_pro");
+    sandbox.write("out/eda/m.step", "model");
+    import(&mut sandbox, "out/eda/layout.kicad_pro");
+
+    let output = sandbox.root_path().join("out");
+    assert!(output.join("eda/layout.kicad_pcb").is_file());
+    assert_eq!(
+        read_zip_entry(
+            &output.join("layout.kicad.archive.zip"),
+            "models/KIPRJMOD/m.step"
+        ),
+        b"model"
+    );
+}
+
+#[test]
 fn missing_footprint_assignment_preserves_unset_marker_and_still_imports() {
     let mut sandbox = sandbox();
     sandbox.write(

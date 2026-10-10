@@ -123,10 +123,6 @@ fn prepare_output(
         }
     }
 
-    if args.force {
-        remove_generated_output(paths, &selection.board_name, source_board)?;
-    }
-
     if !existing_board_repo {
         std::fs::create_dir_all(board_repo).with_context(|| {
             format!("Failed to create board repository {}", board_repo.display())
@@ -303,6 +299,13 @@ impl Materialized {
             validation,
             ir,
         } = analyzed;
+        if ctx.args.force {
+            remove_generated_output(
+                &ctx.paths,
+                &selection.board_name,
+                selection.selected.kicad_pcb.is_some(),
+            )?;
+        }
         let board = materialize::materialize_board(
             &ctx.paths,
             &selection,
