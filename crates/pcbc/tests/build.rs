@@ -570,17 +570,18 @@ fn dependency_symbols_report_what_kicad_rejects_and_nothing_else() {
     assert!(output.contains("Exit Code: 0"), "{output}");
     assert!(!output.contains("symbol."), "{output}");
 
-    // A library KiCad cannot load fails the build, without an offer to fix it.
+    // A library KiCad cannot load warns: pcb loads it, and it is not the
+    // workspace's to fix.
     let unloadable = DEPENDENCY_PART_SYMBOL.replacen(
         "(symbol \"Part\"",
         "(embedded_fonts no) (symbol \"Part\"",
         1,
     );
     let output = build_with_dependency_symbol(&unloadable);
-    assert!(output.contains("Exit Code: 1"), "{output}");
+    assert!(output.contains("Exit Code: 0"), "{output}");
     assert!(
         output.contains(
-            "[symbol.parse] `embedded_fonts` is not something KiCad accepts in a symbol library"
+            "Warning: [symbol.parse] `embedded_fonts` is not something KiCad accepts in a symbol library"
         ),
         "{output}"
     );
@@ -594,9 +595,9 @@ fn dependency_symbols_report_what_kicad_rejects_and_nothing_else() {
         1,
     );
     let output = build_with_dependency_symbol(&sibling);
-    assert!(output.contains("Exit Code: 1"), "{output}");
+    assert!(output.contains("Exit Code: 0"), "{output}");
     assert!(
-        output.contains("Other: `property` takes text, not `1`"),
+        output.contains("Warning: [symbol.parse] Other: `property` takes text, not `1`"),
         "{output}"
     );
 }

@@ -39,12 +39,14 @@ impl Library {
     }
 
     /// `issue` as a diagnostic, with its fix only when the file is `owned`.
+    /// A file that is not the workspace's to fix only warns: pcb loads it,
+    /// and the user cannot change it.
     fn diagnostic(&self, issue: &SymbolIssue, owned: bool) -> Diagnostic {
         let (path, codemap) = &self.sources[issue.source];
         let body = format!("[{}] {}\nhelp: {}", issue.kind, issue.message, issue.help);
         let severity = match issue.severity {
-            Severity::Error => EvalSeverity::Error,
-            Severity::Warning => EvalSeverity::Warning,
+            Severity::Error if owned => EvalSeverity::Error,
+            Severity::Error | Severity::Warning => EvalSeverity::Warning,
             Severity::Advice => EvalSeverity::Advice,
         };
         let fix = if owned { issue.fix.clone() } else { Vec::new() };

@@ -18,7 +18,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - New KiCad projects are named after the board instead of `layout`; `pcb migrate` renames existing ones.
 - `pcb apply` names the root schematic after its KiCad project, and renames one that does not match, so KiCad keeps project settings such as bus aliases and ERC exclusions and DRC schematic parity runs.
 - `pcb apply` gives schematic symbols and layout footprints the same Footprint, Value and Datasheet. Value is the part value, else its MPN, else the symbol name, so footprints that showed an MPN now show the value.
-- `pcb build` and `pcb inspect` validate symbol libraries the way KiCad loads them: they reject what KiCad cannot load, such as a root-level `embedded_fonts`, and accept what it does, such as repeated symbol names and private properties. An invalid library in a dependency now fails the build.
+- `pcb build` and `pcb inspect` validate symbol libraries the way KiCad loads them: they reject what KiCad cannot load, such as a root-level `embedded_fonts`, and accept what it does, such as repeated symbol names and private properties. A library in a dependency is checked too, and warns instead of failing the build, since the workspace cannot fix it.
 - `DiffPair(impedance=...)` sets the impedance on its nets when the pair is created, so it applies even when the pair never crosses an `io()` boundary. Conflicting impedance values on one net keep the first and warn (`net.property_conflict`).
 - `moved()` is deprecated and warns on each use (`deprecated.moved`); it still works for now.
 - `pcb publish` checks BOM supplier offers only with `--bump`; local builds and `--check` no longer contact the BOM API.
