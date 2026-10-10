@@ -197,8 +197,7 @@ fn release_diagnostics(
         .collect()
 }
 
-/// Outcome of one preflight stage in the `--check` report.
-#[derive(Clone, Copy, Default, Serialize)]
+#[derive(Default, Serialize)]
 #[serde(rename_all = "lowercase")]
 enum StageStatus {
     #[default]
@@ -214,7 +213,7 @@ struct PreflightStages {
 }
 
 pub struct BoardReleaseOptions {
-    pub version: Option<String>,
+    pub version: String,
     pub suppress: Vec<String>,
     pub exclude: Vec<ArtifactType>,
     pub check: bool,
@@ -229,15 +228,9 @@ pub fn build_board_release(
     workspace_root: &Path,
     zen_path: PathBuf,
     board_name: String,
-    mut options: BoardReleaseOptions,
+    options: BoardReleaseOptions,
 ) -> Result<Option<PathBuf>> {
     let start_time = Instant::now();
-    let version = options
-        .version
-        .get_or_insert_with(|| {
-            git::rev_parse_short_head(workspace_root).unwrap_or_else(|| "unknown".to_string())
-        })
-        .clone();
     let temporary = options.check.then(tempfile::tempdir).transpose()?;
     if let Some(temporary) = &temporary {
         // A terminated check never drops its TempDir.
@@ -272,7 +265,7 @@ pub fn build_board_release(
         }
         let report = serde_json::json!({
             "schemaVersion": 2,
-            "version": version,
+            "version": options.version,
             "stages": stages,
             "diagnostics": release_diagnostics(&diagnostics, workspace_root, &temporary.path().join("release")),
         });
@@ -318,7 +311,6 @@ fn preflight_board_release(
     stages: &mut PreflightStages,
 ) -> Result<Option<ReleaseInfo>> {
     let start_time = Instant::now();
-    // A stage reads as failed from the moment it starts until it passes.
     stages.build = StageStatus::Failed;
 
     let release_info = {
@@ -356,10 +348,7 @@ fn preflight_board_release(
         // Get git hash for metadata
         let git_hash = git::rev_parse_head(workspace_root).unwrap_or_else(|| "unknown".to_string());
 
-        let version = options
-            .version
-            .clone()
-            .expect("build_board_release sets the version");
+        let version = options.version.clone();
 
         // Create release staging directory in workspace root with flat structure
         let staging_dir = staging_override.unwrap_or_else(|| {
@@ -715,17 +704,14 @@ fn run_release_preflight(
     )?;
 
     if let Some(layout) = &info.layout {
-        let check_layout = !options.exclude.contains(&ArtifactType::Drc);
-        if check_layout {
-            stages.layout = StageStatus::Failed;
-        }
         ensure_board_compatible_with_installed_kicad(
             &layout_utils::KiCadLayoutFiles {
                 kicad_pro: info.workspace_root().join(&layout.kicad_pro_rel),
             }
             .kicad_pcb(),
         )?;
-        if check_layout {
+        if !options.exclude.contains(&ArtifactType::Drc) {
+            stages.layout = StageStatus::Failed;
             execute_task(
                 info,
                 "Running KiCad DRC checks",

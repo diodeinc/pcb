@@ -139,7 +139,7 @@ impl fmt::Display for BumpStrategy {
 #[derive(Args, Debug)]
 #[command(about = "Publish packages or board releases")]
 pub struct PublishArgs {
-    /// Check a board's release preflight and print JSON with the version it would publish, without publishing
+    /// Print a board's release preflight and version as JSON, without publishing
     #[arg(long, conflicts_with_all = ["force", "no_push", "no_build"])]
     pub check: bool,
 
@@ -526,7 +526,7 @@ fn publish_board(zen_path: &Path, args: &PublishArgs) -> Result<()> {
     ensure_board_publish_has_no_workspace_overrides(&workspace)?;
 
     let mut options = release::BoardReleaseOptions {
-        version: None,
+        version: git::rev_parse_short_head(&workspace.root).unwrap_or_else(|| "unknown".into()),
         suppress: args.suppress.clone(),
         exclude: args.exclude.clone(),
         check: args.check,
@@ -547,8 +547,7 @@ fn publish_board(zen_path: &Path, args: &PublishArgs) -> Result<()> {
     } else {
         resolve_remote(&workspace.root, args.force)?
     };
-    // A check reads the remote's tags, which a real publish prunes local tags to, without
-    // touching local ones.
+    // A real publish prunes local tags to the remote's, so a check reads those directly.
     let all_tags = if args.check {
         git::list_remote_tags(&workspace.root, &remote)?
     } else {
@@ -583,7 +582,7 @@ fn publish_board(zen_path: &Path, args: &PublishArgs) -> Result<()> {
     let tag_name = tags::build_tag_name(&tag_prefix, &next_version);
 
     // Build the release archive
-    options.version = Some(format!("v{}", next_version));
+    options.version = format!("v{next_version}");
     if args.check {
         release::build_board_release(&workspace.root, board_path, board_name, options)?;
         return Ok(());
