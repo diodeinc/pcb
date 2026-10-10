@@ -202,7 +202,7 @@ fn test_release_check_does_not_publish_or_modify_authored_sources() {
             .unwrap();
         assert_eq!(output.status.success(), severity.is_none());
         let report: Value = serde_json::from_slice(&output.stdout).unwrap();
-        assert_eq!(report["schemaVersion"], 2);
+        assert_eq!(report["schemaVersion"], 1);
         assert_eq!(report["version"], short_head);
         let build = if severity.is_none() {
             "passed"
