@@ -26,6 +26,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Fixed
 
+- `pcb apply schematic` fails with the sheet name and content size when a new sheet does not fit on A0, instead of placing symbols off an A4 page.
 - `pcb apply schematic` reads KiCad 10 project bus aliases, so it no longer adds labels to bus nets after a KiCad save.
 - `pcb import` of a `.kicad_sch` uses its same-name `.kicad_pro`, keeping KiCad 10 bus aliases, and a `.kicad_pro` without a board imports.
 - `pcb import` accepts multi-unit symbols whose sheets keep stale caches of units they do not place.
