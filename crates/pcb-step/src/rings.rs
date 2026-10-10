@@ -61,13 +61,15 @@ pub(crate) fn rings_of(contours: &[ContourBuf]) -> Vec<Vec<Vec2>> {
     for points in raw_rings(contours) {
         split_pinches(points, &mut rings);
     }
-    for ring in &mut rings {
-        simplify_ring(ring);
-    }
-    // A ring under a square micrometre is a sliver the boolean left
-    // behind, whose winding OCCT cannot even tell.
-    rings.retain(|r| r.len() >= 3 && signed_area(r).abs() > 1e-6);
-    rings
+    rings.into_iter().filter_map(cleaned).collect()
+}
+
+/// A ring with near-collinear vertices dropped, or `None` for a sliver: a
+/// ring under a square micrometre is one the boolean left behind, whose
+/// winding OCCT cannot even tell.
+pub(crate) fn cleaned(mut ring: Vec<Vec2>) -> Option<Vec<Vec2>> {
+    simplify_ring(&mut ring);
+    (ring.len() >= 3 && signed_area(&ring).abs() > 1e-6).then_some(ring)
 }
 
 /// One `(outer, holes)` per island of a region, with arcs refitted.
@@ -93,12 +95,35 @@ pub(crate) fn nest(rings: Vec<Vec<Vec2>>) -> Vec<Nested> {
     let n = rings.len();
     let areas: Vec<f64> = rings.iter().map(|r| signed_area(r).abs()).collect();
     let indexed: Vec<IndexedRing> = rings.iter().map(|r| IndexedRing::new(r)).collect();
+    // Rings are bucketed by the grid cells their boxes cover, so each probe
+    // only tests the rings whose box can hold it, in ascending order.
+    let (lo, hi) = indexed.iter().fold(
+        (Vec2::splat(f64::INFINITY), Vec2::splat(f64::NEG_INFINITY)),
+        |(lo, hi), r| (lo.min(r.lo), hi.max(r.hi)),
+    );
+    let per_axis = (n as f64).sqrt().ceil().max(1.0) as usize;
+    let scale = (hi - lo).max(Vec2::splat(1e-9)).recip() * per_axis as f64;
+    let cell = |p: Vec2| {
+        let c = ((p - lo) * scale).min(Vec2::splat((per_axis - 1) as f64));
+        (c.x as usize, c.y as usize)
+    };
+    let mut cells: Vec<Vec<u32>> = vec![Vec::new(); per_axis * per_axis];
+    for (j, r) in indexed.iter().enumerate() {
+        let ((x0, y0), (x1, y1)) = (cell(r.lo), cell(r.hi));
+        for y in y0..=y1 {
+            for x in x0..=x1 {
+                cells[y * per_axis + x].push(j as u32);
+            }
+        }
+    }
     let mut parent = vec![usize::MAX; n];
     let mut depth = vec![0usize; n];
     for i in 0..n {
         let probe = rings[i][0];
         let mut best = f64::INFINITY;
-        for j in 0..n {
+        let (x, y) = cell(probe);
+        for &j in &cells[y * per_axis + x] {
+            let j = j as usize;
             if i != j && areas[j] > areas[i] && indexed[j].contains(&rings[j], probe) {
                 depth[i] += 1;
                 if areas[j] < best {
@@ -177,7 +202,13 @@ fn simplify_ring(ring: &mut Vec<Vec2>) {
     let mut kept: Vec<Vec2> = Vec::with_capacity(n);
     for i in 0..n {
         let prev = *kept.last().unwrap_or(&ring[n - 1]);
-        let next = ring[(i + 1) % n];
+        // The last vertex closes onto the first one kept, not onto a
+        // dropped one, or a corner between them is cut off.
+        let next = if i + 1 == n {
+            kept.first().copied().unwrap_or(ring[0])
+        } else {
+            ring[i + 1]
+        };
         let p = ring[i];
         let d = next - prev;
         let len = d.length();

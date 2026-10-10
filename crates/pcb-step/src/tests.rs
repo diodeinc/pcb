@@ -1225,6 +1225,30 @@ fn polygonized_arcs_are_refitted() {
 }
 
 #[test]
+fn ring_simplification_keeps_a_corner_at_the_ring_start() {
+    // A frame side whose ring starts just past a corner: the first and
+    // last vertices are each within tolerance of a line through the
+    // other, but dropping both cuts a 0.058 × 50 mm sliver off the side.
+    let ring: Vec<Vec2> = [
+        (0.0, 0.0),
+        (0.0, -50.0),
+        (0.058, -50.6),
+        (0.5, -51.0),
+        (0.5, 1.0),
+        (0.058, 0.6),
+        (0.00036, 0.0076),
+    ]
+    .into_iter()
+    .map(|(x, y)| Vec2::new(x, y))
+    .collect();
+    let area = crate::geom::signed_area(&ring);
+    let ring = crate::rings::cleaned(ring).unwrap();
+    // Within the 0.5 µm tolerance along the 51 mm side, not 1.45 mm².
+    let lost = area - crate::geom::signed_area(&ring);
+    assert!(lost.abs() < 0.0005 * 51.0, "lost {lost} mm² in {ring:?}");
+}
+
+#[test]
 fn rounded_and_chamfered_pads_cut_inward() {
     let text = parse(&format!(
         "{}{}",
