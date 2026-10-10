@@ -139,7 +139,7 @@ impl fmt::Display for BumpStrategy {
 #[derive(Args, Debug)]
 #[command(about = "Publish packages or board releases")]
 pub struct PublishArgs {
-    /// Print JSON without publishing: a board's release preflight and version, or each
+    /// Print, as JSON without publishing, a board's release preflight and version, or each
     /// package's next version and tag (bumps are inferred unless --bump is given)
     #[arg(long, conflicts_with_all = ["force", "no_push", "no_build"])]
     pub check: bool,
@@ -467,6 +467,10 @@ pub fn execute(args: PublishArgs) -> Result<()> {
         .map(|p| Path::new(p).to_path_buf())
         .unwrap_or_else(|| env::current_dir().unwrap());
 
+    if args.check && args.bump == Some(BumpType::Interactive) {
+        bail!("--check needs an explicit --bump value");
+    }
+
     // If path ends in .zen, route to board publish
     if path.extension().is_some_and(|ext| ext == "zen") {
         return publish_board(&path, &args);
@@ -523,7 +527,7 @@ fn publish_board(zen_path: &Path, args: &PublishArgs) -> Result<()> {
     ensure_board_publish_has_no_workspace_overrides(&workspace)?;
 
     let mut options = release::BoardReleaseOptions {
-        version: None,
+        version: git::rev_parse_short_head(&workspace.root).unwrap_or_else(|| "unknown".into()),
         suppress: args.suppress.clone(),
         exclude: args.exclude.clone(),
         check: args.check,
@@ -535,17 +539,13 @@ fn publish_board(zen_path: &Path, args: &PublishArgs) -> Result<()> {
         release::build_board_release(&workspace.root, board_path, board_name, options)?;
         return Ok(());
     };
-    if args.check && bump == BumpType::Interactive {
-        bail!("--check needs an explicit --bump=patch, --bump=minor or --bump=major");
-    }
 
     let remote = if args.check || args.no_push {
         resolve_fetch_remote(&workspace.root)?
     } else {
         resolve_remote(&workspace.root, args.force)?
     };
-    // A check reads the remote's tags, which a real publish prunes local tags to, without
-    // touching local ones.
+    // A real publish prunes local tags to the remote's, so a check reads those directly.
     let all_tags = if args.check {
         git::list_remote_tags(&workspace.root, &remote)?
     } else {
@@ -580,7 +580,7 @@ fn publish_board(zen_path: &Path, args: &PublishArgs) -> Result<()> {
     let tag_name = tags::build_tag_name(&tag_prefix, &next_version);
 
     // Build the release archive
-    options.version = Some(format!("v{}", next_version));
+    options.version = format!("v{next_version}");
     if args.check {
         release::build_board_release(&workspace.root, board_path, board_name, options)?;
         return Ok(());
@@ -769,10 +769,10 @@ fn publish_packages(start_path: &Path, args: &PublishArgs) -> Result<()> {
         git::fetch_tags_without_pruning(&workspace_root, &remote)?;
     } else {
         git::fetch_tags(&workspace_root, &remote)?;
-    }
-    if !args.check && !args.force {
-        git::fetch_branch(&workspace_root, &remote, "main")?;
-        preflight_checks(&workspace_root, &remote)?;
+        if !args.force {
+            git::fetch_branch(&workspace_root, &remote, "main")?;
+            preflight_checks(&workspace_root, &remote)?;
+        }
     }
 
     let mut workspace = get_workspace_info(&file_provider, start_path)?;
@@ -910,16 +910,12 @@ fn publish_packages(start_path: &Path, args: &PublishArgs) -> Result<()> {
     Ok(())
 }
 
-/// Print, as JSON, the version and tag each package would be published at.
 fn print_publish_plan(
     workspace: &WorkspaceInfo,
     dirty_urls: &HashSet<String>,
     all_tags: &[String],
     bump: Option<BumpType>,
 ) -> Result<()> {
-    if bump == Some(BumpType::Interactive) {
-        bail!("--check needs --bump=patch, --bump=minor, --bump=major or --bump=infer");
-    }
     let waves = compute_publish_waves(workspace, dirty_urls)?;
     let bumps = match bump.and_then(BumpType::release) {
         Some(bump) => uniform_bump_map(&waves, bump),
