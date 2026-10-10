@@ -9,12 +9,16 @@ use crate::{SchItem, SchPage, SymbolLibrary, parse_kicad_sch_page};
 ///
 /// Unchanged semantic items and unsupported source sections retain their
 /// original text. The function performs no I/O and returns `None` when the
-/// desired page is semantically unchanged. An actual edit to a KiCad 9 page
-/// rewrites it as KiCad 10, rather than mixing modern nodes with legacy
-/// version-dependent string and body-style semantics.
+/// desired page is semantically unchanged. Pages pcb itself wrote are kept
+/// canonical instead, so an older pcb layout migrates in one rewrite. An
+/// actual edit to a KiCad 9 page rewrites it as KiCad 10, rather than mixing
+/// modern nodes with legacy version-dependent string and body-style semantics.
 pub fn patch_page_source(source: &str, desired_page: &SchPage) -> Result<Option<String>> {
     let desired_source = desired_page.to_kicad_sch();
     let source_root = pcb_sexpr::parse(source).context("failed to parse source schematic")?;
+    if header(&source_root, "generator").and_then(Sexpr::as_atom) == Some(crate::kicad::GENERATOR) {
+        return Ok((desired_source != source).then_some(desired_source));
+    }
     let desired_root =
         pcb_sexpr::parse(&desired_source).context("failed to parse desired schematic")?;
     let source_nodes = managed_nodes(&source_root)?;
@@ -75,12 +79,7 @@ pub fn patch_page_source(source: &str, desired_page: &SchPage) -> Result<Option<
     if patches.is_empty() {
         return Ok(None);
     }
-    let source_version = source_root
-        .as_list()
-        .and_then(|items| pcb_sexpr::find_child_list(items, "version"))
-        .and_then(|items| items.get(1))
-        .and_then(Sexpr::as_int);
-    if source_version == Some(20250114) {
+    if header(&source_root, "version").and_then(Sexpr::as_int) == Some(20250114) {
         return Ok(Some(desired_source));
     }
     let mut patched = Vec::new();
@@ -88,6 +87,10 @@ pub fn patch_page_source(source: &str, desired_page: &SchPage) -> Result<Option<
     String::from_utf8(patched)
         .context("patched schematic is not UTF-8")
         .map(Some)
+}
+
+fn header<'a>(root: &'a Sexpr, tag: &str) -> Option<&'a Sexpr> {
+    pcb_sexpr::find_child_list(root.as_list()?, tag)?.get(1)
 }
 
 fn format_node(node: &Sexpr) -> String {

@@ -67,14 +67,6 @@ pub(crate) fn reconcile_document(
             SchDocument {
                 pages: vec![SchPage {
                     file_name: Some(root_file_name.to_string()),
-                    // KiCad's trailing root-sheet sections.
-                    items: [
-                        r#"(sheet_instances (path "/" (page "1")))"#,
-                        "(embedded_fonts no)",
-                    ]
-                    .into_iter()
-                    .map(|source| Ok(SchItem::Unsupported(pcb_sexpr::parse(source)?)))
-                    .collect::<Result<_>>()?,
                     ..SchPage::new(root_page_id())
                 }],
                 root_page_ids: vec![root_page_id()],

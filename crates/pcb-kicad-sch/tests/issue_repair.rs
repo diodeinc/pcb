@@ -224,7 +224,7 @@ fn relocating_shorted_symbols_reconnects_their_other_nets() {
     // MID, which is valid before repair and must survive moving the symbols.
     document.pages[0]
         .items
-        .retain(|item| matches!(item, SchItem::Symbol(_)));
+        .retain(|item| matches!(item, SchItem::Symbol(_) | SchItem::Unsupported(_)));
     let target = common::pin_point(&document, "R1.R", "1");
     let source = common::pin_point(&document, "R2.R", "2");
     let symbol = managed_symbol_mut(&mut document, "R2.R");

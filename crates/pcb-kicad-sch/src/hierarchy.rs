@@ -341,7 +341,10 @@ pub(crate) fn sync_instances(
             .push(format!("/{}", instance.id));
         // Roots are numbered by `sheet_instances`, child sheets by their sheet item.
         let (page, sheet) = match instance.id.rsplit_once('/') {
-            None => (root_page_number(instance.page), None),
+            None => (
+                root_page_number(instance.page),
+                (instance.page.id.clone(), None),
+            ),
             Some((parent_id, sheet_id)) => {
                 let parent = page_of[parent_id];
                 let sheet = parent
@@ -362,8 +365,10 @@ pub(crate) fn sync_instances(
                     .iter()
                     .find(|instance| instance.path == parent_path)
                     .map(|instance| instance.page.clone());
-                let sheet = (parent.id.clone(), sheet_id.to_string(), parent_path);
-                (page, Some(sheet))
+                (
+                    page,
+                    (parent.id.clone(), Some((sheet_id.to_string(), parent_path))),
+                )
             }
         };
         match page {
@@ -374,20 +379,19 @@ pub(crate) fn sync_instances(
         }
     }
     drop(instances);
-    let mut new_pages = BTreeMap::<(String, String), Vec<SheetInstance>>::new();
+    // Keyed by page and sheet item; `None` is the page's own root `sheet_instances`.
+    let mut new_pages = BTreeMap::<(String, Option<String>), Vec<SheetInstance>>::new();
     let free = (1..).map(|n| n.to_string()).filter(|n| !used.contains(n));
-    for (sheet, page) in unnumbered.into_iter().zip(free) {
-        // An unnumbered root still takes the first number.
-        if let Some((page_id, sheet_id, path)) = sheet {
-            new_pages
-                .entry((page_id, sheet_id))
-                .or_default()
-                .push(SheetInstance {
-                    project: project.to_string(),
-                    path,
-                    page,
-                });
-        }
+    for ((page_id, sheet), page) in unnumbered.into_iter().zip(free) {
+        let (sheet_id, path) = sheet.map_or((None, "/".to_string()), |(id, path)| (Some(id), path));
+        new_pages
+            .entry((page_id, sheet_id))
+            .or_default()
+            .push(SheetInstance {
+                project: project.to_string(),
+                path,
+                page,
+            });
     }
 
     let SchDocument {
@@ -405,6 +409,17 @@ pub(crate) fn sync_instances(
         let Some(paths) = paths_by_page.get(&page.id) else {
             continue;
         };
+        if let Some(root) = new_pages.remove(&(page.id.clone(), None)) {
+            // A root without a page number also lacks KiCad's other trailing section.
+            let number = &root[0].page;
+            for source in [
+                format!(r#"(sheet_instances (path "/" (page "{number}")))"#),
+                "(embedded_fonts no)".to_string(),
+            ] {
+                page.items
+                    .push(SchItem::Unsupported(pcb_sexpr::parse(&source)?));
+            }
+        }
         for item in &mut page.items {
             match item {
                 SchItem::Symbol(symbol) => {
@@ -445,7 +460,9 @@ pub(crate) fn sync_instances(
                     symbol.instances.sort_by(|a, b| a.path.cmp(&b.path));
                 }
                 SchItem::Sheet(sheet) => {
-                    if let Some(added) = new_pages.remove(&(page.id.clone(), sheet.id.clone())) {
+                    if let Some(added) =
+                        new_pages.remove(&(page.id.clone(), Some(sheet.id.clone())))
+                    {
                         sheet.instances.extend(added);
                     }
                     for instance in &mut sheet.instances {
