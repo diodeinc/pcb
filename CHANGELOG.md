@@ -44,6 +44,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - KiCad netlist (`.net`) libparts use the same part name as their components.
 - `pcb step export` accepts footprint text placed as `(at x y unlocked)`, as KiCad writes unrotated text.
 - `pcb step export` no longer cuts off a sliver of silkscreen or solder mask at the corner where a ring starts. Boards with many mask openings or silkscreen items export faster.
+- A board release blocks on a repeated `sch` warning, as it does on a single one.
 - `pcb add` no longer fails with "Content hash mismatch" on packages whose tracked files match the publisher's `.gitignore`. Package tags no longer carry content hashes, and `pcb info --inventory` drops `contentHash`.
 
 ### Removed
