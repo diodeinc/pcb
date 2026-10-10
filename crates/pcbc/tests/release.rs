@@ -179,6 +179,10 @@ fn test_release_check_does_not_publish_or_modify_authored_sources() {
     std::fs::create_dir(&temporary).unwrap();
     sb.env("TMPDIR", temporary.to_string_lossy());
     let head = sb.cmd("git", ["rev-parse", "HEAD"]).read().unwrap();
+    let short_head = sb
+        .cmd("git", ["rev-parse", "--short", "HEAD"])
+        .read()
+        .unwrap();
     for (source, severity) in [
         ("# Unsaved to Git\n", None),
         ("fail(\"release-check diagnostic\")\n", Some("error")),
@@ -198,8 +202,17 @@ fn test_release_check_does_not_publish_or_modify_authored_sources() {
             .unwrap();
         assert_eq!(output.status.success(), severity.is_none());
         let report: Value = serde_json::from_slice(&output.stdout).unwrap();
-        assert_eq!(report["schemaVersion"], 1);
-        assert_eq!(report["layoutChecked"], false);
+        assert_eq!(report["schemaVersion"], 2);
+        assert_eq!(report["version"], short_head);
+        let build = if severity.is_none() {
+            "passed"
+        } else {
+            "failed"
+        };
+        assert_eq!(
+            report["stages"],
+            serde_json::json!({ "build": build, "layout": "skipped" })
+        );
         if let Some(severity) = severity {
             let diagnostic = &report["diagnostics"][0];
             assert_eq!(diagnostic["severity"], severity);
@@ -265,7 +278,7 @@ fn test_release_check_operational_failure_is_a_diagnostic() {
         .unwrap();
     assert!(!output.status.success());
     let report: Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(report["layoutChecked"], false);
+    assert_eq!(report["stages"]["layout"], "skipped");
     let diagnostic = &report["diagnostics"][0];
     assert_eq!(diagnostic["kind"], "release.preflight");
     assert_eq!(diagnostic["severity"], "error");
@@ -274,7 +287,7 @@ fn test_release_check_operational_failure_is_a_diagnostic() {
 }
 
 #[test]
-fn test_release_check_drc_exclusion_does_not_claim_layout_checked() {
+fn test_release_check_drc_exclusion_skips_layout() {
     let mut sb = Sandbox::new();
     sb.cwd("src")
         .write("pcb.toml", PCB_TOML)
@@ -305,8 +318,40 @@ fn test_release_check_drc_exclusion_does_not_claim_layout_checked() {
         .run()
         .unwrap();
     let report: Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(report["layoutChecked"], false);
+    assert_eq!(
+        report["stages"],
+        serde_json::json!({ "build": "passed", "layout": "skipped" })
+    );
     assert_eq!(sb.cmd("git", ["diff", "HEAD"]).read().unwrap(), before);
+}
+
+#[test]
+fn test_release_check_reports_bumped_version() {
+    let mut sb = Sandbox::new();
+    sb.cwd("src")
+        .write("pcb.toml", PCB_TOML)
+        .write("boards/pcb.toml", BOARD_PCB_TOML)
+        .write("boards/TestBoard.zen", "# No components or layout\n")
+        .init_git()
+        .commit("Initial commit")
+        .tag("boards/v0.3.0")
+        .sync();
+    sb.cmd("git", ["push", "-q", "origin", "main", "--tags"])
+        .run()
+        .unwrap();
+
+    let output = sb
+        .run(
+            "pcbc",
+            ["publish", "boards/TestBoard.zen", "--check", "--bump=minor"],
+        )
+        .stdout_capture()
+        .stderr_capture()
+        .run()
+        .unwrap();
+    let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["version"], "v0.4.0");
+    assert_eq!(sb.cmd("git", ["tag"]).read().unwrap(), "boards/v0.3.0");
 }
 
 #[test]

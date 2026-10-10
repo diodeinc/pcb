@@ -139,8 +139,8 @@ impl fmt::Display for BumpStrategy {
 #[derive(Args, Debug)]
 #[command(about = "Publish packages or board releases")]
 pub struct PublishArgs {
-    /// Check a board's release preflight and print JSON, without publishing
-    #[arg(long, conflicts_with_all = ["bump", "force", "no_push", "no_build"])]
+    /// Check a board's release preflight and print JSON with the version it would publish, without publishing
+    #[arg(long, conflicts_with_all = ["force", "no_push", "no_build"])]
     pub check: bool,
 
     /// Skip preflight checks (uncommitted changes, branch, remote)
@@ -534,18 +534,21 @@ fn publish_board(zen_path: &Path, args: &PublishArgs) -> Result<()> {
     };
 
     // Local hash release: --check stops the build after preflight.
-    if args.bump.is_none() {
+    let Some(bump) = args.bump else {
         release::build_board_release(&workspace.root, board_path, board_name, options)?;
         return Ok(());
+    };
+    if args.check && bump == BumpType::Interactive {
+        bail!("--check needs an explicit --bump=patch, --bump=minor or --bump=major");
     }
 
-    let remote = if args.no_push {
+    let remote = if args.check || args.no_push {
         resolve_fetch_remote(&workspace.root)?
     } else {
         resolve_remote(&workspace.root, args.force)?
     };
     eprintln!("Syncing with {}...", remote.cyan());
-    if args.no_push {
+    if args.check || args.no_push {
         git::fetch_tags_without_pruning(&workspace.root, &remote)?;
     } else {
         git::fetch_tags(&workspace.root, &remote)?;
@@ -561,7 +564,7 @@ fn publish_board(zen_path: &Path, args: &PublishArgs) -> Result<()> {
     let current = tags::find_latest_version(&all_tags, &tag_prefix);
 
     // Resolve bump type (interactive prompt if --bump was passed without a value)
-    let bump = match args.bump.unwrap() {
+    let bump = match bump {
         BumpType::Interactive => prompt_single_bump(&board_name, current.as_ref())?,
         BumpType::Infer => {
             bail!("--bump=infer is only supported when publishing packages.");
@@ -576,6 +579,10 @@ fn publish_board(zen_path: &Path, args: &PublishArgs) -> Result<()> {
 
     // Build the release archive
     options.version = Some(format!("v{}", next_version));
+    if args.check {
+        release::build_board_release(&workspace.root, board_path, board_name, options)?;
+        return Ok(());
+    }
     options.check_bom_offers = true;
     let Some(zip_path) =
         release::build_board_release(&workspace.root, board_path, board_name.clone(), options)?

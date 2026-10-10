@@ -23,6 +23,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - `moved()` is deprecated and warns on each use (`deprecated.moved`); it still works for now.
 - `pcb publish` checks BOM supplier offers only with `--bump`; local builds and `--check` no longer contact the BOM API.
 - `pcb import` rejects projects with more than one top-level sheet instead of importing only one of them.
+- `pcb publish --check` reports the version it would publish (pass `--bump` for the next semver) and each stage as passed, failed or skipped; `layoutChecked` is gone and `schemaVersion` is 2.
 
 ### Fixed
 
