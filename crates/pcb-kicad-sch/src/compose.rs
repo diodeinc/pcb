@@ -552,6 +552,7 @@ fn initial_component_rotation(
         fields: BTreeMap::new(),
         pins: Vec::new(),
         unsupported: Vec::new(),
+        instances: Vec::new(),
     };
     let pins = symbol::ParsedSymbolDefinition::parse(definition)?.placed_pins(&unplaced)?;
     // Orientation inference is useful for simple passives, but rotating a
@@ -1749,6 +1750,9 @@ fn build_component_symbol(
         unsupported: previous
             .filter(|symbol| symbol.id == slot.symbol_id())
             .map(|symbol| symbol.unsupported.clone())
+            .unwrap_or_default(),
+        instances: previous
+            .map(|symbol| symbol.instances.clone())
             .unwrap_or_default(),
     };
     component_slots::sync_netlist_derived_symbol_properties(&mut symbol, instance);
@@ -3284,6 +3288,7 @@ fn build_net_symbol(
         fields,
         pins: Vec::new(),
         unsupported: Vec::new(),
+        instances: Vec::new(),
     };
     reconcile_pin_instances(&mut symbol, &spec.definition, &[])?;
     symbol.at = Point::new(
@@ -4176,6 +4181,7 @@ mod tests {
             fields: BTreeMap::new(),
             pins: Vec::new(),
             unsupported: Vec::new(),
+            instances: Vec::new(),
         };
         BTreeMap::from([(
             slot,

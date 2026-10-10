@@ -3,7 +3,7 @@ use anyhow::{Context, Result, bail};
 use pcb_sexpr::{Sexpr, parse as parse_sexpr};
 use serde::Serialize;
 use serde_json::Value;
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::ffi::OsStr;
 use std::fs;
@@ -138,45 +138,34 @@ fn global_footprint_table_from_paths(
     libraries
 }
 
-fn discover_schematic_assets(
+fn schematic_assets(
     project_dir: &Path,
-    root_schematic_abs: &Path,
-    variable_resolver: &KicadVariableResolver,
-) -> Result<SchematicAssets> {
-    let mut assets = SchematicAssets::default();
-    let mut visited = BTreeSet::new();
-    let mut queue = VecDeque::from([root_schematic_abs.to_path_buf()]);
-
-    while let Some(current_abs) = queue.pop_front() {
-        if !visited.insert(current_abs.clone()) {
-            continue;
-        }
-        assets.files.insert(current_abs.clone());
-
-        let content = fs::read_to_string(&current_abs)
-            .with_context(|| format!("Failed to read schematic {}", current_abs.display()))?;
-        let discovery = discover_from_sexpr_text(&content)
-            .with_context(|| format!("Failed to parse schematic {}", current_abs.display()))?;
-        assets.symbol_ids.extend(discovery.symbol_ids);
-        assets.footprint_ids.extend(discovery.footprint_ids);
-        assets.model_refs.extend(discovery.model_refs);
-
-        for sheet_ref in discovery.sheetfile_refs {
-            let base_dir = current_abs.parent().unwrap_or(project_dir);
-            let child_abs =
-                resolve_reference_path(project_dir, base_dir, &sheet_ref, variable_resolver)?;
-            if child_abs.extension().and_then(|ext| ext.to_str()) != Some(KICAD_SCH_EXT) {
-                bail!(
-                    "Sheetfile reference must point to .kicad_sch, got '{}' in {}",
-                    sheet_ref,
-                    current_abs.display()
-                );
-            }
-            queue.push_back(child_abs);
-        }
+    schematic: &pcb_kicad_sch::LoadedProject,
+) -> SchematicAssets {
+    let mut assets = SchematicAssets {
+        files: schematic
+            .schematic_files
+            .iter()
+            .map(|file| project_dir.join(file))
+            .collect(),
+        ..SchematicAssets::default()
+    };
+    for symbol in schematic
+        .document
+        .pages
+        .iter()
+        .flat_map(|page| &page.items)
+        .filter_map(|item| match item {
+            pcb_kicad_sch::SchItem::Symbol(symbol) => Some(symbol),
+            _ => None,
+        })
+    {
+        assets.symbol_ids.insert(symbol.lib_id.clone());
+        assets
+            .footprint_ids
+            .extend(symbol.field_value("Footprint").map(str::to_string));
     }
-
-    Ok(assets)
+    assets
 }
 
 fn resolve_project_library_assets(
@@ -311,33 +300,22 @@ pub(super) fn discover_and_validate(kicad_input_abs: &Path) -> Result<PortableKi
     let variable_resolver = build_kicad_variable_resolver(project_dir, &kicad_pro_json);
     let kicad_refs = collect_kicad_refs_from_json(&kicad_pro_json);
 
-    let root_schematic_abs = if input_ext == Some(KICAD_SCH_EXT) {
-        kicad_input_abs.clone()
-    } else {
-        resolve_root_schematic_from_pro(
-            project_dir,
-            &project_name,
-            &kicad_refs,
-            &variable_resolver,
-        )?
+    let schematic =
+        pcb_kicad_sch::load_project(&format!("{project_name}.{KICAD_PRO_EXT}"), |relative| {
+            pcbc::kicad_schematic::read_project_file(project_dir, relative)
+        })?;
+    let [root_schematic] = schematic.root_schematics.as_slice() else {
+        bail!(
+            "Import supports one top-level schematic, but {} lists {}",
+            kicad_input_abs.display(),
+            schematic.root_schematics.len()
+        );
     };
+    let root_schematic_abs = project_dir.join(root_schematic);
     let kicad_pcb_abs = kicad_pro_abs
         .as_ref()
         .map(|pro| pro.with_extension(KICAD_PCB_EXT))
         .filter(|pcb| pcb.is_file());
-
-    // Validate root schematic UUID if present in project.
-    if let Ok(root_uuid) = extract_root_uuid(&kicad_pro_json)
-        && let Some(root_sch_uuid) = extract_first_schematic_uuid(&root_schematic_abs)?
-        && root_sch_uuid != root_uuid
-    {
-        bail!(
-            "Root schematic UUID mismatch: .kicad_pro says '{}', but '{}' has '{}'",
-            root_uuid,
-            root_schematic_abs.display(),
-            root_sch_uuid
-        );
-    }
 
     let mut abs_files: BTreeSet<PathBuf> = kicad_pro_abs
         .iter()
@@ -365,8 +343,7 @@ pub(super) fn discover_and_validate(kicad_input_abs: &Path) -> Result<PortableKi
         resolve_reference_path(project_dir, project_dir, reference, &variable_resolver).ok()
     }));
 
-    let mut referenced_assets =
-        discover_schematic_assets(project_dir, &root_schematic_abs, &variable_resolver)?;
+    let mut referenced_assets = schematic_assets(project_dir, &schematic);
     abs_files.extend(referenced_assets.files.iter().cloned());
 
     // Include references embedded in the PCB in addition to schematic assets.
@@ -398,7 +375,6 @@ pub(super) fn discover_and_validate(kicad_input_abs: &Path) -> Result<PortableKi
         &referenced_assets.model_refs,
         &variable_resolver,
     );
-    let schematic_files_rel = relative_sorted(project_dir, &referenced_assets.files);
 
     let kicad_pro_rel = kicad_pro_abs.map(|path| to_relative(project_dir, &path));
     let root_schematic_rel = to_relative(project_dir, &root_schematic_abs);
@@ -411,7 +387,7 @@ pub(super) fn discover_and_validate(kicad_input_abs: &Path) -> Result<PortableKi
         project_file: kicad_pro_rel.as_deref().map(path_to_posix_string),
         root_schematic: path_to_posix_string(&root_schematic_rel),
         pcb_file: kicad_pcb_rel.as_deref().map(path_to_posix_string),
-        schematic_files: schematic_files_rel
+        schematic_files: relative_sorted(project_dir, &referenced_assets.files)
             .iter()
             .map(|p| path_to_posix_string(p))
             .collect(),
@@ -433,7 +409,7 @@ pub(super) fn discover_and_validate(kicad_input_abs: &Path) -> Result<PortableKi
         kicad_pro_rel,
         root_schematic_rel,
         kicad_pcb_rel,
-        schematic_files_rel,
+        schematic,
         files_to_bundle_rel,
         resolved_project_footprints,
         project_footprint_ids,
@@ -699,37 +675,6 @@ fn load_user_environment_vars_from_common_json(path: &Path) -> BTreeMap<String, 
         .collect()
 }
 
-fn extract_root_uuid(kicad_pro_json: &Value) -> Result<String> {
-    let sheets = kicad_pro_json
-        .get("sheets")
-        .and_then(|v| v.as_array())
-        .ok_or_else(|| anyhow::anyhow!("Missing or invalid 'sheets' array in .kicad_pro"))?;
-
-    let mut root_uuid = None;
-    for sheet in sheets {
-        let Some(entry) = sheet.as_array() else {
-            continue;
-        };
-        if entry.len() < 2 {
-            continue;
-        }
-        let Some(uuid) = entry[0].as_str() else {
-            continue;
-        };
-        let Some(name) = entry[1].as_str() else {
-            continue;
-        };
-        if name == "Root" {
-            if root_uuid.is_some() {
-                bail!("Multiple 'Root' entries in .kicad_pro sheets array");
-            }
-            root_uuid = Some(uuid.to_string());
-        }
-    }
-
-    root_uuid.ok_or_else(|| anyhow::anyhow!("No 'Root' sheet entry found in .kicad_pro"))
-}
-
 fn collect_kicad_refs_from_json(value: &Value) -> BTreeSet<String> {
     let mut refs = BTreeSet::new();
     collect_refs_recursive(value, &mut refs);
@@ -755,54 +700,6 @@ fn collect_refs_recursive(value: &Value, refs: &mut BTreeSet<String>) {
         }
         _ => {}
     }
-}
-
-fn resolve_root_schematic_from_pro(
-    project_dir: &Path,
-    project_name: &str,
-    references: &BTreeSet<String>,
-    variable_resolver: &KicadVariableResolver,
-) -> Result<PathBuf> {
-    let sch_refs = references
-        .iter()
-        .filter(|r| extension_of_reference(r.as_str()).as_deref() == Some(KICAD_SCH_EXT))
-        .collect::<Vec<_>>();
-
-    let default_root = format!("{project_name}.{KICAD_SCH_EXT}");
-    let reference = if sch_refs.iter().any(|s| s.as_str() == default_root) {
-        default_root.as_str()
-    } else if sch_refs.len() == 1 {
-        sch_refs[0].as_str()
-    } else {
-        default_root.as_str()
-    };
-
-    resolve_reference_path(project_dir, project_dir, reference, variable_resolver)
-}
-
-fn extract_first_schematic_uuid(schematic_abs: &Path) -> Result<Option<String>> {
-    let content = fs::read_to_string(schematic_abs)
-        .with_context(|| format!("Failed to read schematic {}", schematic_abs.display()))?;
-    Ok(extract_first_schematic_uuid_from_text(&content))
-}
-
-fn extract_first_schematic_uuid_from_text(content: &str) -> Option<String> {
-    let root = parse_sexpr(content).ok()?;
-    let items = root.as_list()?;
-
-    if items.first().and_then(|node| node.as_sym()) != Some("kicad_sch") {
-        return None;
-    }
-
-    for node in &items[1..] {
-        if let Some(uuid_items) = node.as_list()
-            && uuid_items.first().and_then(|item| item.as_sym()) == Some("uuid")
-            && let Some(uuid) = uuid_items.get(1).and_then(atom_or_string)
-        {
-            return Some(uuid.to_string());
-        }
-    }
-    None
 }
 
 fn parse_library_table(path: &Path, table_tag: &str) -> Result<BTreeMap<String, String>> {
@@ -1574,7 +1471,7 @@ mod tests {
         assert_eq!(project.project_name, "layout");
         assert!(
             project
-                .schematic_files_rel
+                .schematic_files_rel()
                 .iter()
                 .any(|p| p == Path::new("layout.kicad_sch"))
         );
@@ -1898,7 +1795,7 @@ mod tests {
         )?;
         fs::write(
             dir.path().join("demo.kicad_sch"),
-            "(kicad_sch (uuid \"u\"))",
+            r#"(kicad_sch (version 20260306) (generator "eeschema") (uuid "u") (paper "A4") (lib_symbols))"#,
         )?;
 
         let project = discover_and_validate(&dir.path().join("demo.kicad_pro"))?;
@@ -1927,7 +1824,7 @@ mod tests {
         )?;
         fs::write(
             dir.path().join("demo.kicad_sch"),
-            "(kicad_sch (uuid \"u\"))",
+            r#"(kicad_sch (version 20260306) (generator "eeschema") (uuid "u") (paper "A4") (lib_symbols))"#,
         )?;
         fs::write(
             dir.path().join("demo.kicad_pcb"),

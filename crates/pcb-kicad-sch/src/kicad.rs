@@ -12,7 +12,7 @@ use crate::model::{
     FieldHorizontalJustify, FieldJustify, FieldVerticalJustify, Graphic, GraphicKind, GraphicText,
     Junction, Label, LabelKind, LabelShape, LabelSpin, MirrorAxis, NoConnect, Paper, PinInstance,
     Point, Rotation, SchDocument, SchItem, SchPage, Sheet, SheetPin, Symbol, SymbolDefinition,
-    SymbolField, SymbolLibrary, TextEffects, TextSize, Wire,
+    SymbolField, SymbolInstance, SymbolLibrary, TextEffects, TextSize, Wire,
 };
 
 pub const KICAD_SCH_VERSION: i64 = 20260306;
@@ -367,6 +367,7 @@ fn parse_symbol(items: SexprList<'_>) -> Result<Symbol> {
     let mut fields = BTreeMap::new();
     let mut pins = Vec::new();
     let mut unsupported = Vec::new();
+    let mut instances = Vec::new();
 
     for child in items.children_from(1) {
         let Some(list) = SexprList::from_sexpr(child) else {
@@ -377,6 +378,9 @@ fn parse_symbol(items: SexprList<'_>) -> Result<Symbol> {
         match list.tag() {
             Some("lib_id") => {
                 lib_id = list.string(1);
+            }
+            Some("instances") => {
+                instances.extend(parse_symbol_instances(list)?);
             }
             Some("lib_name") => {
                 lib_name = Some(list.string(1).context("symbol lib_name is not a string")?);
@@ -453,7 +457,44 @@ fn parse_symbol(items: SexprList<'_>) -> Result<Symbol> {
         fields,
         pins,
         unsupported,
+        instances,
     })
+}
+
+fn parse_symbol_instances(list: SexprList<'_>) -> Result<Vec<SymbolInstance>> {
+    let mut instances = Vec::new();
+    for project in list.children_from(1) {
+        let project = SexprList::from_sexpr(project)
+            .filter(|project| project.tag() == Some("project"))
+            .context("symbol instances must contain projects")?;
+        let name = project.string(1).context("instance project has no name")?;
+        for path in project.children_from(2) {
+            let path = SexprList::from_sexpr(path)
+                .filter(|path| path.tag() == Some("path"))
+                .context("instance project must contain paths")?;
+            let mut instance = SymbolInstance {
+                project: name.clone(),
+                path: path.string(1).context("instance path is not a string")?,
+                reference: None,
+                unit: None,
+                unsupported: Vec::new(),
+            };
+            for child in path.children_from(2) {
+                match SexprList::from_sexpr(child) {
+                    Some(item) if item.tag() == Some("reference") => {
+                        instance.reference = item.string(1);
+                    }
+                    Some(item) if item.tag() == Some("unit") => {
+                        let unit = item.i64(1).context("instance unit is not an integer")?;
+                        instance.unit = Some(positive_u32("instance unit", unit)?);
+                    }
+                    _ => instance.unsupported.push(child.clone()),
+                }
+            }
+            instances.push(instance);
+        }
+    }
+    Ok(instances)
 }
 
 fn positive_u32(field: &str, value: i64) -> Result<u32> {
@@ -1251,8 +1292,42 @@ fn symbol_to_sexpr(symbol: &Symbol) -> Sexpr {
     items.extend(symbol.fields.values().map(field_to_sexpr));
     items.extend(symbol.pins.iter().map(pin_to_sexpr));
     items.extend(symbol.unsupported.iter().cloned());
+    if !symbol.instances.is_empty() {
+        items.push(symbol_instances_to_sexpr(&symbol.instances));
+    }
 
     Sexpr::list(items)
+}
+
+fn symbol_instances_to_sexpr(instances: &[SymbolInstance]) -> Sexpr {
+    let mut projects: Vec<Vec<Sexpr>> = Vec::new();
+    for (index, instance) in instances.iter().enumerate() {
+        if index == 0 || instances[index - 1].project != instance.project {
+            projects.push(vec![
+                Sexpr::symbol("project"),
+                Sexpr::string(&instance.project),
+            ]);
+        }
+        let mut path = vec![Sexpr::symbol("path"), Sexpr::string(&instance.path)];
+        path.extend(instance.reference.iter().map(|reference| {
+            Sexpr::list(vec![Sexpr::symbol("reference"), Sexpr::string(reference)])
+        }));
+        path.extend(
+            instance
+                .unit
+                .map(|unit| Sexpr::list(vec![Sexpr::symbol("unit"), Sexpr::int(unit as i64)])),
+        );
+        path.extend(instance.unsupported.iter().cloned());
+        projects
+            .last_mut()
+            .expect("project started above")
+            .push(Sexpr::list(path));
+    }
+    Sexpr::list(
+        std::iter::once(Sexpr::symbol("instances"))
+            .chain(projects.into_iter().map(Sexpr::list))
+            .collect(),
+    )
 }
 
 fn bool_property_to_sexpr(name: &str, value: bool) -> Sexpr {
@@ -2444,7 +2519,7 @@ mod tests {
         assert!(symbol.on_board);
         assert!(symbol.in_pos_files);
         assert!(!symbol.dnp);
-        assert!(has_tag(&symbol.unsupported, "instances"));
+        assert!(!symbol.instances.is_empty());
         assert!(has_tag(
             &symbol.field("Reference").unwrap().unsupported,
             "show_name"

@@ -21,7 +21,7 @@ use pcb_kicad_sch::{
 
 mod project;
 
-pub use project::KicadProject;
+pub use project::{KicadProject, read_project_file};
 use project::{declared_root_schematics, project_schematic_path, schematic_project_path};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]

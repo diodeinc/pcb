@@ -946,6 +946,7 @@ mod tests {
             ]),
             pins: Vec::new(),
             unsupported: Vec::new(),
+            instances: Vec::new(),
         }
     }
 }

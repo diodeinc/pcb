@@ -4,7 +4,6 @@ use anyhow::{Context, Result, bail};
 use pcb_sch::{
     ATTR_SYMBOL_FORMAT_VERSION, AttributeValue, Instance, InstanceKind, InstanceRef, Schematic,
 };
-use pcb_sexpr::Sexpr;
 
 use crate::{
     SchDocument, SchItem, Symbol, SymbolDefinition, SymbolSlotKey, canonical_component_path,
@@ -149,43 +148,9 @@ pub(crate) fn sync_symbol_instance_references(
                 .reference()
                 .with_context(|| format!("managed symbol '{slot}' has no Reference field"))?
                 .to_string();
-            for instances in &mut symbol.unsupported {
-                let Some(projects) = instances
-                    .as_list_mut()
-                    .filter(|items| items.first().and_then(Sexpr::as_sym) == Some("instances"))
-                else {
-                    continue;
-                };
-                for project in projects {
-                    let Some(annotations) = project
-                        .as_list_mut()
-                        .filter(|items| items.first().and_then(Sexpr::as_sym) == Some("project"))
-                    else {
-                        continue;
-                    };
-                    for annotation in annotations {
-                        let Some(fields) = annotation.as_list_mut().filter(|items| {
-                            items.first().and_then(Sexpr::as_sym) == Some("path")
-                                && items
-                                    .get(1)
-                                    .and_then(Sexpr::as_str)
-                                    .is_some_and(|path| paths.contains(path))
-                        }) else {
-                            continue;
-                        };
-                        for field in fields {
-                            if let Some(value) = field
-                                .as_list_mut()
-                                .filter(|items| {
-                                    items.first().and_then(Sexpr::as_sym) == Some("reference")
-                                })
-                                .and_then(|items| items.get_mut(1))
-                                && value.as_str() != Some(&reference)
-                            {
-                                *value = Sexpr::string(&reference);
-                            }
-                        }
-                    }
+            for instance in &mut symbol.instances {
+                if paths.contains(&instance.path) && instance.reference.is_some() {
+                    instance.reference = Some(reference.clone());
                 }
             }
         }

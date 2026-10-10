@@ -58,6 +58,7 @@ pub(crate) fn specs(netlist: &Schematic) -> Result<BTreeMap<String, NetSymbolSpe
                 fields: BTreeMap::new(),
                 pins: Vec::new(),
                 unsupported: Vec::new(),
+                instances: Vec::new(),
             };
             let connection_pins = parsed
                 .placed_pins(&unplaced)?

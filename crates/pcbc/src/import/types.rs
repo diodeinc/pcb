@@ -130,7 +130,8 @@ pub(super) struct PortableKicadProject {
     pub(super) kicad_pro_rel: Option<PathBuf>, // relative to project_dir
     pub(super) root_schematic_rel: PathBuf,    // relative to project_dir
     pub(super) kicad_pcb_rel: Option<PathBuf>, // relative to project_dir
-    pub(super) schematic_files_rel: Vec<PathBuf>,
+    /// The source project as KiCad loads it, parsed once for the whole import.
+    pub(super) schematic: pcb_kicad_sch::LoadedProject,
     pub(super) files_to_bundle_rel: Vec<PathBuf>,
     /// KiCad footprint ID -> project-local `.kicad_mod` path.
     pub(super) resolved_project_footprints: BTreeMap<String, PathBuf>,
@@ -138,6 +139,19 @@ pub(super) struct PortableKicadProject {
     pub(super) project_footprint_ids: BTreeSet<String>,
     pub(super) extra_files_to_bundle: Vec<PortableExtraFile>,
     pub(super) manifest_json: String,
+}
+
+impl PortableKicadProject {
+    pub(super) fn schematic_files_rel(&self) -> Vec<PathBuf> {
+        let mut files: Vec<_> = self
+            .schematic
+            .schematic_files
+            .iter()
+            .map(PathBuf::from)
+            .collect();
+        files.sort();
+        files
+    }
 }
 
 #[derive(Debug, Clone)]

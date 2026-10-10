@@ -32,17 +32,14 @@ pub(super) fn materialize_board(
     copy_project_sources(staged_root, selected, &layout_kicad_pro)?;
 
     // The live schematic is the original hierarchy, not a reconstruction from symbol positions.
-    for relative in &selection.portable.schematic_files_rel {
+    let schematic_files = selection.portable.schematic_files_rel();
+    for relative in &schematic_files {
         let destination = layout_dir.join(relative);
         fs::create_dir_all(destination.parent().context("Schematic has no parent")?)?;
         fs::copy(staged_root.join(relative), &destination)
             .with_context(|| format!("Failed to copy schematic {}", relative.display()))?;
     }
-    make_sheet_file_ids_unique(
-        &layout_dir,
-        &selected.kicad_sch,
-        &selection.portable.schematic_files_rel,
-    )?;
+    make_sheet_file_ids_unique(&layout_dir, &selected.kicad_sch, &schematic_files)?;
     // Without a source board, forced imports retain eda/. Its matching board still needs
     // stackup extraction and identity prepatching, but retains its existing net names.
     let layout_kicad_pcb =

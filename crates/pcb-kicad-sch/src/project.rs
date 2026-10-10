@@ -21,15 +21,14 @@ pub struct LoadedProject {
 /// Load a project through `read`, which returns `None` for a missing file.
 ///
 /// KiCad 10 flat projects list their roots in `schematic.top_level_sheets`;
-/// other projects use KiCad's legacy same-stem root file.
+/// other projects use KiCad's legacy same-stem root file. Like KiCad, a missing
+/// project file is an empty project.
 pub fn load_project(
     project_file: &str,
     mut read: impl FnMut(&str) -> Result<Option<String>>,
 ) -> Result<LoadedProject> {
-    let project: Value = serde_json::from_str(
-        &read(project_file)?.with_context(|| format!("{project_file} does not exist"))?,
-    )
-    .with_context(|| format!("failed to parse {project_file}"))?;
+    let project: Value = serde_json::from_str(&read(project_file)?.unwrap_or_else(|| "{}".into()))
+        .with_context(|| format!("failed to parse {project_file}"))?;
     let roots = project_roots(project_file, &project)?;
 
     let mut seen = BTreeSet::new();
@@ -65,7 +64,7 @@ pub fn load_project(
             SchItem::Sheet(sheet) => Some(sheet),
             _ => None,
         }) {
-            let child = posix(&normalized(&path, sheet.file_name())?);
+            let child = sheet_file(&path, sheet.file_name())?;
             if seen.contains(&child) {
                 continue;
             }
@@ -154,6 +153,11 @@ fn project_roots(project_file: &str, project: &Value) -> Result<Vec<(String, Opt
             Ok((posix(&normalized(project_file, file_name)?), id))
         })
         .collect()
+}
+
+/// The project-relative file a sheet in `parent` (project-relative) refers to.
+pub fn sheet_file(parent: &str, child: &str) -> Result<String> {
+    normalized(parent, child).map(|path| posix(&path))
 }
 
 fn posix(path: &Path) -> String {
