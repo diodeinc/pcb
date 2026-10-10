@@ -1068,21 +1068,27 @@ fn build_workspace(
             &mut has_warnings,
         );
         for diagnostic in result.diagnostics.iter().filter(|d| !d.suppressed) {
-            let kind = pcb_zen_core::diagnostics::diagnostic_kind(diagnostic);
-            let sch = kind.as_deref().and_then(|k| k.split('.').next()) == Some("sch");
+            let report = pcb_zen_core::diagnostics::DiagnosticReport::from_diagnostic(diagnostic);
+            let sch = report.kind.as_deref().and_then(|k| k.split('.').next()) == Some("sch");
             if diagnostic.severity != EvalSeverity::Error && !sch {
                 continue;
             }
-            let inner = diagnostic.innermost();
-            let path = Some(Path::new(&inner.path))
-                .filter(|path| !path.as_os_str().is_empty())
-                .unwrap_or(zen_path);
+            let location = if report.location.is_empty() {
+                zen_path.display().to_string()
+            } else {
+                report.location
+            };
             blockers.push(format!(
                 "  {}: {}{}: {}",
-                path.strip_prefix(&workspace.root).unwrap_or(path).display(),
+                Path::new(&location)
+                    .strip_prefix(&workspace.root)
+                    .map_or(location.clone(), |path| path.display().to_string()),
                 diagnostic.severity.to_string().to_lowercase(),
-                kind.map(|kind| format!(" {kind}")).unwrap_or_default(),
-                inner.body
+                report
+                    .kind
+                    .map(|kind| format!(" {kind}"))
+                    .unwrap_or_default(),
+                report.body
             ));
         }
         if let Some(schematic) = result.schematic {
