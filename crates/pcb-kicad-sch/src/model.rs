@@ -16,10 +16,6 @@ pub struct SchDocument {
     pub pages: Vec<SchPage>,
     /// UUIDs of the project's top-level schematic pages, in project order.
     pub root_page_ids: Vec<Id>,
-    /// KiCad project name (the `.kicad_pro` stem) that owns per-sheet
-    /// symbol and sheet instance data.
-    #[serde(default)]
-    pub project_name: String,
     /// KiCad 10 project bus aliases (`schematic.bus_aliases`).
     pub bus_aliases: BTreeMap<String, Vec<String>>,
 }

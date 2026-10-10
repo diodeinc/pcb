@@ -98,10 +98,6 @@ pub fn load_project(
         document: SchDocument {
             pages,
             root_page_ids,
-            project_name: Path::new(project_file)
-                .file_stem()
-                .map(|stem| stem.to_string_lossy().into_owned())
-                .unwrap_or_default(),
             bus_aliases,
         },
         project,

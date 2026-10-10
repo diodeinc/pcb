@@ -4,8 +4,8 @@ use anyhow::{Context, Result, bail};
 use pcb_sch::InstanceRef;
 
 use crate::{
-    SchDocument, SchItem, SchPage, Sheet, SymbolInstance, SymbolSlotKey,
-    connectivity::kicad::{PageInstance, page_instances, resolve_file_name},
+    SchDocument, SchItem, SchPage, SymbolInstance, SymbolSlotKey,
+    connectivity::kicad::{page_instances, resolve_file_name},
     deterministic_uuid,
     kicad::find_child,
     model::SheetInstance,
@@ -318,192 +318,141 @@ fn path_depth(path: &str) -> usize {
 /// KiCad stores the annotation of each symbol and the page number of each
 /// sheet per sheet-instance path, outside the items, and fills in whatever a
 /// loaded file lacks: paths under this project's root belong to this project
-/// (even after a rename), and pages are numbered depth-first with children in
-/// position order, each taking the lowest unused positive integer. Doing the
-/// same here keeps a KiCad resave from touching pcb-written sheets.
+/// (even after a rename), and unnumbered sheets take the lowest unused page
+/// numbers in sheet-list order. Doing the same here keeps a KiCad resave from
+/// touching pcb-written sheets.
 pub(crate) fn sync_instances(
     document: &mut SchDocument,
     slots: &BTreeSet<SymbolSlotKey>,
     project: &str,
 ) -> Result<()> {
+    // Sheet-list order: `page_instances` walks the hierarchy depth-first with
+    // children in KiCad's position order.
     let instances = page_instances(document)?;
-    let by_id: BTreeMap<&str, &PageInstance<'_>> = instances
+    let page_of = instances
         .iter()
-        .map(|instance| (instance.id.as_str(), instance))
-        .collect();
+        .map(|instance| (instance.id.as_str(), instance.page))
+        .collect::<BTreeMap<_, _>>();
     let mut paths_by_page = BTreeMap::<String, Vec<String>>::new();
-    let mut sheet_order = Vec::new();
-    for root_id in &document.root_page_ids {
-        walk_sheets(
-            by_id[root_id.as_str()],
-            &by_id,
-            &mut paths_by_page,
-            &mut sheet_order,
-        );
+    let mut used = BTreeSet::new();
+    let mut unnumbered = Vec::new();
+    for instance in &instances {
+        paths_by_page
+            .entry(instance.page.id.clone())
+            .or_default()
+            .push(format!("/{}", instance.id));
+        // Roots are numbered by `sheet_instances`, child sheets by their
+        // sheet item's instance for the parent path.
+        let (page, sheet) = match instance.id.rsplit_once('/') {
+            None => (root_page_number(instance.page), None),
+            Some((parent_id, sheet_id)) => {
+                let parent = page_of[parent_id];
+                let parent_path = format!("/{parent_id}");
+                let page = parent.items.iter().find_map(|item| match item {
+                    SchItem::Sheet(sheet) if sheet.id == sheet_id => sheet
+                        .instances
+                        .iter()
+                        .find(|instance| instance.path == parent_path)
+                        .map(|instance| instance.page.clone()),
+                    _ => None,
+                });
+                let sheet = (parent.id.clone(), sheet_id.to_string(), parent_path);
+                (page, Some(sheet))
+            }
+        };
+        match page {
+            Some(page) => {
+                used.insert(page);
+            }
+            None => unnumbered.push(sheet),
+        }
     }
     drop(instances);
+    let mut new_pages = BTreeMap::<(String, String), Vec<SheetInstance>>::new();
+    let free = (1..).map(|n| n.to_string()).filter(|n| !used.contains(n));
+    for (sheet, page) in unnumbered.into_iter().zip(free) {
+        // An unnumbered root still takes the first number.
+        if let Some((page_id, sheet_id, path)) = sheet {
+            new_pages
+                .entry((page_id, sheet_id))
+                .or_default()
+                .push(SheetInstance {
+                    project: project.to_string(),
+                    path,
+                    page,
+                });
+        }
+    }
 
+    // Instances under this project's roots are re-homed after a project
+    // rename; a document without a root file cannot name the project.
     let root_ids = document.root_page_ids.clone();
     let is_root_path = |path: &str| {
-        root_ids.iter().any(|root| {
-            path.strip_prefix('/')
-                .is_some_and(|rest| rest.starts_with(root.as_str()))
-        })
+        !project.is_empty()
+            && root_ids
+                .iter()
+                .any(|root| path[1..].split('/').next() == Some(root))
     };
     for page in &mut document.pages {
         let Some(paths) = paths_by_page.get(&page.id) else {
             continue;
         };
         for item in &mut page.items {
-            let SchItem::Symbol(symbol) = item else {
-                continue;
-            };
-            let slot = symbol
-                .field_value("Path")
-                .and_then(|path| SymbolSlotKey::new(path, symbol.unit))
-                .filter(|slot| slots.contains(slot));
-            let reference = match (symbol.reference(), &slot) {
-                (Some(reference), _) => reference.to_string(),
-                (None, Some(slot)) => bail!("managed symbol '{slot}' has no Reference field"),
-                (None, None) => continue,
-            };
-            for path in paths {
-                match symbol.instances.iter_mut().find(|i| &i.path == path) {
-                    // Only managed annotations are refreshed from the field;
-                    // for anything else the native annotation is the truth.
-                    Some(instance) => {
-                        if slot.is_some() {
-                            instance.reference = Some(reference.clone());
-                            instance.unit = Some(symbol.unit);
+            match item {
+                SchItem::Symbol(symbol) => {
+                    let slot = symbol
+                        .field_value("Path")
+                        .and_then(|path| SymbolSlotKey::new(path, symbol.unit))
+                        .filter(|slot| slots.contains(slot));
+                    let reference = match (symbol.reference(), &slot) {
+                        (Some(reference), _) => reference.to_string(),
+                        (None, Some(slot)) => {
+                            bail!("managed symbol '{slot}' has no Reference field")
+                        }
+                        (None, None) => continue,
+                    };
+                    for path in paths {
+                        match symbol.instances.iter_mut().find(|i| &i.path == path) {
+                            // Only managed annotations are refreshed from the
+                            // field; otherwise the native annotation is the truth.
+                            Some(instance) => {
+                                if slot.is_some() {
+                                    instance.reference = Some(reference.clone());
+                                    instance.unit = Some(symbol.unit);
+                                }
+                            }
+                            None => symbol.instances.push(SymbolInstance {
+                                project: project.to_string(),
+                                path: path.clone(),
+                                reference: Some(reference.clone()),
+                                unit: Some(symbol.unit),
+                                unsupported: Vec::new(),
+                            }),
                         }
                     }
-                    None => symbol.instances.push(SymbolInstance {
-                        project: project.to_string(),
-                        path: path.clone(),
-                        reference: Some(reference.clone()),
-                        unit: Some(symbol.unit),
-                        unsupported: Vec::new(),
-                    }),
+                    for instance in &mut symbol.instances {
+                        if is_root_path(&instance.path) {
+                            instance.project = project.to_string();
+                        }
+                    }
+                    symbol.instances.sort_by(|a, b| a.path.cmp(&b.path));
                 }
-            }
-            for instance in &mut symbol.instances {
-                if is_root_path(&instance.path) {
-                    instance.project = project.to_string();
+                SchItem::Sheet(sheet) => {
+                    if let Some(added) = new_pages.remove(&(page.id.clone(), sheet.id.clone())) {
+                        sheet.instances.extend(added);
+                    }
+                    for instance in &mut sheet.instances {
+                        if is_root_path(&instance.path) {
+                            instance.project = project.to_string();
+                        }
+                    }
+                    sheet.instances.sort_by(|a, b| a.path.cmp(&b.path));
                 }
-            }
-            symbol.instances.sort_by(|a, b| a.path.cmp(&b.path));
-        }
-    }
-
-    let mut used = BTreeSet::new();
-    for root_id in &root_ids {
-        used.extend(root_page_number(page_mut(document, root_id)?));
-    }
-    for (page_id, sheet_id, parent) in &sheet_order {
-        let sheet = sheet_mut(document, page_id, sheet_id)?;
-        used.extend(
-            sheet
-                .instances
-                .iter()
-                .filter(|instance| &instance.path == parent)
-                .map(|instance| instance.page.clone()),
-        );
-    }
-    let allocate = |used: &mut BTreeSet<String>| {
-        let page = (1..)
-            .map(|n| n.to_string())
-            .find(|n| !used.contains(n))
-            .expect("unbounded");
-        used.insert(page.clone());
-        page
-    };
-    for root_id in &root_ids {
-        // An unnumbered root still comes first in KiCad's sheet list.
-        if root_page_number(page_mut(document, root_id)?).is_none() {
-            allocate(&mut used);
-        }
-    }
-    for (page_id, sheet_id, parent) in &sheet_order {
-        let sheet = sheet_mut(document, page_id, sheet_id)?;
-        if !sheet.instances.iter().any(|i| &i.path == parent) {
-            sheet.instances.push(SheetInstance {
-                project: project.to_string(),
-                path: parent.clone(),
-                page: allocate(&mut used),
-            });
-        }
-        for instance in &mut sheet.instances {
-            if is_root_path(&instance.path) {
-                instance.project = project.to_string();
+                _ => {}
             }
         }
-        sheet.instances.sort_by(|a, b| a.path.cmp(&b.path));
     }
     Ok(())
-}
-
-/// Visit the hierarchy in KiCad's sheet-list order, recording each page's
-/// instance paths and every placed sheet as (page id, sheet id, parent path).
-fn walk_sheets(
-    instance: &PageInstance<'_>,
-    by_id: &BTreeMap<&str, &PageInstance<'_>>,
-    paths_by_page: &mut BTreeMap<String, Vec<String>>,
-    sheet_order: &mut Vec<(String, String, String)>,
-) {
-    let path = format!("/{}", instance.id);
-    paths_by_page
-        .entry(instance.page.id.clone())
-        .or_default()
-        .push(path.clone());
-    let mut sheets = instance
-        .page
-        .items
-        .iter()
-        .filter_map(|item| match item {
-            SchItem::Sheet(sheet) if sheet.placed => Some(sheet.as_ref()),
-            _ => None,
-        })
-        .collect::<Vec<_>>();
-    sheets.sort_by(|a, b| {
-        let position = |sheet: &Sheet| sheet.at.map(|at| (at.x, at.y)).unwrap_or_default();
-        position(a)
-            .partial_cmp(&position(b))
-            .unwrap_or(std::cmp::Ordering::Equal)
-            .then_with(|| a.id.cmp(&b.id))
-    });
-    for sheet in sheets {
-        sheet_order.push((instance.page.id.clone(), sheet.id.clone(), path.clone()));
-        if let Some(child) = instance
-            .child_ids
-            .get(&sheet.id)
-            .and_then(|id| by_id.get(id.as_str()))
-        {
-            walk_sheets(child, by_id, paths_by_page, sheet_order);
-        }
-    }
-}
-
-fn page_mut<'a>(document: &'a mut SchDocument, page_id: &str) -> Result<&'a mut SchPage> {
-    document
-        .pages
-        .iter_mut()
-        .find(|page| page.id == page_id)
-        .with_context(|| format!("page {page_id} is not present in the document"))
-}
-
-fn sheet_mut<'a>(
-    document: &'a mut SchDocument,
-    page_id: &str,
-    sheet_id: &str,
-) -> Result<&'a mut Sheet> {
-    page_mut(document, page_id)?
-        .items
-        .iter_mut()
-        .find_map(|item| match item {
-            SchItem::Sheet(sheet) if sheet.id == sheet_id => Some(sheet.as_mut()),
-            _ => None,
-        })
-        .with_context(|| format!("sheet {sheet_id} is not present on page {page_id}"))
 }
 
 /// The root page number from `(sheet_instances (path "/" (page "N")))`.

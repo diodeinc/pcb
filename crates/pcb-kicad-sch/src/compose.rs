@@ -37,33 +37,6 @@ const PLACEMENT_BLOCK_GAP_CELLS: i32 = 4;
 const CONTEXT_LABEL_GAP_CELLS: i32 = 1;
 const CAPACITOR_BANK_BUS_OFFSET_CELLS: f64 = 2.0;
 
-/// The project name symbol instances are recorded under. Documents that never
-/// went through a project file (new or in-memory) use the root schematic's
-/// stem, and a reopened in-memory page keeps whatever its instances already say.
-fn project_name(document: &SchDocument) -> String {
-    if !document.project_name.is_empty() {
-        return document.project_name.clone();
-    }
-    let root = document
-        .root_page_ids
-        .first()
-        .and_then(|id| document.pages.iter().find(|page| &page.id == id));
-    root.and_then(|page| page.file_name.as_deref())
-        .and_then(|name| Path::new(name).file_stem())
-        .map(|stem| stem.to_string_lossy().into_owned())
-        .or_else(|| {
-            root?.items.iter().find_map(|item| match item {
-                SchItem::Symbol(symbol) => symbol
-                    .instances
-                    .iter()
-                    .find(|instance| !instance.project.is_empty())
-                    .map(|instance| instance.project.clone()),
-                _ => None,
-            })
-        })
-        .unwrap_or_default()
-}
-
 pub(crate) fn reconcile_document(
     existing: Option<&SchDocument>,
     netlist: &Schematic,
@@ -88,29 +61,28 @@ pub(crate) fn reconcile_document(
     let creating = existing.is_none();
     let mut document = match existing {
         Some(existing) => existing.clone(),
-        None => SchDocument {
-            pages: vec![SchPage {
-                file_name: Some(
-                    root_file_name
-                        .context("initializing a schematic requires a root filename")?
-                        .to_string(),
-                ),
-                // KiCad's trailing root-sheet sections. Existing files keep
-                // whatever they have; a KiCad save adds them if missing.
-                items: [
-                    r#"(sheet_instances (path "/" (page "1")))"#,
-                    "(embedded_fonts no)",
-                ]
-                .into_iter()
-                .map(|source| Ok(SchItem::Unsupported(pcb_sexpr::parse(source)?)))
-                .collect::<Result<_>>()?,
-                ..SchPage::new(root_page_id())
-            }],
-            root_page_ids: vec![root_page_id()],
-            ..SchDocument::default()
-        },
+        None => {
+            let root_file_name =
+                root_file_name.context("initializing a schematic requires a root filename")?;
+            SchDocument {
+                pages: vec![SchPage {
+                    file_name: Some(root_file_name.to_string()),
+                    // KiCad's trailing root-sheet sections. Existing files keep
+                    // whatever they have; a KiCad save adds them if missing.
+                    items: [
+                        r#"(sheet_instances (path "/" (page "1")))"#,
+                        "(embedded_fonts no)",
+                    ]
+                    .into_iter()
+                    .map(|source| Ok(SchItem::Unsupported(pcb_sexpr::parse(source)?)))
+                    .collect::<Result<_>>()?,
+                    ..SchPage::new(root_page_id())
+                }],
+                root_page_ids: vec![root_page_id()],
+                ..SchDocument::default()
+            }
+        }
     };
-    let project_name = project_name(&document);
     if document.pages.is_empty() {
         bail!("KiCad schematic project has no pages");
     }
@@ -365,6 +337,15 @@ pub(crate) fn reconcile_document(
         )?;
     }
 
+    // KiCad pairs a root schematic only with the same-stem project (see
+    // `apply_linked_schematic`), so the root file names the project.
+    let project_name = document
+        .root_page_ids
+        .first()
+        .and_then(|id| document.pages.iter().find(|page| &page.id == id))
+        .and_then(|root| Path::new(root.file_name.as_deref()?).file_stem())
+        .map(|stem| stem.to_string_lossy().into_owned())
+        .unwrap_or_default();
     hierarchy::sync_instances(&mut document, &project_slots, &project_name)?;
 
     // Cleanup is a whole-document concern; a scoped repair must not

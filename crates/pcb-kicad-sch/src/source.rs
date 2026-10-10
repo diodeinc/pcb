@@ -39,8 +39,14 @@ pub fn patch_page_source(source: &str, desired_page: &SchPage) -> Result<Option<
 
     // New nodes go where KiCad would save them: before the next desired node
     // the source already has, else before the trailing sections.
-    let mut insertions = BTreeMap::<usize, Vec<String>>::new();
     let mut pending = Vec::new();
+    let mut insert = |at: usize, nodes: &mut Vec<String>| {
+        let text = nodes
+            .drain(..)
+            .map(|node| format!("\t{node}\n"))
+            .collect::<String>();
+        patches.replace_raw(pcb_sexpr::Span::new(at, at), text);
+    };
     for node in &desired_root
         .as_list()
         .context("expected kicad_sch root list")?[1..]
@@ -49,35 +55,22 @@ pub fn patch_page_source(source: &str, desired_page: &SchPage) -> Result<Option<
             continue;
         };
         match source_nodes.get(&key) {
-            Some(source_node) if !pending.is_empty() => insertions
-                .entry(line_start(source, source_node.span.start))
-                .or_default()
-                .append(&mut pending),
+            Some(source_node) if !pending.is_empty() => {
+                insert(line_start(source, source_node.span.start), &mut pending)
+            }
             Some(_) => {}
             None => pending.push(format_node(node)),
         }
     }
     if !pending.is_empty() {
-        let insertion = trailing_section_start(&source_root)?.unwrap_or(
+        let end = trailing_section_start(&source_root)?.unwrap_or(
             source_root
                 .span
                 .end
                 .checked_sub(1)
                 .context("schematic root has an invalid span")?,
         );
-        insertions
-            .entry(line_start(source, insertion))
-            .or_default()
-            .append(&mut pending);
-    }
-    for (at, nodes) in insertions {
-        let mut text = String::new();
-        for node in nodes {
-            text.push('\t');
-            text.push_str(&node);
-            text.push('\n');
-        }
-        patches.replace_raw(pcb_sexpr::Span::new(at, at), text);
+        insert(line_start(source, end), &mut pending);
     }
 
     if patches.is_empty() {
@@ -105,19 +98,24 @@ fn format_node(node: &Sexpr) -> String {
         .replace('\n', "\n\t")
 }
 
+/// The start of `offset`'s line when only indentation precedes it, else
+/// `offset` itself (compact sources keep several nodes on one line).
 fn line_start(source: &str, offset: usize) -> usize {
-    source[..offset].rfind('\n').map_or(0, |index| index + 1)
+    let start = source[..offset].rfind('\n').map_or(0, |index| index + 1);
+    if source[start..offset].trim().is_empty() {
+        start
+    } else {
+        offset
+    }
 }
 
-/// `span` widened to whole lines when only indentation surrounds it.
+/// `span` widened to its whole lines when only indentation surrounds it.
 fn line_span(source: &str, span: pcb_sexpr::Span) -> pcb_sexpr::Span {
     let start = line_start(source, span.start);
     let end = source[span.end..]
         .find('\n')
-        .map(|index| span.end + index + 1)
-        .unwrap_or(source.len());
-    let blank = |text: &str| text.chars().all(|c| c == ' ' || c == '\t');
-    if blank(&source[start..span.start]) && blank(source[span.end..end].trim_end_matches('\n')) {
+        .map_or(source.len(), |index| span.end + index + 1);
+    if source[span.end..end].trim().is_empty() {
         pcb_sexpr::Span::new(start, end)
     } else {
         span

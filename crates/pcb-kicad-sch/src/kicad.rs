@@ -1577,6 +1577,12 @@ fn label_to_sexpr(label: &Label) -> Sexpr {
 }
 
 fn field_to_sexpr(field: &SymbolField) -> Sexpr {
+    property_to_sexpr(field, false)
+}
+
+/// KiCad writes `hide` before `show_name` on a schematic property and after
+/// `do_not_autoplace` on a library property.
+fn property_to_sexpr(field: &SymbolField, library: bool) -> Sexpr {
     let mut items = vec![Sexpr::symbol("property")];
     if field.private {
         items.push(Sexpr::symbol("private"));
@@ -1591,21 +1597,21 @@ fn field_to_sexpr(field: &SymbolField) -> Sexpr {
             angle_to_sexpr(field.rotation_deg.rem_euclid(360.0)),
         ]),
     ]);
-
-    if field.hidden || is_internal_kicad_metadata_property(&field.name) {
-        items.push(Sexpr::list(vec![
-            Sexpr::symbol("hide"),
-            Sexpr::symbol("yes"),
-        ]));
-    }
-    items.extend([
+    let hide = (field.hidden || is_internal_kicad_metadata_property(&field.name))
+        .then(|| bool_property_to_sexpr("hide", true));
+    let flags = [
         bool_property_to_sexpr("show_name", field.show_name),
         bool_property_to_sexpr("do_not_autoplace", field.do_not_autoplace),
-        text_effects_to_sexpr(&field.effects, field.justify),
-    ]);
-
+    ];
+    if library {
+        items.extend(flags);
+        items.extend(hide);
+    } else {
+        items.extend(hide);
+        items.extend(flags);
+    }
+    items.push(text_effects_to_sexpr(&field.effects, field.justify));
     items.extend(field.unsupported.iter().cloned());
-
     Sexpr::list(items)
 }
 
@@ -1638,81 +1644,25 @@ fn library_to_sexpr(library: &SymbolLibrary) -> Sexpr {
 }
 
 fn normalize_internal_metadata_properties(sexpr: &mut Sexpr) {
+    if sexpr.as_list().and_then(list_tag) == Some("property") {
+        // Library properties round-trip through the field model so that they
+        // serialize the way KiCad 10 writes them however the source spelled
+        // `hide`; metadata properties are always hidden.
+        if let Some(field) = SexprList::from_sexpr(sexpr).and_then(|list| parse_property(list).ok())
+        {
+            *sexpr = property_to_sexpr(&field, true);
+        }
+        return;
+    }
     let SexprKind::List(items) = &mut sexpr.kind else {
         return;
     };
-
-    if list_tag(items) == Some("property") {
-        canonicalize_property_children(items);
-    }
-
     for item in items.iter_mut() {
         normalize_internal_metadata_properties(item);
     }
-
     if list_tag(items) == Some("symbol") {
         canonicalize_symbol_children(items);
     }
-}
-
-/// KiCad writes a library property as at, show_name, do_not_autoplace, hide
-/// (only when hidden), effects. Older libraries mark hidden fields with a bare
-/// `hide` atom or a `hide` inside `effects`; metadata fields are always hidden.
-fn canonicalize_property_children(items: &mut Vec<Sexpr>) {
-    let Some(name) = property_name(items) else {
-        return;
-    };
-    let mut hidden = is_internal_kicad_metadata_property(name);
-    let first_child = if items.get(1).and_then(Sexpr::as_atom) == Some("private") {
-        4
-    } else {
-        3
-    };
-    if items.len() < first_child {
-        return;
-    }
-    let mut at = None;
-    let mut show_name = None;
-    let mut do_not_autoplace = None;
-    let mut effects = None;
-    let mut rest = Vec::new();
-    for mut child in items.split_off(first_child) {
-        if let Some(flag) = hide_flag(&child) {
-            hidden |= flag;
-            continue;
-        }
-        match child.as_list().and_then(list_tag) {
-            Some("at") => at = Some(child),
-            Some("show_name") => show_name = Some(child),
-            Some("do_not_autoplace") => do_not_autoplace = Some(child),
-            Some("effects") => {
-                let children = child.as_list_mut().expect("effects is a list");
-                hidden |= children.iter().any(|item| hide_flag(item) == Some(true));
-                children.retain(|item| hide_flag(item).is_none());
-                effects = Some(child);
-            }
-            _ => rest.push(child),
-        }
-    }
-    items.extend(at);
-    items.push(show_name.unwrap_or_else(|| bool_property_to_sexpr("show_name", false)));
-    items.push(
-        do_not_autoplace.unwrap_or_else(|| bool_property_to_sexpr("do_not_autoplace", false)),
-    );
-    if hidden {
-        items.push(bool_property_to_sexpr("hide", true));
-    }
-    items.extend(effects);
-    items.extend(rest);
-}
-
-/// `hide`, `(hide)`, `(hide yes)` or `(hide no)`.
-fn hide_flag(item: &Sexpr) -> Option<bool> {
-    if item.as_atom() == Some("hide") {
-        return Some(true);
-    }
-    let items = item.as_list()?;
-    (list_tag(items) == Some("hide")).then(|| items.get(1).and_then(atom_bool).unwrap_or(true))
 }
 
 /// KiCad writes a library symbol as its header attributes, then properties,
