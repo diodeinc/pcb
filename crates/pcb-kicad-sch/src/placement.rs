@@ -346,20 +346,22 @@ pub fn off_page_warnings(document: &SchDocument) -> Result<Vec<String>> {
         let Ok((width, height)) = paper_dimensions(&page.paper) else {
             continue;
         };
-        let (mut max_x, mut max_y) = (width, height);
+        let mut extent = Bounds::from_points([Point::default(), Point::new(width, height)])
+            .expect("a page has two corners");
         for item in &page.items {
             if let SchItem::Symbol(symbol) = item
                 && let Some(definition) = page.library.definitions.get(symbol.library_key())
                 && let Some(bounds) = symbol_visual_bounds(symbol, definition)?
             {
-                max_x = max_x.max(bounds.max_x);
-                max_y = max_y.max(bounds.max_y);
+                extent.union(bounds);
             }
         }
-        if max_x > width || max_y > height {
+        if extent.width() > width || extent.height() > height {
             warnings.push(format!(
-                "schematic sheet '{}' has symbols outside its {width:.0}×{height:.0} mm page; they extend to {max_x:.0}×{max_y:.0} mm",
+                "schematic sheet '{}' has symbols outside its {width:.0}×{height:.0} mm page; page and symbols span {:.0}×{:.0} mm",
                 page.file_name.as_deref().unwrap_or(&page.id),
+                extent.width(),
+                extent.height(),
             ));
         }
     }
