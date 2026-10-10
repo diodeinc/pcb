@@ -139,7 +139,8 @@ impl fmt::Display for BumpStrategy {
 #[derive(Args, Debug)]
 #[command(about = "Publish packages or board releases")]
 pub struct PublishArgs {
-    /// Check a board's release preflight and print JSON with the version it would publish, without publishing
+    /// Print JSON without publishing: a board's release preflight and version, or each
+    /// package's next version and tag (bumps are inferred unless --bump is given)
     #[arg(long, conflicts_with_all = ["force", "no_push", "no_build"])]
     pub check: bool,
 
@@ -471,10 +472,6 @@ pub fn execute(args: PublishArgs) -> Result<()> {
         return publish_board(&path, &args);
     }
 
-    if args.check {
-        bail!("--check requires an explicit board .zen target");
-    }
-
     // Otherwise, publish packages
     publish_packages(&path, &args)
 }
@@ -748,7 +745,7 @@ fn collect_unpublishable_manifest_entries(manifest_path: &Path, manifest: &PcbTo
 
 /// Publish dirty packages in the workspace
 fn publish_packages(start_path: &Path, args: &PublishArgs) -> Result<()> {
-    if !args.force && std::env::var("CI").is_err() {
+    if !args.check && !args.force && std::env::var("CI").is_err() {
         bail!(
             "Package publishing is only supported in CI.\nUse --force to publish manually (only if you know what you're doing)."
         );
@@ -756,11 +753,19 @@ fn publish_packages(start_path: &Path, args: &PublishArgs) -> Result<()> {
 
     let file_provider = DefaultFileProvider::new();
     let workspace_root = find_workspace_root(&file_provider, start_path)?;
-    let remote = resolve_remote(&workspace_root, args.force)?;
+    let remote = if args.check {
+        resolve_fetch_remote(&workspace_root)?
+    } else {
+        resolve_remote(&workspace_root, args.force)?
+    };
 
     eprintln!("Syncing with {}...", remote.cyan());
-    git::fetch_tags(&workspace_root, &remote)?;
-    if !args.force {
+    if args.check {
+        git::fetch_tags_without_pruning(&workspace_root, &remote)?;
+    } else {
+        git::fetch_tags(&workspace_root, &remote)?;
+    }
+    if !args.check && !args.force {
         git::fetch_branch(&workspace_root, &remote, "main")?;
         preflight_checks(&workspace_root, &remote)?;
     }
@@ -787,6 +792,9 @@ fn publish_packages(start_path: &Path, args: &PublishArgs) -> Result<()> {
     // Expand to include packages that depend on dirty packages (transitively)
     // These need to be published because their pcb.toml will be bumped
     let dirty_urls = expand_dirty_set(&workspace, &directly_dirty);
+    if args.check {
+        return print_publish_plan(&workspace, &dirty_urls, args.bump);
+    }
 
     if !args.no_build {
         // Packages can read only their own files, declared dependencies and the workspace manifest.
@@ -893,6 +901,43 @@ fn publish_packages(start_path: &Path, args: &PublishArgs) -> Result<()> {
     }
 
     guard.disarm();
+    Ok(())
+}
+
+/// Print, as JSON, the version and tag each package would be published at.
+fn print_publish_plan(
+    workspace: &WorkspaceInfo,
+    dirty_urls: &HashSet<String>,
+    bump: Option<BumpType>,
+) -> Result<()> {
+    if bump == Some(BumpType::Interactive) {
+        bail!("--check needs --bump=patch, --bump=minor, --bump=major or --bump=infer");
+    }
+    let waves = compute_publish_waves(workspace, dirty_urls)?;
+    let all_tags = git::list_all_tags_vec(&workspace.root);
+    let bumps = match bump.and_then(BumpType::release) {
+        Some(bump) => uniform_bump_map(&waves, bump),
+        None => infer_all_bumps(workspace, &waves, &all_tags),
+    };
+    let packages = waves
+        .into_iter()
+        .flat_map(|mut wave| {
+            wave.sort();
+            wave
+        })
+        .map(|url| {
+            let pkg = &workspace.packages[&url];
+            let current = current_package_version(pkg, workspace.path(), &all_tags);
+            let next = compute_next_version(current.as_ref(), bumps[&url]);
+            serde_json::json!({
+                "path": pkg.rel_path.to_string_lossy(),
+                "current": current.map(|version| version.to_string()),
+                "version": next.to_string(),
+                "tag": compute_tag_name(pkg, &next, workspace),
+            })
+        })
+        .collect::<Vec<_>>();
+    println!("{}", serde_json::json!({ "packages": packages }));
     Ok(())
 }
 
