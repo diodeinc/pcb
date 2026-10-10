@@ -54,8 +54,8 @@ fn deleted_source_sheet_restores_as_unplaced_and_reconciles_without_losing_child
         root_page_ids: vec![baseline.pages[root_index].id.clone()],
         ..Default::default()
     }
-    .to_kicad_sch()
-    .unwrap();
+    .pages[0]
+        .to_kicad_sch();
     let mut source_without_sheet = baseline.pages[root_index].clone();
     source_without_sheet
         .items

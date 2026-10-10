@@ -119,7 +119,7 @@ fn apply_renumbers_instance_references_after_component_insertion_and_removal() {
             symbol.fields.get_mut("Reference").unwrap().at.y += 2.54;
             symbol.fields.get_mut("Reference").unwrap().hidden = true;
         }
-        let source = project.document.to_kicad_sch().unwrap();
+        let source = project.document.pages[0].to_kicad_sch();
         fs::write(&project.schematic_files[0], &source).unwrap();
         let original = KicadProject::load(&project_dir).unwrap().document;
 
@@ -231,8 +231,12 @@ fn apply_repairs_stale_child_instance_reference_without_touching_other_paths() {
         ))
         .unwrap(),
     );
-    for file in project.document.to_kicad_sch_files() {
-        fs::write(project_dir.join(file.file_name.unwrap()), file.content).unwrap();
+    for page in &project.document.pages {
+        fs::write(
+            project_dir.join(page.file_name.as_ref().unwrap()),
+            page.to_kicad_sch(),
+        )
+        .unwrap();
     }
     let original = KicadProject::load(&project_dir).unwrap();
     let sources = original
@@ -517,11 +521,11 @@ fn apply_preserves_drawings_on_obsolete_pages_but_prunes_orphan_electrical_notat
         let child = project_dir.join("FILTER_A.kicad_sch");
         let edited = project
             .document
-            .to_kicad_sch_files()
-            .into_iter()
-            .find(|file| file.file_name.as_deref() == Some("FILTER_A.kicad_sch"))
+            .pages
+            .iter()
+            .find(|page| page.file_name.as_deref() == Some("FILTER_A.kicad_sch"))
             .unwrap();
-        fs::write(&child, edited.content).unwrap();
+        fs::write(&child, edited.to_kicad_sch()).unwrap();
 
         let replacement = linked_fixture(&project_dir);
         let applied = apply_linked_schematic(&replacement).unwrap().unwrap();
@@ -947,8 +951,12 @@ fn initializes_each_linked_module_instance_as_its_own_child_sheet() {
             .analysis
             .is_equivalent()
     );
-    for file in edited.document.to_kicad_sch_files() {
-        fs::write(edited.directory.join(file.file_name.unwrap()), file.content).unwrap();
+    for page in &edited.document.pages {
+        fs::write(
+            edited.directory.join(page.file_name.as_ref().unwrap()),
+            page.to_kicad_sch(),
+        )
+        .unwrap();
     }
     let before = created
         .schematic_files
@@ -984,10 +992,10 @@ fn adds_an_uninitialized_linked_module_to_an_existing_project() {
             !matches!(item, SchItem::Sheet(sheet) if sheet.file_name() == "FILTER_B.kicad_sch")
         });
     }
-    for file in incomplete.document.to_kicad_sch_files() {
+    for page in &incomplete.document.pages {
         fs::write(
-            incomplete.directory.join(file.file_name.unwrap()),
-            file.content,
+            incomplete.directory.join(page.file_name.as_ref().unwrap()),
+            page.to_kicad_sch(),
         )
         .unwrap();
     }
@@ -1085,7 +1093,7 @@ fn preserves_user_symbol_and_equivalent_label_geometry() {
     let expected_spin = label.spin;
     fs::write(
         &project.schematic_files[0],
-        project.document.to_kicad_sch().unwrap(),
+        project.document.pages[0].to_kicad_sch(),
     )
     .unwrap();
 
@@ -1167,7 +1175,7 @@ fn materializes_an_isolated_not_connected_pin_and_then_makes_no_changes() {
         })
         .unwrap();
     marker.id = pcb_kicad_sch::deterministic_uuid("user-owned-no-connect");
-    let user_source = without_marker.document.to_kicad_sch().unwrap();
+    let user_source = without_marker.document.pages[0].to_kicad_sch();
     fs::write(&created.schematic_files[0], &user_source).unwrap();
     assert!(!apply_linked_schematic(&netlist).unwrap().unwrap().changed);
     assert_eq!(
@@ -1180,7 +1188,7 @@ fn materializes_an_isolated_not_connected_pin_and_then_makes_no_changes() {
         .retain(|item| !matches!(item, SchItem::NoConnect(_)));
     fs::write(
         &created.schematic_files[0],
-        without_marker.document.to_kicad_sch().unwrap(),
+        without_marker.document.pages[0].to_kicad_sch(),
     )
     .unwrap();
     let missing_inspection = inspect_schematic(&without_marker.document, &netlist).unwrap();
@@ -1297,7 +1305,7 @@ fn preserves_equivalent_user_connectivity_without_normalizing_labels() {
     }));
     fs::write(
         &project.schematic_files[0],
-        project.document.to_kicad_sch().unwrap(),
+        project.document.pages[0].to_kicad_sch(),
     )
     .unwrap();
 
@@ -1401,7 +1409,7 @@ fn projects_the_exact_symbol_and_library_definition_set() {
         .insert(unused_definition.lib_id.clone(), unused_definition);
     fs::write(
         &project.schematic_files[0],
-        project.document.to_kicad_sch().unwrap(),
+        project.document.pages[0].to_kicad_sch(),
     )
     .unwrap();
 
@@ -1625,7 +1633,7 @@ fn repairs_component_identity_without_rebuilding_connectivity() {
     symbol.id = "00000000-0000-0000-0000-000000000000".to_string();
     fs::write(
         project_dir.join("simple.kicad_sch"),
-        broken.to_kicad_sch().unwrap(),
+        broken.pages[0].to_kicad_sch(),
     )
     .unwrap();
 
@@ -1673,7 +1681,7 @@ fn repairs_a_disconnected_net_without_removing_remaining_wires() {
         .collect::<Vec<_>>();
     fs::write(
         project_dir.join("simple.kicad_sch"),
-        broken.to_kicad_sch().unwrap(),
+        broken.pages[0].to_kicad_sch(),
     )
     .unwrap();
 
@@ -1714,8 +1722,12 @@ fn apply_repairs_rotated_mirrored_physical_pin_connectivity() {
         .expect("managed multi-pin symbol");
     symbol.rotation = Rotation::Deg270;
     symbol.mirror = Some(MirrorAxis::Y);
-    for file in project.document.to_kicad_sch_files() {
-        fs::write(project_dir.join(file.file_name.unwrap()), file.content).unwrap();
+    for page in &project.document.pages {
+        fs::write(
+            project_dir.join(page.file_name.as_ref().unwrap()),
+            page.to_kicad_sch(),
+        )
+        .unwrap();
     }
 
     let applied = apply_linked_schematic(&netlist).unwrap().unwrap();
@@ -1763,7 +1775,7 @@ fn removes_only_the_driver_of_an_unexpected_net() {
         .push(SchItem::Label(unexpected));
     fs::write(
         &project.schematic_files[0],
-        project.document.to_kicad_sch().unwrap(),
+        project.document.pages[0].to_kicad_sch(),
     )
     .unwrap();
 
@@ -1821,7 +1833,7 @@ fn removes_a_short_without_rebuilding_unaffected_nets() {
     }));
     fs::write(
         &project.schematic_files[0],
-        project.document.to_kicad_sch().unwrap(),
+        project.document.pages[0].to_kicad_sch(),
     )
     .unwrap();
 
@@ -1896,7 +1908,7 @@ fn ambiguous_short_uses_the_same_repair_as_the_shared_issue_planner() {
     .unwrap();
     fs::write(
         &project.schematic_files[0],
-        project.document.to_kicad_sch().unwrap(),
+        project.document.pages[0].to_kicad_sch(),
     )
     .unwrap();
 
@@ -1942,7 +1954,7 @@ fn refreshes_placed_pin_instances_from_the_netlist_symbol_definition() {
     });
     fs::write(
         &project.schematic_files[0],
-        project.document.to_kicad_sch().unwrap(),
+        project.document.pages[0].to_kicad_sch(),
     )
     .unwrap();
 

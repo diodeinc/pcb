@@ -50,7 +50,7 @@ fn cache_alias_lookup_is_distinct_from_library_identity() {
         .local_label("ALIAS_NET", (15.0, 0.0));
     let mut document = builder.build();
     managed_mut(&mut document, "ALIAS").lib_name = Some("Part_1".into());
-    let source = document.to_kicad_sch().unwrap();
+    let source = document.pages[0].to_kicad_sch();
     let mut reopened = SchDocument::from_kicad_sch(&source).unwrap();
     let alias = managed(&reopened, "ALIAS");
     assert_eq!(alias.lib_id, "Test:Part");
@@ -121,7 +121,7 @@ fn save_apply_reopen_preserves_distinct_native_alias_presentation() {
             .library
             .definitions
             .insert(alias.lib_id.clone(), alias.clone());
-        let source = saved.to_kicad_sch().unwrap();
+        let source = saved.pages[0].to_kicad_sch();
         let saved = SchDocument::from_kicad_sch(&source).unwrap();
         let plan = plan_reconciliation(Some(&saved), &netlist, "Alias.kicad_sch").unwrap();
         assert!(plan.inspection_after().analysis.is_equivalent());
@@ -203,7 +203,7 @@ fn refreshing_one_shared_alias_does_not_change_the_other_instance() {
                 .iter()
                 .any(|pin| pin.name == "CHANGED")
         );
-        let source = applied.to_kicad_sch().unwrap();
+        let source = applied.pages[0].to_kicad_sch();
         let reopened = SchDocument::from_kicad_sch(&source).unwrap();
         let second = plan_reconciliation(Some(&reopened), &netlist, "Alias.kicad_sch").unwrap();
         assert!(second.is_empty(), "{:#?}", second.edits());
@@ -276,7 +276,7 @@ fn stale_alias_pin_or_unit_interfaces_are_refreshed() {
                 .definitions
                 .contains_key("Native_1")
         );
-        let source = applied.to_kicad_sch().unwrap();
+        let source = applied.pages[0].to_kicad_sch();
         let reopened = SchDocument::from_kicad_sch(&source).unwrap();
         let second = plan_reconciliation(Some(&reopened), &netlist, "Alias.kicad_sch").unwrap();
         assert!(second.is_empty());
@@ -358,7 +358,7 @@ fn native_netlist_export_preserves_alias_pin_partitions_after_two_applies() {
             .collect()
     })
     .collect();
-    let mut source = document.to_kicad_sch().unwrap();
+    let mut source = document.pages[0].to_kicad_sch();
     for apply in 0..3 {
         std::fs::write(&file, &source).unwrap();
         let exported = std::process::Command::new("kicad-cli")

@@ -19,19 +19,6 @@ pub const KICAD_SCH_VERSION: i64 = 20260306;
 pub const GENERATOR: &str = "diode";
 pub const GENERATOR_VERSION: &str = env!("CARGO_PKG_VERSION");
 
-#[derive(Debug, Clone, Copy)]
-pub struct KicadSchSource<'a> {
-    pub file_name: Option<&'a str>,
-    pub content: &'a str,
-    pub is_root: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct KicadSchFile {
-    pub file_name: Option<String>,
-    pub content: String,
-}
-
 impl SchDocument {
     pub fn from_kicad_sch(content: &str) -> Result<Self> {
         let page = parse_kicad_sch_page(None, content)?;
@@ -40,43 +27,6 @@ impl SchDocument {
             pages: vec![page],
             ..Self::default()
         })
-    }
-
-    pub fn from_kicad_sch_files<'a>(
-        files: impl IntoIterator<Item = KicadSchSource<'a>>,
-    ) -> Result<Self> {
-        let mut document = Self::default();
-
-        for file in files {
-            let page = parse_kicad_sch_page(file.file_name, file.content)?;
-            if file.is_root {
-                document.root_page_ids.push(page.id.clone());
-            }
-            document.pages.push(page);
-        }
-
-        Ok(document)
-    }
-
-    pub fn to_kicad_sch(&self) -> Result<String> {
-        let [page] = self.pages.as_slice() else {
-            bail!(
-                "to_kicad_sch requires exactly one page, found {}",
-                self.pages.len()
-            );
-        };
-
-        Ok(page.to_kicad_sch())
-    }
-
-    pub fn to_kicad_sch_files(&self) -> Vec<KicadSchFile> {
-        self.pages
-            .iter()
-            .map(|page| KicadSchFile {
-                file_name: page.file_name.clone(),
-                content: page.to_kicad_sch(),
-            })
-            .collect()
     }
 }
 
@@ -2127,7 +2077,7 @@ mod tests {
             crate::patch_page_source(source, &document.pages[0]).unwrap(),
             None
         );
-        let exported = document.to_kicad_sch().unwrap();
+        let exported = document.pages[0].to_kicad_sch();
         assert!(exported.contains("(version 20260306)"));
         assert_eq!(SchDocument::from_kicad_sch(&exported).unwrap(), document);
     }
@@ -2160,7 +2110,7 @@ mod tests {
         };
         assert_eq!(symbol(&modern), "~");
         assert_eq!(symbol(&legacy), "");
-        let exported = legacy.to_kicad_sch().unwrap();
+        let exported = legacy.pages[0].to_kicad_sch();
         assert!(exported.contains("(name \"\")"));
         assert!(exported.contains("(number \"\")"));
         assert!(exported.contains("(text \"~\""));
@@ -2182,7 +2132,7 @@ mod tests {
             panic!("expected symbol");
         };
         assert_eq!(symbol.body_style, 2);
-        let exported = document.to_kicad_sch().unwrap();
+        let exported = document.pages[0].to_kicad_sch();
         assert!(exported.contains("(body_styles demorgan)"));
         assert!(exported.contains("(body_style 2)"));
         assert!(!exported.contains("(convert"));
@@ -2291,7 +2241,7 @@ mod tests {
         assert_eq!(directive.at, Point::new(80.0, 20.0));
         assert!(directive.fields.contains_key("Net Class"));
 
-        let formatted = document.to_kicad_sch().expect("format schematic");
+        let formatted = document.pages[0].to_kicad_sch();
         let reparsed = SchDocument::from_kicad_sch(&formatted).expect("reparse schematic");
 
         assert_eq!(reparsed.pages[0].items, document.pages[0].items);
@@ -2318,7 +2268,7 @@ mod tests {
         label.effects.font_size = TextSize::new(2.0, 2.0);
         label.effects.bold = true;
 
-        let formatted = document.to_kicad_sch().unwrap();
+        let formatted = document.pages[0].to_kicad_sch();
         let reparsed = SchDocument::from_kicad_sch(&formatted).unwrap();
         let SchItem::Label(label) = &reparsed.pages[0].items[3] else {
             panic!("expected label");
@@ -2339,7 +2289,7 @@ mod tests {
         };
         assert_eq!(symbol.pins[0].alternate.as_deref(), Some("ALT"));
 
-        let reparsed = SchDocument::from_kicad_sch(&document.to_kicad_sch().unwrap()).unwrap();
+        let reparsed = SchDocument::from_kicad_sch(&document.pages[0].to_kicad_sch()).unwrap();
         assert_eq!(reparsed, document);
     }
 
@@ -2500,7 +2450,7 @@ mod tests {
             "show_name"
         ));
 
-        let formatted = document.to_kicad_sch().expect("format KiCad 10 fixture");
+        let formatted = document.pages[0].to_kicad_sch();
         assert!(formatted.contains(&format!("(generator_version \"{GENERATOR_VERSION}\")")));
         let reparsed = SchDocument::from_kicad_sch(&formatted).expect("reparse KiCad 10 fixture");
         assert_eq!(reparsed, document);
@@ -2546,7 +2496,7 @@ mod tests {
             |item| matches!(item, SchItem::Sheet(sheet) if sheet.file_name() == "aSheet.kicad_sch" && sheet.pins.len() == 2)
         ));
 
-        let formatted = document.to_kicad_sch().expect("format KiCad 10 fixture");
+        let formatted = document.pages[0].to_kicad_sch();
         let reparsed = SchDocument::from_kicad_sch(&formatted).expect("reparse KiCad 10 fixture");
         assert_eq!(reparsed, document);
     }
@@ -2586,7 +2536,7 @@ mod tests {
         assert!(label.fields_autoplaced);
         assert!(label.fields.is_empty());
 
-        let formatted = document.to_kicad_sch().expect("format schematic");
+        let formatted = document.pages[0].to_kicad_sch();
         let reparsed = SchDocument::from_kicad_sch(&formatted).expect("reparse schematic");
         let label = reparsed.pages[0]
             .items
@@ -2619,7 +2569,7 @@ mod tests {
         assert!(symbol.field("ki_keywords").unwrap().hidden);
         assert!(symbol.field("ki_fp_filters").unwrap().hidden);
 
-        let formatted = document.to_kicad_sch().expect("format schematic");
+        let formatted = document.pages[0].to_kicad_sch();
         let root = parse(&formatted).expect("parse formatted schematic");
         let items = root.as_list().expect("formatted schematic root");
         let symbol = items
@@ -2644,7 +2594,7 @@ mod tests {
             }
         );
 
-        let formatted = document.to_kicad_sch().expect("format schematic");
+        let formatted = document.pages[0].to_kicad_sch();
         let formatted_root = parse(&formatted).expect("parse formatted schematic");
         let formatted_items = formatted_root.as_list().expect("formatted schematic root");
         let paper = find_child(formatted_items, "paper").expect("formatted paper");
@@ -2655,7 +2605,7 @@ mod tests {
     #[test]
     fn exports_document_coordinates_as_kicad_page_coordinates() {
         let document = SchDocument::from_kicad_sch(SAMPLE).expect("parse schematic");
-        let formatted = document.to_kicad_sch().expect("format schematic");
+        let formatted = document.pages[0].to_kicad_sch();
         let root = parse(&formatted).expect("parse formatted schematic");
         let items = root.as_list().expect("formatted schematic root");
 
@@ -2682,32 +2632,6 @@ mod tests {
             .expect("formatted wire point");
         assert_eq!(xy.get(1).and_then(atom_f64), Some(10.0));
         assert_eq!(xy.get(2).and_then(atom_f64), Some(20.0));
-    }
-
-    #[test]
-    fn supports_multiple_page_files() {
-        let document = SchDocument::from_kicad_sch_files([
-            KicadSchSource {
-                file_name: Some("a.kicad_sch"),
-                content: SAMPLE,
-                is_root: true,
-            },
-            KicadSchSource {
-                file_name: Some("b.kicad_sch"),
-                content: &SAMPLE.replace("page-1", "page-2"),
-                is_root: false,
-            },
-        ])
-        .expect("parse pages");
-
-        assert_eq!(document.pages.len(), 2);
-        assert_eq!(document.pages[0].file_name.as_deref(), Some("a.kicad_sch"));
-        assert_eq!(document.pages[0].library.definitions.len(), 1);
-        assert_eq!(document.pages[1].library.definitions.len(), 1);
-
-        let files = document.to_kicad_sch_files();
-        assert_eq!(files.len(), 2);
-        assert_eq!(files[1].file_name.as_deref(), Some("b.kicad_sch"));
     }
 
     fn find_property<'a>(items: &'a [Sexpr], name: &str) -> Option<&'a [Sexpr]> {

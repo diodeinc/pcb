@@ -6,7 +6,7 @@ use common::kicad_builder::{KicadBuilder, TestPin};
 use pcb_kicad_sch::{
     SchDocument, SchItem,
     connectivity::{ConnectivityGraph, Terminal},
-    kicad::KicadSchSource,
+    parse_kicad_sch_page,
 };
 
 fn raw(document: &mut SchDocument, page: usize, text: &str) {
@@ -267,13 +267,15 @@ fn aliased_groups_match_members_by_name_across_hierarchy_and_roundtrip() {
     let expected = names(&[&["Parent.CLK", "Child.CLK"], &["Parent.DATA", "Child.DATA"]]);
     assert_eq!(named_groups(&document), expected);
 
-    let files = document.to_kicad_sch_files();
-    let roundtrip = SchDocument::from_kicad_sch_files(files.iter().map(|file| KicadSchSource {
-        file_name: file.file_name.as_deref(),
-        content: &file.content,
-        is_root: file.file_name.as_deref() == Some("root.kicad_sch"),
-    }))
-    .unwrap();
+    let roundtrip = SchDocument {
+        pages: document
+            .pages
+            .iter()
+            .map(|page| parse_kicad_sch_page(page.file_name.as_deref(), &page.to_kicad_sch()))
+            .collect::<anyhow::Result<_>>()
+            .unwrap(),
+        ..document.clone()
+    };
     assert_eq!(named_groups(&roundtrip), expected);
 }
 

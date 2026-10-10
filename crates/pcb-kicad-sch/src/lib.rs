@@ -36,7 +36,7 @@ pub use identity::{
     KiCadUuidPath, ROOT_PAGE_KEY, SymbolSlotKey, UUID_NAMESPACE_URL, canonical_component_path,
     deterministic_page_id, deterministic_uuid, normalize_schematic_path, root_page_id,
 };
-pub use kicad::{KicadSchFile, KicadSchSource, parse_kicad_sch_page};
+pub use kicad::parse_kicad_sch_page;
 pub use model::{
     FieldHorizontalJustify, FieldJustify, FieldVerticalJustify, Graphic, GraphicKind, GraphicText,
     Junction, Label, LabelKind, LabelShape, LabelSpin, MirrorAxis, NoConnect, Paper, PinInstance,
