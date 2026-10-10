@@ -1448,6 +1448,7 @@ fn parses_silk_mask_and_tenting() {
   (property "Value" "10k" (at 0 1.5 90) (layer "B.Fab") (hide yes) (effects (font (size 1 1))))
   (solder_mask_margin 0.1)
   (fp_text user "${REFERENCE}-${VALUE}" (at 0 0 90 unlocked) (layer "B.SilkS") (effects (font (size 0.5 0.5) (thickness 0.08) bold) (justify left top mirror)))
+  (fp_text user "U" (at 0 2 unlocked) (layer "B.SilkS") (effects (font (size 0.5 0.5) (thickness 0.08)) (justify mirror)))
   (fp_line (start -1 -1) (end 1 -1) (stroke (width 0.12) (type solid)) (layer "B.SilkS"))
   (fp_circle (center 0 0) (end 1 0) (stroke (width 0.1) (type solid)) (fill yes) (layer "F.Mask"))
   (pad "1" smd rect (at -1 0 90) (size 1 1.5) (layers "B.Cu" "B.Mask") (solder_mask_margin 0.2))
@@ -1462,9 +1463,9 @@ fn parses_silk_mask_and_tenting() {
     let board = Board::parse(text.as_bytes()).unwrap();
     assert!((board.mask_expansion - 0.0).abs() < 1e-12);
     assert_eq!(board.tent, [false, false]);
-    // Texts: the visible reference, the user text with its variables
+    // Texts: the visible reference, the user texts with variables
     // resolved, and the board text; the hidden value is skipped.
-    assert_eq!(board.texts.len(), 3);
+    assert_eq!(board.texts.len(), 4);
     let reference = &board.texts[0];
     assert_eq!(reference.text, "R1");
     assert_eq!(reference.layer, crate::board::Tech::BackSilk);
@@ -1478,8 +1479,11 @@ fn parses_silk_mask_and_tenting() {
     let user = &board.texts[1];
     assert_eq!(user.text, "R1-10k");
     assert!(user.style.bold && user.style.halign == -1 && user.style.valign == -1);
+    // `unlocked` may follow the coordinates with no angle.
+    assert_eq!(board.texts[2].text, "U");
+    assert!(board.texts[2].style.angle.abs() < 1e-12);
     // The board text at 200 degrees is not kept upright; footprint text is.
-    assert!((board.texts[2].style.angle - 200.0).abs() < 1e-12);
+    assert!((board.texts[3].style.angle - 200.0).abs() < 1e-12);
     // Shapes: the back silk line, the front mask disc, the filled rect.
     assert_eq!(board.shapes.len(), 3);
     assert!(

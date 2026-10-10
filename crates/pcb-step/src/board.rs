@@ -1810,8 +1810,13 @@ fn parse_text<'a>(
         match field {
             "at" => {
                 at = p.xy("text at")?;
-                angle = p.f64_or(0.0)?;
-                if p.atom()? == Some("unlocked") {
+                // `(at x y [angle] [unlocked])`: the angle is optional.
+                let mut rest = p.atom()?;
+                if let Some(a) = rest.and_then(|a| a.parse().ok()) {
+                    angle = a;
+                    rest = p.atom()?;
+                }
+                if rest == Some("unlocked") {
                     keep_upright = false;
                 }
             }
