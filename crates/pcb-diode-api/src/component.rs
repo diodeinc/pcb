@@ -1,5 +1,4 @@
 use anyhow::{Context, Result};
-use clap::Args;
 use colored::Colorize;
 use inquire::{Select, Text};
 use pcb_eda::kicad::metadata::SymbolMetadata;
@@ -9,12 +8,9 @@ use pcb_sexpr::kicad::symbol::{
     symbol_properties,
 };
 use pcb_zen_core::config::find_workspace_root;
-use serde::Serialize;
 use std::fs;
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
-
-use crate::RegistryInfo;
 
 /// Upgrade a .kicad_sym file to the latest version using kicad-cli
 /// Returns Ok(()) if upgrade succeeds or kicad-cli is not available (non-fatal)
@@ -281,52 +277,12 @@ fn generate_zen_file(
         component_name,
         symbol,
         symbol_filename,
-        generated_by: "pcb search",
+        generated_by: "pcb new component",
         include_skip_bom: false,
         include_skip_pos: false,
         skip_bom_default: false,
         skip_pos_default: false,
     })
-}
-
-#[derive(clap::ValueEnum, Debug, Clone, Default)]
-pub enum SearchOutputFormat {
-    #[default]
-    Human,
-    Json,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
-pub enum SearchMode {
-    /// Search the registry for modules/packages
-    #[value(name = "registry:modules")]
-    RegistryModules,
-    /// Search the registry for components
-    #[value(name = "registry:components")]
-    RegistryComponents,
-}
-
-#[derive(Args, Debug)]
-#[command(about = "Search for electronic components")]
-pub struct SearchArgs {
-    /// Search query (MPN, description, keywords)
-    pub query: String,
-
-    /// Output format
-    #[arg(short = 'f', long, value_enum, default_value_t = SearchOutputFormat::Human)]
-    pub format: SearchOutputFormat,
-
-    /// Search mode
-    #[arg(short = 'm', long, value_enum, default_value_t = SearchMode::RegistryModules)]
-    pub mode: SearchMode,
-
-    /// Registry SQLite index to use instead of the cached/downloaded index
-    #[arg(long, value_name = "PATH")]
-    pub registry_index: Option<PathBuf>,
-
-    /// Registry URL/id to search. Can be repeated. Overrides the default registry scope.
-    #[arg(long = "registry", value_name = "REGISTRY")]
-    pub registries: Vec<String>,
 }
 
 /// Files discovered in a local directory for component generation
@@ -640,268 +596,6 @@ pub fn execute_component_from_local_dir(dir: &Path) -> Result<()> {
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let workspace_root = find_workspace_root(&pcb_zen_core::DefaultFileProvider::new(), &cwd)?;
     execute_from_dir(dir, &workspace_root)
-}
-
-pub fn execute(args: SearchArgs) -> Result<()> {
-    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    let workspace_root = find_workspace_root(&pcb_zen_core::DefaultFileProvider::new(), &cwd)?;
-
-    if args.registry_index.is_some() && !args.registries.is_empty() {
-        anyhow::bail!("--registry cannot be used with --registry-index");
-    }
-
-    let client = match args.registry_index {
-        Some(path) => crate::RegistrySearchClient::single(crate::RegistryClient::open_path(&path)?),
-        None => {
-            let Some(scope) = crate::registry::download::resolve_registry_search_scope(
-                &args.registries,
-                Some(&workspace_root),
-            )?
-            else {
-                anyhow::bail!("No registry index available");
-            };
-            crate::RegistrySearchClient::open_scope(scope, false)?
-        }
-    };
-
-    let json = matches!(args.format, SearchOutputFormat::Json);
-    match args.mode {
-        SearchMode::RegistryModules => execute_registry_module_search(&client, &args.query, json),
-        SearchMode::RegistryComponents => {
-            execute_registry_symbol_search(&client, &args.query, json)
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize)]
-struct RegistryModuleCliResult {
-    pub kind: &'static str,
-    pub registry: RegistryInfo,
-    pub url: String,
-    pub name: String,
-    pub version: String,
-    pub description: String,
-    pub entrypoints: Vec<crate::RegistryModuleEntrypoint>,
-    pub dependencies: Vec<String>,
-    pub dependents: Vec<String>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-struct RegistrySymbolCliResult {
-    pub kind: &'static str,
-    pub registry: RegistryInfo,
-    pub url: String,
-    pub name: String,
-    #[serde(rename = "moduleUrl")]
-    pub module_url: String,
-    #[serde(rename = "moduleVersion")]
-    pub module_version: String,
-    pub mpn: String,
-    pub manufacturer: String,
-    pub footprint: String,
-    pub datasheet: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub digikey: Option<crate::DigikeyData>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub availability: Option<pcb_sch::bom::Availability>,
-}
-
-fn execute_registry_module_search(
-    client: &crate::RegistrySearchClient,
-    query: &str,
-    json: bool,
-) -> Result<()> {
-    let hits: Vec<_> = client.search_modules(query).into_iter().take(25).collect();
-
-    if hits.is_empty() {
-        if json {
-            println!("[]");
-        } else {
-            println!("{} No results found for '{}'", "✗".red(), query);
-        }
-        return Ok(());
-    }
-
-    if json {
-        let results: Vec<_> = hits
-            .iter()
-            .filter_map(|hit| {
-                let module = client.get_module_by_hit(hit).ok().flatten()?;
-                let relations = client.get_module_relations_by_hit(hit).unwrap_or_default();
-                Some(RegistryModuleCliResult {
-                    kind: "module",
-                    registry: hit.registry.clone(),
-                    url: module.url.clone(),
-                    name: module.name,
-                    version: module.version,
-                    description: module.description,
-                    entrypoints: module.entrypoints,
-                    dependencies: relations
-                        .dependencies
-                        .into_iter()
-                        .map(|dep| dep.url_with_version())
-                        .collect(),
-                    dependents: relations
-                        .dependents
-                        .into_iter()
-                        .map(|dep| dep.url_with_version())
-                        .collect(),
-                })
-            })
-            .collect();
-        println!("{}", serde_json::to_string_pretty(&results)?);
-        return Ok(());
-    }
-
-    println!(
-        "{} Found {} results for '{}' (registry:modules):\n",
-        "✓".green().bold(),
-        hits.len(),
-        query,
-    );
-    for hit in &hits {
-        println!(
-            "{} {} {}",
-            registry_relative_path(&hit.url, &hit.registry.registry_url).blue(),
-            format!("({})", hit.version).yellow().dimmed(),
-            format!("[{}]", hit.registry.display_name()).dimmed()
-        );
-        println!("  {}", hit.description.dimmed());
-        println!();
-    }
-    Ok(())
-}
-
-fn execute_registry_symbol_search(
-    client: &crate::RegistrySearchClient,
-    query: &str,
-    json: bool,
-) -> Result<()> {
-    let hits: Vec<_> = client.search_symbols(query).into_iter().take(25).collect();
-
-    if hits.is_empty() {
-        if json {
-            println!("[]");
-        } else {
-            println!("{} No results found for '{}'", "✗".red(), query);
-        }
-        return Ok(());
-    }
-
-    let groups: Vec<_> = hits
-        .iter()
-        .map(|hit| hit.availability_key.iter().cloned().collect())
-        .collect();
-    let availability_map = search_availability(&groups);
-
-    if json {
-        let results: Vec<_> = hits
-            .iter()
-            .enumerate()
-            .filter_map(|(idx, hit)| {
-                let symbol = client.get_symbol_by_hit(hit).ok().flatten()?;
-                Some(RegistrySymbolCliResult {
-                    kind: "symbol",
-                    registry: hit.registry.clone(),
-                    url: symbol.url.clone(),
-                    name: symbol.name,
-                    module_url: symbol.module_url,
-                    module_version: symbol.module_version,
-                    mpn: symbol.mpn,
-                    manufacturer: symbol.manufacturer,
-                    footprint: symbol.footprint,
-                    datasheet: symbol.datasheet,
-                    description: symbol.kicad_description,
-                    digikey: symbol.digikey,
-                    availability: availability_map.get(&idx).cloned(),
-                })
-            })
-            .collect();
-        println!("{}", serde_json::to_string_pretty(&results)?);
-        return Ok(());
-    }
-
-    println!(
-        "{} Found {} results for '{}' (registry:components):\n",
-        "✓".green().bold(),
-        hits.len(),
-        query,
-    );
-    for (idx, hit) in hits.iter().enumerate() {
-        println!(
-            "{}",
-            registry_relative_path(&hit.url, &hit.registry.registry_url).green()
-        );
-        println!(
-            "  {} {} {}",
-            hit.mpn,
-            format!("· {}", hit.manufacturer).dimmed(),
-            format!("[{}]", hit.registry.display_name()).dimmed()
-        );
-        if let Some(description) = hit
-            .kicad_description
-            .as_deref()
-            .filter(|description| !description.trim().is_empty())
-        {
-            println!("  {}", description.dimmed());
-        }
-        if let Some(pricing) = availability_map.get(&idx) {
-            print_availability_summary(pricing);
-        }
-        println!();
-    }
-    Ok(())
-}
-
-fn registry_relative_path(url: &str, registry_url: &str) -> String {
-    let registry_url = registry_url.trim_end_matches('/');
-    if let Some(rest) = url.strip_prefix(registry_url) {
-        return rest.trim_start_matches('/').to_string();
-    }
-
-    url.split('/').skip(3).collect::<Vec<_>>().join("/")
-}
-
-fn search_availability(
-    groups: &[Vec<crate::bom::ComponentKey>],
-) -> std::collections::HashMap<usize, pcb_sch::bom::Availability> {
-    if groups.iter().all(Vec::is_empty) {
-        return std::collections::HashMap::new();
-    }
-
-    let Ok(token) = crate::auth::get_api_token() else {
-        return std::collections::HashMap::new();
-    };
-    let pricing =
-        crate::bom::fetch_pricing_grouped_batch(token.as_deref(), groups).unwrap_or_default();
-
-    pricing
-        .into_iter()
-        .enumerate()
-        .filter(|(_, availability)| crate::bom::has_search_availability(availability))
-        .collect()
-}
-
-/// Print a compact availability summary line for CLI output.
-fn print_availability_summary(avail: &pcb_sch::bom::Availability) {
-    use crate::bom::{format_number_with_commas, format_price};
-
-    let format_region = |avail: Option<&pcb_sch::bom::AvailabilitySummary>, name: &str| -> String {
-        if let Some(a) = avail {
-            let stock_str = format_number_with_commas(a.stock);
-            let price_str = a.price.map(format_price).unwrap_or_else(|| "—".to_string());
-            format!("{}: {} ({})", name, price_str, stock_str)
-        } else {
-            format!("{}: —", name)
-        }
-    };
-
-    let global_str = format_region(avail.global.as_ref(), "Global");
-    let us_str = format_region(avail.us.as_ref(), "US");
-
-    println!("  {} │ {}", global_str.dimmed(), us_str.dimmed());
 }
 
 #[cfg(test)]
