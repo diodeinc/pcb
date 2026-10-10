@@ -40,8 +40,6 @@ pub struct InventoryPackage {
 pub struct InventoryRelease {
     pub version: String,
     pub commit: String,
-    /// Publisher provenance, not a hash of the current checkout.
-    pub content_hash: Option<String>,
 }
 
 /// Inventory physical checkout packages and their selected local releases.
@@ -71,29 +69,12 @@ pub fn package_inventory(start_path: &Path) -> Result<Vec<InventoryPackage>> {
     let mut tags = git::try_list_peeled_tags(&workspace.root)?;
     tags.retain(|tag| merged.contains(tag.commit.as_str()));
     let latest = latest_package_tags(&workspace, &tags);
-    let selected: Vec<_> = latest.values().map(|info| info.tag.clone()).collect();
-    let annotations = git::tag_annotations(&workspace.root, &selected)?;
 
     let mut packages = Vec::new();
     for (url, package) in &workspace.packages {
-        let release = latest.get(url).map(|info| {
-            let version = info.version.to_string();
-            let annotation_version = format!("v{version}");
-            let content_hash = annotations.get(&info.tag.object).and_then(|message| {
-                message.lines().find_map(|line| {
-                    let fields: Vec<_> = line.split_whitespace().collect();
-                    (fields.len() == 3
-                        && fields[0] == url
-                        && fields[1] == annotation_version
-                        && fields[2].starts_with("h1:"))
-                    .then(|| fields[2].to_owned())
-                })
-            });
-            InventoryRelease {
-                version,
-                commit: info.tag.commit.clone(),
-                content_hash,
-            }
+        let release = latest.get(url).map(|info| InventoryRelease {
+            version: info.version.to_string(),
+            commit: info.tag.commit.clone(),
         });
         let path = if package.rel_path.as_os_str().is_empty() {
             subpath.to_path_buf()
@@ -436,7 +417,6 @@ mod tests {
             ],
         )?;
         let commit = git::run_output(root, &["rev-parse", "HEAD"])?;
-        let hash = "h1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
         // Exercise both tag-path branches with native filesystem separators.
         for (prefix, config) in [("", ""), ("registry/", "path = \"registry\"\n")] {
             std::fs::write(
@@ -444,21 +424,14 @@ mod tests {
                 format!("[workspace]\nrepository = \"example.com/repo\"\n{config}"),
             )?;
             for name in ["a", "b"] {
-                let mut message = b"Legacy caf\xe9\n".to_vec();
-                if name == "a" {
-                    message.extend_from_slice(
-                        format!("example.com/repo/{prefix}parts/a v1.2.0 {hash}\n").as_bytes(),
-                    );
-                }
-                std::fs::write(root.join("message"), message)?;
                 git::run_in(
                     root,
                     &[
                         "tag",
                         "-a",
                         &format!("{prefix}parts/{name}/v1.2.0"),
-                        "-F",
-                        "message",
+                        "-m",
+                        "release",
                     ],
                 )?;
             }
@@ -472,10 +445,6 @@ mod tests {
                     .expect("nested package is published");
                 assert_eq!(release.version, "1.2.0");
                 assert_eq!(release.commit, commit.trim());
-                assert_eq!(
-                    release.content_hash.as_deref(),
-                    (name == "a").then_some(hash)
-                );
             }
         }
         Ok(())

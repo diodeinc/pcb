@@ -29,6 +29,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ### Fixed
 
 - `pcb import --force` no longer deletes a KiCad project that lives inside its output before reading it.
+- `pcb add` no longer fails with "Content hash mismatch" on packages whose tracked files match the publisher's `.gitignore`. Package tags no longer carry content hashes, and `pcb info --inventory` drops `contentHash`.
 - `pcb apply schematic` grows a new sheet up to A0 instead of leaving it on A4, and warns on every run while a sheet has symbols outside its page.
 - `pcb apply schematic` reads KiCad 10 project bus aliases, so it no longer adds labels to bus nets after a KiCad save.
 - `pcb import` of a `.kicad_sch` uses its same-name `.kicad_pro`, keeping KiCad 10 bus aliases, and a `.kicad_pro` without a board imports.

@@ -3674,18 +3674,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "pcb-canonical"
-version = "0.4.74"
-dependencies = [
- "anyhow",
- "base64 0.23.1",
- "blake3",
- "ignore",
- "tar",
- "unicode-normalization",
-]
-
-[[package]]
 name = "pcb-command-runner"
 version = "0.4.74"
 dependencies = [
@@ -4116,7 +4104,6 @@ dependencies = [
  "lsp-server",
  "lsp-types",
  "path-slash",
- "pcb-canonical",
  "pcb-sch",
  "pcb-sim",
  "pcb-starlark-lsp",
@@ -4225,7 +4212,6 @@ dependencies = [
  "notify",
  "open",
  "pathdiff",
- "pcb-canonical",
  "pcb-command-runner",
  "pcb-component-gen",
  "pcb-diode-api",

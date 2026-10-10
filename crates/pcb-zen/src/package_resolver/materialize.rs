@@ -1,7 +1,6 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-use crate::cache_index::CacheIndex;
 use anyhow::{Result, bail};
 use semver::Version;
 
@@ -11,7 +10,6 @@ pub(crate) fn materialize_selected<'a>(
     workspace: &crate::WorkspaceInfo,
     selected_remote: impl IntoIterator<Item = (&'a ResolvedDepId, &'a Version)>,
     offline: bool,
-    cache_index: &CacheIndex,
 ) -> Result<BTreeSet<(String, String)>> {
     let selected: Vec<_> = selected_remote
         .into_iter()
@@ -36,7 +34,7 @@ pub(crate) fn materialize_selected<'a>(
             );
         }
     } else {
-        crate::resolve::ensure_packages_in_cache(unvendored, cache_index)?;
+        crate::resolve::ensure_packages_in_cache(unvendored)?;
     }
 
     Ok(selected

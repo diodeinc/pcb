@@ -68,10 +68,6 @@ struct PackageMetadata {
     preferred: bool,
     #[serde(default, skip_serializing_if = "is_default")]
     dirty: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    content_hash: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    manifest_hash: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     entrypoints: Vec<PathBuf>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -223,8 +219,6 @@ fn metadata_for_workspace_package(
         published_at: pkg.published_at.clone(),
         preferred: pkg.preferred,
         dirty: pkg.dirty,
-        content_hash: None,
-        manifest_hash: None,
         entrypoints: pkg.entrypoints.clone(),
         symbol_files: pkg.symbol_files.clone(),
     }
@@ -265,8 +259,6 @@ fn external_dependencies(
                 published_at: None,
                 preferred: false,
                 dirty: false,
-                content_hash: None,
-                manifest_hash: None,
                 entrypoints,
                 symbol_files,
             },

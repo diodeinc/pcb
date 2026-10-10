@@ -1,7 +1,6 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use crate::cache_index::CacheIndex;
 use anyhow::{Context, Result};
 use pcb_zen_core::config::{DependencySpec, ManifestPart};
 use semver::Version;
@@ -31,7 +30,6 @@ impl ManifestLoader {
     pub(crate) fn load(
         &mut self,
         workspace: &crate::WorkspaceInfo,
-        index: &CacheIndex,
         module_path: &str,
         version: &Version,
     ) -> Result<ManifestRequirements> {
@@ -41,7 +39,7 @@ impl ManifestLoader {
         }
 
         let loaded =
-            load_manifest_for_module_version(workspace, index, module_path, version, self.offline)?;
+            load_manifest_for_module_version(workspace, module_path, version, self.offline)?;
         self.cache.insert(key, loaded.clone());
         Ok(loaded)
     }
@@ -49,7 +47,6 @@ impl ManifestLoader {
 
 fn load_manifest_for_module_version(
     workspace: &crate::WorkspaceInfo,
-    index: &CacheIndex,
     module_path: &str,
     version: &Version,
     offline: bool,
@@ -61,7 +58,7 @@ fn load_manifest_for_module_version(
     } else if offline {
         package_version_root(workspace.workspace_cache_dir(), module_path, version).join("pcb.toml")
     } else {
-        crate::resolve::ensure_package_manifest_in_cache(module_path, version, index)?
+        crate::resolve::ensure_package_manifest_in_cache(module_path, version)?
     };
     let content = std::fs::read_to_string(&pcb_toml_path)
         .with_context(|| format!("Failed to read {}", pcb_toml_path.display()))?;
