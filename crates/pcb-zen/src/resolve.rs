@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use globset::{Glob, GlobSetBuilder};
+use ignore::WalkBuilder;
 use pcb_zen_core::config::ManifestPart;
 use pcb_zen_core::resolution::{FrozenResolutionMap, ResolutionResult};
 use semver::Version;
@@ -8,12 +9,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use tracing::instrument;
 
-use crate::cache_index::{CacheIndex, cache_base, ensure_source_repo, source_repo_dir};
+use crate::cache_index::{cache_base, ensure_source_repo};
 use crate::git;
 use crate::workspace::WorkspaceInfo;
-use pcb_canonical::{
-    CanonicalTarOptions, compute_content_hash_from_dir, compute_manifest_hash, copy_canonical_files,
-};
 
 /// Result of vendoring operation
 pub struct VendorResult {
@@ -43,13 +41,7 @@ impl VendorPlan {
 
     pub fn apply(&self) -> Result<VendorResult> {
         for copy in &self.copies {
-            copy_canonical_files(
-                &copy.src,
-                &copy.dst,
-                Some(CanonicalTarOptions {
-                    exclude_nested_packages: true,
-                }),
-            )?;
+            copy_package_files(&copy.src, &copy.dst)?;
         }
 
         for root in &self.prunes {
@@ -205,6 +197,30 @@ pub fn plan_vendor_package_roots(
     })
 }
 
+/// Copy a package's files, skipping hidden files, nested packages and `pcb.sum`.
+fn copy_package_files(src: &Path, dst: &Path) -> Result<()> {
+    let src_root = src.to_path_buf();
+    let walker = WalkBuilder::new(src)
+        .standard_filters(false)
+        .hidden(true)
+        .filter_entry(move |entry| {
+            entry.path() == src_root
+                || !entry.file_type().is_some_and(|ft| ft.is_dir())
+                || !entry.path().join("pcb.toml").is_file()
+        })
+        .build();
+    for entry in walker {
+        let entry = entry?;
+        if !entry.file_type().is_some_and(|ft| ft.is_file()) || entry.file_name() == "pcb.sum" {
+            continue;
+        }
+        let dst_path = dst.join(entry.path().strip_prefix(src)?);
+        fs::create_dir_all(dst_path.parent().unwrap())?;
+        fs::copy(entry.path(), &dst_path)?;
+    }
+    Ok(())
+}
+
 fn remote_package_vendor_source(
     workspace_vendor: &Path,
     cache_dir: &Path,
@@ -333,12 +349,8 @@ fn collect_stale_dir(
 }
 
 /// Returns a dependency manifest using the shared cache-backed materialization path.
-pub fn ensure_package_manifest_in_cache(
-    module_path: &str,
-    version: &Version,
-    index: &CacheIndex,
-) -> Result<PathBuf> {
-    ensure_packages_in_cache([(module_path, version)], index)?;
+pub fn ensure_package_manifest_in_cache(module_path: &str, version: &Version) -> Result<PathBuf> {
+    ensure_packages_in_cache([(module_path, version)])?;
     Ok(package_cache_dir(module_path, version).join("pcb.toml"))
 }
 
@@ -349,17 +361,20 @@ pub fn ensure_package_manifest_in_cache(
 /// from local objects.
 pub fn ensure_packages_in_cache<'a>(
     packages: impl IntoIterator<Item = (&'a str, &'a Version)>,
-    index: &CacheIndex,
 ) -> Result<()> {
     let uncached: BTreeSet<_> = packages
         .into_iter()
-        .filter(|(module_path, version)| !is_cached(index, module_path, version))
+        .filter(|(module_path, version)| !is_cached(module_path, version))
         .collect();
     fetch_package_contents(&uncached)?;
 
     uncached.into_iter().try_for_each(|(module_path, version)| {
-        cache_package(module_path, version, index)
-            .with_context(|| format!("Failed to materialize {}@{}", module_path, version))
+        ensure_sparse_checkout(
+            &package_cache_dir(module_path, version),
+            module_path,
+            &version.to_string(),
+        )
+        .with_context(|| format!("Failed to materialize {}@{}", module_path, version))
     })
 }
 
@@ -367,27 +382,10 @@ fn package_cache_dir(module_path: &str, version: &Version) -> PathBuf {
     cache_base().join(module_path).join(version.to_string())
 }
 
-fn is_cached(index: &CacheIndex, module_path: &str, version: &Version) -> bool {
-    index
-        .get_package(module_path, &version.to_string())
-        .is_some()
-        && package_cache_dir(module_path, version)
-            .join("pcb.toml")
-            .exists()
-}
-
-fn cache_package(module_path: &str, version: &Version, index: &CacheIndex) -> Result<()> {
-    let checkout_dir = package_cache_dir(module_path, version);
-    let version_str = version.to_string();
-    ensure_sparse_checkout(&checkout_dir, module_path, &version_str)?;
-
-    let content_hash = compute_content_hash_from_dir(&checkout_dir)?;
-    let manifest_content = std::fs::read_to_string(checkout_dir.join("pcb.toml"))?;
-    let manifest_hash = compute_manifest_hash(&manifest_content);
-
-    verify_tag_hashes(module_path, version, &content_hash, &manifest_hash)?;
-    index.set_package(module_path, &version_str, &content_hash, &manifest_hash)?;
-    Ok(())
+fn is_cached(module_path: &str, version: &Version) -> bool {
+    package_cache_dir(module_path, version)
+        .join("pcb.toml")
+        .exists()
 }
 
 /// Fetch the contents of these package versions, one fetch per source repo.
@@ -459,120 +457,31 @@ pub fn build_frozen_symbol_parts(
     Ok(result)
 }
 
-/// Verify computed hashes match the expected hashes from the git tag annotation
-fn verify_tag_hashes(
-    module_path: &str,
-    version: &Version,
-    content_hash: &str,
-    manifest_hash: &str,
-) -> Result<()> {
-    let (repo_url, subpath) = git::split_repo_and_subpath(module_path)?;
-    let source_dir = source_repo_dir(&repo_url)?;
-    let tag_name = if subpath.is_empty() {
-        format!("v{}", version)
-    } else {
-        format!("{}/v{}", subpath, version)
-    };
-
-    // Read the annotated tag directly from the shared source repo. Materialized
-    // cache directories are plain extracted files now, not git repos.
-    let Some(tag_body) = git::cat_file(&source_dir, &tag_name) else {
-        return Ok(());
-    };
-
-    let Some((expected_content, expected_manifest)) = parse_hashes_from_tag_body(&tag_body) else {
-        return Ok(());
-    };
-
-    fn check_hash(
-        kind: &str,
-        computed: &str,
-        expected: &str,
-        module_path: &str,
-        version: &Version,
-    ) -> Result<()> {
-        if computed != expected {
-            anyhow::bail!(
-                "{} hash mismatch for {}@v{}\n  \
-                Expected (from tag): {}\n  \
-                Computed:            {}\n\n\
-                This may indicate a bug in the packaging toolchain.",
-                kind,
-                module_path,
-                version,
-                expected,
-                computed
-            );
-        }
-        Ok(())
-    }
-
-    check_hash(
-        "Content",
-        content_hash,
-        &expected_content,
-        module_path,
-        version,
-    )?;
-    check_hash(
-        "Manifest",
-        manifest_hash,
-        &expected_manifest,
-        module_path,
-        version,
-    )?;
-
-    Ok(())
-}
-
-/// Parse content and manifest hashes from tag annotation body
-fn parse_hashes_from_tag_body(body: &str) -> Option<(String, String)> {
-    let mut content_hash = None;
-    let mut manifest_hash = None;
-
-    for line in body.lines() {
-        let line = line.trim();
-        if let Some(hash_start) = line.find(" h1:") {
-            let hash = line[hash_start + 1..].to_string();
-            if line[..hash_start].ends_with("/pcb.toml") {
-                manifest_hash = Some(hash);
-            } else {
-                content_hash = Some(hash);
-            }
-        }
-    }
-
-    content_hash.zip(manifest_hash)
-}
-
 /// Populate a cache directory with exclusive locking.
 ///
-/// Only one process fetches; others wait for the lock and then see the completed result.
-/// If the fetching process crashes, the OS releases the lock and waiters retry.
-fn populate_cache<F>(cache_dir: &Path, marker: &str, fetch: F) -> Result<PathBuf>
+/// The fetch writes to a staging directory that is renamed into place, so
+/// `marker` only ever appears in a complete entry. If the fetching process
+/// crashes, the OS releases the lock and the next caller starts over.
+fn populate_cache<F>(cache_dir: &Path, marker: &str, fetch: F) -> Result<()>
 where
     F: FnOnce(&Path) -> Result<()>,
 {
-    // Fast path: already complete
     if cache_dir.join(marker).exists() {
-        return Ok(cache_dir.to_path_buf());
+        return Ok(());
     }
 
-    // Acquire exclusive lock (blocks until available, auto-releases on crash)
     let _lock = git::lock_dir(cache_dir)?;
-
-    // Double-check after acquiring lock
     if cache_dir.join(marker).exists() {
-        return Ok(cache_dir.to_path_buf());
+        return Ok(());
     }
 
-    // Clean up any incomplete cache before fetching
+    let staging = tempfile::Builder::new()
+        .prefix(".partial-")
+        .tempdir_in(cache_dir.parent().context("cache dir has no parent")?)?;
+    fetch(staging.path())?;
     let _ = std::fs::remove_dir_all(cache_dir);
-    std::fs::create_dir_all(cache_dir)?;
-
-    fetch(cache_dir)?;
-
-    Ok(cache_dir.to_path_buf())
+    std::fs::rename(staging.path(), cache_dir)?;
+    Ok(())
 }
 
 /// Ensure a cached package checkout for a specific version.
@@ -582,21 +491,14 @@ where
 /// shared source repo into `~/.pcb/cache/...`, then later builds reuse that cache.
 /// Tagged versions archive from the version tag; pseudo-versions archive from
 /// the pinned commit.
-///
-/// Returns the package root path (where pcb.toml lives)
-fn ensure_sparse_checkout(
-    checkout_dir: &Path,
-    module_path: &str,
-    version_str: &str,
-) -> Result<PathBuf> {
+fn ensure_sparse_checkout(checkout_dir: &Path, module_path: &str, version_str: &str) -> Result<()> {
     let marker = "pcb.toml";
     let (repo_url, subpath) = git::split_repo_and_subpath(module_path)?;
 
     populate_cache(checkout_dir, marker, |dest| {
         let ref_spec = package_ref(&subpath, version_str);
         fetch_via_git(dest, &repo_url, &ref_spec, &subpath)
-            .with_context(|| format!("Failed to fetch {} via git sparse checkout", module_path))?;
-        Ok(())
+            .with_context(|| format!("Failed to fetch {} via git sparse checkout", module_path))
     })
 }
 
@@ -669,6 +571,26 @@ mod tests {
             packages,
             errors: vec![],
         }
+    }
+
+    #[test]
+    fn failed_cache_fetch_leaves_no_marker() -> Result<()> {
+        let temp = TempDir::new()?;
+        let dir = temp.path().join("pkg").join("1.0.0");
+        let result = populate_cache(&dir, "pcb.toml", |dest| {
+            fs::write(dest.join("pcb.toml"), "")?;
+            anyhow::bail!("interrupted")
+        });
+        assert!(result.is_err());
+        assert!(!dir.join("pcb.toml").exists());
+
+        populate_cache(&dir, "pcb.toml", |dest| {
+            fs::write(dest.join("pcb.toml"), "")?;
+            fs::write(dest.join("main.zen"), "")?;
+            Ok(())
+        })?;
+        assert!(dir.join("main.zen").exists());
+        Ok(())
     }
 
     #[test]

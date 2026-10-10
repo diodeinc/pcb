@@ -1,8 +1,7 @@
 //! Package publishing
 //!
-//! Publishes dirty/unpublished packages by creating annotated git tags with
-//! content and manifest hashes. Uses topological sorting to publish packages
-//! in dependency order (dependencies before dependants).
+//! Publishes dirty/unpublished packages by creating annotated git tags. Uses
+//! topological sorting to publish packages in dependency order (dependencies before dependants).
 
 use anyhow::{Context, Result, bail};
 use clap::{Args, ValueEnum};
@@ -182,8 +181,6 @@ pub struct PublishArgs {
 struct PublishCandidate {
     next_version: Version,
     tag_name: String,
-    content_hash: String,
-    manifest_hash: String,
 }
 
 /// Tracks local git state created during publishing.
@@ -949,7 +946,7 @@ fn publish_wave(
     let all_tags = git::list_all_tags_vec(&workspace.root);
 
     // Build candidates with fresh hashes after any wave-boundary sync commit.
-    let candidates = build_candidates(workspace, bump_map, package_urls, &all_tags)?;
+    let candidates = build_candidates(workspace, bump_map, package_urls, &all_tags);
 
     for (url, c) in &candidates {
         git::create_tag(&workspace.root, &c.tag_name, &format_tag_message(url, c))?;
@@ -967,7 +964,7 @@ fn build_candidates(
     bump_map: &BTreeMap<String, ReleaseBump>,
     package_urls: &[String],
     all_tags: &[String],
-) -> Result<BTreeMap<String, PublishCandidate>> {
+) -> BTreeMap<String, PublishCandidate> {
     let ws_path = workspace.path();
     let url_set: HashSet<&String> = package_urls.iter().collect();
 
@@ -981,21 +978,13 @@ fn build_candidates(
             let current = tags::find_latest_version(all_tags, &tag_prefix);
             let next_version = compute_next_version(current.as_ref(), bump);
             let tag_name = compute_tag_name(pkg, &next_version, workspace);
-
-            let pkg_dir = pkg.dir(&workspace.root);
-            let content_hash = pcb_canonical::compute_content_hash_from_dir(&pkg_dir)?;
-            let manifest_content = std::fs::read_to_string(pkg_dir.join("pcb.toml"))?;
-            let manifest_hash = pcb_canonical::compute_manifest_hash(&manifest_content);
-
-            Ok((
+            (
                 url.clone(),
                 PublishCandidate {
                     next_version,
                     tag_name,
-                    content_hash,
-                    manifest_hash,
                 },
-            ))
+            )
         })
         .collect()
 }
@@ -1178,10 +1167,7 @@ fn compute_tag_name(
 }
 
 fn format_tag_message(url: &str, c: &PublishCandidate) -> String {
-    format!(
-        "{} v{} {}\n{} v{}/pcb.toml {}",
-        url, c.next_version, c.content_hash, url, c.next_version, c.manifest_hash
-    )
+    format!("{url} v{}", c.next_version)
 }
 
 fn infer_self_bump(

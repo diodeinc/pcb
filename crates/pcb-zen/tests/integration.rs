@@ -24,7 +24,6 @@ pub(crate) use insta_snapshot_name;
 #[macro_use]
 mod common;
 
-mod canonical_snapshot;
 mod input;
 mod load_diagnostics;
 mod module_loading;

@@ -208,7 +208,7 @@ impl PackageResolver {
         &self,
         selected_remote: impl IntoIterator<Item = (&'a ResolvedDepId, &'a Version)>,
     ) -> Result<BTreeSet<(String, String)>> {
-        materialize_selected(&self.workspace, selected_remote, false, &self.cache_index)
+        materialize_selected(&self.workspace, selected_remote, false)
     }
 
     pub fn build_package_graph(&mut self, package_url: &str) -> Result<DepGraph> {
@@ -324,7 +324,7 @@ impl PackageResolver {
         };
         let loaded = self
             .manifest_loader
-            .load(&self.workspace, &self.cache_index, &dep_id.path, version)
+            .load(&self.workspace, &dep_id.path, version)
             .with_context(|| format!("Failed to load {}@{}", dep_id.path, version))?;
 
         for (child_path, child_spec) in loaded.direct {
@@ -454,7 +454,6 @@ impl PackageResolver {
                     .iter()
                     .filter_map(|dep_id| Some((dep_id, selected.get(dep_id)?))),
                 false,
-                &self.cache_index,
             )?;
 
             for dep_id in level {
@@ -463,7 +462,7 @@ impl PackageResolver {
                 };
                 let loaded = self
                     .manifest_loader
-                    .load(&self.workspace, &self.cache_index, &dep_id.path, &version)
+                    .load(&self.workspace, &dep_id.path, &version)
                     .with_context(|| format!("Failed to load {}@{}", dep_id.path, version))?;
                 for (dep_path, dep_spec) in loaded.direct {
                     if is_stdlib_module_path(&dep_path) {

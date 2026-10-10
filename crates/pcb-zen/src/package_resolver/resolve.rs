@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 
-use crate::cache_index::{CacheIndex, ensure_workspace_cache_symlink};
+use crate::cache_index::ensure_workspace_cache_symlink;
 use crate::resolve::ensure_package_manifest_in_cache;
 use crate::workspace::WorkspaceInfoExt;
 use crate::{WorkspaceInfo, WorkspacePackage};
@@ -194,7 +194,6 @@ fn collect_workspace_zen_files(
 struct FrozenResolutionBuilder<'a> {
     workspace: &'a WorkspaceInfo,
     offline: bool,
-    cache_index: CacheIndex,
     manifest_loader: ManifestLoader,
     stdlib_root: PathBuf,
     selected_remote: BTreeMap<ResolvedDepId, Version>,
@@ -207,7 +206,6 @@ impl<'a> FrozenResolutionBuilder<'a> {
     fn new(workspace: &'a WorkspaceInfo, offline: bool) -> Result<Self> {
         ensure_workspace_cache_symlink(&workspace.root)?;
         Ok(Self {
-            cache_index: CacheIndex::open()?,
             manifest_loader: ManifestLoader::new(offline),
             stdlib_root: canonicalize(&workspace.workspace_stdlib_dir()),
             workspace,
@@ -259,12 +257,7 @@ impl<'a> FrozenResolutionBuilder<'a> {
             return Ok(());
         }
 
-        materialize_selected(
-            self.workspace,
-            pending.iter(),
-            self.offline,
-            &self.cache_index,
-        )?;
+        materialize_selected(self.workspace, pending.iter(), self.offline)?;
         self.materialized_remote.extend(pending);
         Ok(())
     }
@@ -288,7 +281,7 @@ impl<'a> FrozenResolutionBuilder<'a> {
                 let package_root = self.remote_package_root(&dep_id.path, &version)?;
                 let manifest = self
                     .manifest_loader
-                    .load(self.workspace, &self.cache_index, &dep_id.path, &version)
+                    .load(self.workspace, &dep_id.path, &version)
                     .with_context(|| format!("Failed to load {}@{}", dep_id.path, version))?;
                 (
                     FrozenPackageIdentity::Remote { dep_id, version },
@@ -407,7 +400,7 @@ impl<'a> FrozenResolutionBuilder<'a> {
                         version
                     );
                 }
-                ensure_package_manifest_in_cache(module_path, version, &self.cache_index)?;
+                ensure_package_manifest_in_cache(module_path, version)?;
             }
             cache_root
         };
