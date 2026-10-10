@@ -323,40 +323,39 @@ fn extract_kicad_schematic_data(
                         }
                         _ => None,
                     });
-            // A reused file can retain instances from other projects or deleted sheets.
-            // Their references are unrelated even when their symbol UUID or reference
-            // happens to match.
-            let instances = symbol
+            // Placements of this symbol as (sheet path, reference, unit). A reused file
+            // can retain instances from other projects or deleted sheets; their
+            // references are unrelated even when the symbol UUID or reference matches.
+            let mut placements = symbol
                 .instances
                 .iter()
                 .filter(|instance| {
                     instance.path.trim_matches('/').split('/').next() == Some(root.id.as_str())
                         && targets_file(&instance.path)
                 })
-                .collect::<Vec<_>>();
-            // Without instance data for a sheet, as in files KiCad has not re-saved
-            // since an Altium import, KiCad reads the reference and unit from the
-            // symbol itself, so its netlist decides where the symbol lives.
-            let fallback_instance = instances.is_empty().then(|| {
-                let reference = symbol.reference()?.to_string();
-                let anchor = refdes_to_anchor.get(&KiCadRefDes::from(reference.clone()))?;
-                let unit = netlist_components[anchor]
-                    .netlist
-                    .unit_pcb_paths
-                    .iter()
-                    .find(|unit| unit.symbol_uuid == symbol.id)?;
-                Some(pcb_kicad_sch::SymbolInstance {
-                    project: String::new(),
-                    path: format!("/{}{}", root.id, unit.sheetpath_tstamps),
-                    reference: Some(reference),
-                    unit: None,
-                    unsupported: Vec::new(),
+                .filter_map(|instance| {
+                    let reference = instance.reference.clone()?;
+                    let unit = instance.unit.unwrap_or(symbol.unit);
+                    Some((instance.path.clone(), reference, unit))
                 })
-            });
-            for instance in fallback_instance.flatten().iter().chain(instances) {
-                let Some(anchor) = instance.reference.as_ref().and_then(|reference| {
-                    refdes_to_anchor.get(&KiCadRefDes::from(reference.clone()))
-                }) else {
+                .collect::<Vec<_>>();
+            // Without instance data, as in files KiCad has not re-saved since an Altium
+            // import, KiCad reads the reference and unit from the symbol itself and its
+            // netlist says which sheet the symbol is on.
+            if placements.is_empty()
+                && let Some(reference) = symbol.reference()
+            {
+                let sheet = refdes_to_anchor
+                    .get(&KiCadRefDes::from(reference.to_string()))
+                    .and_then(|anchor| {
+                        let units = &netlist_components[anchor].netlist.unit_pcb_paths;
+                        units.iter().find(|unit| unit.symbol_uuid == symbol.id)
+                    })
+                    .map(|unit| format!("/{}{}", root.id, unit.sheetpath_tstamps));
+                placements.extend(sheet.map(|path| (path, reference.to_string(), symbol.unit)));
+            }
+            for (path, reference, unit) in placements {
+                let Some(anchor) = refdes_to_anchor.get(&KiCadRefDes::from(reference)) else {
                     continue;
                 };
                 let Some(entry) = netlist_components.get_mut(anchor) else {
@@ -366,18 +365,18 @@ fn extract_kicad_schematic_data(
                     );
                     continue;
                 };
-                let key = key_from_schematic_instance_path(&instance.path, &symbol.id)?;
+                let key = key_from_schematic_instance_path(&path, &symbol.id)?;
                 let unit = ImportSchematicUnit {
                     lib_name: symbol.lib_name.clone(),
                     lib_id: Some(lib_id.clone()),
-                    unit: Some(i64::from(instance.unit.unwrap_or(symbol.unit))),
+                    unit: Some(i64::from(unit)),
                     at: at.clone(),
                     mirror: mirror.clone(),
                     in_bom: Some(symbol.in_bom),
                     on_board: Some(symbol.on_board),
                     dnp: Some(symbol.dnp),
                     exclude_from_sim,
-                    instance_path: Some(instance.path.clone()),
+                    instance_path: Some(path),
                     properties: properties.clone(),
                     pins: (!pins.is_empty()).then(|| pins.clone()),
                 };
