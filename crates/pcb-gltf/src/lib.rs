@@ -31,7 +31,7 @@ pub fn export(
     let (layers, mut models) = rayon::join(
         || -> Result<_> {
             let layers = Scene::layers(board, options, &mut layer_warnings)?;
-            let meshes = board::mesh(&layers, options.cut_vias);
+            let meshes = board::mesh(&layers);
             Ok((layers, meshes))
         },
         || models::tessellate(board, &scene),
