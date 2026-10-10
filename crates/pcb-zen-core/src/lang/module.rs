@@ -479,10 +479,10 @@ pub struct ModuleValueGen<V: ValueLifetimeless> {
     /// parent.parent_component_modifiers(), creating the full ancestor chain.
     /// Applied AFTER the module's own modifiers.
     parent_component_modifiers: Vec<V>,
-    /// Where the parent instantiated this module (path, span, call stack); `None` for the root.
+    /// Where the parent instantiated this module; `None` for the root.
     #[freeze(identity)]
     #[allocative(skip)]
-    call_site: Option<(String, ResolvedSpan, starlark::eval::CallStack)>,
+    pub(crate) call_site: Option<(String, ResolvedSpan)>,
 }
 
 pub type ModuleValue<'v> = ModuleValueGen<Value<'v>>;
@@ -611,19 +611,6 @@ impl<'v, V: ValueLike<'v>> ModuleValueGen<V> {
 
     pub fn inputs(&self) -> &SmallMap<String, V> {
         &self.inputs
-    }
-
-    pub fn call_site(&self) -> Option<&(String, ResolvedSpan, starlark::eval::CallStack)> {
-        self.call_site.as_ref()
-    }
-
-    pub(crate) fn set_call_site(
-        &mut self,
-        path: String,
-        span: ResolvedSpan,
-        stack: starlark::eval::CallStack,
-    ) {
-        self.call_site = Some((path, span, stack));
     }
 
     /// Return a reference to the custom property map attached to this Module.

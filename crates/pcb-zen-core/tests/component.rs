@@ -1965,22 +1965,15 @@ Component(
 
 #[test]
 fn schematic_option_on_project_module_warns_only_for_linked_projects() {
-    let ignored = |root_project: &str| {
+    let warned_files = |root: &str| {
         let result = common::eval_zen(vec![
             (
                 "Sub.zen".to_string(),
-                r#"
-builtin.add_property("schematic_path", "sub")
-p = io(Net)
-Component(name = "R1", footprint = "0402", pin_defs = {"1": "1"}, pins = {"1": p})
-"#
-                .to_string(),
+                r#"builtin.add_property("schematic_path", "sub")"#.to_string(),
             ),
             (
                 "test.zen".to_string(),
-                format!(
-                    "{root_project}\nModule(\"Sub.zen\")(name = \"sub\", p = Net(\"P\"), schematic = \"collapse\")\n"
-                ),
+                format!("{root}\nModule(\"Sub.zen\")(name = \"sub\", schematic = \"collapse\")"),
             ),
         ]);
         let output = result.output.expect("expected eval output");
@@ -1992,14 +1985,13 @@ Component(name = "R1", footprint = "0402", pin_defs = {"1": "1"}, pins = {"1": p
                 diag.downcast_error_ref::<CategorizedDiagnostic>()
                     .is_some_and(|c| c.kind == "module.schematic.ignored")
             })
-            .map(|diag| (diag.path.ends_with("test.zen"), diag.span.is_some()))
+            .map(|diag| diag.path.rsplit('/').next().unwrap().to_string())
             .collect::<Vec<_>>()
     };
 
-    // Attributed to the instantiation so `# suppress:` there works.
     assert_eq!(
-        ignored(r#"builtin.add_property("schematic_path", ".")"#),
-        [(true, true)]
+        warned_files(r#"builtin.add_property("schematic_path", ".")"#),
+        ["test.zen"]
     );
-    assert!(ignored("").is_empty());
+    assert!(warned_files("").is_empty());
 }

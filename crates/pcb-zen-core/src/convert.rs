@@ -1152,47 +1152,38 @@ impl ModuleConverter {
     }
 }
 
-/// `schematic="collapse"`/`"embed"` drives only legacy schematics; in a linked
-/// KiCad project a module is a sheet exactly when it declares `Project()`.
+/// In a linked KiCad schematic, `Project()` alone decides which modules are sheets.
 fn diagnose_ignored_schematic_option(
     module_tree: &BTreeMap<ModulePath, &FrozenModuleValue>,
     diagnostics: &mut Diagnostics,
 ) {
-    let declares_project = |module: &FrozenModuleValue| {
+    let linked = |module: &FrozenModuleValue| {
         module
             .properties()
             .contains_key(pcb_sch::ATTR_SCHEMATIC_PATH)
     };
-    if !module_tree
-        .get(&ModulePath::root())
-        .is_some_and(|root| declares_project(root))
-    {
+    if !linked(module_tree[&ModulePath::root()]) {
         return;
     }
-    for (path, module) in module_tree.iter().filter(|(path, _)| !path.is_root()) {
-        if !declares_project(module) {
+    for (path, module) in module_tree {
+        let Some((file, span)) = module.call_site.as_ref().filter(|_| linked(module)) else {
             continue;
-        }
-        for option in ["collapse", "embed"]
+        };
+        let Some(option) = ["collapse", "embed"]
             .into_iter()
-            .filter(|option| module.properties().contains_key(*option))
-        {
-            let body = format!(
-                "`schematic=\"{option}\"` only affects legacy schematics; module '{path}' is a \
-                 sheet because it declares Project()"
-            );
-            let call_site = module.call_site();
-            diagnostics.push(
-                Diagnostic::categorized(
-                    call_site.map_or(module.source_path(), |(file, ..)| file),
-                    &body,
-                    "module.schematic.ignored",
-                    EvalSeverity::Warning,
-                )
-                .with_span(call_site.map(|(_, span, _)| *span))
-                .with_call_stack(call_site.map(|(.., stack)| stack.clone())),
-            );
-        }
+            .find(|option| module.properties().contains_key(*option))
+        else {
+            continue;
+        };
+        diagnostics.push(
+            Diagnostic::categorized(
+                file,
+                &format!("`schematic=\"{option}\"` is ignored: '{path}' declares Project() in a linked schematic"),
+                "module.schematic.ignored",
+                EvalSeverity::Warning,
+            )
+            .with_span(Some(*span)),
+        );
     }
 }
 

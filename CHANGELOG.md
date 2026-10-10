@@ -23,7 +23,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - `moved()` is deprecated and warns on each use (`deprecated.moved`); it still works for now.
 - `pcb publish` checks BOM supplier offers only with `--bump`; local builds and `--check` no longer contact the BOM API.
 - `pcb import` rejects projects with more than one top-level sheet instead of importing only one of them.
-- `schematic="collapse"` and `"embed"` warn (`module.schematic.ignored`) on a module that declares `Project()` in a linked KiCad schematic, where they have no effect.
+- `schematic="collapse"` and `"embed"` warn (`module.schematic.ignored`) when ignored, on a module that declares `Project()` in a linked KiCad schematic.
 - Missing BOM part errors suggest setting `Manufacturer_Part_Number` and `Manufacturer_Name` on the symbol as well as `part=Part(...)`.
 
 ### Fixed
