@@ -1,6 +1,7 @@
 //! The `export` command line shared by every writer of a [`Scene`]:
 //! `pcb step export` and `pcb gltf export` take the same arguments, as
-//! `kicad-cli pcb export step` and `glb` do.
+//! `kicad-cli pcb export step` and `glb` do, except which copper to export:
+//! STEP takes it as [`CopperArgs`], GLB always exports outer copper.
 //!
 //! [`Scene`]: crate::scene::Scene
 
@@ -30,18 +31,6 @@ pub struct ExportArgs {
     /// Cut via drills into the board body
     #[arg(long)]
     cut_vias_in_body: bool,
-    /// Export pad copper and plating
-    #[arg(long)]
-    include_pads: bool,
-    /// Export tracks, via rings and via barrels
-    #[arg(long)]
-    include_tracks: bool,
-    /// Export zone fills
-    #[arg(long)]
-    include_zones: bool,
-    /// Export copper on inner layers too (outer layers only by default)
-    #[arg(long)]
-    include_inner_copper: bool,
     /// Leave out the silkscreen faces
     #[arg(long)]
     no_silkscreen: bool,
@@ -68,16 +57,43 @@ pub struct ExportArgs {
     user_origin: Option<(f64, f64)>,
 }
 
+/// Which copper to export.
+#[derive(clap::Args, Clone, Copy)]
+pub struct CopperArgs {
+    /// Export pad copper and plating
+    #[arg(long)]
+    include_pads: bool,
+    /// Export tracks, via rings and via barrels
+    #[arg(long)]
+    include_tracks: bool,
+    /// Export zone fills
+    #[arg(long)]
+    include_zones: bool,
+    /// Export copper on inner layers too (outer layers only by default)
+    #[arg(long)]
+    include_inner_copper: bool,
+}
+
+impl CopperArgs {
+    /// Pads, tracks, vias and zones on the outer layers.
+    pub const OUTER: Self = Self {
+        include_pads: true,
+        include_tracks: true,
+        include_zones: true,
+        include_inner_copper: false,
+    };
+}
+
 impl ExportArgs {
-    fn options(&self) -> Options {
+    fn options(&self, copper: CopperArgs) -> Options {
         Options {
             board_body: !self.no_board_body,
             components: !self.no_components,
             cut_vias: self.cut_vias_in_body,
-            pads: self.include_pads,
-            tracks: self.include_tracks,
-            zones: self.include_zones,
-            inner_copper: self.include_inner_copper,
+            pads: copper.include_pads,
+            tracks: copper.include_tracks,
+            zones: copper.include_zones,
+            inner_copper: copper.include_inner_copper,
             silkscreen: !self.no_silkscreen,
             soldermask: !self.no_soldermask,
             include_dnp: !self.no_dnp,
@@ -102,16 +118,17 @@ impl ExportArgs {
         }
     }
 
-    /// Export the board with `write`, to the output path or the board path
-    /// with `extension`. The assembly is named after the board file and
-    /// `${NAME}` text variables come from the project file beside it. The
-    /// output is replaced atomically, so a failure leaves any previous
-    /// output alone. Warnings are printed, whether or not the export
+    /// Export the board and its `copper` with `write`, to the output path
+    /// or the board path with `extension`. The assembly is named after the
+    /// board file and `${NAME}` text variables come from the project file
+    /// beside it. The output is replaced atomically, so a failure leaves any
+    /// previous output alone. Warnings are printed, whether or not the export
     /// succeeds; models that could not be read fail the command once the
     /// file is written.
     pub fn run(
         &self,
         extension: &str,
+        copper: CopperArgs,
         write: impl FnOnce(&Board, &Options, &mut dyn Write, &mut Report) -> Result<()>,
     ) -> Result<()> {
         let board = &self.board;
@@ -122,12 +139,12 @@ impl ExportArgs {
         if output.exists() && fs::canonicalize(board).ok() == fs::canonicalize(&output).ok() {
             bail!("Output {} is the board itself", output.display());
         }
-        let options = self.options();
+        let options = self.options(copper);
         let data =
             fs::read(board).with_context(|| format!("Failed to read {}", board.display()))?;
-        let copper = options.pads || options.tracks || options.zones;
+        let any_copper = options.pads || options.tracks || options.zones;
         let graphics = options.silkscreen || options.soldermask;
-        let parsed = Board::parse_with(&data, copper, graphics)
+        let parsed = Board::parse_with(&data, any_copper, graphics)
             .map_err(anyhow::Error::from)
             .with_context(|| format!("Failed to parse {}", board.display()))?;
 

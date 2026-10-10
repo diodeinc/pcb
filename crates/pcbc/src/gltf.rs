@@ -1,10 +1,11 @@
 //! `pcb gltf`: glTF export of a KiCad board through `pcb-gltf`. Takes the
-//! same arguments as `pcb step export`, as `kicad-cli pcb export glb` takes
-//! those of `kicad-cli pcb export step`.
+//! arguments of `pcb step export`, as `kicad-cli pcb export glb` takes those
+//! of `kicad-cli pcb export step`, but always exports outer copper, as
+//! KiCad's VRML export does.
 
 use anyhow::Result;
 use clap::{Args, Subcommand};
-use pcb_step::cli::ExportArgs;
+use pcb_step::cli::{CopperArgs, ExportArgs};
 
 #[derive(Args)]
 pub struct GltfArgs {
@@ -14,11 +15,11 @@ pub struct GltfArgs {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Export a board to a GLB file: body, drills, models, silkscreen and solder mask
+    /// Export a board to a GLB file: body, drills, copper, models, silkscreen and solder mask
     Export(ExportArgs),
 }
 
 pub fn execute(args: GltfArgs) -> Result<()> {
     let Commands::Export(args) = args.command;
-    args.run("glb", pcb_gltf::export)
+    args.run("glb", CopperArgs::OUTER, pcb_gltf::export)
 }
