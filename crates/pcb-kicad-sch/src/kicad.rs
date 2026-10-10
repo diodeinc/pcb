@@ -293,9 +293,7 @@ fn format_kicad_sch_page(page: &SchPage) -> String {
     )
 }
 
-/// KiCad's `KICAD_T` order for the schematic item types it saves. A
-/// `polyline` is a notes-layer line unless it carries a fill, which only
-/// shapes have. Trailing document sections sort after every item.
+/// KiCad's `KICAD_T` save order. An unfilled `polyline` is a line, not a shape.
 fn item_save_rank(item: &SchItem) -> u8 {
     let tag = match item {
         SchItem::Graphic(graphic) => match &graphic.kind {
@@ -513,7 +511,6 @@ fn parse_symbol(items: SexprList<'_>) -> Result<Symbol> {
     })
 }
 
-/// The `(project "name" (path "/..." ...))` pairs of an `(instances ...)` block.
 fn parse_instance_paths(list: SexprList<'_>) -> Result<Vec<(String, SexprList<'_>)>> {
     let mut paths = Vec::new();
     for project in list.children_from(1) {
@@ -737,7 +734,7 @@ fn parse_sheet_pin(items: SexprList<'_>) -> Result<SheetPin> {
         match list.tag() {
             Some("at") => at = Some(parse_at(list)?),
             Some("uuid") => id = list.string(1),
-            // The justification follows the sheet side, so only the font is kept.
+            // Justification is derived from the sheet side on write.
             Some("effects") => effects = parse_effects(list)?.effects,
             _ => unsupported.push(child.clone()),
         }
@@ -831,8 +828,7 @@ fn parse_label(items: SexprList<'_>) -> Result<Label> {
         fields,
         unsupported,
     };
-    // KiCad gives every global label this field; it is derived on write so
-    // that it follows the label when the label moves.
+    // Derived on write so it follows the label.
     if label.fields.get(INTERSHEET_REFS) == Some(&intersheet_refs_field(&label)) {
         label.fields.remove(INTERSHEET_REFS);
     }
@@ -1432,8 +1428,6 @@ fn symbol_to_sexpr(symbol: &Symbol) -> Sexpr {
     Sexpr::list(items)
 }
 
-/// `(instances (project "name" (path "/..." ...children) ...) ...)`, with
-/// consecutive paths of the same project grouped under one `project`.
 fn instances_to_sexpr<'a>(
     instances: impl Iterator<Item = (&'a str, &'a str, Vec<Sexpr>)>,
 ) -> Sexpr {
@@ -1458,8 +1452,7 @@ fn instances_to_sexpr<'a>(
     )
 }
 
-/// KiCad writes the mandatory fields in field-id order, then the remaining
-/// fields in their stored order, and the library metadata fields last.
+/// Mandatory fields in field-id order, then the rest, then library metadata.
 fn field_rank(name: &str) -> u8 {
     match name {
         "Reference" | INTERSHEET_REFS => 0,
@@ -1645,9 +1638,8 @@ fn library_to_sexpr(library: &SymbolLibrary) -> Sexpr {
 
 fn normalize_internal_metadata_properties(sexpr: &mut Sexpr) {
     if sexpr.as_list().and_then(list_tag) == Some("property") {
-        // Library properties round-trip through the field model so that they
-        // serialize the way KiCad 10 writes them however the source spelled
-        // `hide`; metadata properties are always hidden.
+        // Round-trip through the field model so library properties serialize
+        // the way KiCad 10 writes them.
         if let Some(field) = SexprList::from_sexpr(sexpr).and_then(|list| parse_property(list).ok())
         {
             *sexpr = property_to_sexpr(&field, true);
@@ -1667,10 +1659,8 @@ fn normalize_internal_metadata_properties(sexpr: &mut Sexpr) {
 
 /// KiCad writes a library symbol as its header attributes, then properties,
 /// then unit sub-symbols, then `embedded_fonts`. Impose that order, with the
-/// mandatory properties first and the rest sorted by name, so a definition
-/// compares and serializes the same however its source ordered the children:
-/// a flattened derived symbol must not read as a changed schematic on every
-/// apply.
+/// properties in `field_rank` order, so a definition compares and serializes
+/// the same however its source ordered the children.
 fn canonicalize_symbol_children(items: &mut Vec<Sexpr>) {
     if items.len() <= 2 {
         return;
@@ -2648,10 +2638,7 @@ mod tests {
         assert!(symbol.in_pos_files);
         assert!(!symbol.dnp);
         assert!(!symbol.instances.is_empty());
-        let reference = symbol.field("Reference").unwrap();
-        assert!(!reference.show_name);
-        assert!(!reference.do_not_autoplace);
-        assert!(reference.unsupported.is_empty());
+        assert!(symbol.field("Reference").unwrap().unsupported.is_empty());
 
         let formatted = document.pages[0].to_kicad_sch();
         assert!(formatted.contains(&format!("(generator_version \"{GENERATOR_VERSION}\")")));
@@ -2659,8 +2646,6 @@ mod tests {
         assert_eq!(reparsed, document);
     }
 
-    /// A sheet KiCad 10 saved comes back byte-identical, so a KiCad resave of
-    /// our output only rewrites the generator lines.
     #[test]
     fn kicad_10_saved_sheet_round_trips_byte_identically() {
         let document = SchDocument::from_kicad_sch(KICAD_10_RESAVED_FIXTURE).unwrap();

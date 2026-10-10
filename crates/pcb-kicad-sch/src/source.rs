@@ -37,8 +37,7 @@ pub fn patch_page_source(source: &str, desired_page: &SchPage) -> Result<Option<
         }
     }
 
-    // New nodes go where KiCad would save them: before the next desired node
-    // the source already has, else before the trailing sections.
+    // New nodes go before the next node the source already has.
     let mut pending = Vec::new();
     let mut insert = |at: usize, nodes: &mut Vec<String>| {
         let text = nodes
@@ -91,15 +90,13 @@ pub fn patch_page_source(source: &str, desired_page: &SchPage) -> Result<Option<
         .map(Some)
 }
 
-/// A top-level node formatted for splicing into a page at depth one.
 fn format_node(node: &Sexpr) -> String {
     pcb_sexpr::formatter::format_tree(node, FormatMode::Normal)
         .trim()
         .replace('\n', "\n\t")
 }
 
-/// The start of `offset`'s line when only indentation precedes it, else
-/// `offset` itself (compact sources keep several nodes on one line).
+/// Start of `offset`'s line, unless another node precedes it on that line.
 fn line_start(source: &str, offset: usize) -> usize {
     let start = source[..offset].rfind('\n').map_or(0, |index| index + 1);
     if source[start..offset].trim().is_empty() {
@@ -109,7 +106,6 @@ fn line_start(source: &str, offset: usize) -> usize {
     }
 }
 
-/// `span` widened to its whole lines when only indentation surrounds it.
 fn line_span(source: &str, span: pcb_sexpr::Span) -> pcb_sexpr::Span {
     let start = line_start(source, span.start);
     let end = source[span.end..]

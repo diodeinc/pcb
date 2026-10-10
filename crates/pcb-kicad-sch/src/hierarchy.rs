@@ -315,19 +315,15 @@ fn path_depth(path: &str) -> usize {
     path.split('.').count()
 }
 
-/// KiCad stores the annotation of each symbol and the page number of each
-/// sheet per sheet-instance path, outside the items, and fills in whatever a
-/// loaded file lacks: paths under this project's root belong to this project
-/// (even after a rename), and unnumbered sheets take the lowest unused page
-/// numbers in sheet-list order. Doing the same here keeps a KiCad resave from
-/// touching pcb-written sheets.
+/// Fill in symbol annotations and sheet page numbers per sheet-instance path
+/// the way KiCad does on load: unnumbered sheets take the lowest unused page
+/// numbers in sheet-list order, and paths under this project's roots belong
+/// to this project even after a rename.
 pub(crate) fn sync_instances(
     document: &mut SchDocument,
     slots: &BTreeSet<SymbolSlotKey>,
     project: &str,
 ) -> Result<()> {
-    // Sheet-list order: `page_instances` walks the hierarchy depth-first with
-    // children in KiCad's position order.
     let instances = page_instances(document)?;
     let page_of = instances
         .iter()
@@ -341,8 +337,7 @@ pub(crate) fn sync_instances(
             .entry(instance.page.id.clone())
             .or_default()
             .push(format!("/{}", instance.id));
-        // Roots are numbered by `sheet_instances`, child sheets by their
-        // sheet item's instance for the parent path.
+        // Roots are numbered by `sheet_instances`, child sheets by their sheet item.
         let (page, sheet) = match instance.id.rsplit_once('/') {
             None => (root_page_number(instance.page), None),
             Some((parent_id, sheet_id)) => {
@@ -384,16 +379,18 @@ pub(crate) fn sync_instances(
         }
     }
 
-    // Instances under this project's roots are re-homed after a project
-    // rename; a document without a root file cannot name the project.
-    let root_ids = document.root_page_ids.clone();
+    let SchDocument {
+        pages,
+        root_page_ids,
+        ..
+    } = document;
     let is_root_path = |path: &str| {
         !project.is_empty()
-            && root_ids
+            && root_page_ids
                 .iter()
                 .any(|root| path[1..].split('/').next() == Some(root))
     };
-    for page in &mut document.pages {
+    for page in pages {
         let Some(paths) = paths_by_page.get(&page.id) else {
             continue;
         };
@@ -413,8 +410,7 @@ pub(crate) fn sync_instances(
                     };
                     for path in paths {
                         match symbol.instances.iter_mut().find(|i| &i.path == path) {
-                            // Only managed annotations are refreshed from the
-                            // field; otherwise the native annotation is the truth.
+                            // Only managed annotations follow the Reference field.
                             Some(instance) => {
                                 if slot.is_some() {
                                     instance.reference = Some(reference.clone());

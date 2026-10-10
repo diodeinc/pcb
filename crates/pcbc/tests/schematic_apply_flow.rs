@@ -1576,7 +1576,6 @@ fn renames_a_root_schematic_that_does_not_match_the_project() {
 
     let applied = apply_linked_schematic(&netlist).unwrap().unwrap();
 
-    // Symbol instances are keyed by project name, so the rename re-homes them.
     assert!(applied.changed);
     assert_eq!(applied.project_file, project_file);
     assert_eq!(applied.root_schematic, project_dir.join("layout.kicad_sch"));
@@ -1919,7 +1918,6 @@ fn ambiguous_short_uses_the_same_repair_as_the_shared_issue_planner() {
     for (repaired, expected) in repaired.document.pages.iter().zip(&expected.pages) {
         assert_eq!(repaired.id, expected.id);
         assert_eq!(repaired.file_name, expected.file_name);
-        // The saved file carries KiCad's defaults (wire strokes, item order).
         let expected =
             parse_kicad_sch_page(expected.file_name.as_deref(), &expected.to_kicad_sch()).unwrap();
         assert_eq!(repaired.items, expected.items);

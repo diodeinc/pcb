@@ -67,8 +67,7 @@ pub(crate) fn reconcile_document(
             SchDocument {
                 pages: vec![SchPage {
                     file_name: Some(root_file_name.to_string()),
-                    // KiCad's trailing root-sheet sections. Existing files keep
-                    // whatever they have; a KiCad save adds them if missing.
+                    // KiCad's trailing root-sheet sections.
                     items: [
                         r#"(sheet_instances (path "/" (page "1")))"#,
                         "(embedded_fonts no)",
@@ -337,8 +336,7 @@ pub(crate) fn reconcile_document(
         )?;
     }
 
-    // KiCad pairs a root schematic only with the same-stem project (see
-    // `apply_linked_schematic`), so the root file names the project.
+    // The root schematic and the project share a file stem.
     let project_name = document
         .root_page_ids
         .first()
