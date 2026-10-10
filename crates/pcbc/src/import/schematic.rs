@@ -156,39 +156,59 @@ fn issue_summary(
         return summary;
     }
     // Island names are the bound `pcb:net` names, so show what the schematic itself says.
-    let drivers = document
+    let items = document
         .pages
         .iter()
         .flat_map(|page| page.items.iter().map(move |item| (page, item)))
         .filter_map(|(page, item)| {
             let name = match item {
-                pcb_kicad_sch::SchItem::Label(label) => &label.text,
-                pcb_kicad_sch::SchItem::Symbol(symbol) => symbol.field_value("Value")?,
-                _ => return None,
+                pcb_kicad_sch::SchItem::Label(label) => Some(format!("'{}'", label.text)),
+                pcb_kicad_sch::SchItem::Symbol(symbol) => symbol
+                    .field_value("Value")
+                    .map(|value| format!("'{value}'")),
+                _ => None,
             };
-            let file = page.file_name.as_deref().unwrap_or_default();
-            Some((item.id()?, format!("'{name}' in {file}")))
+            Some((
+                item.id()?,
+                (page.file_name.as_deref().unwrap_or_default(), name),
+            ))
         })
         .collect::<BTreeMap<_, _>>();
+    let id = |item: &ConnectivityItemRef| match item {
+        ConnectivityItemRef::Symbol { id, .. }
+        | ConnectivityItemRef::Wire { id, .. }
+        | ConnectivityItemRef::Junction { id, .. }
+        | ConnectivityItemRef::NoConnect { id, .. }
+        | ConnectivityItemRef::Label { id, .. } => id.clone(),
+        ConnectivityItemRef::SheetPin { sheet_id, .. } => sheet_id.clone(),
+    };
     let pieces = inspection.analysis.nets[net_name]
         .connected_islands
         .iter()
         .map(|piece| {
-            let names = piece
+            let islands = piece
                 .iter()
-                .flat_map(|island| inspection.physical.islands[island].named_drivers.values())
-                .flatten()
-                .filter_map(|driver| match driver {
-                    ConnectivityItemRef::Label { id, .. }
-                    | ConnectivityItemRef::Symbol { id, .. } => drivers.get(id.as_str()),
-                    _ => None,
-                })
+                .map(|island| &inspection.physical.islands[island])
+                .collect::<Vec<_>>();
+            let names = islands
+                .iter()
+                .flat_map(|island| island.named_drivers.values().flatten())
+                .filter_map(|driver| items.get(id(driver).as_str())?.1.clone())
                 .collect::<BTreeSet<_>>();
-            if names.is_empty() {
+            let files = islands
+                .iter()
+                .flat_map(|island| &island.items)
+                .filter_map(|item| Some(items.get(id(item).as_str())?.0))
+                .collect::<BTreeSet<_>>();
+            let names = if names.is_empty() {
                 "unlabelled wiring".to_string()
             } else {
-                names.into_iter().cloned().collect::<Vec<_>>().join(", ")
-            }
+                names.into_iter().collect::<Vec<_>>().join(", ")
+            };
+            format!(
+                "{names} in {}",
+                files.into_iter().collect::<Vec<_>>().join(", ")
+            )
         })
         .collect::<Vec<_>>();
     format!("{summary}: {}", pieces.join(" | "))
