@@ -1696,6 +1696,16 @@ fn canonicalize_symbol_children(items: &mut Vec<Sexpr>) {
             .then_with(|| natord::compare(pin_number(a), pin_number(b)))
             .then_with(|| draw_item_sort_key(a).cmp(&draw_item_sort_key(b)))
     });
+    // Unit names end in `_<unit>_<body_style>`, KiCad's unit sort key.
+    units.sort_by_cached_key(|unit| {
+        let name = unit.as_list().and_then(|list| list.get(1)?.as_str());
+        let mut suffix = name
+            .unwrap_or("")
+            .rsplit('_')
+            .map(|part| part.parse::<u32>().ok());
+        let body_style = suffix.next().flatten();
+        (suffix.next().flatten(), body_style)
+    });
     items.extend(leading);
     items.extend(properties);
     items.extend(draw_items);

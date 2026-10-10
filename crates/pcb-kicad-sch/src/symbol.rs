@@ -175,6 +175,15 @@ impl ParsedSymbolDefinition {
             && self.sections.iter().all(|section| section.pins.is_empty())
     }
 
+    /// The pins KiCad instantiates on a placed symbol: every unit's, in the
+    /// symbol's body style.
+    pub(crate) fn instance_pins(&self, symbol: &Symbol) -> impl Iterator<Item = &PlacedPin> {
+        self.sections
+            .iter()
+            .filter(|section| matches_body_style(section.body_style, symbol.body_style))
+            .flat_map(|section| section.pins.iter())
+    }
+
     pub fn placed_pins(&self, symbol: &Symbol) -> Result<Vec<PlacedPin>> {
         let mut pins = self
             .sections

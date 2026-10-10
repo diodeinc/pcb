@@ -1779,9 +1779,8 @@ fn reconcile_pin_instances(
     previous: &[crate::PinInstance],
 ) -> Result<()> {
     let parsed = symbol::ParsedSymbolDefinition::parse(definition)?;
-    let definition_pins = parsed.placed_pins(symbol)?;
     let mut pins_by_number = BTreeMap::<String, Vec<_>>::new();
-    for pin in definition_pins {
+    for pin in parsed.instance_pins(symbol) {
         if !pin.number.is_empty() {
             pins_by_number
                 .entry(pin.number.clone())
@@ -1849,17 +1848,13 @@ fn component_fields(
         SymbolField::new("Footprint", footprint_id, at).with_hidden(true),
         SymbolField::new("Path", slot.component_path(), at).with_hidden(true),
     ];
-    // KiCad always writes the mandatory Datasheet field.
-    let datasheet = component_slots::attribute_string(instance, "datasheet")?.unwrap_or_default();
-    fields.push(SymbolField::new("Datasheet", datasheet, at).with_hidden(true));
-    // Imported boards persist the original schematic Description; an explicitly
-    // empty one is meaningful.
-    let description = match component_slots::attribute_string(instance, "schematic_description")? {
-        Some(description) => Some(description),
-        None => component_slots::attribute_string(instance, "description")?,
-    };
-    if let Some(description) = description {
-        fields.push(SymbolField::new("Description", description, at).with_hidden(true));
+    // KiCad always writes the mandatory Datasheet and Description fields.
+    // Imported boards persist the original schematic Description.
+    let datasheet = component_slots::attribute_string(instance, "datasheet")?;
+    let description = component_slots::attribute_string(instance, "schematic_description")?
+        .or(component_slots::attribute_string(instance, "description")?);
+    for (name, value) in [("Datasheet", datasheet), ("Description", description)] {
+        fields.push(SymbolField::new(name, value.unwrap_or_default(), at).with_hidden(true));
     }
     Ok(fields)
 }

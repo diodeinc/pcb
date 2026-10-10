@@ -540,7 +540,6 @@ fn assert_preserved_schematic(path: &std::path::Path, original: &str, applied: b
     use pcb_kicad_sch::{SchDocument, SchItem, SymbolSlotKey};
     let mut imported = SchDocument::from_kicad_sch(&fs::read_to_string(path).unwrap()).unwrap();
     let mut source = SchDocument::from_kicad_sch(original).unwrap();
-    let library = source.pages[0].library.clone();
     // Apply writes items in KiCad's save order; pair them by identity.
     for page in imported.pages.iter_mut().chain(source.pages.iter_mut()) {
         page.items.sort_by_cached_key(|item| match item {
@@ -575,18 +574,20 @@ fn assert_preserved_schematic(path: &std::path::Path, original: &str, applied: b
                 imported.fields.remove("Footprint");
                 original.fields.remove("Footprint");
                 if applied {
-                    if !original.fields.contains_key("Datasheet") {
-                        imported.fields.remove("Datasheet");
+                    // Apply always writes the mandatory fields.
+                    for name in ["Datasheet", "Description"] {
+                        if !original.fields.contains_key(name) {
+                            imported.fields.remove(name);
+                        }
                     }
-                    // KiCad may store all units' pin UUIDs on each unit. Apply keeps only the
-                    // selected unit's records, without changing its physical pin identity.
-                    let pins = library.definitions[original.library_key()]
-                        .placed_pins(original)
-                        .unwrap()
-                        .into_iter()
-                        .map(|pin| pin.number)
+                    // Apply lists every unit's pins, like KiCad; the source may list only
+                    // the placed unit's. Pins the source lists must keep their identity.
+                    let pins = original
+                        .pins
+                        .iter()
+                        .map(|pin| pin.number.clone())
                         .collect::<BTreeSet<_>>();
-                    original.pins.retain(|pin| pins.contains(&pin.number));
+                    imported.pins.retain(|pin| pins.contains(&pin.number));
                     original.pins.sort_by(|a, b| a.number.cmp(&b.number));
                     imported.pins.sort_by(|a, b| a.number.cmp(&b.number));
                 }
