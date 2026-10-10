@@ -12,9 +12,24 @@ use crate::{SchDocument, SchItem, parse_kicad_sch_page, restore_sheet_placements
 #[derive(Debug, Clone)]
 pub struct LoadedProject {
     pub project: Value,
-    pub root_schematics: Vec<String>,
-    pub schematic_files: Vec<String>,
     pub document: SchDocument,
+}
+
+impl LoadedProject {
+    /// Every loaded schematic file in load order: roots in project order, then
+    /// children breadth-first. One per page.
+    pub fn schematic_files(&self) -> impl Iterator<Item = &str> {
+        self.document
+            .pages
+            .iter()
+            .filter_map(|page| page.file_name.as_deref())
+    }
+
+    /// The root schematic files in project order; they are loaded first.
+    pub fn root_schematics(&self) -> impl Iterator<Item = &str> {
+        self.schematic_files()
+            .take(self.document.root_page_ids.len())
+    }
 }
 
 /// Load a project through `read`, which returns `None` for a missing file.
@@ -93,8 +108,6 @@ pub fn load_project(
         .context("schematic.bus_aliases must map alias names to member lists")?
         .unwrap_or_default();
     Ok(LoadedProject {
-        root_schematics: roots.into_iter().map(|(path, _)| path).collect(),
-        schematic_files: queue.into_iter().map(|(path, _)| path).collect(),
         document: SchDocument {
             pages,
             root_page_ids,
@@ -234,7 +247,7 @@ mod tests {
         let project = load_project("demo.kicad_pro", |path| Ok(files.get(path).cloned())).unwrap();
 
         assert_eq!(
-            project.schematic_files,
+            project.schematic_files().collect::<Vec<_>>(),
             [
                 "demo.kicad_sch",
                 "sub/child.kicad_sch",

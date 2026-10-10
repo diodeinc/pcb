@@ -30,12 +30,8 @@ mod symbol;
 pub mod analysis;
 mod compose;
 
-pub use analysis::NoConnectTarget;
 pub use field_autoplace::Bounds;
-pub use identity::{
-    KiCadUuidPath, SymbolSlotKey, UUID_NAMESPACE_URL, canonical_component_path, deterministic_uuid,
-    normalize_schematic_path, root_page_id,
-};
+pub use identity::{SymbolSlotKey, canonical_component_path, deterministic_uuid, root_page_id};
 pub use kicad::parse_kicad_sch_page;
 pub use model::{
     FieldHorizontalJustify, FieldJustify, FieldVerticalJustify, Graphic, GraphicKind, GraphicText,
@@ -43,7 +39,6 @@ pub use model::{
     Point, Rotation, SchDocument, SchItem, SchPage, Sheet, SheetPin, Symbol, SymbolDefinition,
     SymbolField, SymbolInstance, SymbolLibrary, TextEffects, TextSize, Wire,
 };
-pub use net_symbols::NetSymbolSpec;
 pub use placement::off_page_warnings;
 pub use project::{LoadedProject, load_project, project_root_schematics, sheet_file};
 pub use repair::{

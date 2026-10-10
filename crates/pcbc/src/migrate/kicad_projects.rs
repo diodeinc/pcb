@@ -63,17 +63,32 @@ fn declared_project(zen: &Path) -> Result<Option<(String, String)>> {
             if !matches!(function.node.ident.as_str(), "Board" | "Project" | "Layout") {
                 return None;
             }
-            let literal = |keys: &[&str]| {
-                args.args.iter().find_map(|arg| match &arg.node {
-                    ArgumentP::Named(key, value) if keys.contains(&key.node.as_str()) => {
-                        match &value.node {
-                            ExprP::Literal(AstLiteral::String(value)) => Some(value.node.clone()),
-                            _ => None,
+            // All three take `name` then `path` positionally.
+            let literal = |position: usize, keys: &[&str]| {
+                let positional = args
+                    .args
+                    .iter()
+                    .filter_map(|arg| match &arg.node {
+                        ArgumentP::Positional(value) => Some(value),
+                        _ => None,
+                    })
+                    .nth(position);
+                let named = || {
+                    args.args.iter().find_map(|arg| match &arg.node {
+                        ArgumentP::Named(key, value) if keys.contains(&key.node.as_str()) => {
+                            Some(value)
                         }
-                    }
+                        _ => None,
+                    })
+                };
+                match &positional.or_else(named)?.node {
+                    ExprP::Literal(AstLiteral::String(value)) => Some(value.node.clone()),
                     _ => None,
-                })
+                }
             };
-            Some((literal(&["path", "layout_path"])?, literal(&["name"])?))
+            Some((
+                literal(1, &["path", "layout_path"])?,
+                literal(0, &["name"])?,
+            ))
         }))
 }

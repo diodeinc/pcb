@@ -13,7 +13,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::Write;
 use std::path::Path;
-use uuid::Uuid;
 
 pub(super) struct GenerationResult {
     pub(super) expected_pins_by_refdes: BTreeMap<KiCadRefDes, BTreeSet<KiCadPinNumber>>,
@@ -387,8 +386,6 @@ fn compute_set_footprint_sync_hook_patches_by_refdes(
     pcb_text: &str,
     desired_by_refdes: &BTreeMap<KiCadRefDes, String>,
 ) -> std::result::Result<PatchSet, anyhow::Error> {
-    const UUID_NAMESPACE_URL: Uuid = Uuid::from_u128(0x6ba7b811_9dad_11d1_80b4_00c04fd430c8); // uuid.NAMESPACE_URL
-
     let root_list = board
         .as_list()
         .ok_or_else(|| anyhow::anyhow!("KiCad PCB root is not a list"))?;
@@ -451,9 +448,9 @@ fn compute_set_footprint_sync_hook_patches_by_refdes(
         // Note: This overwrites KiCad's schematic association path. That's intentional: once a
         // KiCad project is adopted into Zener, Zener becomes the source of truth and the layout
         // sync pipeline relies on this deterministic KIID path.
-        let uuid = Uuid::new_v5(&UUID_NAMESPACE_URL, desired.as_bytes()).to_string();
+        let kiid_path = pcb_sch::kicad_identity::footprint_kiid_path(desired);
         for span in path_spans {
-            patches.replace_string(span, &format!("/{uuid}/{uuid}"));
+            patches.replace_string(span, &kiid_path);
         }
 
         if let Some(span) = existing_path_span {

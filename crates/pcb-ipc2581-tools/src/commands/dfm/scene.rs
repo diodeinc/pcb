@@ -5,14 +5,14 @@
 //! are. The material is the dark image the checks measure, cutouts and
 //! negative polarity resolved into it; pads keep their exact standard shapes.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 
 use anyhow::{Context, Result, ensure};
 use pcb_ir::dialects::artwork::{self, Aperture, ApertureShape, Geometry, Object};
 use pcb_ir::dialects::ipc::process;
 use pcb_ir::dialects::ipc::{
-    ArtworkScope, ArtworkTarget, FeatureBucket, ProfileSet, lower_layer_to_artwork_objects_with,
-    profile_occurrences_for,
+    ArtworkScope, ArtworkTarget, FeatureBucket, PrimitiveRef, ProfileSet,
+    lower_layer_to_artwork_objects_with, profile_occurrences_for,
 };
 use pcb_ir::geom::path::{ContourBuf, stroke_to_fill};
 use pcb_ir::geom::region::ContourSet;
@@ -59,11 +59,14 @@ pub(super) fn export(
                 .unwrap_or_default(),
             BBox::union,
         );
+    let rules = rules
+        .iter()
+        .map(|rule| (rule.id.as_str(), rule))
+        .collect::<HashMap<_, _>>();
     for finding in findings {
         let rule = rules
-            .iter()
-            .find(|rule| rule.id == finding.rule_id)
-            .context("DFM finding references an absent rule")?;
+            .get(finding.rule_id.as_str())
+            .expect("checks create every finding from a configured rule");
         ensure!(
             !rule.view.spatial || !finding.sites.is_empty(),
             "spatial DFM finding {} has no check-owned sites",
@@ -151,13 +154,15 @@ fn scene_passes(wanted: &BTreeSet<&str>, designs: &[Design<'_>]) -> Result<Vec<S
                 .map(|name| (format!("{name} openings"), "mask_openings", "#159447", name)),
         )
         .collect::<Vec<_>>();
+    let primitives = standard_primitives(design.imported);
+    let catalogue = |primitive| catalogue_aperture(&primitives, primitive);
     #[cfg(not(target_family = "wasm"))]
     let layers = layers.into_par_iter();
     #[cfg(target_family = "wasm")]
     let layers = layers.into_iter();
     let mut passes = layers
         .map(|(label, feature, color, layer)| {
-            let shapes = material(designs, layer)?;
+            let shapes = material(designs, &catalogue, layer)?;
             Ok(pass(label, feature, color, Some(layer.clone()), shapes))
         })
         .collect::<Result<Vec<_>>>()?;
@@ -278,11 +283,15 @@ fn scene_passes(wanted: &BTreeSet<&str>, designs: &[Design<'_>]) -> Result<Vec<S
     Ok(passes)
 }
 
-/// One layer's material, each Step's own in its own frame.
-fn material(designs: &[Design<'_>], layer: &str) -> Result<Vec<(u32, Shape)>> {
-    let primitives = standard_primitives(designs[0].imported);
+/// One layer's material, each Step's own in its own frame, its standard
+/// pads drawn with `catalogue`'s apertures.
+fn material(
+    designs: &[Design<'_>],
+    catalogue: &(dyn Fn(PrimitiveRef) -> Option<Aperture> + Sync),
+    layer: &str,
+) -> Result<Vec<(u32, Shape)>> {
     let target = ArtworkTarget {
-        catalogue: &|primitive| catalogue_aperture(&primitives, primitive),
+        catalogue,
         ..ArtworkTarget::default()
     };
     let mut shapes = Vec::new();
@@ -556,7 +565,9 @@ mod tests {
         ));
         let imported = fixtures::import(MASK_BOARD);
         let design = Design::board(&imported, &rules, Resolution::default());
-        let shapes = material(std::slice::from_ref(&design), "F.Mask").unwrap();
+        let primitives = standard_primitives(&imported);
+        let catalogue = |primitive| catalogue_aperture(&primitives, primitive);
+        let shapes = material(std::slice::from_ref(&design), &catalogue, "F.Mask").unwrap();
         let [(0, opening)] = shapes.as_slice() else {
             panic!("one opening: {shapes:?}");
         };
@@ -584,8 +595,10 @@ mod tests {
             "[[rules.copper.clearance]]\nid = \"clearance\"\nlimit = { minimum = \"0.1 mm\" }",
         ));
         let design = Design::board(&imported, &rules, Resolution::default());
+        let primitives = standard_primitives(&imported);
+        let catalogue = |primitive| catalogue_aperture(&primitives, primitive);
         assert!(
-            material(std::slice::from_ref(&design), "F.Cu")
+            material(std::slice::from_ref(&design), &catalogue, "F.Cu")
                 .unwrap()
                 .is_empty()
         );

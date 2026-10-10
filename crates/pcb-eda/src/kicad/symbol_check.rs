@@ -443,16 +443,8 @@ pub fn fix(mut sources: Vec<String>) -> Vec<String> {
         let Ok(library) = KicadSymbolLibrary::from_sources(sources.clone()) else {
             return sources;
         };
-        let symbols = || {
-            let names = library.symbol_names();
-            names
-                .into_iter()
-                .flat_map(|name| check_symbol(&library, name, None))
-                .collect()
-        };
-        let issues = check_library(&library).map_or_else(symbols, |issue| vec![issue]);
         let mut edits = vec![Vec::new(); sources.len()];
-        for issue in issues {
+        for issue in library_issues(&library) {
             edits[issue.source].extend(issue.fix);
         }
         if edits.iter().all(Vec::is_empty) {
@@ -469,12 +461,19 @@ pub fn fix(mut sources: Vec<String>) -> Vec<String> {
 /// Every issue over which KiCad refuses to load `library`: a fault in a
 /// file, else those of each symbol, as KiCad reads every definition.
 pub fn unloadable(library: &KicadSymbolLibrary) -> Vec<SymbolIssue> {
+    // A file fault is a `symbol.parse` issue, which always blocks.
+    let mut issues = library_issues(library);
+    issues.retain(SymbolIssue::blocks_kicad);
+    issues
+}
+
+/// The fault in a file of `library`, else the issues of each symbol.
+fn library_issues(library: &KicadSymbolLibrary) -> Vec<SymbolIssue> {
     let symbols = || {
         let names = library.symbol_names();
         names
             .into_iter()
             .flat_map(|name| check_symbol(library, name, None))
-            .filter(SymbolIssue::blocks_kicad)
             .collect()
     };
     check_library(library).map_or_else(symbols, |fault| vec![fault])

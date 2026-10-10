@@ -159,12 +159,9 @@ kurbo = "0.13"
 tiny-skia = "0.12"
 zstd = "0.14"
 jiff = "0.2"
-# The Starlark fork requires exactly 1.8.2 for its hashing integration.
-blake3 = "1.8"
 rusqlite = { version = "0.40.2", features = ["bundled"] }
 r2d2 = "0.8"
 r2d2_sqlite = "0.35"
-unicode-normalization = "0.1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 tracing-chrome = "0.7"

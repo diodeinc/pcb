@@ -15,7 +15,9 @@ use i_triangle::float::triangulator::Triangulator;
 use i_triangle::i_overlay::core::fill_rule::FillRule;
 use i_triangle::i_overlay::core::solver::Solver;
 use i_triangle::int::validation::Validation;
-use pcb_step::scene::{Layer, LayerKind, Prism, RoundHole, Shape, Vertex};
+use pcb_step::scene::{
+    KICAD_MAX_ERROR, Layer, LayerKind, Prism, RoundHole, Shape, Vertex, chord_count,
+};
 use rayon::prelude::*;
 
 use crate::mesh::Primitive;
@@ -23,19 +25,8 @@ use crate::mesh::Primitive;
 /// Chord error for arcs and circles, in millimetres.
 const MAX_ERROR: f64 = 0.01;
 
-/// Chord error for the board body's outline, cutouts and drills: KiCad's
-/// VRML tolerance, so large round outlines do not look faceted.
-const OUTLINE_ERROR: f64 = 0.005;
-
 /// Tolerance for a copper face to count as resting on the body.
 const TOUCHING: f64 = 1e-6;
-
-/// A copper prism, drawn flat: the board body's bottom and top, when it
-/// is exported, hide the caps resting on it and the copper inside it.
-#[derive(Clone, Copy)]
-struct Copper {
-    body: Option<(f64, f64)>,
-}
 
 /// One optimized primitive per layer, in order.
 pub(crate) fn mesh(layers: &[Layer]) -> Vec<Primitive> {
@@ -48,27 +39,31 @@ pub(crate) fn mesh(layers: &[Layer]) -> Vec<Primitive> {
     layers
         .par_iter()
         .map(|layer| {
-            let mut primitive = self::layer(layer, Copper { body });
+            let mut primitive = self::layer(layer, body);
             primitive.optimize();
             primitive
         })
         .collect()
 }
 
-fn layer(layer: &Layer, copper: Copper) -> Primitive {
-    let copper = matches!(
-        layer.kind,
-        LayerKind::Copper | LayerKind::Pads | LayerKind::Vias
-    )
-    .then_some(copper);
+/// A layer's faces. Copper is drawn flat: the board `body`'s bottom and
+/// top, when it is exported, hide the caps resting on it and the copper
+/// inside it.
+fn layer(layer: &Layer, body: Option<(f64, f64)>) -> Primitive {
+    let copper = layer.kind.is_copper();
     let parts: Vec<Primitive> = match &layer.shape {
         Shape::Solids(prisms) => {
+            // The board body's outline, cutouts and drills at KiCad's VRML
+            // tolerance, so large round outlines do not look faceted.
             let error = if layer.kind == LayerKind::Body {
-                OUTLINE_ERROR
+                KICAD_MAX_ERROR
             } else {
                 MAX_ERROR
             };
-            prisms.par_iter().map(|p| prism(p, copper, error)).collect()
+            prisms
+                .par_iter()
+                .map(|p| prism(p, copper, body, error))
+                .collect()
         }
         Shape::Faces { z, up, faces } => faces
             .par_iter()
@@ -91,13 +86,13 @@ fn layer(layer: &Layer, copper: Copper) -> Primitive {
 }
 
 /// A prism's faces, with curves chorded within `error` millimetres; only
-/// its visible caps when it is copper.
-fn prism(prism: &Prism, copper: Option<Copper>, error: f64) -> Primitive {
+/// its caps not hidden by the board `body` when it is copper.
+fn prism(prism: &Prism, copper: bool, body: Option<(f64, f64)>, error: f64) -> Primitive {
     let Prism { z0, z1, solid } = prism;
     let (z0, z1) = (*z0, *z1);
     // Which faces the body hides: all of copper inside it, and a cap
     // resting on it.
-    let (top_hidden, bottom_hidden) = match copper.and_then(|c| c.body) {
+    let (top_hidden, bottom_hidden) = match body.filter(|_| copper) {
         Some((b0, b1)) if z0 >= b0 - TOUCHING && z1 <= b1 + TOUCHING => {
             return Primitive::default();
         }
@@ -116,7 +111,7 @@ fn prism(prism: &Prism, copper: Option<Copper>, error: f64) -> Primitive {
         .collect();
     let mut bottom = top.clone();
     for hole in &solid.round {
-        let n = segments(hole.max_radius(), error);
+        let n = chord_count(hole.max_radius(), TAU, error).max(8);
         let (z_top, r_top) = hole.profile[0];
         let (z_bottom, r_bottom) = hole.profile[hole.profile.len() - 1];
         if z_top >= z1 - 1e-9 && r_top > 0.0 {
@@ -125,7 +120,7 @@ fn prism(prism: &Prism, copper: Option<Copper>, error: f64) -> Primitive {
         if z_bottom <= z0 + 1e-9 && r_bottom > 0.0 {
             bottom.push(circle(hole.center, r_bottom, n));
         }
-        if copper.is_none() {
+        if !copper {
             round_hole(&mut out, hole, n);
         }
     }
@@ -135,7 +130,7 @@ fn prism(prism: &Prism, copper: Option<Copper>, error: f64) -> Primitive {
     if !bottom_hidden {
         cap(&mut out, &bottom, z0, false);
     }
-    if copper.is_none() {
+    if !copper {
         walls(&mut out, &outer, true, z0, z1);
         for hole in &holes {
             walls(&mut out, hole, false, z0, z1);
@@ -146,12 +141,6 @@ fn prism(prism: &Prism, copper: Option<Copper>, error: f64) -> Primitive {
 
 fn points(ring: &[Vertex]) -> Vec<DVec2> {
     ring.iter().map(|v| v.point).collect()
-}
-
-/// Chords for a whole circle of radius `r` within `error`.
-fn segments(r: f64, error: f64) -> usize {
-    let step = 2.0 * (1.0 - error / r).clamp(-1.0, 1.0).acos();
-    ((TAU / step.max(1e-3)).ceil() as usize).max(8)
 }
 
 fn circle(c: DVec2, r: f64, n: usize) -> Vec<DVec2> {

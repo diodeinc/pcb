@@ -224,7 +224,7 @@ fn migrate_names_kicad_projects_after_their_board() {
         )
         .write(
             "boards/Demo/Demo.zen",
-            "Board(name = \"Demo\", path = \"layout\", layers = 4)\n",
+            "Board(\"Demo\", path = \"layout\", layers = 4)\n",
         )
         .write("boards/Demo/layout/layout.kicad_pro", project)
         .write("boards/Demo/layout/layout.kicad_pcb", "board")

@@ -271,6 +271,8 @@ limit = {{ minimum = "0.20 mm" }}"#
                 assert!(
                     result
                         .scene
+                        .as_ref()
+                        .unwrap()
                         .passes
                         .iter()
                         .any(|pass| pass.feature == "drills"

@@ -16,7 +16,7 @@ use meshopt_rs::index::buffer::{encode_index_buffer, encode_index_buffer_bound};
 use meshopt_rs::vertex::VertexEncodingVersion;
 use meshopt_rs::vertex::buffer::{encode_vertex_buffer, encode_vertex_buffer_bound};
 use meshopt_rs::vertex::filter::encode_filter_oct_8;
-use pcb_step::scene::{LayerKind, Scene};
+use pcb_step::scene::{Layer, LayerKind, Scene};
 use rayon::prelude::*;
 use serde_json::{Value, json};
 
@@ -62,19 +62,25 @@ impl Material {
     }
 }
 
-/// Board materials: the layer colours KiCad writes to STEP, with copper
-/// shown as metal.
-fn layer_material(kind: LayerKind, srgb: [f64; 3], transparency: Option<f64>) -> Material {
-    let (metallic, roughness) = match kind {
+/// Board materials: KiCad's layer colours read as sRGB, as its VRML export
+/// reads them. Exposed copper, pads included, takes the finish colour
+/// `copper`, as in KiCad's VRML export; STEP keeps KiCad's STEP colours.
+fn layer_material(layer: &Layer, copper: [f64; 3]) -> Material {
+    let (metallic, roughness) = match layer.kind {
         LayerKind::Body => (0.0, 0.8),
         // Not metallic: without an environment map, metal renders black.
         LayerKind::Copper | LayerKind::Pads | LayerKind::Vias => (0.0, 0.4),
         LayerKind::Silkscreen { .. } => (0.0, 0.9),
         LayerKind::Soldermask { .. } => (0.0, 0.4),
     };
+    let srgb = if layer.kind.is_copper() {
+        copper
+    } else {
+        layer.color
+    };
     let [r, g, b] = srgb.map(|c| srgb_to_linear(c as f32));
     Material {
-        color: [r, g, b, 1.0 - transparency.unwrap_or(0.0) as f32],
+        color: [r, g, b, 1.0 - layer.transparency.unwrap_or(0.0) as f32],
         metallic,
         roughness,
         double_sided: false,
@@ -354,11 +360,12 @@ fn matrix(m: DMat4) -> Value {
 pub(crate) fn write(
     name: &str,
     scene: &Scene,
+    copper: [f64; 3],
     layers: &[Primitive],
     models: &Models,
     sink: &mut dyn Write,
 ) -> Result<()> {
-    let board: Vec<(&pcb_step::scene::Layer, &Primitive)> = scene
+    let board: Vec<(&Layer, &Primitive)> = scene
         .layers
         .iter()
         .zip(layers)
@@ -401,7 +408,7 @@ pub(crate) fn write(
         let primitives: Vec<Value> = board
             .iter()
             .map(|(layer, _)| {
-                let material = layer_material(layer.kind, layer.color, layer.transparency);
+                let material = layer_material(layer, copper);
                 gltf.primitive(encoded.next().unwrap(), material)
             })
             .collect();

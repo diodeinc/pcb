@@ -10,39 +10,41 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Added
 
-- `pcb gltf export` writes a compressed, instanced GLB for a KiCad board without kicad-cli.
+- `pcb gltf export` writes a compressed, instanced GLB for a KiCad board without kicad-cli, styled like KiCad's VRML export. It takes the arguments of `pcb step export` and always exports outer copper.
 
 ### Changed
 
-- DFM reports are SQLite `.dfm` databases, opened with `pcb open`, and the commands print a JSON summary; removed DFM waivers and `pcb dfm --open`.
+- DFM reports are SQLite `.dfm` databases, opened with `pcb open`, and `pcb dfm` and `pcb ipc dfm check` print a JSON summary; the WASM `checkDfm` returns the same summary. Removed DFM waivers and `pcb dfm --open`.
+- `.kicad_sch` files are written in KiCad 10's item order and number format, so a KiCad save of an untouched pcb-written sheet changes only its generator lines. The first `pcb apply` after upgrading rewrites each pcb-written sheet once.
 - New KiCad projects are named after the board instead of `layout`; `pcb migrate` renames existing ones.
 - `pcb apply` names the root schematic after its KiCad project, and renames one that does not match, so KiCad keeps project settings such as bus aliases and ERC exclusions and DRC schematic parity runs.
 - `pcb apply` gives schematic symbols and layout footprints the same Footprint, Value and Datasheet. Value is the part value, else its MPN, else the symbol name, so footprints that showed an MPN now show the value.
+- `pcb apply schematic` grows a new sheet up to A0 instead of leaving it on A4, and warns on every run while a sheet has symbols outside its page.
 - `pcb build` and `pcb inspect` validate symbol libraries the way KiCad loads them: they reject what KiCad cannot load, such as a root-level `embedded_fonts`, and accept what it does, such as repeated symbol names and private properties. A library in a dependency is checked too, and warns instead of failing the build, since the workspace cannot fix it.
 - `DiffPair(impedance=...)` sets the impedance on its nets when the pair is created, so it applies even when the pair never crosses an `io()` boundary. Conflicting impedance values on one net keep the first and warn (`net.property_conflict`).
 - `moved()` is deprecated and warns on each use (`deprecated.moved`); it still works for now.
-- `pcb publish` checks BOM supplier offers only with `--bump`; local builds and `--check` no longer contact the BOM API.
-- `pcb import` rejects projects with more than one top-level sheet instead of importing only one of them.
-- `pcb publish` lists the diagnostics that block it, and says how far local main is ahead of or behind the remote.
-- `pcb publish` explains that a missing workspace name comes from `[workspace].name` in pcb.toml.
-- `pcb publish --check` reports the version it would publish (pass `--bump` for the next semver) and each stage as passed, failed or skipped, replacing `layoutChecked`; it no longer prints progress.
-- `pcb publish --check` on a workspace prints each package's current version, next version and tag as JSON, inferring bumps unless `--bump` is given.
 - `schematic="collapse"` and `"embed"` warn (`module.schematic.ignored`) when ignored, on a module that declares `Project()` in a linked KiCad schematic.
 - Missing BOM part errors suggest setting `Manufacturer_Part_Number` and `Manufacturer_Name` on the symbol as well as `part=Part(...)`.
+- `pcb import` rejects projects with more than one top-level sheet instead of importing only one of them.
+- `pcb publish` checks BOM supplier offers only with `--bump`; local builds and `--check` no longer contact the BOM API.
+- `pcb publish` lists the diagnostics that block it, says how far local main is ahead of or behind the remote, and explains that a missing workspace name comes from `[workspace].name` in pcb.toml.
+- `pcb publish --check` on a board reports the version it would publish (pass `--bump` for the next semver) and each stage as passed, failed or skipped, replacing `layoutChecked`; it no longer prints progress.
+- `pcb publish --check` on a workspace prints each package's current version, next version and tag as JSON, inferring bumps unless `--bump` is given.
 
 ### Fixed
 
 - `pcb import` ignores symbol instance paths and footprint paths that name no schematic sheet, so converted projects and its own output import with the right hierarchy, and its errors name the symbol, sheet or label to fix.
-- `pcb import --force` no longer deletes a KiCad project that lives inside its output before reading it.
-- `pcb add` no longer fails with "Content hash mismatch" on packages whose tracked files match the publisher's `.gitignore`. Package tags no longer carry content hashes, and `pcb info --inventory` drops `contentHash`.
-- `pcb apply schematic` grows a new sheet up to A0 instead of leaving it on A4, and warns on every run while a sheet has symbols outside its page.
-- `pcb apply schematic` reads KiCad 10 project bus aliases, so it no longer adds labels to bus nets after a KiCad save.
-- `pcb import` of a `.kicad_sch` uses its same-name `.kicad_pro`, keeping KiCad 10 bus aliases, and a `.kicad_pro` without a board imports.
-- `pcb import` accepts multi-unit symbols whose sheets keep stale caches of units they do not place.
 - `pcb import` reads symbols without per-sheet instance data, such as Altium imports KiCad has not re-saved, and ignores instance data for sheets that no longer exist.
+- `pcb import` accepts multi-unit symbols whose sheets keep stale caches of units they do not place.
+- `pcb import` of a `.kicad_sch` uses its same-name `.kicad_pro`, keeping KiCad 10 bus aliases, and a `.kicad_pro` without a board imports.
+- `pcb import` keeps embedded 3D models in the footprints it generates.
+- `pcb import --force` no longer deletes a KiCad project that lives inside its output before reading it.
+- `pcb apply schematic` reads KiCad 10 project bus aliases, so it no longer adds labels to bus nets after a KiCad save.
 - Schematic sheet paths written with Windows separators, including `..`, resolve as KiCad resolves them.
 - KiCad netlist (`.net`) libparts use the same part name as their components.
+- `pcb step export` accepts footprint text placed as `(at x y unlocked)`, as KiCad writes unrotated text.
 - `pcb step export` no longer cuts off a sliver of silkscreen or solder mask at the corner where a ring starts. Boards with many mask openings or silkscreen items export faster.
+- `pcb add` no longer fails with "Content hash mismatch" on packages whose tracked files match the publisher's `.gitignore`. Package tags no longer carry content hashes, and `pcb info --inventory` drops `contentHash`.
 
 ### Removed
 

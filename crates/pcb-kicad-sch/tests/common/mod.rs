@@ -11,7 +11,7 @@ use pcb_kicad_sch::{
     SchDocument, SchItem,
     analysis::{ConnectivityAnalysis, analyze_connectivity},
     connectivity::ConnectivityGraph,
-    normalize_schematic_path, parse_kicad_sch_page,
+    parse_kicad_sch_page,
 };
 
 pub mod kicad_builder;
@@ -122,7 +122,7 @@ impl TestProject {
                     .map(|root| {
                         let path = directory.join(root["filename"].as_str().unwrap());
                         let id = root["uuid"].as_str().map(str::to_owned);
-                        (normalize_schematic_path(&path), id)
+                        (pcb_zen_core::normalize_path(&path), id)
                     })
                     .collect::<Vec<_>>()
             })
@@ -161,7 +161,7 @@ impl TestProject {
                 SchItem::Sheet(sheet) => Some(sheet),
                 _ => None,
             }) {
-                let child = normalize_schematic_path(
+                let child = pcb_zen_core::normalize_path(
                     &path.parent().unwrap_or(directory).join(sheet.file_name()),
                 );
                 if seen.insert(child.clone()) {

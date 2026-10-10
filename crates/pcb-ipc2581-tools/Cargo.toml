@@ -10,6 +10,7 @@ authors.workspace = true
 default = ["cli"]
 cli = [
     "dep:anstream",
+    "dep:atomicwrites",
     "dep:clap",
     "dep:colored",
     "dep:comfy-table",
@@ -19,7 +20,6 @@ cli = [
     "dep:pdf-writer",
     "dep:rusqlite",
     "dep:subsetter",
-    "dep:tempfile",
     "dep:ttf-parser",
     "dep:uuid",
     "dep:zstd",
@@ -29,6 +29,7 @@ cli = [
 [dependencies]
 anyhow = { workspace = true }
 anstream = { workspace = true, optional = true }
+atomicwrites = { workspace = true, optional = true }
 chrono = { workspace = true }
 clap = { workspace = true, optional = true }
 colored = { workspace = true, optional = true }
@@ -50,7 +51,6 @@ serde-value = { workspace = true }
 uppsala = { workspace = true }
 sha2 = { workspace = true }
 subsetter = { workspace = true, optional = true }
-tempfile = { workspace = true, optional = true }
 toml = { workspace = true }
 ttf-parser = { workspace = true, optional = true }
 uuid = { workspace = true, features = ["serde"], optional = true }

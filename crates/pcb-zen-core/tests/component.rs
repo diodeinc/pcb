@@ -283,6 +283,8 @@ fn kicad_value_prefers_explicit_value_then_part_mpn_then_symbol_name() {
             r#"properties = {"Val": "10k"}, part = builtin.Part(mpn = "MPN-1", manufacturer = "M")"#,
             "10k",
         ),
+        // `Value` wins, and the legacy `Val` does not linger as a field.
+        (r#"properties = {"Value": "4k7", "Val": "10k"}"#, "4k7"),
         // A modifier-assigned part still supplies the value.
         (r#"properties = {"matched": True}"#, "HOUSE-1"),
         ("", "Plain"),
@@ -316,6 +318,7 @@ Component(
             .find(|instance| instance.kind == pcb_sch::InstanceKind::Component)
             .unwrap();
         assert_eq!(instance.kicad_value(), expected, "{args}");
+        assert!(!instance.attributes.contains_key("Val"), "{args}");
     }
 }
 

@@ -22,7 +22,7 @@ Models come from the board's embedded files; nothing is looked up on disk.
   colour of the stackup's copper finish (ENIG gold when none is named) and
   is not metallic, so it does not render black without an environment map.
   The board outline, cutouts and drills are chords within 0.005 mm, other
-  arcs and round holes within 0.01 mm, and curved walls carry the
+  arcs within 0.01 mm, and curved walls carry the
   exact normal of the arc or cylinder they lie on. Copper is flat, as in
   KiCad's VRML export: its top and bottom faces without walls, less the
   faces resting on the body and copper inside it. Every layer but the body
@@ -30,8 +30,9 @@ Models come from the board's embedded files; nothing is looked up on disk.
 - **Models**: one mesh per distinct embedded payload, with a primitive per
   STEP colour, drawn for every footprint that uses it with
   `EXT_mesh_gpu_instancing`; the node's `extras.references` lists the
-  footprints in instance order. Models are tessellated within 0.01 mm, the
-  largest first, in parallel, then simplified within another 0.01 mm. Faces
+  footprints in instance order. Models are tessellated within 0.01 mm in
+  model units, the largest first, in parallel, then simplified within another
+  0.01 mm of the placed model. Faces
   foxtrot cannot tessellate are left out with a warning; a model none of
   whose faces can be tessellated fails the export, as an unreadable model
   fails `pcb step export`.

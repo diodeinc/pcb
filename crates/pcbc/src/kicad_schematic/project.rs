@@ -7,7 +7,8 @@ use anyhow::{Context, Result, bail};
 use pcb_sch::{AttributeValue, Schematic};
 use serde_json::Value;
 
-use pcb_kicad_sch::{SchDocument, load_project, normalize_schematic_path};
+use pcb_kicad_sch::{SchDocument, load_project};
+use pcb_zen_core::normalize_path;
 
 /// A KiCad schematic project loaded from one project directory.
 #[derive(Debug, Clone)]
@@ -42,15 +43,10 @@ impl KicadProject {
         let loaded = load_project(file_name, |relative| {
             read_project_file(&directory, relative)
         })?;
-        let absolute = |paths: Vec<String>| {
-            paths
-                .into_iter()
-                .map(|path| normalize_schematic_path(&directory.join(path)))
-                .collect()
-        };
+        let absolute = |path: &str| normalize_path(&directory.join(path));
         Ok(Self {
-            root_schematics: absolute(loaded.root_schematics),
-            schematic_files: absolute(loaded.schematic_files),
+            root_schematics: loaded.root_schematics().map(absolute).collect(),
+            schematic_files: loaded.schematic_files().map(absolute).collect(),
             document: loaded.document,
             project: loaded.project,
             directory,
@@ -72,13 +68,13 @@ pub(crate) fn declared_root_schematics(project_file: &Path) -> Result<Vec<PathBu
         .with_context(|| format!("failed to parse {}", project_file.display()))?;
     pcb_kicad_sch::project_root_schematics(file_name, &project)?
         .iter()
-        .map(|root| project_schematic_path(directory, directory, root))
+        .map(|root| project_schematic_path(directory, root))
         .collect()
 }
 
 /// Read a project-relative file, keeping reads inside the project directory.
 pub fn read_project_file(directory: &Path, relative: &str) -> Result<Option<String>> {
-    let path = project_schematic_path(directory, directory, relative)?;
+    let path = project_schematic_path(directory, relative)?;
     match fs::read_to_string(&path) {
         Ok(content) => Ok(Some(content)),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
@@ -90,7 +86,6 @@ pub fn read_project_file(directory: &Path, relative: &str) -> Result<Option<Stri
 /// linked KiCad project directory.
 pub(crate) fn project_schematic_path(
     directory: &Path,
-    parent: &Path,
     file_name: impl AsRef<Path>,
 ) -> Result<PathBuf> {
     let file_name = file_name.as_ref();
@@ -102,8 +97,8 @@ pub(crate) fn project_schematic_path(
         );
     }
 
-    let directory = normalize_schematic_path(directory);
-    let path = normalize_schematic_path(&parent.join(file_name));
+    let directory = normalize_path(directory);
+    let path = normalize_path(&directory.join(file_name));
     if path == directory || !path.starts_with(&directory) {
         bail!(
             "schematic path '{}' escapes project directory {}",

@@ -5,7 +5,9 @@
 use std::borrow::Cow;
 
 use crate::Error;
-use crate::geom::{Vec2, Vec3, bezier_point, ccw_sweep, circle_center, rotate_kicad};
+use crate::geom::{
+    KICAD_MAX_ERROR, Vec2, Vec3, bezier_point, ccw_sweep, chord_count, circle_center, rotate_kicad,
+};
 use crate::sexpr::{Parser, unescape};
 
 pub struct Board<'a> {
@@ -2177,10 +2179,6 @@ fn parse_pts<'a>(p: &mut Parser<'a>, pts: &mut Vec<PolyPoint>) -> Result<(), Err
     Ok(())
 }
 
-/// Chord error when an arc in a point list is flattened, KiCad's default
-/// maximum error.
-const ARC_CHORD_ERROR: f64 = 0.005;
-
 /// The vertices of a polygon whose arcs are flattened to chords.
 fn flatten_pts(pts: &[PolyPoint], out: &mut Vec<Vec2>) {
     for pt in pts {
@@ -2201,8 +2199,7 @@ fn flatten_pts(pts: &[PolyPoint], out: &mut Vec<Vec2>) {
                 } else {
                     to_end - std::f64::consts::TAU
                 };
-                let step = 2.0 * (1.0 - ARC_CHORD_ERROR / r).clamp(-1.0, 1.0).acos();
-                let n = ((sweep.abs() / step.max(1e-3)).ceil() as usize).max(1);
+                let n = chord_count(r, sweep, KICAD_MAX_ERROR);
                 for k in 0..n {
                     let angle = from + sweep * k as f64 / n as f64;
                     out.push(c + Vec2::new(angle.cos(), angle.sin()) * r);

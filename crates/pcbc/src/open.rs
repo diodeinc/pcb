@@ -72,7 +72,7 @@ pub fn execute(args: OpenArgs) -> Result<()> {
     open_pcb_file(&layout_path)
 }
 
-pub(crate) fn is_dfm_report_path(path: &Path) -> bool {
+fn is_dfm_report_path(path: &Path) -> bool {
     path.file_name()
         .and_then(|name| name.to_str())
         .is_some_and(|name| {
@@ -82,7 +82,7 @@ pub(crate) fn is_dfm_report_path(path: &Path) -> bool {
         })
 }
 
-pub(crate) fn open_dfm_report(path: &Path) -> Result<()> {
+fn open_dfm_report(path: &Path) -> Result<()> {
     let bridge = DfmBridge::new(path)?;
     let url = bridge.url();
     let result = (|| {

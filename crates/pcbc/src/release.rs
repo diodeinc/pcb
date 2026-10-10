@@ -172,9 +172,22 @@ fn execute_tasks(info: &ReleaseInfo, tasks: &[(&str, TaskFn)], start_time: Insta
     Ok(())
 }
 
+/// Unsuppressed errors and unsuppressed `sch` / `sch.*` diagnostics block a release.
 fn release_blocked(diagnostics: &Diagnostics) -> bool {
     diagnostics.error_count() > 0
         || pcbc::kicad_schematic::has_unsuppressed_schematic_diagnostics(diagnostics)
+}
+
+/// Per-diagnostic form of [`release_blocked`], used by package publish.
+///
+/// Unlike [`release_blocked`], the kind lookup also follows an aggregated
+/// (`SuppressedDiagnostics`) wrapper to its first member, so an aggregated
+/// `sch.*` warning still blocks.
+pub(crate) fn blocks_publish(diagnostic: &pcb_zen_core::Diagnostic) -> bool {
+    !diagnostic.suppressed
+        && (diagnostic.is_error()
+            || pcb_zen_core::diagnostics::diagnostic_kind(diagnostic)
+                .is_some_and(|kind| kind == "sch" || kind.starts_with("sch.")))
 }
 
 fn release_diagnostics(

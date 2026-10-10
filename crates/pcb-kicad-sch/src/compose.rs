@@ -901,19 +901,13 @@ fn materialize_hierarchy(
         // the parent page's directory and the reference stays the bare name.
         let mut file_field = SymbolField::new("Sheetfile", &sheet_plan.file_name, at);
         file_field.at.y += height + 0.7112;
-        let child_file_name = match document.pages[sheet_plan.parent_page]
-            .file_name
-            .as_deref()
-            .and_then(|file_name| std::path::Path::new(file_name).parent())
-            .filter(|parent| !parent.as_os_str().is_empty())
-        {
-            Some(parent) => format!(
-                "{}/{}",
-                parent.to_string_lossy().replace('\\', "/"),
-                sheet_plan.file_name
-            ),
-            None => sheet_plan.file_name.clone(),
-        };
+        let child_file_name = crate::sheet_file(
+            document.pages[sheet_plan.parent_page]
+                .file_name
+                .as_deref()
+                .unwrap_or_default(),
+            &sheet_plan.file_name,
+        )?;
         let sheet = Sheet {
             id: hierarchy::sheet_id(&sheet_plan.module_path),
             placed: true,
@@ -2951,17 +2945,7 @@ fn page_driver_contexts(
     // instantiating it, so it inherits that page's interface names and its
     // drivers can bridge through the sheet pins. Contexts flow down the
     // sheet hierarchy until nothing changes.
-    let page_by_file: BTreeMap<String, usize> = document
-        .pages
-        .iter()
-        .enumerate()
-        .filter_map(|(index, page)| {
-            Some((
-                crate::sheet_file("", page.file_name.as_deref()?).ok()?,
-                index,
-            ))
-        })
-        .collect();
+    let page_by_file = crate::connectivity::kicad::PagesByFile::new(&document.pages);
     loop {
         let mut changed = false;
         for parent_index in 0..document.pages.len() {
@@ -2972,12 +2956,8 @@ fn page_driver_contexts(
                 let SchItem::Sheet(sheet) = item else {
                     continue;
                 };
-                let Some(&child_index) = crate::connectivity::kicad::resolve_file_name(
-                    &document.pages[parent_index],
-                    sheet.file_name(),
-                )
-                .ok()
-                .and_then(|file| page_by_file.get(&file)) else {
+                let Some(child_index) = page_by_file.child(&document.pages[parent_index], sheet)
+                else {
                     continue;
                 };
                 if child_index == parent_index || contexts.contains_key(&child_index) {

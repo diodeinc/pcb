@@ -63,9 +63,5 @@ fn managed_symbol_uuids_follow_the_existing_component_identity() {
         let component_path = symbol.field_value("Path").expect("managed symbol path");
         let slot = SymbolSlotKey::new(component_path, symbol.unit).expect("component slot");
         assert_eq!(symbol.id, slot.symbol_id());
-        assert_eq!(
-            slot.layout_sync_footprint_path().to_kicad_string(),
-            pcb_sch::kicad_identity::footprint_kiid_path(component_path)
-        );
     }
 }

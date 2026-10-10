@@ -145,8 +145,7 @@ impl PortableKicadProject {
     pub(super) fn schematic_files_rel(&self) -> Vec<PathBuf> {
         let mut files: Vec<_> = self
             .schematic
-            .schematic_files
-            .iter()
+            .schematic_files()
             .map(PathBuf::from)
             .collect();
         files.sort();
