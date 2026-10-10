@@ -35,6 +35,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - Schematic sheet paths written with Windows separators, including `..`, resolve as KiCad resolves them.
 - KiCad netlist (`.net`) libparts use the same part name as their components.
 
+### Removed
+
+- Remove `pcb search` and its local SQLite registry index; search the registry through the Diode API MCP endpoints.
+
 ## [0.4.74] - 2026-10-09
 
 ### Changed

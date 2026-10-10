@@ -342,11 +342,6 @@ pub fn get_api_token_with_context(ctx: &WorkspaceContext) -> Result<Option<Strin
     }
 }
 
-pub fn get_api_token() -> Result<Option<String>> {
-    let ctx = WorkspaceContext::from_cwd().unwrap_or_default();
-    get_api_token_with_context(&ctx)
-}
-
 pub(crate) fn apply_bearer_auth(request: RequestBuilder, token: Option<&str>) -> RequestBuilder {
     if api_auth_disabled() {
         request
