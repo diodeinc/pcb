@@ -332,12 +332,27 @@ pub struct SymbolField {
     pub unsupported: Vec<Sexpr>,
 }
 
+/// KiCad's mandatory symbol fields, in field-id order. KiCad strips their
+/// text of surrounding whitespace on load.
+pub(crate) const MANDATORY_FIELDS: [&str; 5] = [
+    "Reference",
+    "Value",
+    "Footprint",
+    "Datasheet",
+    "Description",
+];
+
 impl SymbolField {
     pub fn new(name: impl Into<String>, value: impl Into<String>, at: Point) -> Self {
+        let name = name.into();
+        let mut value = value.into();
+        if MANDATORY_FIELDS.contains(&name.as_str()) {
+            value = value.trim().to_owned();
+        }
         Self {
             private: false,
-            name: name.into(),
-            value: value.into(),
+            name,
+            value,
             at,
             rotation_deg: 0.0,
             effects: TextEffects::default(),

@@ -10,9 +10,10 @@ use pcb_sexpr::{
 
 use crate::model::{
     FieldHorizontalJustify, FieldJustify, FieldVerticalJustify, Graphic, GraphicKind, GraphicText,
-    Junction, Label, LabelKind, LabelShape, LabelSpin, MirrorAxis, NoConnect, Paper, PinInstance,
-    Point, Rotation, SchDocument, SchItem, SchPage, Sheet, SheetInstance, SheetPin, Symbol,
-    SymbolDefinition, SymbolField, SymbolInstance, SymbolLibrary, TextEffects, TextSize, Wire,
+    Junction, Label, LabelKind, LabelShape, LabelSpin, MANDATORY_FIELDS, MirrorAxis, NoConnect,
+    Paper, PinInstance, Point, Rotation, SchDocument, SchItem, SchPage, Sheet, SheetInstance,
+    SheetPin, Symbol, SymbolDefinition, SymbolField, SymbolInstance, SymbolLibrary, TextEffects,
+    TextSize, Wire,
 };
 
 pub const KICAD_SCH_VERSION: i64 = 20260306;
@@ -1455,15 +1456,14 @@ fn instances_to_sexpr<'a>(
 /// Mandatory fields in field-id order, then the rest, then library metadata.
 fn field_rank(name: &str) -> u8 {
     match name {
-        "Reference" | INTERSHEET_REFS => 0,
-        "Value" => 1,
-        "Footprint" => 2,
-        "Datasheet" => 3,
-        "Description" => 4,
+        INTERSHEET_REFS => 0,
         "ki_locked" => 6,
         "ki_keywords" => 7,
         "ki_fp_filters" => 8,
-        _ => 5,
+        _ => MANDATORY_FIELDS
+            .iter()
+            .position(|field| *field == name)
+            .map_or(5, |rank| rank as u8),
     }
 }
 
@@ -1658,15 +1658,16 @@ fn normalize_internal_metadata_properties(sexpr: &mut Sexpr) {
 }
 
 /// KiCad writes a library symbol as its header attributes, then properties,
-/// then unit sub-symbols, then `embedded_fonts`. Impose that order, with the
-/// properties in `field_rank` order, so a definition compares and serializes
-/// the same however its source ordered the children.
+/// then unit sub-symbols, then `embedded_fonts`, and sorts each unit's draw
+/// items. Impose that order so a definition compares and serializes the same
+/// however its source ordered the children.
 fn canonicalize_symbol_children(items: &mut Vec<Sexpr>) {
     if items.len() <= 2 {
         return;
     }
     let mut leading = Vec::new();
     let mut properties = Vec::new();
+    let mut draw_items = Vec::new();
     let mut units = Vec::new();
     let mut embedded_fonts = Vec::new();
     for child in items.split_off(2) {
@@ -1674,6 +1675,10 @@ fn canonicalize_symbol_children(items: &mut Vec<Sexpr>) {
             Some("property") => properties.push(child),
             Some("symbol") => units.push(child),
             Some("embedded_fonts") => embedded_fonts.push(child),
+            Some(
+                "arc" | "bezier" | "circle" | "polyline" | "rectangle" | "text" | "text_box"
+                | "pin",
+            ) => draw_items.push(child),
             _ => leading.push(child),
         }
     }
@@ -1681,10 +1686,91 @@ fn canonicalize_symbol_children(items: &mut Vec<Sexpr>) {
         let name = symbol_property_name(property);
         (field_rank(name), name.to_owned())
     });
+    draw_items.sort_by(|a, b| {
+        let (a, b) = (
+            a.as_list().unwrap_or_default(),
+            b.as_list().unwrap_or_default(),
+        );
+        draw_item_rank(a)
+            .cmp(&draw_item_rank(b))
+            .then_with(|| natord::compare(pin_number(a), pin_number(b)))
+            .then_with(|| draw_item_sort_key(a).cmp(&draw_item_sort_key(b)))
+    });
     items.extend(leading);
     items.extend(properties);
+    items.extend(draw_items);
     items.extend(units);
     items.extend(embedded_fonts);
+}
+
+/// `KICAD_T` order of the items a library unit can hold.
+fn draw_item_rank(items: &[Sexpr]) -> u8 {
+    match list_tag(items) {
+        Some("text") => 1,
+        Some("text_box") => 2,
+        Some("pin") => 3,
+        _ => 0,
+    }
+}
+
+fn pin_number(items: &[Sexpr]) -> &str {
+    find_child(items, "number")
+        .and_then(|number| number.get(1)?.as_atom())
+        .unwrap_or("")
+}
+
+/// `SCH_ITEM::compare` in library coordinates (internal units, y up): the
+/// item's anchor, then its shape and remaining points.
+fn draw_item_sort_key(items: &[Sexpr]) -> Vec<i64> {
+    let iu = |value: f64| (value * 10_000.0).round() as i64;
+    let point = |list: &[Sexpr]| -> Option<[i64; 2]> {
+        Some([iu(atom_f64(list.get(1)?)?), -iu(atom_f64(list.get(2)?)?)])
+    };
+    let named = |tags: &[&str]| -> Vec<[i64; 2]> {
+        tags.iter()
+            .filter_map(|tag| point(find_child(items, tag)?))
+            .collect()
+    };
+    let (shape, points) = match list_tag(items) {
+        Some("rectangle") => (1, named(&["start", "end"])),
+        Some("arc") => {
+            let mut points = named(&["start", "mid", "end"]);
+            if let [a, b, c] = points[..] {
+                points.insert(0, circumcenter(a, b, c));
+            }
+            (2, points)
+        }
+        Some("circle") => (3, named(&["center"])),
+        Some(tag @ ("polyline" | "bezier")) => {
+            let points = find_child(items, "pts")
+                .map(|pts| {
+                    pts[1..]
+                        .iter()
+                        .filter_map(|xy| point(xy.as_list()?))
+                        .collect()
+                })
+                .unwrap_or_default();
+            (if tag == "polyline" { 4 } else { 5 }, points)
+        }
+        _ => (0, named(&["at"])),
+    };
+    let mut key = points.first().map_or(Vec::new(), |anchor| anchor.to_vec());
+    key.push(shape);
+    key.extend(points.iter().flatten());
+    key
+}
+
+fn circumcenter(a: [i64; 2], b: [i64; 2], c: [i64; 2]) -> [i64; 2] {
+    let [ax, ay, bx, by, cx, cy] = [a[0], a[1], b[0], b[1], c[0], c[1]].map(|v| v as f64);
+    let d = 2.0 * (ax * (by - cy) + bx * (cy - ay) + cx * (ay - by));
+    if d == 0.0 {
+        return a;
+    }
+    let (a2, b2, c2) = (ax * ax + ay * ay, bx * bx + by * by, cx * cx + cy * cy);
+    [
+        ((a2 * (by - cy) + b2 * (cy - ay) + c2 * (ay - by)) / d).round() as i64,
+        ((a2 * (cx - bx) + b2 * (ax - cx) + c2 * (bx - ax)) / d).round() as i64,
+    ]
 }
 
 fn symbol_property_name(property: &Sexpr) -> &str {

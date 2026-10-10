@@ -3921,6 +3921,7 @@ version = "0.4.74"
 dependencies = [
  "anyhow",
  "insta",
+ "natord",
  "pcb-sch",
  "pcb-sexpr",
  "pcb-zen-core",
