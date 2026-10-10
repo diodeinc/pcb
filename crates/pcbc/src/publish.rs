@@ -139,8 +139,8 @@ impl fmt::Display for BumpStrategy {
 #[derive(Args, Debug)]
 #[command(about = "Publish packages or board releases")]
 pub struct PublishArgs {
-    /// Check a board's release preflight and print JSON, without publishing
-    #[arg(long, conflicts_with_all = ["bump", "force", "no_push", "no_build"])]
+    /// Print a board's release preflight and version as JSON, without publishing
+    #[arg(long, conflicts_with_all = ["force", "no_push", "no_build"])]
     pub check: bool,
 
     /// Skip preflight checks (uncommitted changes, branch, remote)
@@ -524,7 +524,7 @@ fn publish_board(zen_path: &Path, args: &PublishArgs) -> Result<()> {
     ensure_board_publish_has_no_workspace_overrides(&workspace)?;
 
     let mut options = release::BoardReleaseOptions {
-        version: None,
+        version: git::rev_parse_short_head(&workspace.root).unwrap_or_else(|| "unknown".into()),
         suppress: args.suppress.clone(),
         exclude: args.exclude.clone(),
         check: args.check,
@@ -532,34 +532,41 @@ fn publish_board(zen_path: &Path, args: &PublishArgs) -> Result<()> {
     };
 
     // Local hash release: --check stops the build after preflight.
-    if args.bump.is_none() {
+    let Some(bump) = args.bump else {
         release::build_board_release(&workspace.root, board_path, board_name, options)?;
         return Ok(());
+    };
+    if args.check && bump == BumpType::Interactive {
+        bail!("--check needs an explicit --bump=patch, --bump=minor or --bump=major");
     }
 
-    let remote = if args.no_push {
+    let remote = if args.check || args.no_push {
         resolve_fetch_remote(&workspace.root)?
     } else {
         resolve_remote(&workspace.root, args.force)?
     };
-    eprintln!("Syncing with {}...", remote.cyan());
-    if args.no_push {
-        git::fetch_tags_without_pruning(&workspace.root, &remote)?;
+    // A real publish prunes local tags to the remote's, so a check reads those directly.
+    let all_tags = if args.check {
+        git::list_remote_tags(&workspace.root, &remote)?
     } else {
-        git::fetch_tags(&workspace.root, &remote)?;
-        if !args.force {
-            git::fetch_branch(&workspace.root, &remote, "main")?;
-            preflight_checks(&workspace.root, &remote)?;
+        eprintln!("Syncing with {}...", remote.cyan());
+        if args.no_push {
+            git::fetch_tags_without_pruning(&workspace.root, &remote)?;
+        } else {
+            git::fetch_tags(&workspace.root, &remote)?;
+            if !args.force {
+                git::fetch_branch(&workspace.root, &remote, "main")?;
+                preflight_checks(&workspace.root, &remote)?;
+            }
         }
-    }
+        git::list_all_tags(&workspace.root).unwrap_or_default()
+    };
 
-    // Compute current version from tags (after fetch)
     let tag_prefix = tags::compute_tag_prefix(Some(&package_relative_path), workspace.path());
-    let all_tags = git::list_all_tags(&workspace.root).unwrap_or_default();
     let current = tags::find_latest_version(&all_tags, &tag_prefix);
 
     // Resolve bump type (interactive prompt if --bump was passed without a value)
-    let bump = match args.bump.unwrap() {
+    let bump = match bump {
         BumpType::Interactive => prompt_single_bump(&board_name, current.as_ref())?,
         BumpType::Infer => {
             bail!("--bump=infer is only supported when publishing packages.");
@@ -573,7 +580,11 @@ fn publish_board(zen_path: &Path, args: &PublishArgs) -> Result<()> {
     let tag_name = tags::build_tag_name(&tag_prefix, &next_version);
 
     // Build the release archive
-    options.version = Some(format!("v{}", next_version));
+    options.version = format!("v{next_version}");
+    if args.check {
+        release::build_board_release(&workspace.root, board_path, board_name, options)?;
+        return Ok(());
+    }
     options.check_bom_offers = true;
     let Some(zip_path) =
         release::build_board_release(&workspace.root, board_path, board_name.clone(), options)?

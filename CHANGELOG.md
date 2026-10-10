@@ -25,6 +25,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - `pcb import` rejects projects with more than one top-level sheet instead of importing only one of them.
 - `pcb publish` lists the diagnostics that block it, and says how far local main is ahead of or behind the remote.
 - `pcb publish` explains that a missing workspace name comes from `[workspace].name` in pcb.toml.
+- `pcb publish --check` reports the version it would publish (pass `--bump` for the next semver) and each stage as passed, failed or skipped, replacing `layoutChecked`; it no longer prints progress.
 - `schematic="collapse"` and `"embed"` warn (`module.schematic.ignored`) when ignored, on a module that declares `Project()` in a linked KiCad schematic.
 - Missing BOM part errors suggest setting `Manufacturer_Part_Number` and `Manufacturer_Name` on the symbol as well as `part=Part(...)`.
 

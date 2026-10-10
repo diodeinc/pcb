@@ -819,6 +819,19 @@ pub fn fetch_tags(repo_root: &Path, remote: &str) -> anyhow::Result<()> {
     )
 }
 
+/// Tag names on `remote`, read without fetching.
+pub fn list_remote_tags(repo_root: &Path, remote: &str) -> anyhow::Result<Vec<String>> {
+    let mut cmd = git_network(repo_root)?;
+    cmd.args(["ls-remote", "--tags", "--refs", remote]);
+    Ok(run_stdout(cmd)?
+        .lines()
+        .filter_map(|line| {
+            line.split_once("refs/tags/")
+                .map(|(_, tag)| tag.to_string())
+        })
+        .collect())
+}
+
 /// Fetch tags from remote without deleting local-only tags.
 pub fn fetch_tags_without_pruning(repo_root: &Path, remote: &str) -> anyhow::Result<()> {
     run_network_in(
