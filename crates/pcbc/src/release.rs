@@ -7,6 +7,7 @@ use pcb_ir::geom::{GeometryAccuracy, Resolution};
 use pcb_kicad::{KiCadCliBuilder, ensure_board_compatible_with_installed_kicad};
 use pcb_layout::utils as layout_utils;
 use pcb_ui::{Colorize, Spinner, Style, StyledText};
+use serde::Serialize;
 
 use crate::bundle::{self, MetadataInput, SourceBundlePlan};
 use pcb_zen::workspace::WorkspaceInfoExt;
@@ -61,6 +62,8 @@ struct ReleaseInfo {
     suppress: Vec<String>,
     resolution: ResolutionResult,
     root_package_url: Option<String>,
+    /// `--check` reports only JSON on stdout.
+    quiet: bool,
 }
 
 impl ReleaseInfo {
@@ -70,10 +73,6 @@ impl ReleaseInfo {
 
     fn workspace_root(&self) -> &Path {
         &self.resolution.workspace_info.root
-    }
-
-    fn has_layout(&self) -> bool {
-        self.layout.is_some()
     }
 
     fn staged_layout_dir(&self) -> Option<PathBuf> {
@@ -154,6 +153,9 @@ fn execute_task<T>(
     let cumulative_duration = start_time.elapsed().as_secs_f64();
 
     spinner.finish();
+    if info.quiet {
+        return Ok(output);
+    }
     eprintln!(
         "{}: ({}) {name}",
         format_cumulative_time(cumulative_duration),
@@ -200,8 +202,23 @@ fn release_diagnostics(
         .collect()
 }
 
+#[derive(Default, Serialize)]
+#[serde(rename_all = "lowercase")]
+enum StageStatus {
+    #[default]
+    Skipped,
+    Passed,
+    Failed,
+}
+
+#[derive(Default, Serialize)]
+struct PreflightStages {
+    build: StageStatus,
+    layout: StageStatus,
+}
+
 pub struct BoardReleaseOptions {
-    pub version: Option<String>,
+    pub version: String,
     pub suppress: Vec<String>,
     pub exclude: Vec<ArtifactType>,
     pub check: bool,
@@ -221,6 +238,7 @@ pub fn build_board_release(
     let start_time = Instant::now();
     let temporary = options.check.then(tempfile::tempdir).transpose()?;
     if let Some(temporary) = &temporary {
+        pcb_ui::hide_spinners();
         // A terminated check never drops its TempDir.
         let path = temporary.path().to_path_buf();
         ctrlc::set_handler(move || {
@@ -230,12 +248,14 @@ pub fn build_board_release(
         .context("Failed to set termination handler")?;
     }
     let mut diagnostics = Diagnostics::default();
+    let mut stages = PreflightStages::default();
     let outcome = preflight_board_release(
         zen_path.clone(),
         board_name,
         &options,
         temporary.as_ref().map(|dir| dir.path().join("release")),
         &mut diagnostics,
+        &mut stages,
     );
     // Check mode stops here, including on preflight failure, before any assets.
     if let Some(temporary) = temporary {
@@ -249,16 +269,10 @@ pub fn build_board_release(
                     starlark::errors::EvalSeverity::Error,
                 ));
         }
-        let layout_checked = !release_blocked(&diagnostics)
-            && !options.exclude.contains(&ArtifactType::Drc)
-            && outcome
-                .as_ref()
-                .ok()
-                .and_then(Option::as_ref)
-                .is_some_and(ReleaseInfo::has_layout);
         let report = serde_json::json!({
             "schemaVersion": 1,
-            "layoutChecked": layout_checked,
+            "version": options.version,
+            "stages": stages,
             "diagnostics": release_diagnostics(&diagnostics, workspace_root, &temporary.path().join("release")),
         });
         pcb_ui::write_stdout(|stdout| {
@@ -300,8 +314,10 @@ fn preflight_board_release(
     options: &BoardReleaseOptions,
     staging_override: Option<PathBuf>,
     diagnostics: &mut Diagnostics,
+    stages: &mut PreflightStages,
 ) -> Result<Option<ReleaseInfo>> {
     let start_time = Instant::now();
+    stages.build = StageStatus::Failed;
 
     let release_info = {
         let info_spinner = Spinner::builder("Gathering release information").start();
@@ -316,11 +332,13 @@ fn preflight_board_release(
         let eval_result = pcb_zen::eval(&zen_path, resolution.clone(), Default::default());
 
         if eval_result.diagnostics.has_errors() || eval_result.output.is_none() {
-            info_spinner.suspend(|| {
-                let mut diagnostics = eval_result.diagnostics.clone();
-                let passes = crate::build::create_diagnostics_passes(&[], &[]);
-                diagnostics.apply_passes(&passes);
-            });
+            if !options.check {
+                info_spinner.suspend(|| {
+                    let mut diagnostics = eval_result.diagnostics.clone();
+                    let passes = crate::build::create_diagnostics_passes(&[], &[]);
+                    diagnostics.apply_passes(&passes);
+                });
+            }
             info_spinner.finish();
             diagnostics
                 .diagnostics
@@ -338,10 +356,7 @@ fn preflight_board_release(
         // Get git hash for metadata
         let git_hash = git::rev_parse_head(workspace_root).unwrap_or_else(|| "unknown".to_string());
 
-        // Use provided version, or fall back to short git hash
-        let version = options.version.clone().unwrap_or_else(|| {
-            git::rev_parse_short_head(workspace_root).unwrap_or_else(|| "unknown".to_string())
-        });
+        let version = options.version.clone();
 
         // Create release staging directory in workspace root with flat structure
         let staging_dir = staging_override.unwrap_or_else(|| {
@@ -399,28 +414,23 @@ fn preflight_board_release(
             suppress: options.suppress.clone(),
             resolution,
             root_package_url: package_url,
+            quiet: options.check,
         };
 
-        let elapsed = start_time.elapsed().as_secs_f64();
-        eprintln!(
-            "{}: {} ({}) Release information gathered",
-            format_cumulative_time(elapsed),
-            "✓".green(),
-            format_task_duration(elapsed),
-        );
+        if !options.check {
+            let elapsed = start_time.elapsed().as_secs_f64();
+            eprintln!(
+                "{}: {} ({}) Release information gathered",
+                format_cumulative_time(elapsed),
+                "✓".green(),
+                format_task_duration(elapsed),
+            );
+        }
 
         info
     };
 
-    if let Some(layout) = &release_info.layout {
-        let kicad_pcb_path = layout_utils::KiCadLayoutFiles {
-            kicad_pro: release_info.workspace_root().join(&layout.kicad_pro_rel),
-        }
-        .kicad_pcb();
-        ensure_board_compatible_with_installed_kicad(&kicad_pcb_path)?;
-    }
-
-    run_release_preflight(&release_info, options, start_time, diagnostics)?;
+    run_release_preflight(&release_info, options, start_time, diagnostics, stages)?;
     Ok(Some(release_info))
 }
 
@@ -679,6 +689,7 @@ fn run_release_preflight(
     options: &BoardReleaseOptions,
     start_time: Instant,
     diagnostics: &mut Diagnostics,
+    stages: &mut PreflightStages,
 ) -> Result<()> {
     execute_task(
         info,
@@ -695,6 +706,7 @@ fn run_release_preflight(
     if release_blocked(diagnostics) {
         return Ok(());
     }
+    stages.build = StageStatus::Passed;
     execute_task(
         info,
         "Substituting version variables",
@@ -702,15 +714,27 @@ fn run_release_preflight(
         |info, _| substitute_variables(info),
     )?;
 
-    if info.has_layout() && !options.exclude.contains(&ArtifactType::Drc) {
-        execute_task(
-            info,
-            "Running KiCad DRC checks",
-            start_time,
-            |info, _spinner| run_kicad_drc(info, diagnostics),
+    if let Some(layout) = &info.layout {
+        stages.layout = StageStatus::Failed;
+        ensure_board_compatible_with_installed_kicad(
+            &layout_utils::KiCadLayoutFiles {
+                kicad_pro: info.workspace_root().join(&layout.kicad_pro_rel),
+            }
+            .kicad_pcb(),
         )?;
-        if release_blocked(diagnostics) {
-            return Ok(());
+        if options.exclude.contains(&ArtifactType::Drc) {
+            stages.layout = StageStatus::Skipped;
+        } else {
+            execute_task(
+                info,
+                "Running KiCad DRC checks",
+                start_time,
+                |info, _spinner| run_kicad_drc(info, diagnostics),
+            )?;
+            if release_blocked(diagnostics) {
+                return Ok(());
+            }
+            stages.layout = StageStatus::Passed;
         }
     }
     if options.check_bom_offers {
@@ -799,7 +823,9 @@ fn validate_build(
 
         // Export diagnostics to JSON for release artifacts
         let mut passes = crate::build::create_diagnostics_processing_passes(&info.suppress, &[]);
-        passes.push(Box::new(RenderBuildErrorsPass));
+        if !info.quiet {
+            passes.push(Box::new(RenderBuildErrorsPass));
+        }
         passes.push(Box::new(pcb_zen_core::JsonExportPass::new(
             info.staging_dir.join("diagnostics.json"),
             zen_file_rel.display().to_string(),

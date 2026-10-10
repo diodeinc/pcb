@@ -33,7 +33,6 @@ pcb-eda = { path = "crates/pcb-eda" }
 pcb-component-gen = { path = "crates/pcb-component-gen" }
 pcb-layout = { path = "crates/pcb-layout" }
 pcb-sch = { path = "crates/pcb-sch" }
-pcb-canonical = { path = "crates/pcb-canonical" }
 pcb-zen = { path = "crates/pcb-zen" }
 pcb-zen-core = { path = "crates/pcb-zen-core" }
 pcb-ui = { path = "crates/pcb-ui" }
@@ -86,7 +85,6 @@ tiny_http = "0.12.0"
 toml = "1"
 toml_edit = "0.25"
 uuid = { version = "1.27", features = ["v4", "v5", "js"] }
-walkdir = "2.5"
 same-file = "1.0"
 deunicode = "1.6"
 insta = { version = "1.49", features = ["yaml", "filters", "json"] }

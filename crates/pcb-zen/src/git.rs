@@ -507,53 +507,6 @@ fn parse_peeled_tags<'a>(lines: impl IntoIterator<Item = &'a str>) -> Vec<Tag> {
     tags
 }
 
-/// Read selected annotated tag objects by immutable object ID, in one process.
-/// Lightweight tags have no annotation and are omitted.
-pub(crate) fn tag_annotations(
-    repo_root: &Path,
-    tags: &[Tag],
-) -> anyhow::Result<HashMap<String, String>> {
-    let tags: Vec<_> = tags.iter().filter(|tag| tag.object != tag.commit).collect();
-    if tags.is_empty() {
-        return Ok(HashMap::new());
-    }
-    let input: String = tags.iter().map(|tag| format!("{}\n", tag.object)).collect();
-    let mut cmd = git(repo_root);
-    cmd.env("GIT_NO_LAZY_FETCH", "1")
-        .args(["cat-file", "--batch"]);
-    let output = run_with_input(cmd, &input)?;
-    let mut bytes = output.as_slice();
-    let mut annotations = HashMap::new();
-    for tag in tags {
-        let end = bytes
-            .iter()
-            .position(|b| *b == b'\n')
-            .context("Missing tag object header")?;
-        let header = std::str::from_utf8(&bytes[..end])?;
-        let fields: Vec<_> = header.split_whitespace().collect();
-        anyhow::ensure!(
-            fields.len() == 3 && fields[0] == tag.object && fields[1] == "tag",
-            "Cannot read tag {}: {header}",
-            tag.name
-        );
-        let size: usize = fields[2].parse()?;
-        bytes = &bytes[end + 1..];
-        anyhow::ensure!(
-            bytes.len() > size && bytes[size] == b'\n',
-            "Truncated tag object {}",
-            tag.name
-        );
-        // Decode only after framing: legacy annotations may not be UTF-8.
-        let object = String::from_utf8_lossy(&bytes[..size]);
-        let (_, message) = object
-            .split_once("\n\n")
-            .context("Missing tag annotation")?;
-        annotations.insert(tag.object.clone(), message.to_owned());
-        bytes = &bytes[size + 1..];
-    }
-    Ok(annotations)
-}
-
 /// Commits reachable from `commit`, newest first.
 pub fn rev_list(repo_root: &Path, commit: &str) -> Vec<String> {
     run_lines({
@@ -866,6 +819,19 @@ pub fn fetch_tags(repo_root: &Path, remote: &str) -> anyhow::Result<()> {
     )
 }
 
+/// Tag names on `remote`, read without fetching.
+pub fn list_remote_tags(repo_root: &Path, remote: &str) -> anyhow::Result<Vec<String>> {
+    let mut cmd = git_network(repo_root)?;
+    cmd.args(["ls-remote", "--tags", "--refs", remote]);
+    Ok(run_stdout(cmd)?
+        .lines()
+        .filter_map(|line| {
+            line.split_once("refs/tags/")
+                .map(|(_, tag)| tag.to_string())
+        })
+        .collect())
+}
+
 /// Fetch tags from remote without deleting local-only tags.
 pub fn fetch_tags_without_pruning(repo_root: &Path, remote: &str) -> anyhow::Result<()> {
     run_network_in(
@@ -951,10 +917,6 @@ pub fn commit_with_trailers(repo_root: &Path, message: &str) -> anyhow::Result<S
 
 pub fn reset_hard(repo_root: &Path, commit: &str) -> anyhow::Result<()> {
     run_in(repo_root, &["reset", "--hard", commit])
-}
-
-pub fn cat_file(repo_root: &Path, object: &str) -> Option<String> {
-    run_output_opt(repo_root, &["cat-file", "-p", object])
 }
 
 pub fn show_commit_timestamp(repo_root: &Path, commit: &str) -> Option<i64> {

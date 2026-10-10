@@ -175,15 +175,6 @@ endpoint = "diode.computer"
   credentials. `DIODE_API_URL` takes precedence over the workspace setting; outside
   a configured workspace, the CLI uses its default API URL.
 
-## Registry search scope
-
-Registry-backed `pcb search` searches the public Diode registry and the
-registries configured by `[workspace].repository`.
-
-- `pcb search --registry code.diode.computer/diode/registry ...` overrides the default
-  scope for that invocation.
-- Repeat `--registry` to search more than one registry.
-
 ## Pseudo-versions
 
 Pseudo-versions identify unreleased commits while preserving version ordering.
@@ -322,8 +313,7 @@ pcb publish --force          # Skip preflight checks
 A package requires publication when:
 
 - No version tag exists.
-- Its content hash differs from the published tag.
-- Its `pcb.toml` hash differs from the published tag.
+- A file in it changed since its latest tag.
 
 Versions are computed automatically:
 

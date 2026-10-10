@@ -3674,18 +3674,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "pcb-canonical"
-version = "0.4.74"
-dependencies = [
- "anyhow",
- "base64 0.23.1",
- "blake3",
- "ignore",
- "tar",
- "unicode-normalization",
-]
-
-[[package]]
 name = "pcb-command-runner"
 version = "0.4.74"
 dependencies = [
@@ -3716,29 +3704,21 @@ dependencies = [
  "base64 0.23.1",
  "chrono",
  "clap",
- "colored",
  "dirs",
  "fslock",
  "hex",
  "httpmock",
  "inquire",
- "insta",
  "log",
- "md-5",
  "open",
- "pcb-component-gen",
  "pcb-diode-uri",
  "pcb-eda",
- "pcb-fmt",
- "pcb-kicad",
  "pcb-sch",
- "pcb-sexpr",
  "pcb-ui",
  "pcb-zen",
  "pcb-zen-core",
  "rand 0.10.3",
  "reqwest",
- "rusqlite",
  "serde",
  "serde_json",
  "serial_test",
@@ -3748,9 +3728,7 @@ dependencies = [
  "url",
  "urlencoding",
  "uuid",
- "walkdir",
  "zip",
- "zstd",
 ]
 
 [[package]]
@@ -4120,7 +4098,6 @@ dependencies = [
  "lsp-server",
  "lsp-types",
  "path-slash",
- "pcb-canonical",
  "pcb-sch",
  "pcb-sim",
  "pcb-starlark-lsp",
@@ -4229,7 +4206,6 @@ dependencies = [
  "notify",
  "open",
  "pathdiff",
- "pcb-canonical",
  "pcb-command-runner",
  "pcb-component-gen",
  "pcb-diode-api",

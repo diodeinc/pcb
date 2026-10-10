@@ -80,7 +80,6 @@ pub struct Sandbox {
     pub cache_dir: PathBuf,
     fixture_rewrites: BTreeSet<RepoRewrite>,
     default_cwd: PathBuf,
-    trace: bool,
     hash_globs: Vec<String>,
     ignore_globs: Vec<String>,
     extra_env: HashMap<String, String>,
@@ -121,7 +120,6 @@ impl Sandbox {
             cache_dir,
             fixture_rewrites: BTreeSet::new(),
             default_cwd,
-            trace: false,
             hash_globs: Vec::new(),
             ignore_globs: Vec::new(),
             extra_env: HashMap::new(),
@@ -133,12 +131,6 @@ impl Sandbox {
     /// Add a minimal workspace manifest at the sandbox cwd.
     pub fn with_workspace(mut self) -> Self {
         self.write("pcb.toml", "[workspace]\npcb-version = \"0.4\"\n");
-        self
-    }
-
-    /// Enable `GIT_TRACE=1` for commands run with `run` / `run_ok` / `cmd`.
-    pub fn with_trace(mut self, yes: bool) -> Self {
-        self.trace = yes;
         self
     }
 
@@ -679,11 +671,6 @@ impl Sandbox {
         env_map.insert("HTTP_PROXY".into(), "http://127.0.0.1:0".into());
         env_map.insert("HTTPS_PROXY".into(), "http://127.0.0.1:0".into());
         env_map.insert("NO_PROXY".into(), "".into());
-
-        if self.trace {
-            env_map.insert("GIT_TRACE".into(), "1".into());
-            env_map.insert("GIT_CURL_VERBOSE".into(), "1".into());
-        }
 
         env_map.extend(self.extra_env.clone());
 

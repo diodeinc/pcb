@@ -46,11 +46,6 @@ impl TypeInfo {
         matches!(self, TypeInfo::Net | TypeInfo::Interface { .. })
     }
 
-    /// Check if this type is an enum
-    pub fn is_enum(&self) -> bool {
-        matches!(self, TypeInfo::Enum { .. })
-    }
-
     /// Extract TypeInfo from a Starlark value representing a type
     pub fn from_value<'v>(value: Value<'v>) -> Self {
         // Get the type name for identification

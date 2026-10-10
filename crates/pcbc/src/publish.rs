@@ -1,8 +1,7 @@
 //! Package publishing
 //!
-//! Publishes dirty/unpublished packages by creating annotated git tags with
-//! content and manifest hashes. Uses topological sorting to publish packages
-//! in dependency order (dependencies before dependants).
+//! Publishes dirty/unpublished packages by creating annotated git tags. Uses
+//! topological sorting to publish packages in dependency order (dependencies before dependants).
 
 use anyhow::{Context, Result, bail};
 use clap::{Args, ValueEnum};
@@ -11,7 +10,8 @@ use inquire::{Confirm, Select};
 use pcb_zen::workspace::{WorkspaceInfo, WorkspaceInfoExt, WorkspacePackage, get_workspace_info};
 use pcb_zen::{git, tags};
 use pcb_zen_core::config::{DependencySpec, PcbToml, find_workspace_root};
-use pcb_zen_core::{DefaultFileProvider, initial_package_version};
+use pcb_zen_core::diagnostics::diagnostic_kind;
+use pcb_zen_core::{DefaultFileProvider, Diagnostics, DiagnosticsPass, initial_package_version};
 use petgraph::Direction;
 use petgraph::graph::{DiGraph, NodeIndex};
 use rayon::prelude::*;
@@ -139,8 +139,9 @@ impl fmt::Display for BumpStrategy {
 #[derive(Args, Debug)]
 #[command(about = "Publish packages or board releases")]
 pub struct PublishArgs {
-    /// Check a board's release preflight and print JSON, without publishing
-    #[arg(long, conflicts_with_all = ["bump", "force", "no_push", "no_build"])]
+    /// Print, as JSON without publishing, a board's release preflight and version, or each
+    /// package's next version and tag (bumps are inferred unless --bump is given)
+    #[arg(long, conflicts_with_all = ["force", "no_push", "no_build"])]
     pub check: bool,
 
     /// Skip preflight checks (uncommitted changes, branch, remote)
@@ -181,8 +182,6 @@ pub struct PublishArgs {
 struct PublishCandidate {
     next_version: Version,
     tag_name: String,
-    content_hash: String,
-    manifest_hash: String,
 }
 
 /// Tracks local git state created during publishing.
@@ -466,13 +465,13 @@ pub fn execute(args: PublishArgs) -> Result<()> {
         .map(|p| Path::new(p).to_path_buf())
         .unwrap_or_else(|| env::current_dir().unwrap());
 
+    if args.check && args.bump == Some(BumpType::Interactive) {
+        bail!("--check needs an explicit --bump value");
+    }
+
     // If path ends in .zen, route to board publish
     if path.extension().is_some_and(|ext| ext == "zen") {
         return publish_board(&path, &args);
-    }
-
-    if args.check {
-        bail!("--check requires an explicit board .zen target");
     }
 
     // Otherwise, publish packages
@@ -526,7 +525,7 @@ fn publish_board(zen_path: &Path, args: &PublishArgs) -> Result<()> {
     ensure_board_publish_has_no_workspace_overrides(&workspace)?;
 
     let mut options = release::BoardReleaseOptions {
-        version: None,
+        version: git::rev_parse_short_head(&workspace.root).unwrap_or_else(|| "unknown".into()),
         suppress: args.suppress.clone(),
         exclude: args.exclude.clone(),
         check: args.check,
@@ -534,34 +533,38 @@ fn publish_board(zen_path: &Path, args: &PublishArgs) -> Result<()> {
     };
 
     // Local hash release: --check stops the build after preflight.
-    if args.bump.is_none() {
+    let Some(bump) = args.bump else {
         release::build_board_release(&workspace.root, board_path, board_name, options)?;
         return Ok(());
-    }
+    };
 
-    let remote = if args.no_push {
+    let remote = if args.check || args.no_push {
         resolve_fetch_remote(&workspace.root)?
     } else {
         resolve_remote(&workspace.root, args.force)?
     };
-    eprintln!("Syncing with {}...", remote.cyan());
-    if args.no_push {
-        git::fetch_tags_without_pruning(&workspace.root, &remote)?;
+    // A real publish prunes local tags to the remote's, so a check reads those directly.
+    let all_tags = if args.check {
+        git::list_remote_tags(&workspace.root, &remote)?
     } else {
-        git::fetch_tags(&workspace.root, &remote)?;
-        if !args.force {
-            git::fetch_branch(&workspace.root, &remote, "main")?;
-            preflight_checks(&workspace.root, &remote)?;
+        eprintln!("Syncing with {}...", remote.cyan());
+        if args.no_push {
+            git::fetch_tags_without_pruning(&workspace.root, &remote)?;
+        } else {
+            git::fetch_tags(&workspace.root, &remote)?;
+            if !args.force {
+                git::fetch_branch(&workspace.root, &remote, "main")?;
+                preflight_checks(&workspace.root, &remote)?;
+            }
         }
-    }
+        git::list_all_tags(&workspace.root).unwrap_or_default()
+    };
 
-    // Compute current version from tags (after fetch)
     let tag_prefix = tags::compute_tag_prefix(Some(&package_relative_path), workspace.path());
-    let all_tags = git::list_all_tags(&workspace.root).unwrap_or_default();
     let current = tags::find_latest_version(&all_tags, &tag_prefix);
 
     // Resolve bump type (interactive prompt if --bump was passed without a value)
-    let bump = match args.bump.unwrap() {
+    let bump = match bump {
         BumpType::Interactive => prompt_single_bump(&board_name, current.as_ref())?,
         BumpType::Infer => {
             bail!("--bump=infer is only supported when publishing packages.");
@@ -575,7 +578,11 @@ fn publish_board(zen_path: &Path, args: &PublishArgs) -> Result<()> {
     let tag_name = tags::build_tag_name(&tag_prefix, &next_version);
 
     // Build the release archive
-    options.version = Some(format!("v{}", next_version));
+    options.version = format!("v{next_version}");
+    if args.check {
+        release::build_board_release(&workspace.root, board_path, board_name, options)?;
+        return Ok(());
+    }
     options.check_bom_offers = true;
     let Some(zip_path) =
         release::build_board_release(&workspace.root, board_path, board_name.clone(), options)?
@@ -741,7 +748,7 @@ fn collect_unpublishable_manifest_entries(manifest_path: &Path, manifest: &PcbTo
 
 /// Publish dirty packages in the workspace
 fn publish_packages(start_path: &Path, args: &PublishArgs) -> Result<()> {
-    if !args.force && std::env::var("CI").is_err() {
+    if !args.check && !args.force && std::env::var("CI").is_err() {
         bail!(
             "Package publishing is only supported in CI.\nUse --force to publish manually (only if you know what you're doing)."
         );
@@ -749,13 +756,21 @@ fn publish_packages(start_path: &Path, args: &PublishArgs) -> Result<()> {
 
     let file_provider = DefaultFileProvider::new();
     let workspace_root = find_workspace_root(&file_provider, start_path)?;
-    let remote = resolve_remote(&workspace_root, args.force)?;
+    let remote = if args.check {
+        resolve_fetch_remote(&workspace_root)?
+    } else {
+        resolve_remote(&workspace_root, args.force)?
+    };
 
-    eprintln!("Syncing with {}...", remote.cyan());
-    git::fetch_tags(&workspace_root, &remote)?;
-    if !args.force {
-        git::fetch_branch(&workspace_root, &remote, "main")?;
-        preflight_checks(&workspace_root, &remote)?;
+    if args.check {
+        git::fetch_tags_without_pruning(&workspace_root, &remote)?;
+    } else {
+        eprintln!("Syncing with {}...", remote.cyan());
+        git::fetch_tags(&workspace_root, &remote)?;
+        if !args.force {
+            git::fetch_branch(&workspace_root, &remote, "main")?;
+            preflight_checks(&workspace_root, &remote)?;
+        }
     }
 
     let mut workspace = get_workspace_info(&file_provider, start_path)?;
@@ -780,6 +795,10 @@ fn publish_packages(start_path: &Path, args: &PublishArgs) -> Result<()> {
     // Expand to include packages that depend on dirty packages (transitively)
     // These need to be published because their pcb.toml will be bumped
     let dirty_urls = expand_dirty_set(&workspace, &directly_dirty);
+    if args.check {
+        let remote_tags = git::list_remote_tags(&workspace.root, &remote)?;
+        return print_publish_plan(&workspace, &dirty_urls, &remote_tags, args.bump);
+    }
 
     if !args.no_build {
         // Packages can read only their own files, declared dependencies and the workspace manifest.
@@ -889,6 +908,39 @@ fn publish_packages(start_path: &Path, args: &PublishArgs) -> Result<()> {
     Ok(())
 }
 
+fn print_publish_plan(
+    workspace: &WorkspaceInfo,
+    dirty_urls: &HashSet<String>,
+    all_tags: &[String],
+    bump: Option<BumpType>,
+) -> Result<()> {
+    let waves = compute_publish_waves(workspace, dirty_urls)?;
+    let bumps = match bump.and_then(BumpType::release) {
+        Some(bump) => uniform_bump_map(&waves, bump),
+        None => infer_all_bumps(workspace, &waves, all_tags),
+    };
+    let packages = waves
+        .into_iter()
+        .flat_map(|mut wave| {
+            wave.sort();
+            wave
+        })
+        .map(|url| {
+            let pkg = &workspace.packages[&url];
+            let current = current_package_version(pkg, workspace.path(), all_tags);
+            let next = compute_next_version(current.as_ref(), bumps[&url]);
+            serde_json::json!({
+                "path": pkg.rel_path.to_string_lossy(),
+                "current": current.map(|version| version.to_string()),
+                "version": next.to_string(),
+                "tag": compute_tag_name(pkg, &next, workspace),
+            })
+        })
+        .collect::<Vec<_>>();
+    println!("{}", serde_json::json!({ "packages": packages }));
+    Ok(())
+}
+
 fn publish_package_waves(
     workspace: &mut WorkspaceInfo,
     bump_map: &BTreeMap<String, ReleaseBump>,
@@ -948,7 +1000,7 @@ fn publish_wave(
     let all_tags = git::list_all_tags_vec(&workspace.root);
 
     // Build candidates with fresh hashes after any wave-boundary sync commit.
-    let candidates = build_candidates(workspace, bump_map, package_urls, &all_tags)?;
+    let candidates = build_candidates(workspace, bump_map, package_urls, &all_tags);
 
     for (url, c) in &candidates {
         git::create_tag(&workspace.root, &c.tag_name, &format_tag_message(url, c))?;
@@ -966,7 +1018,7 @@ fn build_candidates(
     bump_map: &BTreeMap<String, ReleaseBump>,
     package_urls: &[String],
     all_tags: &[String],
-) -> Result<BTreeMap<String, PublishCandidate>> {
+) -> BTreeMap<String, PublishCandidate> {
     let ws_path = workspace.path();
     let url_set: HashSet<&String> = package_urls.iter().collect();
 
@@ -980,21 +1032,13 @@ fn build_candidates(
             let current = tags::find_latest_version(all_tags, &tag_prefix);
             let next_version = compute_next_version(current.as_ref(), bump);
             let tag_name = compute_tag_name(pkg, &next_version, workspace);
-
-            let pkg_dir = pkg.dir(&workspace.root);
-            let content_hash = pcb_canonical::compute_content_hash_from_dir(&pkg_dir)?;
-            let manifest_content = std::fs::read_to_string(pkg_dir.join("pcb.toml"))?;
-            let manifest_hash = pcb_canonical::compute_manifest_hash(&manifest_content);
-
-            Ok((
+            (
                 url.clone(),
                 PublishCandidate {
                     next_version,
                     tag_name,
-                    content_hash,
-                    manifest_hash,
                 },
-            ))
+            )
         })
         .collect()
 }
@@ -1055,6 +1099,7 @@ fn build_workspace(
     let eval_state = crate::build::BuildEvalState::new(resolution);
     let mut has_errors = false;
     let mut has_warnings = false;
+    let mut blocking = Diagnostics::default();
     for zen_path in &zen_files {
         let file_name = zen_path.file_name().unwrap().to_string_lossy();
         let result = eval_state.build(
@@ -1065,16 +1110,28 @@ fn build_workspace(
             &mut has_errors,
             &mut has_warnings,
         );
-        if pcbc::kicad_schematic::has_unsuppressed_schematic_diagnostics(&result.diagnostics) {
-            has_errors = true;
-        }
+        blocking.diagnostics.extend(
+            result
+                .diagnostics
+                .iter()
+                .filter(|d| {
+                    !d.suppressed
+                        && (d.is_error()
+                            || diagnostic_kind(d)
+                                .is_some_and(|k| k == "sch" || k.starts_with("sch.")))
+                })
+                .cloned(),
+        );
         if let Some(schematic) = result.schematic {
             crate::build::print_build_success(&file_name, &schematic);
         }
     }
 
-    if has_errors {
-        bail!("Build failed. Fix errors before publishing.");
+    if !blocking.diagnostics.is_empty() {
+        let count = blocking.diagnostics.len();
+        eprintln!("\n{}", "Blocking publish:".red().bold());
+        pcb_zen::diagnostics::RenderPass.apply(&mut blocking);
+        bail!("Publish blocked by {count} diagnostic(s) above; sch.* warnings block like errors.");
     }
     Ok(())
 }
@@ -1084,7 +1141,7 @@ fn resolve_remote(repo_root: &Path, force: bool) -> Result<String> {
         anyhow::anyhow!("Not on a branch (detached HEAD state). Switch to main before publishing.")
     })?;
     if !force && branch != "main" {
-        bail!("Must be on 'main' branch to publish.");
+        bail!("On branch '{branch}'. Publishing runs only from 'main'; switch to main first.");
     }
     git::get_branch_remote(repo_root, &branch).ok_or_else(|| {
         anyhow::anyhow!(
@@ -1130,11 +1187,12 @@ fn preflight_checks(repo_root: &Path, remote: &str) -> Result<()> {
         .ok_or_else(|| anyhow::anyhow!("Failed to resolve {}", remote_ref))?;
 
     if local_sha != remote_sha {
+        let range = format!("HEAD...{remote_ref}");
+        let counts = git::run_output(repo_root, &["rev-list", "--left-right", "--count", &range])?;
+        let (ahead, behind) = counts.split_once('\t').unwrap_or(("?", "?"));
         bail!(
-            "Local main ({}) is out of sync with {}/main ({}).\nPull or push changes before publishing.",
-            &local_sha[..8],
-            remote,
-            &remote_sha[..8]
+            "Local main is {ahead} commit(s) ahead of and {behind} behind {remote_ref}. \
+             Pull or push before publishing."
         );
     }
 
@@ -1163,10 +1221,7 @@ fn compute_tag_name(
 }
 
 fn format_tag_message(url: &str, c: &PublishCandidate) -> String {
-    format!(
-        "{} v{} {}\n{} v{}/pcb.toml {}",
-        url, c.next_version, c.content_hash, url, c.next_version, c.manifest_hash
-    )
+    format!("{url} v{}", c.next_version)
 }
 
 fn infer_self_bump(

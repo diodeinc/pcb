@@ -9,7 +9,7 @@ const COMPONENT_ZEN_TEMPLATE: &str = include_str!("../templates/component.zen.ji
 
 /// Sanitize a string for use as a directory/file name and Zener `Component(name=...)`.
 ///
-/// This is shared across `pcb search` and `pcb import` so the output is consistent.
+/// This is shared across `pcb new component` and `pcb import` so the output is consistent.
 ///
 /// Process:
 /// 1. Replace unsafe ASCII → underscore (keep a-z A-Z 0-9 - _, keep Unicode)
@@ -269,6 +269,218 @@ fn generate_component_zen_inner(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_sanitize_mpn_for_path_basic() {
+        // Normal alphanumeric MPNs pass through unchanged
+        assert_eq!(sanitize_mpn_for_path("STM32F407VGT6"), "STM32F407VGT6");
+        assert_eq!(sanitize_mpn_for_path("TPS82140"), "TPS82140");
+        assert_eq!(sanitize_mpn_for_path("LM358"), "LM358");
+    }
+
+    #[test]
+    fn test_sanitize_mpn_for_path_punctuation() {
+        // ASCII punctuation replaced with underscore
+        assert_eq!(sanitize_mpn_for_path("PESD2CAN,215"), "PESD2CAN_215");
+        assert_eq!(sanitize_mpn_for_path("IC@123#456"), "IC_123_456");
+        assert_eq!(
+            sanitize_mpn_for_path("Part.Number:Test"),
+            "Part_Number_Test"
+        );
+        assert_eq!(
+            sanitize_mpn_for_path("Part/Number\\Test"),
+            "Part_Number_Test"
+        );
+        assert_eq!(sanitize_mpn_for_path("Device(123)"), "Device_123");
+        assert_eq!(sanitize_mpn_for_path("IC[5V]"), "IC_5V");
+        assert_eq!(sanitize_mpn_for_path("Part;Number"), "Part_Number");
+        assert_eq!(sanitize_mpn_for_path("Part'Number"), "Part_Number");
+        assert_eq!(sanitize_mpn_for_path("Part\"Number"), "Part_Number");
+
+        // Real-world examples from user
+        assert_eq!(sanitize_mpn_for_path("AT86RF212B.ZU"), "AT86RF212B_ZU");
+        assert_eq!(sanitize_mpn_for_path("MC34063A/D"), "MC34063A_D");
+        assert_eq!(sanitize_mpn_for_path("Part#123@Test"), "Part_123_Test");
+    }
+
+    #[test]
+    fn test_sanitize_mpn_for_path_spaces() {
+        // Spaces become underscores
+        assert_eq!(sanitize_mpn_for_path("TPS82140 SILR"), "TPS82140_SILR");
+        assert_eq!(
+            sanitize_mpn_for_path("Part Number Test"),
+            "Part_Number_Test"
+        );
+
+        // Multiple spaces collapse to single underscore
+        assert_eq!(sanitize_mpn_for_path("Part  Number"), "Part_Number");
+
+        // Leading/trailing spaces trimmed
+        assert_eq!(sanitize_mpn_for_path("   spaces   "), "spaces");
+        assert_eq!(sanitize_mpn_for_path(" Part "), "Part");
+    }
+
+    #[test]
+    fn test_sanitize_mpn_for_path_hyphens_underscores() {
+        // Hyphens and underscores are preserved as safe characters
+        assert_eq!(sanitize_mpn_for_path("STM32-F407"), "STM32-F407");
+        assert_eq!(sanitize_mpn_for_path("IC_123"), "IC_123");
+        assert_eq!(sanitize_mpn_for_path("Part-Name_123"), "Part-Name_123");
+
+        // Multiple consecutive underscores collapse (hyphens preserved)
+        assert_eq!(sanitize_mpn_for_path("Part---Test"), "Part---Test");
+        assert_eq!(sanitize_mpn_for_path("Part___Test"), "Part_Test");
+        assert_eq!(sanitize_mpn_for_path("Part-_-Test"), "Part-_-Test");
+    }
+
+    #[test]
+    fn test_sanitize_mpn_for_path_unicode() {
+        // Unicode characters are transliterated
+        assert_eq!(
+            sanitize_mpn_for_path("µController-2000"),
+            "uController-2000"
+        );
+        assert_eq!(sanitize_mpn_for_path("αβγ-Component"), "abg-Component");
+        assert_eq!(sanitize_mpn_for_path("Ω-Resistor"), "O-Resistor");
+
+        // Cyrillic
+        assert_eq!(sanitize_mpn_for_path("Микроконтроллер"), "Mikrokontroller");
+
+        // Chinese (transliterates - exact output depends on deunicode library)
+        let chinese_result = sanitize_mpn_for_path("电阻器");
+        assert!(!chinese_result.is_empty());
+        assert!(chinese_result.is_ascii());
+
+        // Accented characters
+        assert_eq!(sanitize_mpn_for_path("Café-IC"), "Cafe-IC");
+        assert_eq!(sanitize_mpn_for_path("Résistance"), "Resistance");
+
+        // Real-world examples from user
+        assert_eq!(
+            sanitize_mpn_for_path("Würth Elektronik"),
+            "Wurth_Elektronik"
+        );
+
+        // Trademark symbol transliterates (deunicode produces "tm" without parens)
+        assert_eq!(sanitize_mpn_for_path("LM358™"), "LM358tm");
+    }
+
+    #[test]
+    fn test_sanitize_mpn_for_path_mixed() {
+        // Complex real-world examples
+        assert_eq!(
+            sanitize_mpn_for_path("TPS82140SILR (Texas Instruments)"),
+            "TPS82140SILR_Texas_Instruments"
+        );
+        assert_eq!(
+            sanitize_mpn_for_path("µPD78F0730GB-GAH-AX"),
+            "uPD78F0730GB-GAH-AX"
+        );
+        assert_eq!(sanitize_mpn_for_path("AT91SAM7S256-AU"), "AT91SAM7S256-AU");
+    }
+
+    #[test]
+    fn test_sanitize_mpn_for_path_edge_cases() {
+        // Empty string falls back to "component"
+        assert_eq!(sanitize_mpn_for_path(""), "component");
+
+        // Only punctuation falls back to "component"
+        assert_eq!(sanitize_mpn_for_path("!!!"), "component");
+        assert_eq!(sanitize_mpn_for_path("@#$%"), "component");
+        assert_eq!(sanitize_mpn_for_path("..."), "component");
+
+        // Only spaces falls back to "component"
+        assert_eq!(sanitize_mpn_for_path("     "), "component");
+
+        // Single character
+        assert_eq!(sanitize_mpn_for_path("A"), "A");
+        assert_eq!(sanitize_mpn_for_path("1"), "1");
+        assert_eq!(sanitize_mpn_for_path(","), "component");
+    }
+
+    #[test]
+    fn test_sanitize_mpn_for_path_numbers() {
+        // Numbers are allowed anywhere (no special handling)
+        assert_eq!(sanitize_mpn_for_path("123-456"), "123-456");
+        assert_eq!(sanitize_mpn_for_path("9000IC"), "9000IC");
+        assert_eq!(sanitize_mpn_for_path("0805"), "0805");
+    }
+
+    #[test]
+    fn test_sanitize_mpn_for_path_case_preserved() {
+        // Case is preserved
+        assert_eq!(sanitize_mpn_for_path("STM32f407"), "STM32f407");
+        assert_eq!(sanitize_mpn_for_path("AbCdEf"), "AbCdEf");
+        assert_eq!(sanitize_mpn_for_path("lowercase"), "lowercase");
+        assert_eq!(sanitize_mpn_for_path("UPPERCASE"), "UPPERCASE");
+    }
+
+    #[test]
+    fn test_sanitize_pin_name_basic() {
+        // Basic alphanumeric names get uppercased
+        assert_eq!(sanitize_pin_name("VCC"), "VCC");
+        assert_eq!(sanitize_pin_name("gnd"), "GND");
+        assert_eq!(sanitize_pin_name("GPIO1"), "GPIO1");
+        assert_eq!(sanitize_pin_name("sda"), "SDA");
+    }
+
+    #[test]
+    fn test_sanitize_pin_name_plus_minus_at_end() {
+        // + and - at end become _POS and _NEG
+        assert_eq!(sanitize_pin_name("V+"), "V_POS");
+        assert_eq!(sanitize_pin_name("V-"), "V_NEG");
+        assert_eq!(sanitize_pin_name("IN+"), "IN_POS");
+        assert_eq!(sanitize_pin_name("OUT-"), "OUT_NEG");
+        assert_eq!(sanitize_pin_name("VCC+"), "VCC_POS");
+    }
+
+    #[test]
+    fn test_sanitize_pin_name_plus_minus_in_middle() {
+        // + and - in middle become underscores
+        assert_eq!(sanitize_pin_name("A+B"), "A_B");
+        assert_eq!(sanitize_pin_name("IN-OUT"), "IN_OUT");
+        assert_eq!(sanitize_pin_name("V+REF"), "V_REF");
+    }
+
+    #[test]
+    fn test_sanitize_pin_name_not_prefix() {
+        // ~ and ! at start become N_ prefix
+        assert_eq!(sanitize_pin_name("~CS"), "N_CS");
+        assert_eq!(sanitize_pin_name("!RESET"), "N_RESET");
+        assert_eq!(sanitize_pin_name("~WR"), "N_WR");
+        assert_eq!(sanitize_pin_name("!OE"), "N_OE");
+    }
+
+    #[test]
+    fn test_sanitize_pin_name_hash_suffix() {
+        // # becomes H
+        assert_eq!(sanitize_pin_name("CS#"), "CSH");
+        assert_eq!(sanitize_pin_name("WE#"), "WEH");
+    }
+
+    #[test]
+    fn test_sanitize_pin_name_special_chars() {
+        // Other special chars become underscores
+        assert_eq!(sanitize_pin_name("PIN/A"), "PIN_A");
+        assert_eq!(sanitize_pin_name("PIN.B"), "PIN_B");
+        assert_eq!(sanitize_pin_name("PIN A"), "PIN_A");
+    }
+
+    #[test]
+    fn test_sanitize_pin_name_leading_digit() {
+        // Leading digit gets P prefix
+        assert_eq!(sanitize_pin_name("1"), "P1");
+        assert_eq!(sanitize_pin_name("1A"), "P1A");
+        assert_eq!(sanitize_pin_name("123"), "P123");
+    }
+
+    #[test]
+    fn test_sanitize_pin_name_consecutive_underscores() {
+        // Consecutive underscores get collapsed
+        assert_eq!(sanitize_pin_name("A__B"), "A_B");
+        assert_eq!(sanitize_pin_name("A___B"), "A_B");
+        assert_eq!(sanitize_pin_name("_A_"), "A");
+    }
 
     #[test]
     fn only_no_connect_requires_declared_primary_types() {
