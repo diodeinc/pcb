@@ -145,6 +145,7 @@ fn tessellate_one(key: &str, bytes: &[u8], simplify_error: f32) -> Outcome {
             stats.num_faces
         ));
     }
+    let tessellated_any = tessellated.submeshes.iter().any(|s| !s.indices.is_empty());
     let mut primitives: Vec<([f32; 4], Primitive)> = tessellated
         .submeshes
         .into_iter()
@@ -166,18 +167,15 @@ fn tessellate_one(key: &str, bytes: &[u8], simplify_error: f32) -> Outcome {
             primitive.optimize();
             (color, primitive)
         })
+        // Simplification drops solids smaller than the error budget.
+        .filter(|(_, p)| !p.indices.is_empty())
         .collect();
     if primitives.is_empty() {
-        if stats.num_faces == 0 && stats.failures.is_empty() {
-            return Outcome {
-                mesh: Ok(None),
-                notes,
-            };
-        }
-        return Outcome {
-            mesh: Err("no faces could be tessellated".to_owned()),
-            notes,
+        let mesh = match tessellated_any || stats.failures.is_empty() {
+            true => Ok(None),
+            false => Err("no faces could be tessellated".to_owned()),
         };
+        return Outcome { mesh, notes };
     }
     // Foxtrot buckets colours in a hash map; sort for stable output.
     primitives.sort_by(|a, b| a.0.map(f32::to_bits).cmp(&b.0.map(f32::to_bits)));

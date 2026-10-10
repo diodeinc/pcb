@@ -10,27 +10,26 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Added
 
-- Add `pcb gltf export` to write a compressed, instanced GLB for a KiCad board without kicad-cli.
+- `pcb gltf export` writes a compressed, instanced GLB for a KiCad board without kicad-cli.
 
 ### Changed
 
 - DFM reports are SQLite `.dfm` databases, opened with `pcb open`, and the commands print a JSON summary; removed DFM waivers and `pcb dfm --open`.
-- `pcb publish` checks BOM supplier offers only with `--bump`; local builds and `--check` no longer contact the BOM API.
-- `pcb build` rejects dependency symbol libraries KiCad cannot load.
-- `pcb build` and `pcb inspect` reject symbol libraries KiCad cannot load, such as ones with a root-level `embedded_fonts`, and accept what KiCad loads, such as repeated symbol names and private properties.
 - New KiCad projects are named after the board instead of `layout`; `pcb migrate` renames existing ones.
-- `moved()` is deprecated and emits a warning on each use; it still works for now.
+- `pcb apply` names the root schematic after its KiCad project, and renames one that does not match, so KiCad keeps project settings such as bus aliases and ERC exclusions and DRC schematic parity runs.
+- `pcb apply` gives schematic symbols and layout footprints the same Footprint, Value and Datasheet. Value is the part value, else its MPN, else the symbol name, so footprints that showed an MPN now show the value.
+- `pcb build` and `pcb inspect` validate symbol libraries the way KiCad loads them: they reject what KiCad cannot load, such as a root-level `embedded_fonts`, and accept what it does, such as repeated symbol names and private properties. A library in a dependency is checked too, and warns instead of failing the build, since the workspace cannot fix it.
+- `DiffPair(impedance=...)` sets the impedance on its nets when the pair is created, so it applies even when the pair never crosses an `io()` boundary. Conflicting impedance values on one net keep the first and warn (`net.property_conflict`).
+- `moved()` is deprecated and warns on each use (`deprecated.moved`); it still works for now.
+- `pcb publish` checks BOM supplier offers only with `--bump`; local builds and `--check` no longer contact the BOM API.
 
 ### Fixed
 
-- `pcb import` accepts multi-unit symbols whose sheets keep stale caches of units they don't place.
-- `pcb apply schematic` renames a root schematic that does not match its KiCad project, so KiCad saves project settings such as bus aliases and ERC exclusions.
-- `pcb apply` schematic symbols and layout footprints now agree on Footprint, Value and Datasheet; footprints show the part value instead of its MPN.
-- `pcb apply` names a new root schematic after its KiCad project, matching the board so DRC schematic parity runs.
 - `pcb apply schematic` reads KiCad 10 project bus aliases, so it no longer adds labels to bus nets after a KiCad save.
 - `pcb import` of a `.kicad_sch` uses its same-name `.kicad_pro`, keeping KiCad 10 bus aliases, and a `.kicad_pro` without a board imports.
-- `DiffPair(impedance=...)` applies to its nets even when the pair never crosses an `io()` boundary; conflicting impedance values on one net now warn.
+- `pcb import` accepts multi-unit symbols whose sheets keep stale caches of units they do not place.
 - Schematic sheet paths written with Windows separators, including `..`, resolve as KiCad resolves them.
+- KiCad netlist (`.net`) libparts use the same part name as their components.
 
 ## [0.4.74] - 2026-10-09
 

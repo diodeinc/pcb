@@ -996,11 +996,11 @@ pub mod utils {
                 .pointer("/schematic/top_level_sheets/0/filename")
                 .and_then(serde_json::Value::as_str)
                 .map_or_else(|| format!("{}.kicad_sch", self.name()), str::to_string);
-            let root_file = if Path::new(&old_root_file).file_name() == Some(old_root_file.as_ref())
-            {
-                format!("{name}.kicad_sch")
-            } else {
+            // KiCad writes sheet paths with either separator.
+            let root_file = if old_root_file.contains(['/', '\\']) {
                 old_root_file.clone()
+            } else {
+                format!("{name}.kicad_sch")
             };
 
             let mut project = original.clone();
@@ -1905,6 +1905,23 @@ mod tests {
                 {"filename": "Layout.kicad_sch"}
             ])
         );
+    }
+
+    #[test]
+    fn rename_leaves_a_nested_root_schematic_in_place() {
+        let dir = tempfile::tempdir().unwrap();
+        // KiCad on Windows writes the sheet path with a backslash.
+        let project = r#"{"schematic":{"top_level_sheets":[{"filename":"sch\\root.kicad_sch"}]}}"#;
+        std::fs::write(dir.path().join("layout.kicad_pro"), project).unwrap();
+        std::fs::write(dir.path().join("layout.kicad_pcb"), "board").unwrap();
+        let files = super::utils::discover_kicad_files(dir.path())
+            .unwrap()
+            .unwrap();
+
+        files.rename("Board").unwrap();
+
+        let project = std::fs::read_to_string(dir.path().join("Board.kicad_pro")).unwrap();
+        assert!(project.contains(r"sch\\root.kicad_sch"), "{project}");
     }
 
     #[test]

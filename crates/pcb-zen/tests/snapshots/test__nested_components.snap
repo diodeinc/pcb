@@ -24,7 +24,7 @@ expression: snapshot_output
     )
   )
   (libparts
-    (libpart (lib "lib") (part "TEST")
+    (libpart (lib "lib") (part "100nF")
       (description "")
       (docs "~")
       (footprints
