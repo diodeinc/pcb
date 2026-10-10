@@ -16,6 +16,10 @@ pub struct SchDocument {
     pub pages: Vec<SchPage>,
     /// UUIDs of the project's top-level schematic pages, in project order.
     pub root_page_ids: Vec<Id>,
+    /// KiCad project name (the `.kicad_pro` stem) that owns per-sheet
+    /// symbol and sheet instance data.
+    #[serde(default)]
+    pub project_name: String,
     /// KiCad 10 project bus aliases (`schematic.bus_aliases`).
     pub bus_aliases: BTreeMap<String, Vec<String>>,
 }
@@ -212,6 +216,17 @@ pub struct Sheet {
     pub pins: Vec<SheetPin>,
     /// Direct child expressions not represented by the semantic fields above.
     pub unsupported: Vec<Sexpr>,
+    /// Per-parent-sheet-instance page numbers from `(instances (project ... (path ... (page ...))))`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub instances: Vec<SheetInstance>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SheetInstance {
+    pub project: String,
+    /// Parent sheet UUID path, e.g. `/root-uuid`.
+    pub path: String,
+    pub page: String,
 }
 
 impl Sheet {
@@ -233,6 +248,9 @@ pub struct SheetPin {
     pub at: Point,
     pub rotation: Rotation,
     pub shape: LabelShape,
+    /// Text effects; the justification is derived from `rotation` (the sheet side).
+    #[serde(default)]
+    pub effects: TextEffects,
     /// Direct child expressions not represented by the semantic fields above.
     pub unsupported: Vec<Sexpr>,
 }
@@ -249,6 +267,8 @@ pub struct Symbol {
     pub at: Point,
     pub rotation: Rotation,
     pub mirror: Option<MirrorAxis>,
+    #[serde(default)]
+    pub exclude_from_sim: bool,
     #[serde(default)]
     pub dnp: bool,
     #[serde(default = "default_true")]
@@ -306,6 +326,8 @@ pub struct SymbolField {
     pub effects: TextEffects,
     pub justify: Option<FieldJustify>,
     pub hidden: bool,
+    #[serde(default)]
+    pub show_name: bool,
     pub do_not_autoplace: bool,
     /// Direct child expressions not represented by the semantic fields above.
     pub unsupported: Vec<Sexpr>,
@@ -322,6 +344,7 @@ impl SymbolField {
             effects: TextEffects::default(),
             justify: None,
             hidden: false,
+            show_name: false,
             do_not_autoplace: false,
             unsupported: Vec::new(),
         }

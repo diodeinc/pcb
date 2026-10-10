@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::path::Path;
 
 use anyhow::{Context, Result, bail};
 use pcb_sch::{ATTR_SCHEMATIC_PATH, Instance, InstanceKind, Schematic};
@@ -36,6 +37,33 @@ const PLACEMENT_BLOCK_GAP_CELLS: i32 = 4;
 const CONTEXT_LABEL_GAP_CELLS: i32 = 1;
 const CAPACITOR_BANK_BUS_OFFSET_CELLS: f64 = 2.0;
 
+/// The project name symbol instances are recorded under. Documents that never
+/// went through a project file (new or in-memory) use the root schematic's
+/// stem, and a reopened in-memory page keeps whatever its instances already say.
+fn project_name(document: &SchDocument) -> String {
+    if !document.project_name.is_empty() {
+        return document.project_name.clone();
+    }
+    let root = document
+        .root_page_ids
+        .first()
+        .and_then(|id| document.pages.iter().find(|page| &page.id == id));
+    root.and_then(|page| page.file_name.as_deref())
+        .and_then(|name| Path::new(name).file_stem())
+        .map(|stem| stem.to_string_lossy().into_owned())
+        .or_else(|| {
+            root?.items.iter().find_map(|item| match item {
+                SchItem::Symbol(symbol) => symbol
+                    .instances
+                    .iter()
+                    .find(|instance| !instance.project.is_empty())
+                    .map(|instance| instance.project.clone()),
+                _ => None,
+            })
+        })
+        .unwrap_or_default()
+}
+
 pub(crate) fn reconcile_document(
     existing: Option<&SchDocument>,
     netlist: &Schematic,
@@ -67,12 +95,22 @@ pub(crate) fn reconcile_document(
                         .context("initializing a schematic requires a root filename")?
                         .to_string(),
                 ),
+                // KiCad's trailing root-sheet sections. Existing files keep
+                // whatever they have; a KiCad save adds them if missing.
+                items: [
+                    r#"(sheet_instances (path "/" (page "1")))"#,
+                    "(embedded_fonts no)",
+                ]
+                .into_iter()
+                .map(|source| Ok(SchItem::Unsupported(pcb_sexpr::parse(source)?)))
+                .collect::<Result<_>>()?,
                 ..SchPage::new(root_page_id())
             }],
             root_page_ids: vec![root_page_id()],
             ..SchDocument::default()
         },
     };
+    let project_name = project_name(&document);
     if document.pages.is_empty() {
         bail!("KiCad schematic project has no pages");
     }
@@ -327,9 +365,7 @@ pub(crate) fn reconcile_document(
         )?;
     }
 
-    // Native saves persist per-sheet annotations separately from Reference.
-    // Refresh even when only the instance annotation (not the field) is stale.
-    component_slots::sync_symbol_instance_references(&mut document, &project_slots)?;
+    hierarchy::sync_instances(&mut document, &project_slots, &project_name)?;
 
     // Cleanup is a whole-document concern; a scoped repair must not
     // touch pages outside its selection.
@@ -544,6 +580,7 @@ fn initial_component_rotation(
         at: Point::default(),
         rotation: Rotation::default(),
         mirror: None,
+        exclude_from_sim: false,
         dnp: false,
         in_bom: true,
         on_board: true,
@@ -888,6 +925,7 @@ fn materialize_hierarchy(
                 at: Point::new(at.x, at.y + (index as f64 + 2.0) * SHEET_PIN_SPACING_MM),
                 rotation: Rotation::Deg180,
                 shape: LabelShape::Bidirectional,
+                effects: crate::TextEffects::default(),
                 unsupported: Vec::new(),
             })
             .collect();
@@ -920,6 +958,7 @@ fn materialize_hierarchy(
             file: file_field,
             pins,
             unsupported: generated_sheet_style(),
+            instances: Vec::new(),
         };
         document.pages[sheet_plan.parent_page]
             .items
@@ -1742,6 +1781,7 @@ fn build_component_symbol(
         at,
         rotation,
         mirror,
+        exclude_from_sim: previous.is_some_and(|symbol| symbol.exclude_from_sim),
         dnp: false,
         in_bom: true,
         on_board: true,
@@ -1844,9 +1884,9 @@ fn component_fields(
         SymbolField::new("Footprint", footprint_id, at).with_hidden(true),
         SymbolField::new("Path", slot.component_path(), at).with_hidden(true),
     ];
-    if let Some(datasheet) = component_slots::attribute_string(instance, "datasheet")? {
-        fields.push(SymbolField::new("Datasheet", datasheet, at).with_hidden(true));
-    }
+    // KiCad always writes the mandatory Datasheet field.
+    let datasheet = component_slots::attribute_string(instance, "datasheet")?.unwrap_or_default();
+    fields.push(SymbolField::new("Datasheet", datasheet, at).with_hidden(true));
     // Imported boards persist the original schematic Description; an explicitly
     // empty one is meaningful.
     let description = match component_slots::attribute_string(instance, "schematic_description")? {
@@ -3284,6 +3324,7 @@ fn build_net_symbol(
         at: Point::default(),
         rotation: Rotation::default(),
         mirror: None,
+        exclude_from_sim: false,
         dnp: false,
         in_bom: true,
         on_board: true,
@@ -3938,6 +3979,7 @@ mod tests {
     fn test_page_with_sheet(id: &str) -> SchPage {
         let mut page = SchPage::new(id);
         page.items.push(SchItem::Sheet(Box::new(Sheet {
+            instances: Vec::new(),
             id: format!("{id}-sheet"),
             placed: true,
             at: Some(Point::new(10.0, 10.0)),
@@ -4171,6 +4213,7 @@ mod tests {
         .unwrap();
         let slot = SymbolSlotKey::new("MQ-7.MQ-7", 1).unwrap();
         let symbol = Symbol {
+            exclude_from_sim: false,
             id: slot.symbol_id(),
             lib_id: definition.lib_id.clone(),
             lib_name: None,

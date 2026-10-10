@@ -181,7 +181,7 @@ pub(crate) fn reduce_with_provenance(
 pub(crate) struct PageInstance<'a> {
     pub(crate) page: &'a SchPage,
     pub(crate) id: String,
-    child_ids: BTreeMap<String, String>,
+    pub(crate) child_ids: BTreeMap<String, String>,
 }
 
 pub(crate) fn page_instances(document: &SchDocument) -> Result<Vec<PageInstance<'_>>> {

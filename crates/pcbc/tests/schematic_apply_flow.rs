@@ -6,7 +6,7 @@ use pcb_kicad_sch::{
     Label, LabelKind, LabelShape, LabelSpin, MirrorAxis, PinInstance, Point, Rotation, SchItem,
     SymbolDefinition, Wire,
     analysis::{SchematicIssue, inspect_schematic},
-    plan_connectivity_repair,
+    parse_kicad_sch_page, plan_connectivity_repair,
     reconcile::plan_repairs,
 };
 use pcb_sch::{ATTR_SCHEMATIC_PATH, ATTR_SYMBOL_FORMAT_VERSION, AttributeValue};
@@ -206,18 +206,28 @@ fn apply_repairs_stale_child_instance_reference_without_touching_other_paths() {
         })
         .unwrap();
     assert_eq!(symbol.reference(), Some("R2"));
-    symbol.unsupported.push(
-        pcb_sexpr::parse(&format!(
-            r#"(instances
-        (project "renamed-project"
-            (path "{path}" (reference "R1") (unit 1) (custom "preserve"))
-            (path "{path}/other-sheet" (reference "R80") (unit 2)))
-        (project "foreign-project"
-            (path "/foreign-root/{sheet_id}" (reference "R90") (unit 3))))"#,
-            sheet_id = path.rsplit('/').next().unwrap()
-        ))
-        .unwrap(),
-    );
+    let sheet_id = path.rsplit('/').next().unwrap();
+    let instance =
+        |project: &str, path: String, reference: &str, unit: u32| pcb_kicad_sch::SymbolInstance {
+            project: project.to_string(),
+            path,
+            reference: Some(reference.to_string()),
+            unit: Some(unit),
+            unsupported: Vec::new(),
+        };
+    symbol.instances = vec![
+        pcb_kicad_sch::SymbolInstance {
+            unsupported: vec![pcb_sexpr::parse(r#"(custom "preserve")"#).unwrap()],
+            ..instance("Hierarchy", path.clone(), "R1", 1)
+        },
+        instance("Hierarchy", format!("{path}/other-sheet"), "R80", 2),
+        instance(
+            "foreign-project",
+            format!("/foreign-root/{sheet_id}"),
+            "R90",
+            3,
+        ),
+    ];
     for page in &project.document.pages {
         fs::write(
             project_dir.join(page.file_name.as_ref().unwrap()),
@@ -1566,13 +1576,15 @@ fn renames_a_root_schematic_that_does_not_match_the_project() {
 
     let applied = apply_linked_schematic(&netlist).unwrap().unwrap();
 
-    assert!(!applied.changed);
+    // Symbol instances are keyed by project name, so the rename re-homes them.
+    assert!(applied.changed);
     assert_eq!(applied.project_file, project_file);
     assert_eq!(applied.root_schematic, project_dir.join("layout.kicad_sch"));
     assert!(!created.root_schematic.exists());
+    assert!(root_source.contains("(project \"Hierarchy\""));
     assert_eq!(
         fs::read_to_string(&applied.root_schematic).unwrap(),
-        root_source
+        root_source.replace("(project \"Hierarchy\"", "(project \"layout\"")
     );
     let project_json: serde_json::Value =
         serde_json::from_str(&fs::read_to_string(&project_file).unwrap()).unwrap();
@@ -1608,7 +1620,7 @@ fn repairs_component_identity_without_rebuilding_connectivity() {
             SchItem::Wire(wire) => Some(wire.id.clone()),
             _ => None,
         })
-        .collect::<Vec<_>>();
+        .collect::<BTreeSet<_>>();
     let symbol = broken.pages[0]
         .items
         .iter_mut()
@@ -1639,7 +1651,7 @@ fn repairs_component_identity_without_rebuilding_connectivity() {
             SchItem::Wire(wire) => Some(wire.id.clone()),
             _ => None,
         })
-        .collect::<Vec<_>>();
+        .collect::<BTreeSet<_>>();
     assert_eq!(repaired_wire_ids, wire_ids);
 }
 
@@ -1665,7 +1677,7 @@ fn repairs_a_disconnected_net_without_removing_remaining_wires() {
             SchItem::Wire(wire) => Some(wire.id.clone()),
             _ => None,
         })
-        .collect::<Vec<_>>();
+        .collect::<BTreeSet<_>>();
     fs::write(
         project_dir.join("simple.kicad_sch"),
         broken.pages[0].to_kicad_sch(),
@@ -1682,7 +1694,7 @@ fn repairs_a_disconnected_net_without_removing_remaining_wires() {
             SchItem::Wire(wire) => Some(wire.id.clone()),
             _ => None,
         })
-        .collect::<Vec<_>>();
+        .collect::<BTreeSet<_>>();
     assert_eq!(repaired_wire_ids, remaining_wire_ids);
     let analysis = inspect_schematic(&repaired.document, &netlist)
         .unwrap()
@@ -1907,11 +1919,10 @@ fn ambiguous_short_uses_the_same_repair_as_the_shared_issue_planner() {
     for (repaired, expected) in repaired.document.pages.iter().zip(&expected.pages) {
         assert_eq!(repaired.id, expected.id);
         assert_eq!(repaired.file_name, expected.file_name);
-        let mut repaired_items = repaired.items.iter().collect::<Vec<_>>();
-        let mut expected_items = expected.items.iter().collect::<Vec<_>>();
-        repaired_items.sort_by_key(|item| item.id());
-        expected_items.sort_by_key(|item| item.id());
-        assert_eq!(repaired_items, expected_items);
+        // The saved file carries KiCad's defaults (wire strokes, item order).
+        let expected =
+            parse_kicad_sch_page(expected.file_name.as_deref(), &expected.to_kicad_sch()).unwrap();
+        assert_eq!(repaired.items, expected.items);
     }
 }
 

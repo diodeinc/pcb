@@ -541,6 +541,14 @@ fn assert_preserved_schematic(path: &std::path::Path, original: &str, applied: b
     let mut imported = SchDocument::from_kicad_sch(&fs::read_to_string(path).unwrap()).unwrap();
     let mut source = SchDocument::from_kicad_sch(original).unwrap();
     let library = source.pages[0].library.clone();
+    // A rewrite stores items in KiCad's save order; pair them by identity.
+    // Import re-identifies managed symbols, so pair those by placement.
+    for page in imported.pages.iter_mut().chain(source.pages.iter_mut()) {
+        page.items.sort_by_cached_key(|item| match item {
+            SchItem::Symbol(symbol) => format!("symbol {:?} {}", symbol.at, symbol.unit),
+            item => format!("{:?}", item.id()),
+        });
+    }
     // Only managed symbol identity may differ. This checks the whole parsed page, including
     // library definitions, wires, graphics, no-connects, fields, hierarchy, and unit placement.
     for (imported, original) in imported.pages[0]
@@ -568,6 +576,10 @@ fn assert_preserved_schematic(path: &std::path::Path, original: &str, applied: b
                 imported.fields.remove("Footprint");
                 original.fields.remove("Footprint");
                 if applied {
+                    // Apply writes every mandatory field, as KiCad does on save.
+                    if !original.fields.contains_key("Datasheet") {
+                        imported.fields.remove("Datasheet");
+                    }
                     // KiCad may store all units' pin UUIDs on each unit. Apply keeps only the
                     // selected unit's records, without changing its physical pin identity.
                     let pins = library.definitions[original.library_key()]
@@ -1310,6 +1322,9 @@ fn unwired_hidden_power_net_preserves_native_name_with_logical_binding() {
     assert_repeated_schematic_apply(&mut sandbox, "out/layout.zen", &[]);
     let applied =
         pcb_kicad_sch::SchDocument::from_kicad_sch(&fs::read_to_string(output).unwrap()).unwrap();
+    // Apply rewrote the KiCad 9 source in KiCad's save order; island numbering follows it.
+    let document =
+        pcb_kicad_sch::SchDocument::from_kicad_sch(&document.pages[0].to_kicad_sch()).unwrap();
     assert_eq!(
         pcb_kicad_sch::connectivity::ConnectivityGraph::from_kicad(&applied).unwrap(),
         pcb_kicad_sch::connectivity::ConnectivityGraph::from_kicad(&document).unwrap()

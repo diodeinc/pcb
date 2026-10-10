@@ -50,6 +50,7 @@ pub(crate) fn specs(netlist: &Schematic) -> Result<BTreeMap<String, NetSymbolSpe
                 at: Point::default(),
                 rotation: Rotation::default(),
                 mirror: None,
+                exclude_from_sim: false,
                 dnp: false,
                 in_bom: true,
                 on_board: true,

@@ -8,6 +8,11 @@ These fixtures come from the KiCad source QA data at revision `3aaf95cc32`
 - `issue24201/`: the complete two-sheet `qa/data/eeschema/issue24201`
   schematic hierarchy, paired with a minimal project marker for the loader test
 
+`resaved-child-sheet.kicad_sch` is a child sheet `pcb apply schematic` wrote and
+KiCad 10.0.7 (`kicad-cli sch upgrade --force`) saved again. It pins the exact
+item, property, and sub-element order KiCad writes so our output survives a
+KiCad save unchanged.
+
 Both files declare `generator_version "10.0"`. They test semantic round trips
 through the supported model while retaining unmodeled S-expressions.
 

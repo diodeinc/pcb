@@ -1607,6 +1607,7 @@ fn nets_split_into_a_user_created_subsheet_are_repairable() {
             .expect("composed port label")
     };
     let sheet = Sheet {
+        instances: Vec::new(),
         id: "sheet-sub".to_string(),
         placed: true,
         at: Some(Point::new(0.0, 0.0)),
@@ -1616,6 +1617,7 @@ fn nets_split_into_a_user_created_subsheet_are_repairable() {
         pins: ["INPUT", "OUTPUT"]
             .into_iter()
             .map(|name| SheetPin {
+                effects: Default::default(),
                 id: format!("pin-{name}"),
                 name: name.to_string(),
                 at: pin_at(name),

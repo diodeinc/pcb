@@ -554,6 +554,7 @@ mod tests {
         assert_eq!(definition.unit_indices(), &[1, 2]);
 
         let symbol = Symbol {
+            exclude_from_sim: false,
             id: "symbol".into(),
             lib_id: "Device:Multi".into(),
             lib_name: None,
@@ -591,6 +592,7 @@ mod tests {
     #[test]
     fn transforms_pins_with_kicad_rotation_then_mirror_matrix() {
         let mut symbol = Symbol {
+            exclude_from_sim: false,
             id: "symbol".into(),
             lib_id: "Test:Symbol".into(),
             lib_name: None,
