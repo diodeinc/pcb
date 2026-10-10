@@ -173,8 +173,20 @@ pub fn prettify(source: &str, mode: FormatMode) -> String {
 ///
 /// The returned string includes a trailing newline.
 pub fn format_tree(sexpr: &Sexpr, mode: FormatMode) -> String {
-    let raw = serialize_compact(sexpr);
-    prettify(&raw, mode)
+    prettify(&serialize_compact(sexpr), mode)
+}
+
+/// Format a synthetic float the way KiCad writes every double (`{:.10g}` in
+/// `FormatInternalUnits`, `FormatDouble2Str` and `FormatAngle`): ten
+/// significant digits, trailing zeros stripped. This erases arithmetic noise
+/// such as `153.67000000000002`, so a KiCad save of the file is a no-op.
+/// Unlike `%g` it never falls back to exponent notation.
+fn format_float(f: f64) -> String {
+    if f == 0.0 {
+        return "0".to_string();
+    }
+    let decimals = (9 - f.abs().log10().floor() as i32).max(0) as usize;
+    trim_float(format!("{f:.decimals$}"))
 }
 
 fn serialize_compact(sexpr: &Sexpr) -> String {
@@ -202,7 +214,7 @@ fn write_compact(sexpr: &Sexpr, out: &mut String) {
             if let Some(raw) = sexpr.raw_atom.as_deref() {
                 out.push_str(raw);
             } else {
-                out.push_str(&trim_float(f.to_string()));
+                out.push_str(&format_float(*f));
             }
         }
         SexprKind::List(items) => {
@@ -311,8 +323,31 @@ fn trim_float(mut s: String) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{FormatMode, format_tree, prettify};
+    use super::{FormatMode, format_float, format_tree, prettify};
     use crate::{Sexpr, parse};
+
+    #[test]
+    fn floats_match_kicad() {
+        // Schematic values taken from a KiCad 10 rewrite of a pcb-generated
+        // sheet, plus board footprint-transform noise and a dimensionless value.
+        for (value, expected) in [
+            (153.67000000000002, "153.67"),
+            (97.78999999999999, "97.79"),
+            (118.66879999999999, "118.6688"),
+            (76.83500000000001, "76.835"),
+            (1.016, "1.016"),
+            (0.2032, "0.2032"),
+            (100.33, "100.33"),
+            (0.0, "0"),
+            (-0.0, "0"),
+            (1.0, "1"),
+            (-6.35, "-6.35"),
+            (-3.220010000000002, "-3.22001"),
+            (0.0000004, "0.0000004"),
+        ] {
+            assert_eq!(format_float(value), expected, "{value}");
+        }
+    }
 
     #[test]
     fn prettify_basic_board() {
