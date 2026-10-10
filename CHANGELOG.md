@@ -22,7 +22,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - `DiffPair(impedance=...)` sets the impedance on its nets when the pair is created, so it applies even when the pair never crosses an `io()` boundary. Conflicting impedance values on one net keep the first and warn (`net.property_conflict`).
 - `moved()` is deprecated and warns on each use (`deprecated.moved`); it still works for now.
 - `pcb publish` checks BOM supplier offers only with `--bump`; local builds and `--check` no longer contact the BOM API.
-- `pcb import` rejects projects with more than one top-level sheet instead of importing only the first.
+- `pcb import` rejects projects with more than one top-level sheet instead of importing only one of them.
 
 ### Fixed
 
