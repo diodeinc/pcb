@@ -5,7 +5,6 @@ use anyhow::{Context, Result, bail};
 use serde_json::Value;
 use uuid::Uuid;
 
-use crate::sheet_placements::normalized;
 use crate::{SchDocument, SchItem, parse_kicad_sch_page, restore_sheet_placements};
 
 /// A KiCad project and every schematic page reachable from its roots. Paths
@@ -125,7 +124,7 @@ fn project_roots(project_file: &str, project: &Value) -> Result<Vec<(String, Opt
         .filter(|sheets| !sheets.is_empty());
     let Some(top_levels) = top_levels else {
         let root = Path::new(project_file).with_extension("kicad_sch");
-        return Ok(vec![(posix(&root), None)]);
+        return Ok(vec![(sheet_file("", &root.to_string_lossy())?, None)]);
     };
     top_levels
         .iter()
@@ -150,18 +149,39 @@ fn project_roots(project_file: &str, project: &Value) -> Result<Vec<(String, Opt
                 .transpose()?
                 .filter(|id| !id.is_nil())
                 .map(|id| id.to_string());
-            Ok((posix(&normalized(project_file, file_name)?), id))
+            Ok((sheet_file(project_file, file_name)?, id))
         })
         .collect()
 }
 
-/// The project-relative file a sheet in `parent` (project-relative) refers to.
+/// The project-relative file a sheet in `parent` (project-relative) refers to,
+/// resolved as KiCad does: Windows separators are accepted, `${KIPRJMOD}` is
+/// the project directory, and the result must stay inside the project.
 pub fn sheet_file(parent: &str, child: &str) -> Result<String> {
-    normalized(parent, child).map(|path| posix(&path))
-}
-
-fn posix(path: &Path) -> String {
-    path.to_string_lossy().replace('\\', "/")
+    let child = child.replace('\\', "/");
+    let (base, child) = match child.strip_prefix("${KIPRJMOD}/") {
+        Some(rooted) => ("", rooted),
+        None => (
+            parent.rsplit_once('/').map_or("", |(dir, _)| dir),
+            child.as_str(),
+        ),
+    };
+    if child.is_empty() || child.starts_with('/') {
+        bail!("schematic sheet path '{child}' must be relative");
+    }
+    let mut parts = Vec::new();
+    for part in base.split('/').chain(child.split('/')) {
+        match part {
+            "" | "." => {}
+            ".." => {
+                parts
+                    .pop()
+                    .context("schematic sheet path escapes project directory")?;
+            }
+            part => parts.push(part),
+        }
+    }
+    Ok(parts.join("/"))
 }
 
 #[cfg(test)]
