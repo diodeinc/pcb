@@ -589,10 +589,6 @@ impl Rotation {
             Self::Deg270 => 270,
         }
     }
-
-    pub fn rotated_by(self, degrees: i64) -> Option<Self> {
-        Self::from_degrees(self.degrees() + degrees)
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

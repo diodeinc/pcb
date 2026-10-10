@@ -86,7 +86,6 @@ tiny_http = "0.12.0"
 toml = "1"
 toml_edit = "0.25"
 uuid = { version = "1.27", features = ["v4", "v5", "js"] }
-walkdir = "2.5"
 same-file = "1.0"
 deunicode = "1.6"
 insta = { version = "1.49", features = ["yaml", "filters", "json"] }

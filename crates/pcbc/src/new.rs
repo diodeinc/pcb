@@ -9,6 +9,8 @@ use std::path::{Path, PathBuf};
 
 use crate::codegen;
 
+mod component;
+
 const GITIGNORE_TEMPLATE: &str = include_str!("templates/gitignore");
 const BOARD_PCB_TOML: &str = include_str!("templates/board_pcb_toml.jinja");
 const BOARD_ZEN: &str = include_str!("templates/board_zen.jinja");
@@ -235,7 +237,7 @@ fn require_workspace() -> Result<(std::path::PathBuf, PcbToml)> {
 }
 
 fn execute_new_component(args: NewComponentArgs) -> Result<()> {
-    pcb_diode_api::execute_component_from_local_dir(&args.dir)
+    component::execute_component_from_local_dir(&args.dir)
 }
 
 fn execute_interactive() -> Result<()> {

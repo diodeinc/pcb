@@ -139,11 +139,6 @@ impl Span {
         Self { start: 0, end: 0 }
     }
 
-    /// Check if this is a synthetic (non-parsed) span
-    pub fn is_synthetic(&self) -> bool {
-        self.start == 0 && self.end == 0
-    }
-
     /// Get the length of the span
     pub fn len(&self) -> usize {
         self.end.saturating_sub(self.start)

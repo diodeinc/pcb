@@ -6,7 +6,6 @@ description = "Diode API client for authentication, BOM matching, sandboxes, and
 
 [dev-dependencies]
 httpmock = { workspace = true }
-insta = { workspace = true }
 serial_test = { workspace = true }
 tempfile = { workspace = true }
 
@@ -17,7 +16,6 @@ atomicwrites = { workspace = true }
 base64 = { workspace = true }
 chrono = { workspace = true }
 clap = { workspace = true }
-colored = { workspace = true }
 dirs = { workspace = true }
 fslock = { workspace = true }
 hex = { workspace = true }
@@ -25,12 +23,8 @@ inquire = { workspace = true }
 log = { workspace = true }
 open = { workspace = true }
 pcb-eda = { workspace = true }
-pcb-component-gen = { workspace = true }
 pcb-diode-uri = { workspace = true }
-pcb-fmt = { workspace = true }
-pcb-kicad = { workspace = true }
 pcb-sch = { workspace = true }
-pcb-sexpr = { workspace = true }
 pcb-ui = { workspace = true }
 pcb-zen = { workspace = true }
 pcb-zen-core = { workspace = true }
@@ -43,5 +37,4 @@ toml = { workspace = true }
 url = { workspace = true }
 urlencoding = { workspace = true }
 uuid = { workspace = true, features = ["serde"] }
-walkdir = { workspace = true }
 zip = { workspace = true }
