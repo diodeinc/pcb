@@ -126,13 +126,10 @@ fn prepare_output(
 
     if args.force {
         let portable = &selection.portable;
-        let inputs: Vec<PathBuf> = std::iter::once(paths.kicad_input_abs.clone())
-            .chain(
-                portable
-                    .files_to_bundle_rel
-                    .iter()
-                    .map(|relative| portable.project_dir.join(relative)),
-            )
+        let inputs: Vec<PathBuf> = portable
+            .files_to_bundle_rel
+            .iter()
+            .map(|relative| portable.project_dir.join(relative))
             .chain(
                 portable
                     .extra_files_to_bundle
@@ -173,14 +170,11 @@ fn remove_generated_output(
         paths.push(import_paths.project_dir());
     }
 
-    for path in &paths {
-        if let Some(input) = inputs.iter().find(|input| input.starts_with(path)) {
-            anyhow::bail!(
-                "--force would remove {}, which contains the import input {}. Move the KiCad project outside the generated output and reimport.",
-                path.display(),
-                input.display()
-            );
-        }
+    if let Some(input) = inputs
+        .iter()
+        .find(|input| paths.iter().any(|path| input.starts_with(path)))
+    {
+        anyhow::bail!("--force would delete import input {}", input.display());
     }
 
     for path in paths {
@@ -403,15 +397,8 @@ mod tests {
         std::fs::create_dir_all(source.parent().unwrap()).expect("create eda");
         std::fs::write(&source, "source").expect("write source");
 
-        let error = remove_generated_output(
-            &import_paths(board_dir),
-            "board",
-            true,
-            std::slice::from_ref(&source),
-        )
-        .expect_err("cleanup must not remove its input");
-
-        assert!(error.to_string().contains("contains the import input"));
+        let inputs = [source.clone()];
+        assert!(remove_generated_output(&import_paths(board_dir), "board", true, &inputs).is_err());
         assert!(source.is_file());
     }
 }
