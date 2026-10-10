@@ -172,7 +172,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 tracing-chrome = "0.7"
 
 # rectify and pcb-gltf: STEP tessellation (foxtrot); rectify: raster grids and FFT numerics
-triangulate = { git = "https://github.com/diodeinc/foxtrot.git", rev = "34b2d057e51f219c5bee839d164a0511b579e208" }
+triangulate = { git = "https://github.com/diodeinc/foxtrot.git", rev = "9cbd4dba969079a338e7bb4876727ecce3198cce" }
 # pcb-gltf: mesh optimization and EXT_meshopt_compression (pure Rust meshoptimizer)
 meshopt-rs = { git = "https://github.com/yzsolt/meshopt-rs", rev = "7b64153167830dfe4fb28d6bd699a28d106f172e" }
 ndarray = "0.17"

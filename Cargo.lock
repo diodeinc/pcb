@@ -604,7 +604,7 @@ dependencies = [
 [[package]]
 name = "cdt"
 version = "0.1.0"
-source = "git+https://github.com/diodeinc/foxtrot.git?rev=34b2d057e51f219c5bee839d164a0511b579e208#34b2d057e51f219c5bee839d164a0511b579e208"
+source = "git+https://github.com/diodeinc/foxtrot.git?rev=9cbd4dba969079a338e7bb4876727ecce3198cce#9cbd4dba969079a338e7bb4876727ecce3198cce"
 dependencies = [
  "spade",
  "thiserror",
@@ -3421,7 +3421,7 @@ dependencies = [
 [[package]]
 name = "nurbs"
 version = "0.1.0"
-source = "git+https://github.com/diodeinc/foxtrot.git?rev=34b2d057e51f219c5bee839d164a0511b579e208#34b2d057e51f219c5bee839d164a0511b579e208"
+source = "git+https://github.com/diodeinc/foxtrot.git?rev=9cbd4dba969079a338e7bb4876727ecce3198cce#9cbd4dba969079a338e7bb4876727ecce3198cce"
 dependencies = [
  "log",
  "nalgebra-glm",
@@ -6072,7 +6072,7 @@ dependencies = [
 [[package]]
 name = "step"
 version = "0.1.0"
-source = "git+https://github.com/diodeinc/foxtrot.git?rev=34b2d057e51f219c5bee839d164a0511b579e208#34b2d057e51f219c5bee839d164a0511b579e208"
+source = "git+https://github.com/diodeinc/foxtrot.git?rev=9cbd4dba969079a338e7bb4876727ecce3198cce#9cbd4dba969079a338e7bb4876727ecce3198cce"
 dependencies = [
  "arrayvec",
  "fast-float2",
@@ -6703,7 +6703,7 @@ dependencies = [
 [[package]]
 name = "triangulate"
 version = "0.1.0"
-source = "git+https://github.com/diodeinc/foxtrot.git?rev=34b2d057e51f219c5bee839d164a0511b579e208#34b2d057e51f219c5bee839d164a0511b579e208"
+source = "git+https://github.com/diodeinc/foxtrot.git?rev=9cbd4dba969079a338e7bb4876727ecce3198cce#9cbd4dba969079a338e7bb4876727ecce3198cce"
 dependencies = [
  "cdt",
  "log",
