@@ -180,14 +180,13 @@ fn ensure_footprints_linked(
                 .get(&sheet)
                 .is_some_and(|node| node.schematic_file.is_none())
         })
-        .map(|(refdes, path)| format!("{} (footprint path {})", refdes.as_str(), path.pcb_path()))
-        .collect::<Vec<_>>();
+        .map(|(refdes, path)| format!("\n  {} {}", refdes.as_str(), path.pcb_path()))
+        .collect::<String>();
     anyhow::ensure!(
         unlinked.is_empty(),
-        "PCB footprints are not linked to the schematic, their paths name no schematic sheet: {}. \
+        "PCB footprints are not linked to the schematic; their paths name no schematic sheet:{unlinked}\n\
          Run KiCad's Update PCB from Schematic with \"Re-link footprints to schematic symbols \
-         based on their reference designators\" checked, then save and import again",
-        unlinked.join(", ")
+         based on their reference designators\" checked, then save and import again"
     );
     Ok(())
 }
