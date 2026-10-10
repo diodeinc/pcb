@@ -42,6 +42,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - `pcb import` reads symbols without per-sheet instance data, such as Altium imports KiCad has not re-saved, and ignores instance data for sheets that no longer exist.
 - Schematic sheet paths written with Windows separators, including `..`, resolve as KiCad resolves them.
 - KiCad netlist (`.net`) libparts use the same part name as their components.
+- `pcb step export` no longer cuts off a sliver of silkscreen or solder mask at the corner where a ring starts. Boards with many mask openings or silkscreen items export faster.
 
 ### Removed
 

@@ -18,7 +18,7 @@ use crate::font;
 use crate::geom::{Vec2, ccw_sweep, circle_center, point_in_polygon, rotate_kicad, signed_area};
 use crate::outline::{Edge, Frame, Loop, Solid, board_solids, flatten, orient};
 use crate::outline_font::Fonts;
-use crate::rings::{Nested, fit, nest, nested_of, rings_of};
+use crate::rings::{IndexedRing, Nested, cleaned, fit, nest, nested_of, raw_islands, rings_of};
 
 /// Height of the silkscreen above the outer copper.
 const SILK_ABOVE_COPPER: f64 = 0.04;
@@ -565,10 +565,12 @@ fn less(
 }
 
 /// The cleaned rings of the union of `items`, unioned cell by cell:
-/// items are binned by position, each bin is unioned on its own thread,
-/// and only bins whose contours overlap are unioned together. Strokes
-/// overlap within a text, openings within a footprint; the rest of the
-/// board is disjoint and costs nothing to combine.
+/// items are binned by position and each bin is unioned on its own
+/// thread. Only islands of different bins that meet are unioned again,
+/// group by group, from the boolean's own vertices so shared edges still
+/// coincide. Strokes overlap within a text, openings within a
+/// footprint; the rest of the board is disjoint and costs nothing to
+/// combine.
 fn union_rings(
     items: Vec<Vec<ContourBuf>>,
     threads: usize,
@@ -596,69 +598,86 @@ fn union_rings(
     bins.retain(|b| !b.is_empty());
     let unioned = crate::parallel_map(threads, &bins, |bin| {
         let mut notes = Vec::new();
-        let contours = region(bin, what, &mut notes)
-            .map(|r| r.to_contours())
+        let islands = region(bin, what, &mut notes)
+            .map(|r| raw_islands(&r))
             .unwrap_or_default();
-        (contours, notes)
+        (islands, notes)
     });
-    let mut bins = Vec::with_capacity(unioned.len());
-    for (contours, notes) in unioned {
+    // (bin, island, its rings indexed); the outer ring comes first.
+    let mut islands: Vec<(usize, Nested, Vec<IndexedRing>)> = Vec::new();
+    for (k, (found, notes)) in unioned.into_iter().enumerate() {
         warnings.extend(notes);
-        bins.push(contours);
-    }
-    // Bins with a pair of overlapping contours are unioned together;
-    // only contours reaching into the other bin's box can be that pair.
-    let boxes: Vec<BBox> = bins.iter().map(|b| bbox_of(b)).collect();
-    let touching = |i: usize, j: usize| {
-        if !boxes[i].intersects(boxes[j]) {
-            return false;
-        }
-        let shared = BBox::new(
-            point(
-                Vec2::new(boxes[i].min.x, boxes[i].min.y)
-                    .max(Vec2::new(boxes[j].min.x, boxes[j].min.y)),
-            ),
-            point(
-                Vec2::new(boxes[i].max.x, boxes[i].max.y)
-                    .min(Vec2::new(boxes[j].max.x, boxes[j].max.y)),
-            ),
-        );
-        let reaching = |bin: &[ContourBuf]| -> Vec<BBox> {
-            bin.iter()
-                .map(|c| c.bbox)
-                .filter(|b| b.intersects(shared))
-                .collect()
-        };
-        let (a, b) = (reaching(&bins[i]), reaching(&bins[j]));
-        a.iter().any(|a| b.iter().any(|b| a.intersects(*b)))
-    };
-    let mut clusters: Vec<Vec<usize>> = Vec::new();
-    let mut clustered = vec![false; bins.len()];
-    for i in 0..bins.len() {
-        if clustered[i] {
-            continue;
-        }
-        clustered[i] = true;
-        let mut members = vec![i];
-        let mut k = 0;
-        while k < members.len() {
-            let found: Vec<usize> = (0..bins.len())
-                .filter(|&j| !clustered[j] && touching(members[k], j))
+        islands.extend(found.into_iter().map(|island| {
+            let indexed = std::iter::once(&island.outer)
+                .chain(&island.holes)
+                .map(|r| IndexedRing::new(r))
                 .collect();
-            for j in found {
-                clustered[j] = true;
-                members.push(j);
-            }
-            k += 1;
-        }
-        clusters.push(members);
+            (k, island, indexed)
+        }));
     }
-    let merged = crate::parallel_map(threads, &clusters, |ids| {
+    let bounds = |x: usize| (islands[x].2[0].lo, islands[x].2[0].hi);
+    // Islands of different bins meet when the box of one reaches the
+    // other's edges or lies inside it; otherwise they are disjoint.
+    let meet = |a: usize, b: usize| {
+        let (island, indexed) = (&islands[a].1, &islands[a].2);
+        let rings = std::iter::once(&island.outer).chain(&island.holes);
+        let reaches = indexed
+            .iter()
+            .zip(rings.clone())
+            .any(|(ix, r)| !ix.edges_meeting(r, bounds(b)).is_empty());
+        let p = islands[b].1.outer[0];
+        let covers = indexed
+            .iter()
+            .zip(rings)
+            .filter(|(ix, r)| ix.contains(r, p))
+            .count()
+            % 2
+            == 1;
+        reaches || covers
+    };
+    // Group the islands that meet, sweeping their boxes along x.
+    let mut order: Vec<usize> = (0..islands.len()).collect();
+    order.sort_by(|&a, &b| bounds(a).0.x.total_cmp(&bounds(b).0.x));
+    let mut group: Vec<usize> = (0..islands.len()).collect();
+    fn root(group: &mut [usize], mut x: usize) -> usize {
+        while group[x] != x {
+            group[x] = group[group[x]];
+            x = group[x];
+        }
+        x
+    }
+    for (k, &a) in order.iter().enumerate() {
+        let (lo, hi) = bounds(a);
+        for &b in &order[k + 1..] {
+            let (blo, bhi) = bounds(b);
+            if blo.x > hi.x {
+                break;
+            }
+            if islands[a].0 != islands[b].0 && blo.y <= hi.y && lo.y <= bhi.y && meet(a, b) {
+                let (ra, rb) = (root(&mut group, a), root(&mut group, b));
+                group[ra.max(rb)] = ra.min(rb);
+            }
+        }
+    }
+    let mut groups: Vec<Vec<usize>> = vec![Vec::new(); islands.len()];
+    for x in 0..islands.len() {
+        let r = root(&mut group, x);
+        groups[r].push(x);
+    }
+    groups.retain(|g| !g.is_empty());
+    let merged = crate::parallel_map(threads, &groups, |ids| {
         let mut notes = Vec::new();
         let rings = if let [only] = ids[..] {
-            rings_of(&bins[only])
+            let island = &islands[only].1;
+            std::iter::once(&island.outer)
+                .chain(&island.holes)
+                .filter_map(|r| cleaned(r.clone()))
+                .collect()
         } else {
-            let all: Vec<ContourBuf> = ids.iter().flat_map(|&i| bins[i].iter().cloned()).collect();
+            let all: Vec<ContourBuf> = ids
+                .iter()
+                .flat_map(|&i| island_contours(&islands[i].1))
+                .collect();
             region(&all, what, &mut notes)
                 .map(|r| rings_of(&r.to_contours()))
                 .unwrap_or_default()
