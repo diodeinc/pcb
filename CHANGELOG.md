@@ -23,17 +23,23 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - `moved()` is deprecated and warns on each use (`deprecated.moved`); it still works for now.
 - `pcb publish` checks BOM supplier offers only with `--bump`; local builds and `--check` no longer contact the BOM API.
 - `pcb import` rejects projects with more than one top-level sheet instead of importing only one of them.
+- `schematic="collapse"` and `"embed"` warn (`module.schematic.ignored`) when ignored, on a module that declares `Project()` in a linked KiCad schematic.
 - Missing BOM part errors suggest setting `Manufacturer_Part_Number` and `Manufacturer_Name` on the symbol as well as `part=Part(...)`.
 
 ### Fixed
 
-- `pcb import` ignores symbol instance paths outside the loaded sheet hierarchy, as KiCad does, and its errors name the footprint, symbol, sheet or label to fix.
+- `pcb import` ignores symbol instance paths and footprint paths that name no schematic sheet, so converted projects and its own output import with the right hierarchy, and its errors name the symbol, sheet or label to fix.
+- `pcb import --force` no longer deletes a KiCad project that lives inside its output before reading it.
 - `pcb apply schematic` grows a new sheet up to A0 instead of leaving it on A4, and warns on every run while a sheet has symbols outside its page.
 - `pcb apply schematic` reads KiCad 10 project bus aliases, so it no longer adds labels to bus nets after a KiCad save.
 - `pcb import` of a `.kicad_sch` uses its same-name `.kicad_pro`, keeping KiCad 10 bus aliases, and a `.kicad_pro` without a board imports.
 - `pcb import` accepts multi-unit symbols whose sheets keep stale caches of units they do not place.
 - Schematic sheet paths written with Windows separators, including `..`, resolve as KiCad resolves them.
 - KiCad netlist (`.net`) libparts use the same part name as their components.
+
+### Removed
+
+- Remove `pcb search` and its local SQLite registry index; search the registry through the Diode API MCP endpoints.
 
 ## [0.4.74] - 2026-10-09
 

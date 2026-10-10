@@ -1962,3 +1962,36 @@ Component(
         "legacy do_not_populate should still set dnp"
     );
 }
+
+#[test]
+fn schematic_option_on_project_module_warns_only_for_linked_projects() {
+    let warned_files = |root: &str| {
+        let result = common::eval_zen(vec![
+            (
+                "Sub.zen".to_string(),
+                r#"builtin.add_property("schematic_path", "sub")"#.to_string(),
+            ),
+            (
+                "test.zen".to_string(),
+                format!("{root}\nModule(\"Sub.zen\")(name = \"sub\", schematic = \"collapse\")"),
+            ),
+        ]);
+        let output = result.output.expect("expected eval output");
+        output
+            .to_schematic_with_diagnostics()
+            .diagnostics
+            .iter()
+            .filter(|diag| {
+                diag.downcast_error_ref::<CategorizedDiagnostic>()
+                    .is_some_and(|c| c.kind == "module.schematic.ignored")
+            })
+            .map(|diag| diag.path.rsplit('/').next().unwrap().to_string())
+            .collect::<Vec<_>>()
+    };
+
+    assert_eq!(
+        warned_files(r#"builtin.add_property("schematic_path", ".")"#),
+        ["test.zen"]
+    );
+    assert!(warned_files("").is_empty());
+}

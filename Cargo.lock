@@ -3724,7 +3724,6 @@ dependencies = [
  "inquire",
  "insta",
  "log",
- "md-5",
  "open",
  "pcb-component-gen",
  "pcb-diode-uri",
@@ -3738,7 +3737,6 @@ dependencies = [
  "pcb-zen-core",
  "rand 0.10.3",
  "reqwest",
- "rusqlite",
  "serde",
  "serde_json",
  "serial_test",
@@ -3750,7 +3748,6 @@ dependencies = [
  "uuid",
  "walkdir",
  "zip",
- "zstd",
 ]
 
 [[package]]
