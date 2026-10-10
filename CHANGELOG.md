@@ -25,6 +25,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - `pcb import` rejects projects with more than one top-level sheet instead of importing only one of them.
 - `pcb publish` lists each diagnostic that blocks it with its file, severity, kind and message, and says when local main is off `main`, behind, ahead of or diverged from the remote.
 - `pcb publish` explains that a missing workspace name comes from `[workspace].name` in pcb.toml.
+- Missing BOM part errors suggest setting `Manufacturer_Part_Number` and `Manufacturer_Name` on the symbol as well as `part=Part(...)`.
 
 ### Fixed
 
