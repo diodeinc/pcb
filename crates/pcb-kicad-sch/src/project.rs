@@ -166,10 +166,9 @@ pub fn sheet_file(parent: &str, child: &str) -> Result<String> {
             child.as_str(),
         ),
     };
-    let drive = child
-        .split('/')
-        .next()
-        .is_some_and(|first| first.ends_with(':'));
+    let drive = child.split('/').next().is_some_and(
+        |first| matches!(first.as_bytes(), [letter, b':'] if letter.is_ascii_alphabetic()),
+    );
     if child.is_empty() || child.starts_with('/') || drive {
         bail!("schematic sheet path '{child}' must be relative");
     }
@@ -237,5 +236,9 @@ mod tests {
         );
         ConnectivityGraph::from_kicad(&project.document).unwrap();
         assert!(sheet_file("demo.kicad_sch", r"C:\other\x.kicad_sch").is_err());
+        assert_eq!(
+            sheet_file("demo.kicad_sch", "rev:/x.kicad_sch").unwrap(),
+            "rev:/x.kicad_sch"
+        );
     }
 }
