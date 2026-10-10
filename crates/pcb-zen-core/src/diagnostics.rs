@@ -285,6 +285,17 @@ impl serde::Serialize for Diagnostic {
 }
 
 impl Diagnostic {
+    /// Whether the diagnostic's kind is `prefix` or nested under it
+    /// (`prefix.*`), looking through an aggregate of repeated diagnostics.
+    pub fn has_kind(&self, prefix: &str) -> bool {
+        diagnostic_kind(self).is_some_and(|kind| {
+            kind == prefix
+                || kind
+                    .strip_prefix(prefix)
+                    .is_some_and(|rest| rest.starts_with('.'))
+        })
+    }
+
     pub fn new<S: Into<String>>(body: S, severity: EvalSeverity, path: &Path) -> Self {
         Self {
             path: path.to_string_lossy().to_string(),
@@ -742,19 +753,9 @@ impl Diagnostics {
     /// Whether any unsuppressed diagnostic carries the categorized kind
     /// `prefix` or a `prefix.`-nested kind.
     pub fn has_unsuppressed_kind(&self, prefix: &str) -> bool {
-        self.diagnostics.iter().any(|diagnostic| {
-            !diagnostic.suppressed
-                && diagnostic
-                    .innermost()
-                    .downcast_error_ref::<crate::lang::error::CategorizedDiagnostic>()
-                    .is_some_and(|categorized| {
-                        categorized.kind == prefix
-                            || categorized
-                                .kind
-                                .strip_prefix(prefix)
-                                .is_some_and(|rest| rest.starts_with('.'))
-                    })
-        })
+        self.diagnostics
+            .iter()
+            .any(|diagnostic| !diagnostic.suppressed && diagnostic.has_kind(prefix))
     }
 
     pub fn error_count(&self) -> usize {

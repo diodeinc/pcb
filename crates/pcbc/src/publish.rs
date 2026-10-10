@@ -1106,7 +1106,7 @@ fn build_workspace(
             result
                 .diagnostics
                 .iter()
-                .filter(|d| release::blocks_publish(d))
+                .filter(|d| release::blocks_release(d))
                 .cloned(),
         );
         if let Some(schematic) = result.schematic {
