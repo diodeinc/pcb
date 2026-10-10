@@ -62,6 +62,8 @@ struct ReleaseInfo {
     suppress: Vec<String>,
     resolution: ResolutionResult,
     root_package_url: Option<String>,
+    /// `--check` reports only JSON on stdout.
+    quiet: bool,
 }
 
 impl ReleaseInfo {
@@ -144,13 +146,16 @@ fn execute_task<T>(
     start_time: Instant,
     task: impl FnOnce(&ReleaseInfo, &Spinner) -> Result<T>,
 ) -> Result<T> {
-    let spinner = Spinner::builder(name).start();
+    let spinner = Spinner::builder(name).hidden(info.quiet).start();
     let task_start = Instant::now();
     let output = task(info, &spinner)?;
     let task_duration = task_start.elapsed().as_secs_f64();
     let cumulative_duration = start_time.elapsed().as_secs_f64();
 
     spinner.finish();
+    if info.quiet {
+        return Ok(output);
+    }
     eprintln!(
         "{}: ({}) {name}",
         format_cumulative_time(cumulative_duration),
@@ -314,7 +319,9 @@ fn preflight_board_release(
     stages.build = StageStatus::Failed;
 
     let release_info = {
-        let info_spinner = Spinner::builder("Gathering release information").start();
+        let info_spinner = Spinner::builder("Gathering release information")
+            .hidden(options.check)
+            .start();
 
         info_spinner.set_message("Resolving dependencies");
         let resolution = crate::resolve::resolve(Some(&zen_path), false)?;
@@ -326,11 +333,13 @@ fn preflight_board_release(
         let eval_result = pcb_zen::eval(&zen_path, resolution.clone(), Default::default());
 
         if eval_result.diagnostics.has_errors() || eval_result.output.is_none() {
-            info_spinner.suspend(|| {
-                let mut diagnostics = eval_result.diagnostics.clone();
-                let passes = crate::build::create_diagnostics_passes(&[], &[]);
-                diagnostics.apply_passes(&passes);
-            });
+            if !options.check {
+                info_spinner.suspend(|| {
+                    let mut diagnostics = eval_result.diagnostics.clone();
+                    let passes = crate::build::create_diagnostics_passes(&[], &[]);
+                    diagnostics.apply_passes(&passes);
+                });
+            }
             info_spinner.finish();
             diagnostics
                 .diagnostics
@@ -406,15 +415,18 @@ fn preflight_board_release(
             suppress: options.suppress.clone(),
             resolution,
             root_package_url: package_url,
+            quiet: options.check,
         };
 
-        let elapsed = start_time.elapsed().as_secs_f64();
-        eprintln!(
-            "{}: {} ({}) Release information gathered",
-            format_cumulative_time(elapsed),
-            "✓".green(),
-            format_task_duration(elapsed),
-        );
+        if !options.check {
+            let elapsed = start_time.elapsed().as_secs_f64();
+            eprintln!(
+                "{}: {} ({}) Release information gathered",
+                format_cumulative_time(elapsed),
+                "✓".green(),
+                format_task_duration(elapsed),
+            );
+        }
 
         info
     };
@@ -812,7 +824,9 @@ fn validate_build(
 
         // Export diagnostics to JSON for release artifacts
         let mut passes = crate::build::create_diagnostics_processing_passes(&info.suppress, &[]);
-        passes.push(Box::new(RenderBuildErrorsPass));
+        if !info.quiet {
+            passes.push(Box::new(RenderBuildErrorsPass));
+        }
         passes.push(Box::new(pcb_zen_core::JsonExportPass::new(
             info.staging_dir.join("diagnostics.json"),
             zen_file_rel.display().to_string(),

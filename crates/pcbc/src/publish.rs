@@ -764,10 +764,10 @@ fn publish_packages(start_path: &Path, args: &PublishArgs) -> Result<()> {
         resolve_remote(&workspace_root, args.force)?
     };
 
-    eprintln!("Syncing with {}...", remote.cyan());
     if args.check {
         git::fetch_tags_without_pruning(&workspace_root, &remote)?;
     } else {
+        eprintln!("Syncing with {}...", remote.cyan());
         git::fetch_tags(&workspace_root, &remote)?;
         if !args.force {
             git::fetch_branch(&workspace_root, &remote, "main")?;
