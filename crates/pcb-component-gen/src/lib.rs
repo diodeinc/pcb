@@ -9,7 +9,7 @@ const COMPONENT_ZEN_TEMPLATE: &str = include_str!("../templates/component.zen.ji
 
 /// Sanitize a string for use as a directory/file name and Zener `Component(name=...)`.
 ///
-/// This is shared across `pcb search` and `pcb import` so the output is consistent.
+/// This is shared across `pcb new component` and `pcb import` so the output is consistent.
 ///
 /// Process:
 /// 1. Replace unsafe ASCII → underscore (keep a-z A-Z 0-9 - _, keep Unicode)
