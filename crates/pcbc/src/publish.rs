@@ -139,7 +139,8 @@ impl fmt::Display for BumpStrategy {
 #[derive(Args, Debug)]
 #[command(about = "Publish packages or board releases")]
 pub struct PublishArgs {
-    /// Print a board's release preflight and version as JSON, without publishing
+    /// Print, as JSON without publishing, a board's release preflight and version, or each
+    /// package's next version and tag (bumps are inferred unless --bump is given)
     #[arg(long, conflicts_with_all = ["force", "no_push", "no_build"])]
     pub check: bool,
 
@@ -464,13 +465,13 @@ pub fn execute(args: PublishArgs) -> Result<()> {
         .map(|p| Path::new(p).to_path_buf())
         .unwrap_or_else(|| env::current_dir().unwrap());
 
+    if args.check && args.bump == Some(BumpType::Interactive) {
+        bail!("--check needs an explicit --bump value");
+    }
+
     // If path ends in .zen, route to board publish
     if path.extension().is_some_and(|ext| ext == "zen") {
         return publish_board(&path, &args);
-    }
-
-    if args.check {
-        bail!("--check requires an explicit board .zen target");
     }
 
     // Otherwise, publish packages
@@ -536,9 +537,6 @@ fn publish_board(zen_path: &Path, args: &PublishArgs) -> Result<()> {
         release::build_board_release(&workspace.root, board_path, board_name, options)?;
         return Ok(());
     };
-    if args.check && bump == BumpType::Interactive {
-        bail!("--check needs an explicit --bump=patch, --bump=minor or --bump=major");
-    }
 
     let remote = if args.check || args.no_push {
         resolve_fetch_remote(&workspace.root)?
@@ -750,7 +748,7 @@ fn collect_unpublishable_manifest_entries(manifest_path: &Path, manifest: &PcbTo
 
 /// Publish dirty packages in the workspace
 fn publish_packages(start_path: &Path, args: &PublishArgs) -> Result<()> {
-    if !args.force && std::env::var("CI").is_err() {
+    if !args.check && !args.force && std::env::var("CI").is_err() {
         bail!(
             "Package publishing is only supported in CI.\nUse --force to publish manually (only if you know what you're doing)."
         );
@@ -758,13 +756,21 @@ fn publish_packages(start_path: &Path, args: &PublishArgs) -> Result<()> {
 
     let file_provider = DefaultFileProvider::new();
     let workspace_root = find_workspace_root(&file_provider, start_path)?;
-    let remote = resolve_remote(&workspace_root, args.force)?;
+    let remote = if args.check {
+        resolve_fetch_remote(&workspace_root)?
+    } else {
+        resolve_remote(&workspace_root, args.force)?
+    };
 
-    eprintln!("Syncing with {}...", remote.cyan());
-    git::fetch_tags(&workspace_root, &remote)?;
-    if !args.force {
-        git::fetch_branch(&workspace_root, &remote, "main")?;
-        preflight_checks(&workspace_root, &remote)?;
+    if args.check {
+        git::fetch_tags_without_pruning(&workspace_root, &remote)?;
+    } else {
+        eprintln!("Syncing with {}...", remote.cyan());
+        git::fetch_tags(&workspace_root, &remote)?;
+        if !args.force {
+            git::fetch_branch(&workspace_root, &remote, "main")?;
+            preflight_checks(&workspace_root, &remote)?;
+        }
     }
 
     let mut workspace = get_workspace_info(&file_provider, start_path)?;
@@ -789,6 +795,10 @@ fn publish_packages(start_path: &Path, args: &PublishArgs) -> Result<()> {
     // Expand to include packages that depend on dirty packages (transitively)
     // These need to be published because their pcb.toml will be bumped
     let dirty_urls = expand_dirty_set(&workspace, &directly_dirty);
+    if args.check {
+        let remote_tags = git::list_remote_tags(&workspace.root, &remote)?;
+        return print_publish_plan(&workspace, &dirty_urls, &remote_tags, args.bump);
+    }
 
     if !args.no_build {
         // Packages can read only their own files, declared dependencies and the workspace manifest.
@@ -895,6 +905,39 @@ fn publish_packages(start_path: &Path, args: &PublishArgs) -> Result<()> {
     }
 
     guard.disarm();
+    Ok(())
+}
+
+fn print_publish_plan(
+    workspace: &WorkspaceInfo,
+    dirty_urls: &HashSet<String>,
+    all_tags: &[String],
+    bump: Option<BumpType>,
+) -> Result<()> {
+    let waves = compute_publish_waves(workspace, dirty_urls)?;
+    let bumps = match bump.and_then(BumpType::release) {
+        Some(bump) => uniform_bump_map(&waves, bump),
+        None => infer_all_bumps(workspace, &waves, all_tags),
+    };
+    let packages = waves
+        .into_iter()
+        .flat_map(|mut wave| {
+            wave.sort();
+            wave
+        })
+        .map(|url| {
+            let pkg = &workspace.packages[&url];
+            let current = current_package_version(pkg, workspace.path(), all_tags);
+            let next = compute_next_version(current.as_ref(), bumps[&url]);
+            serde_json::json!({
+                "path": pkg.rel_path.to_string_lossy(),
+                "current": current.map(|version| version.to_string()),
+                "version": next.to_string(),
+                "tag": compute_tag_name(pkg, &next, workspace),
+            })
+        })
+        .collect::<Vec<_>>();
+    println!("{}", serde_json::json!({ "packages": packages }));
     Ok(())
 }
 
