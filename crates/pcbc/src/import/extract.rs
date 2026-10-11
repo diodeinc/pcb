@@ -15,6 +15,13 @@ pub(super) fn extract_ir(
     staged_root: &Path,
 ) -> Result<ImportIr> {
     let source_pcb = validation.summary.selected.kicad_pcb.as_deref();
+    let netlist_text = export_kicad_sexpr_netlist(
+        &staged_root.join(&validation.summary.selected.kicad_sch),
+        staged_root,
+    )
+    .context("Failed to export KiCad netlist")?;
+    // Check before reading PCB anchors, whose references may repeat the same mistake.
+    ensure_unique_netlist_references(&netlist_text)?;
     let pcb_refdes_to_anchor_key = source_pcb
         .map(|pcb| {
             extract_kicad_pcb_refdes_to_anchor_key(staged_root, &paths.kicad_project_root, pcb)
@@ -28,11 +35,8 @@ pub(super) fn extract_ir(
         pcb_refdes_to_anchor_key,
     )?;
 
-    let mut netlist = extract_kicad_netlist(
-        staged_root,
-        &validation.summary.selected,
-        &pcb_refdes_to_anchor_key,
-    )?;
+    let mut netlist = parse_kicad_sexpr_netlist(&netlist_text, &pcb_refdes_to_anchor_key)
+        .context("Failed to parse KiCad netlist")?;
 
     let schematic = extract_kicad_schematic_data(
         &selection.portable.schematic,
@@ -881,16 +885,59 @@ fn parse_standalone_footprint_pads(
     Ok(pads)
 }
 
-fn extract_kicad_netlist(
-    staged_root: &Path,
-    selected: &SelectedKicadFiles,
-    pcb_refdes_to_anchor_key: &BTreeMap<KiCadRefDes, KiCadUuidPathKey>,
-) -> Result<KiCadNetlistExtraction> {
-    let kicad_sch_abs = staged_root.join(&selected.kicad_sch);
-    let netlist_text = export_kicad_sexpr_netlist(&kicad_sch_abs, staged_root)
-        .context("Failed to export KiCad netlist")?;
-    parse_kicad_sexpr_netlist(&netlist_text, pcb_refdes_to_anchor_key)
-        .context("Failed to parse KiCad netlist")
+fn netlist_comps(components: &[Sexpr]) -> impl Iterator<Item = &[Sexpr]> {
+    components
+        .iter()
+        .skip(1)
+        .filter_map(Sexpr::as_list)
+        .filter(|comp| comp.first().and_then(Sexpr::as_sym) == Some("comp"))
+}
+
+/// Netlist nets, schematic units, and PCB footprints join components by reference, so
+/// duplicate references (including unannotated `R?` copies) cannot be imported faithfully.
+fn ensure_unique_netlist_references(netlist_text: &str) -> Result<()> {
+    let root =
+        pcb_sexpr::parse(netlist_text).context("Failed to parse KiCad netlist as S-expression")?;
+    let mut sheets_by_refdes: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for comp in netlist_comps(root.find_list("components").unwrap_or_default()) {
+        let Some(refdes) = sexpr_kicad::string_prop(comp, "ref") else {
+            continue;
+        };
+        let sheet = sexpr_kicad::sheetpath(comp)
+            .and_then(|(names, _)| names)
+            .unwrap_or_else(|| "/".to_string());
+        sheets_by_refdes.entry(refdes).or_default().push(sheet);
+    }
+    let duplicates = sheets_by_refdes
+        .into_iter()
+        .filter(|(_, sheets)| sheets.len() > 1)
+        .map(|(refdes, sheets)| {
+            let count = sheets.len();
+            let sheets = sheets.into_iter().collect::<BTreeSet<_>>();
+            let mut shown = sheets.iter().take(6).cloned().collect::<Vec<_>>();
+            if sheets.len() > shown.len() {
+                shown.push(format!("and {} more", sheets.len() - shown.len()));
+            }
+            let unannotated = if refdes.ends_with('?') {
+                ", unannotated"
+            } else {
+                ""
+            };
+            format!(
+                "  - {refdes} ({count} symbols{unannotated}) on sheets {}",
+                shown.join(", ")
+            )
+        })
+        .collect::<Vec<_>>();
+    anyhow::ensure!(
+        duplicates.is_empty(),
+        "KiCad schematic has duplicate reference designators:\n{}\n\
+         Import matches netlist connections and PCB footprints by reference designator, so every \
+         symbol needs a unique one. Run Tools > Annotate Schematic in KiCad (covering every instance \
+         of reused sheets), update the PCB from the schematic if the project has one, save, and import again.",
+        duplicates.join("\n")
+    );
+    Ok(())
 }
 
 fn export_kicad_sexpr_netlist(kicad_sch_abs: &Path, working_dir: &Path) -> Result<String> {
@@ -948,6 +995,27 @@ fn parse_kicad_sexpr_netlist_components(
     let mut duplicate_refdeses: BTreeMap<KiCadRefDes, BTreeSet<KiCadUuidPathKey>> = BTreeMap::new();
     let mut duplicate_paths: BTreeMap<KiCadUuidPathKey, BTreeSet<KiCadRefDes>> = BTreeMap::new();
 
+    // A stale PCB can give a reference another component's native path. KiCad links
+    // footprints by path, so a PCB anchor that the netlist assigns elsewhere is ignored.
+    let mut native_owners: BTreeMap<KiCadUuidPathKey, String> = BTreeMap::new();
+    for comp in netlist_comps(components) {
+        let (Some(refdes), Some(uuids), Some((_, sheetpath))) = (
+            sexpr_kicad::string_prop(comp, "ref"),
+            sexpr_kicad::string_list_prop(comp, "tstamps"),
+            sexpr_kicad::sheetpath(comp),
+        ) else {
+            continue;
+        };
+        let sheetpath_tstamps = normalize_sheetpath_tstamps(&sheetpath);
+        for symbol_uuid in uuids {
+            let key = KiCadUuidPathKey {
+                sheetpath_tstamps: sheetpath_tstamps.clone(),
+                symbol_uuid,
+            };
+            native_owners.insert(key, refdes.clone());
+        }
+    }
+
     for node in components.iter().skip(1) {
         let Some(comp) = node.as_list() else {
             continue;
@@ -972,7 +1040,12 @@ fn parse_kicad_sexpr_netlist_components(
 
         let normalized_sheetpath_tstamps = normalize_sheetpath_tstamps(&sheetpath_tstamps);
 
-        let anchor_key = if let Some(anchor_key) = pcb_refdes_to_anchor_key.get(&refdes) {
+        let pcb_anchor = pcb_refdes_to_anchor_key.get(&refdes).filter(|key| {
+            native_owners
+                .get(*key)
+                .is_none_or(|owner| owner == refdes.as_str())
+        });
+        let anchor_key = if let Some(anchor_key) = pcb_anchor {
             anchor_key.clone()
         } else {
             // Fallback: choose the first tstamps entry deterministically.
@@ -1962,6 +2035,45 @@ mod tests {
             .to_string();
         assert!(error.contains("path /same maps to refdeses R1, R2"));
         assert!(error.contains("refdes U1 maps to paths /u-a, /child/u-b"));
+        Ok(())
+    }
+
+    #[test]
+    fn duplicate_references_fail_early_with_annotation_advice() {
+        let error = ensure_unique_netlist_references(
+            r#"(export (components
+            (comp (ref "R?") (sheetpath (names "/B/") (tstamps "/b/")) (tstamps "r1"))
+            (comp (ref "R?") (sheetpath (names "/A/") (tstamps "/a/")) (tstamps "r2"))
+            (comp (ref "R1") (sheetpath (names "/A/") (tstamps "/a/")) (tstamps "r3")))
+            (nets))"#,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("  - R? (2 symbols, unannotated) on sheets /A/, /B/"));
+        assert!(!error.contains("R1"));
+        assert!(error.contains("Run Tools > Annotate Schematic in KiCad"));
+    }
+
+    #[test]
+    fn stale_pcb_reference_does_not_steal_another_components_path() -> Result<()> {
+        // The PCB was not updated after re-annotation: footprint C6 has schematic C8's path.
+        let pcb_anchors = BTreeMap::from([(
+            KiCadRefDes::from("C6".to_string()),
+            KiCadUuidPathKey::from_pcb_path("/c8-uuid")?,
+        )]);
+        let netlist = parse_kicad_sexpr_netlist(
+            r#"(export (components
+            (comp (ref "C6") (sheetpath (tstamps "/")) (tstamps "c6-uuid"))
+            (comp (ref "C8") (sheetpath (tstamps "/")) (tstamps "c8-uuid")))
+            (nets))"#,
+            &pcb_anchors,
+        )?;
+        let refdes = |path| -> Result<String> {
+            let key = KiCadUuidPathKey::from_pcb_path(path)?;
+            Ok(netlist.components[&key].netlist.refdes.as_str().to_string())
+        };
+        assert_eq!(refdes("/c6-uuid")?, "C6");
+        assert_eq!(refdes("/c8-uuid")?, "C8");
         Ok(())
     }
 }
