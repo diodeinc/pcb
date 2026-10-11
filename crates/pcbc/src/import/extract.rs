@@ -72,6 +72,11 @@ pub(super) fn extract_ir(
     // Missing PCB footprints are source parity findings, not missing schematic components.
     // Reuse standalone resolution without replacing any board-embedded geometry.
     resolve_standalone_footprints(selection, staged_root, &mut netlist.components)?;
+    assign_multi_net_pads(
+        &mut netlist.nets,
+        &netlist.netlist_order,
+        &netlist.components,
+    );
 
     Ok(ImportIr {
         components: netlist.components,
@@ -145,6 +150,8 @@ impl SheetSymbols {
 struct KiCadNetlistExtraction {
     components: BTreeMap<KiCadUuidPathKey, ImportComponentData>,
     nets: BTreeMap<KiCadNetName, ImportNetData>,
+    /// Net names in netlist order, which KiCad's PCB update uses to pick a pad's net.
+    netlist_order: Vec<KiCadNetName>,
     unit_to_anchor: BTreeMap<KiCadUuidPathKey, KiCadUuidPathKey>,
 }
 
@@ -925,11 +932,12 @@ fn parse_kicad_sexpr_netlist(
         pcb_sexpr::parse(netlist_text).context("Failed to parse KiCad netlist as S-expression")?;
 
     let comps = parse_kicad_sexpr_netlist_components(&root, pcb_refdes_to_anchor_key)?;
-    let nets = parse_kicad_sexpr_netlist_nets(&root, &comps.refdes_to_anchor)?;
+    let (nets, netlist_order) = parse_kicad_sexpr_netlist_nets(&root, &comps.refdes_to_anchor)?;
 
     Ok(KiCadNetlistExtraction {
         components: comps.components,
         nets,
+        netlist_order,
         unit_to_anchor: comps.unit_to_anchor,
     })
 }
@@ -1066,12 +1074,13 @@ fn parse_kicad_sexpr_netlist_components(
 fn parse_kicad_sexpr_netlist_nets(
     root: &Sexpr,
     refdes_to_key: &BTreeMap<KiCadRefDes, KiCadUuidPathKey>,
-) -> Result<BTreeMap<KiCadNetName, ImportNetData>> {
+) -> Result<(BTreeMap<KiCadNetName, ImportNetData>, Vec<KiCadNetName>)> {
     let nets = root
         .find_list("nets")
         .ok_or_else(|| anyhow::anyhow!("Netlist missing (nets ...) section"))?;
 
     let mut out: BTreeMap<KiCadNetName, ImportNetData> = BTreeMap::new();
+    let mut netlist_order: Vec<KiCadNetName> = Vec::new();
 
     for node in nets.iter().skip(1) {
         let Some(net) = node.as_list() else {
@@ -1118,9 +1127,78 @@ fn parse_kicad_sexpr_netlist_nets(
         if out.insert(name.clone(), ImportNetData { ports }).is_some() {
             anyhow::bail!("Netlist produced a duplicate net name: {}", name.as_str());
         }
+        netlist_order.push(name);
     }
 
-    Ok(out)
+    Ok((out, netlist_order))
+}
+
+/// A pad can land in several netlist nets: a symbol that repeats a pad number (e.g. a flow-through
+/// ESD part with both `IO1` and `NC` on pad 10), or a multi-unit symbol whose units wire the same
+/// pad to different nets. A pad carries one net on the board, so keep the net the source board
+/// already has on that pad, otherwise prefer a real net over an `unconnected-(...)` stub, otherwise
+/// the first one listed (what KiCad's PCB update assigns). Nets emptied by this are dropped.
+fn assign_multi_net_pads(
+    nets: &mut BTreeMap<KiCadNetName, ImportNetData>,
+    netlist_order: &[KiCadNetName],
+    components: &BTreeMap<KiCadUuidPathKey, ImportComponentData>,
+) {
+    let mut candidates: BTreeMap<&ImportNetPort, Vec<&KiCadNetName>> = BTreeMap::new();
+    for name in netlist_order {
+        for port in nets.get(name).into_iter().flat_map(|net| &net.ports) {
+            candidates.entry(port).or_default().push(name);
+        }
+    }
+    let mut dropped_by_port: Vec<(ImportNetPort, Vec<KiCadNetName>)> = Vec::new();
+    for (port, names) in candidates.into_iter().filter(|(_, names)| names.len() > 1) {
+        let component = components.get(&port.component);
+        let board_nets = component
+            .and_then(|component| component.layout.as_ref()?.pads.get(&port.pin))
+            .map(|pad| &pad.net_names);
+        let kept = names
+            .iter()
+            .enumerate()
+            .min_by_key(|(index, name)| {
+                let on_board = board_nets.is_some_and(|nets| nets.contains(**name));
+                let unconnected = name.as_str().starts_with("unconnected-(");
+                (!on_board, unconnected, *index)
+            })
+            .map(|(_, name)| (*name).clone())
+            .expect("pad has several nets");
+        let dropped = names
+            .into_iter()
+            .filter(|name| **name != kept)
+            .cloned()
+            .collect::<Vec<_>>();
+        if dropped
+            .iter()
+            .any(|name| !name.as_str().starts_with("unconnected-("))
+        {
+            eprintln!(
+                "Warning: {} pad {} is also in KiCad net(s) {}; keeping it on \"{kept}\"",
+                component.map_or_else(
+                    || port.component.pcb_path(),
+                    |component| component.netlist.refdes.to_string()
+                ),
+                port.pin.as_str(),
+                dropped
+                    .iter()
+                    .map(|name| format!("\"{name}\""))
+                    .collect::<Vec<_>>()
+                    .join(", "),
+            );
+        }
+        dropped_by_port.push((port.clone(), dropped));
+    }
+    for (port, dropped) in dropped_by_port {
+        for name in dropped {
+            let net = nets.get_mut(&name).expect("net from netlist order");
+            net.ports.remove(&port);
+            if net.ports.is_empty() {
+                nets.remove(&name);
+            }
+        }
+    }
 }
 
 fn key_from_schematic_instance_path(
@@ -1206,6 +1284,46 @@ mod tests {
                 Some(expected)
             );
         }
+        Ok(())
+    }
+
+    #[test]
+    fn pads_in_several_netlist_nets_keep_one_net() -> Result<()> {
+        // U1 repeats pads 7 and 10 as `NC` pins, and its units wire pads 5 and 6 to two nets each.
+        let netlist = r#"(export
+            (components
+                (comp (ref "R1") (sheetpath (tstamps "/")) (tstamps "a"))
+                (comp (ref "U1") (sheetpath (tstamps "/")) (tstamps "b")))
+            (nets
+                (net (code "1") (name "/A") (node (ref "U1") (pin "5")) (node (ref "R1") (pin "1")))
+                (net (code "2") (name "/B") (node (ref "U1") (pin "5")) (node (ref "U1") (pin "6")))
+                (net (code "3") (name "/C") (node (ref "U1") (pin "6")) (node (ref "R1") (pin "2")))
+                (net (code "4") (name "unconnected-(U1-NC-Pad7)") (node (ref "U1") (pin "7")))
+                (net (code "5") (name "/D") (node (ref "U1") (pin "7")) (node (ref "U1") (pin "10")))
+                (net (code "6") (name "unconnected-(U1-NC-Pad10)") (node (ref "U1") (pin "10")))))"#;
+        let board = r#"(kicad_pcb (version 20260206) (generator "pcbnew")
+            (footprint "U" (path "/b") (property "Reference" "U1")
+                (pad "6" smd rect (size 1 1) (net 3 "/C"))))"#;
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().join("board.kicad_pcb");
+        fs::write(&path, board)?;
+        let mut parsed = parse_kicad_sexpr_netlist(netlist, &BTreeMap::new())?;
+        extract_kicad_layout_data(&path, None, &mut parsed.components)?;
+        assign_multi_net_pads(&mut parsed.nets, &parsed.netlist_order, &parsed.components);
+
+        let pins = |net: &str| {
+            parsed.nets[&KiCadNetName::from(net.to_string())]
+                .ports
+                .iter()
+                .map(|port| port.pin.as_str())
+                .collect::<Vec<_>>()
+        };
+        // Pad 5 keeps the first listed net, pad 6 the net the board has, pads 7 and 10 the real
+        // net. `/B` and the `unconnected-(...)` stubs are left empty and dropped.
+        assert_eq!(parsed.nets.len(), 3);
+        assert_eq!(pins("/A"), ["1", "5"]);
+        assert_eq!(pins("/C"), ["2", "6"]);
+        assert_eq!(pins("/D"), ["10", "7"]);
         Ok(())
     }
 
