@@ -1,9 +1,10 @@
 use anyhow::{Context, Result, bail};
 use pcb_sch::kicad_identity::{footprint_kiid_path, uuid_for_path};
-use pcb_sch::{AttributeValue, InstanceKind, Schematic};
+use pcb_sch::{AttributeValue, Instance, InstanceKind, Schematic};
 use pcb_sexpr::Sexpr;
 use pcb_sexpr::board::{extract_keyed_footprints, footprint_name_from_fpid};
 use std::collections::{BTreeMap, BTreeSet};
+use std::path::PathBuf;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Port {
@@ -74,6 +75,10 @@ impl EffectiveNetlist {
 
 pub fn source_effective_netlist(schematic: &Schematic) -> Result<EffectiveNetlist> {
     let mut effective = EffectiveNetlist::default();
+    // KiCad does not realize a symbol pin whose footprint has no matching pad (e.g. a 24-pin
+    // USB-C symbol on a 16-pin footprint), so only the footprint's own pads are expected.
+    let mut pads_by_file: BTreeMap<PathBuf, Option<BTreeSet<String>>> = BTreeMap::new();
+    let mut footprint_pads: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
 
     for (instance_ref, instance) in &schematic.instances {
         if instance.kind != InstanceKind::Component {
@@ -84,6 +89,17 @@ pub fn source_effective_netlist(schematic: &Schematic) -> Result<EffectiveNetlis
         let (fpid, _) = schematic
             .kicad_footprint(instance)
             .with_context(|| format!("component `{component_path}`"))?;
+        if let Some(pads) = footprint_file(schematic, instance).and_then(|file| {
+            pads_by_file
+                .entry(file)
+                .or_insert_with_key(|file| {
+                    let text = std::fs::read_to_string(file).ok()?;
+                    Some(pcb_sexpr::kicad::footprint::pad_numbers(&text))
+                })
+                .clone()
+        }) {
+            footprint_pads.insert(component_path.clone(), pads);
+        }
 
         effective.footprints.insert(
             component_path,
@@ -112,6 +128,12 @@ pub fn source_effective_netlist(schematic: &Schematic) -> Result<EffectiveNetlis
                 let AttributeValue::String(pad_name) = pad else {
                     continue;
                 };
+                if footprint_pads
+                    .get(&component_path)
+                    .is_some_and(|pads| !pads.contains(pad_name))
+                {
+                    continue;
+                }
                 if let Some(fp) = effective.footprints.get_mut(&component_path) {
                     fp.pads.insert(pad_name.clone());
                 }
@@ -141,6 +163,15 @@ pub fn source_effective_netlist(schematic: &Schematic) -> Result<EffectiveNetlis
 
     effective.rebuild_nets();
     Ok(effective)
+}
+
+fn footprint_file(schematic: &Schematic, instance: &Instance) -> Option<PathBuf> {
+    let footprint = instance.string_attr(&["footprint"])?;
+    if footprint.starts_with(pcb_sch::PACKAGE_URI_PREFIX) {
+        schematic.resolve_package_uri(&footprint).ok()
+    } else {
+        Some(PathBuf::from(footprint))
+    }
 }
 
 pub fn layout_effective_netlist(

@@ -2401,13 +2401,22 @@ fn build_physical_pin_plan(
                 .difference(&footprint_pins)
                 .cloned()
                 .collect::<BTreeSet<_>>();
+            // KiCad accepts symbol pins without a matching pad (e.g. a 24-pin USB-C symbol on a
+            // 16-pin footprint): the pin stays in the netlist but is not realized on the board.
+            // Mirror that, and warn so connectivity that never reaches copper is visible.
             if !missing_pins.is_empty() {
-                anyhow::bail!(
-                    "KiCad component {} footprint {} is missing numbered pads {:?} required by symbol physical pins {:?}",
+                let mut described = Vec::with_capacity(missing_pins.len());
+                for pin in &missing_pins {
+                    match resolve_instance_pin_net(anchor, component, pin, port_to_net)? {
+                        Some(net) => described.push(format!("{pin} ({net})")),
+                        None => described.push(pin.to_string()),
+                    }
+                }
+                eprintln!(
+                    "Warning: KiCad component {} footprint {} has no pads for symbol pins {}; these pins are kept in the netlist but not realized on the board, as in KiCad.",
                     component.netlist.refdes,
                     layout.fpid.as_deref().unwrap_or("<unknown>"),
-                    missing_pins,
-                    all_pins
+                    described.join(", ")
                 );
             }
         }
@@ -3067,7 +3076,7 @@ mod tests {
     }
 
     #[test]
-    fn resolved_footprint_must_contain_symbol_physical_pins() {
+    fn symbol_pins_missing_from_resolved_footprint_are_kept() {
         let anchor = make_anchor("u1");
         let mut component = make_component("U1", BTreeMap::new());
         component.layout = Some(ImportLayoutComponent {
@@ -3104,7 +3113,8 @@ mod tests {
             ..Default::default()
         };
 
-        let error = build_physical_pin_plan(
+        // KiCad keeps symbol pins without a matching pad in the netlist; so does import.
+        let plan = build_physical_pin_plan(
             &symbol,
             std::slice::from_ref(&anchor),
             &components,
@@ -3112,11 +3122,13 @@ mod tests {
             &BTreeSet::new(),
             &BTreeMap::new(),
         )
-        .expect_err("resolved footprint must contain every symbol physical pin")
-        .to_string();
-        assert!(error.contains("footprint Local:OnePad is missing numbered pads"));
-        assert!(error.contains("required by symbol physical pins"));
-        assert!(!error.contains("KiCadPinNumber(\"\")"));
+        .expect("symbol pins without footprint pads are allowed");
+        let pads = plan
+            .bindings
+            .iter()
+            .map(|binding| binding.pad_number.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(pads, ["1", "2"]);
     }
 
     #[test]
