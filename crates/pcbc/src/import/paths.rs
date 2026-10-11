@@ -23,6 +23,12 @@ fn require_kicad_input_file(path: &Path) -> Result<PathBuf> {
     let meta = fs::metadata(path)
         .with_context(|| format!("Failed to stat KiCad input file: {}", path.display()))?;
     let extension = path.extension();
+    if matches!(extension, Some(ext) if ext == "pro" || ext == "sch") {
+        anyhow::bail!(
+            "{} is a KiCad 5 legacy file; open and save it in KiCad 9 or newer to convert it",
+            path.display()
+        );
+    }
     if !meta.is_file()
         || !matches!(
             extension,

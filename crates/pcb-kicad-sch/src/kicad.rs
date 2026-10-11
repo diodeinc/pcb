@@ -121,6 +121,14 @@ pub fn parse_kicad_sch_page(file_name: Option<&str>, content: &str) -> Result<Sc
     match version {
         20250114 => normalize_kicad_9(&mut root, ""),
         KICAD_SCH_VERSION => {}
+        // KiCad 6 keeps units and references in root `symbol_instances`, which `sch upgrade` drops.
+        ..20230121 => bail!(
+            "KiCad schematic version {version} is from KiCad 6 or older; open and save the project in KiCad 9 or newer to upgrade it"
+        ),
+        ..20250114 => bail!(
+            "KiCad schematic version {version} is older than KiCad 9; upgrade it with `kicad-cli sch upgrade {}` or save it in KiCad 9 or newer",
+            file_name.unwrap_or("<file>.kicad_sch")
+        ),
         _ => bail!(
             "unsupported KiCad schematic version {version}; expected KiCad 9 version 20250114 or KiCad 10 version {KICAD_SCH_VERSION}"
         ),
@@ -2435,10 +2443,14 @@ mod tests {
 
     #[test]
     fn rejects_unsupported_schematic_versions() {
-        for version in ["20231120", "20270101"] {
+        for (version, expected) in [
+            ("20211123", "open and save the project in KiCad 9"),
+            ("20231120", "kicad-cli sch upgrade"),
+            ("20270101", "expected KiCad 9"),
+        ] {
             let error =
                 SchDocument::from_kicad_sch(&SAMPLE.replace("20260306", version)).unwrap_err();
-            assert!(error.to_string().contains("expected KiCad 9"));
+            assert!(error.to_string().contains(expected));
         }
     }
 
