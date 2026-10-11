@@ -63,6 +63,45 @@ fn import_requires_output_directory() {
 }
 
 #[test]
+fn import_explains_how_to_upgrade_pre_kicad_9_projects() {
+    let mut sandbox = sandbox();
+    sandbox.write(
+        "source/board.kicad_sch",
+        r#"(kicad_sch (version 20250114) (generator "eeschema")
+        (uuid "00000000-0000-0000-0000-000000000001") (paper "A4") (lib_symbols)
+        (sheet (at 0 0) (size 10 10) (uuid "00000000-0000-0000-0000-000000000002")
+            (property "Sheetname" "Child" (at 0 0 0) (effects (font (size 1.27 1.27))))
+            (property "Sheetfile" "child.kicad_sch" (at 0 0 0) (effects (font (size 1.27 1.27)))))
+        (sheet_instances (path "/" (page "1"))))"#,
+    );
+    sandbox.write(
+        "source/child.kicad_sch",
+        r#"(kicad_sch (version 20231120) (generator "eeschema")
+        (uuid "00000000-0000-0000-0000-000000000003") (paper "A4") (lib_symbols))"#,
+    );
+    sandbox.write("legacy/board.pro", "update=legacy\n");
+
+    for (input, expected) in [
+        (
+            "source/board.kicad_sch",
+            "failed to parse child.kicad_sch\n  KiCad schematic version 20231120 is older than KiCad 9; upgrade it with `kicad-cli sch upgrade <file>`",
+        ),
+        ("legacy/board.pro", "board.pro is a KiCad 5 legacy file"),
+    ] {
+        let import = sandbox
+            .run("pcbc", ["import", input, "out"])
+            .stdout_capture()
+            .stderr_capture()
+            .unchecked()
+            .run()
+            .expect("run pcbc import");
+        let stderr = String::from_utf8_lossy(&import.stderr);
+        assert!(!import.status.success());
+        assert!(stderr.contains(expected), "unexpected stderr:\n{stderr}");
+    }
+}
+
+#[test]
 fn validation_extraction_and_materialization_share_one_source_snapshot() {
     let mut sandbox = sandbox();
     sandbox.write("source/layout.kicad_sch", STANDALONE_FIXTURE);
