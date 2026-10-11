@@ -732,7 +732,7 @@ fn placed_symbols_from_document(
 
 /// Component symbols are projected from Zener. Explicit KiCad power symbols
 /// are semantic net-name drivers, so they remain available for connectivity
-/// analysis and minimally destructive repair. Off-board pinless artwork is
+/// analysis and minimally destructive repair. Off-board symbols are
 /// native documentation, not a missing component.
 fn native_symbol_locations(document: &SchDocument) -> Result<BTreeSet<SymbolLocation>> {
     let mut locations = BTreeSet::new();
@@ -745,7 +745,7 @@ fn native_symbol_locations(document: &SchDocument) -> Result<BTreeSet<SymbolLoca
                 continue;
             };
             let definition = symbol::ParsedSymbolDefinition::parse(definition)?;
-            if definition.power_scope().is_some() || definition.is_unmanaged_graphic(symbol) {
+            if definition.power_scope().is_some() || definition.is_native_off_board(symbol) {
                 locations.insert(SymbolLocation {
                     page_id: page.id.clone(),
                     symbol_id: symbol.id.clone(),

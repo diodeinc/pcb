@@ -727,9 +727,9 @@ fn collect_symbol(
         }
         return Ok(());
     }
-    if definition.is_unmanaged_graphic(placed) {
-        return Ok(());
-    }
+    // Off-board symbols are outside KiCad's netlist, but their pins still join
+    // wiring in KiCad's connection graph, so they remain terminal-less contacts.
+    let native = definition.is_native_off_board(placed);
 
     let component_path = placed.field_value("Path").filter(|path| !path.is_empty());
     let slot = component_path.and_then(|path| SymbolSlotKey::new(path, placed.unit));
@@ -748,10 +748,12 @@ fn collect_symbol(
         page_id: page.id.clone(),
         symbol_id: placed.id.clone(),
     };
-    output.components.push(ComponentNode {
-        managed_slot: slot,
-        origin: ComponentOrigin::KiCad(location.clone()),
-    });
+    if !native {
+        output.components.push(ComponentNode {
+            managed_slot: slot,
+            origin: ComponentOrigin::KiCad(location.clone()),
+        });
+    }
 
     let component = component_path.map_or_else(
         || ComponentIdentity::KiCadSymbol(location),
@@ -783,7 +785,7 @@ fn collect_symbol(
                 role: DriverNameRole::NetName,
                 merge_by_name: true,
             }),
-            terminal: Some(terminal.clone()),
+            terminal: (!native).then_some(terminal),
             pin: Some(PhysicalPinRef::new(
                 &page.id,
                 &placed.id,

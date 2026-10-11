@@ -166,13 +166,12 @@ impl ParsedSymbolDefinition {
         &self.jumper_pin_groups
     }
 
-    /// Off-board pinless artwork has no component identity in KiCad's PCB netlist.
-    /// A Path still opts it into managed component validation.
-    pub(crate) fn is_unmanaged_graphic(&self, symbol: &Symbol) -> bool {
+    /// Off-board symbols, such as artwork or excluded test points, have no component
+    /// identity in KiCad's PCB netlist. A Path still opts one into managed validation.
+    pub(crate) fn is_native_off_board(&self, symbol: &Symbol) -> bool {
         !symbol.on_board
             && symbol.field_value("Path").is_none_or(str::is_empty)
             && self.power_scope.is_none()
-            && self.sections.iter().all(|section| section.pins.is_empty())
     }
 
     /// The pins KiCad instantiates on a placed symbol: every unit's, in the

@@ -1148,7 +1148,8 @@ fn stacked_no_connect_import_preserves_drawing_and_distinct_physical_pads() {
 
 #[test]
 fn project_import_retains_symbols_missing_from_pcb() {
-    for pinless in [false, true] {
+    // Off-board R3, with or without pins, is native documentation outside KiCad's netlist.
+    for (pinless, off_board) in [(false, false), (false, true), (true, true)] {
         let mut sandbox = sandbox();
         let mut document = pcb_kicad_sch::SchDocument::from_kicad_sch(STANDALONE_FIXTURE).unwrap();
         let mut logo = document.pages[0].library.definitions["Device:R"]
@@ -1174,10 +1175,12 @@ fn project_import_retains_symbols_missing_from_pcb() {
         for item in &mut document.pages[0].items {
             if let pcb_kicad_sch::SchItem::Symbol(symbol) = item {
                 symbol.in_bom = false;
+                if off_board && symbol.reference() == Some("R3") {
+                    symbol.on_board = false;
+                }
                 if pinless && symbol.reference() == Some("R3") {
                     symbol.lib_id = "Test:Logo".into();
                     symbol.pins.clear();
-                    symbol.on_board = false;
                     symbol.fields.get_mut("Footprint").unwrap().value.clear();
                 }
             }
@@ -1209,7 +1212,7 @@ fn project_import_retains_symbols_missing_from_pcb() {
             .run()
             .unwrap();
         let stderr = String::from_utf8_lossy(&import.stderr);
-        assert!(import.status.success(), "pinless={pinless}: {stderr}");
+        assert!(import.status.success(), "off_board={off_board}: {stderr}");
         let report: serde_json::Value =
             serde_json::from_slice(&fs::read(extraction_report(&stderr)).unwrap()).unwrap();
         assert_eq!(
@@ -1217,13 +1220,13 @@ fn project_import_retains_symbols_missing_from_pcb() {
                 .as_object()
                 .unwrap()
                 .len(),
-            if pinless { 2 } else { 3 }
+            if off_board { 2 } else { 3 }
         );
         let output = sandbox.root_path().join("out/eda");
         assert_preserved_schematic(&output.join("layout.kicad_sch"), &source, false);
         let pcb_before = fs::read(output.join("layout.kicad_pcb")).unwrap();
         assert_repeated_schematic_apply(&mut sandbox, "out/layout.zen", &[]);
-        if pinless {
+        if off_board {
             let applied = pcb_kicad_sch::SchDocument::from_kicad_sch(
                 &fs::read_to_string(output.join("layout.kicad_sch")).unwrap(),
             )
@@ -1235,9 +1238,10 @@ fn project_import_retains_symbols_missing_from_pcb() {
                 applied.pages[0].items.contains(original),
                 "native documentation changed"
             );
+            let lib_id = if pinless { "Test:Logo" } else { "Device:R" };
             assert_eq!(
-                applied.pages[0].library.definitions["Test:Logo"],
-                document.pages[0].library.definitions["Test:Logo"]
+                applied.pages[0].library.definitions[lib_id],
+                document.pages[0].library.definitions[lib_id]
             );
         }
         assert_eq!(
@@ -1263,7 +1267,7 @@ fn project_import_retains_symbols_missing_from_pcb() {
         );
         assert_eq!(
             source_physical_partitions(&report).len(),
-            if pinless { 4 } else { 6 }
+            if off_board { 4 } else { 6 }
         );
     }
 }
