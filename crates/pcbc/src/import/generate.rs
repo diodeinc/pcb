@@ -2037,18 +2037,46 @@ fn render_component_symbol(component_name: &str, sym: &str) -> Result<RenderedCo
     })
 }
 
+/// Point the copied symbol at its footprint, and neutralize KiCad-only data the generated
+/// component cannot evaluate.
 fn patch_symbol_footprint_property(library_text: &str, footprint_stem: &str) -> Result<String> {
     let mut parsed = pcb_sexpr::parse(library_text).map_err(|e| anyhow::anyhow!(e))?;
     let root = kicad_symbol_lib_items_mut(&mut parsed).context("Not a KiCad symbol library")?;
     let names = symbol_names(root);
     anyhow::ensure!(!names.is_empty(), "Symbol library contains no symbols");
+    // KiCad connects same-numbered pins through their shared pad; say so explicitly, since Zener
+    // otherwise rejects such pins as duplicates.
+    let library = pcb_eda::kicad::symbol_library::KicadSymbolLibrary::from_sources(vec![
+        library_text.to_string(),
+    ])?;
+    let duplicate_pins = pcb_eda::kicad::symbol_check::check_symbol(&library, &names[0], None)
+        .iter()
+        .any(|issue| issue.kind == "symbol.pin.duplicate");
     let idx =
         pcb_sexpr::kicad::symbol::find_symbol_index(root, &names[0]).context("Symbol not found")?;
     let symbol_items = root[idx]
         .as_list_mut()
         .context("Invalid symbol structure")?;
+    if duplicate_pins {
+        let flag = Sexpr::list(vec![
+            Sexpr::symbol("duplicate_pin_numbers_are_jumpers"),
+            Sexpr::symbol("yes"),
+        ]);
+        match symbol_items.iter().position(|item| {
+            item.as_list().and_then(|items| items.first()?.as_sym())
+                == Some("duplicate_pin_numbers_are_jumpers")
+        }) {
+            Some(existing) => symbol_items[existing] = flag,
+            None => symbol_items.insert(2, flag),
+        }
+    }
     let mut props = symbol_properties(symbol_items);
     props.insert("Footprint".to_string(), footprint_stem.to_string());
+    // The SPICE library is not copied (and often names a KiCad install path), so it cannot
+    // resolve from the generated component; drop the model rather than fail the build.
+    if props.contains_key("Sim.Library") {
+        props.retain(|name, _| !name.starts_with("Sim."));
+    }
     rewrite_symbol_properties(symbol_items, &props);
     Ok(format_tree(&parsed, FormatMode::Normal))
 }
@@ -3207,5 +3235,43 @@ mod tests {
                 .zen_text
                 .contains("footprint = \"Missing:Footprint\"")
         );
+    }
+
+    #[test]
+    fn patched_symbol_jumpers_duplicate_pins_and_drops_unresolvable_sim_model() {
+        let patch = |sim: &str, second_pin: &str| {
+            let sym = format!(
+                r#"(symbol "Lib:USB" (duplicate_pin_numbers_are_jumpers no)
+  (property "Reference" "J" (at 0 0 0)) (property "Value" "USB" (at 0 0 0))
+  (property "Footprint" "" (at 0 0 0)) {sim}
+  (symbol "USB_1_1"
+    (pin passive line (at 0 10.16 270) (length 2.54) (name "") (number "0"))
+    (pin passive line (at 0 -10.16 90) (length 2.54) (name "") (number "{second_pin}"))))"#
+            );
+            let rendered = render_component_symbol("USB", &sym).unwrap();
+            patch_symbol_footprint_property(&rendered.library_text, "USB").unwrap()
+        };
+
+        let patched = patch(
+            r#"(property "Sim.Device" "SUBCKT" (at 0 0 0))
+  (property "Sim.Library" "${KICAD9_SYMBOL_DIR}/Simulation_SPICE.sp" (at 0 0 0))"#,
+            "0",
+        );
+        assert!(patched.contains("(duplicate_pin_numbers_are_jumpers yes)"));
+        assert!(!patched.contains("Sim."));
+        let library =
+            pcb_eda::kicad::symbol_library::KicadSymbolLibrary::from_sources(vec![patched])
+                .unwrap();
+        let issues = pcb_eda::kicad::symbol_check::check_symbol(&library, "Lib:USB", None);
+        assert!(
+            issues
+                .iter()
+                .all(|issue| issue.kind != "symbol.pin.duplicate")
+        );
+
+        // Unique pins and library-free sim models are left as KiCad wrote them.
+        let patched = patch(r#"(property "Sim.Device" "R" (at 0 0 0))"#, "1");
+        assert!(patched.contains("(duplicate_pin_numbers_are_jumpers no)"));
+        assert!(patched.contains("Sim.Device"));
     }
 }
