@@ -565,12 +565,17 @@ fn less(
 }
 
 /// The cleaned rings of the union of `items`, unioned cell by cell:
-/// items are binned by position and each bin is unioned on its own
-/// thread. Only islands of different bins that meet are unioned again,
+/// items are binned on a `UNION_CELLS` square grid by position and each
+/// bin is unioned on its own thread. Only islands of different bins that meet are unioned again,
 /// group by group, from the boolean's own vertices so shared edges still
 /// coincide. Strokes overlap within a text, openings within a
 /// footprint; the rest of the board is disjoint and costs nothing to
 /// combine.
+/// Cells per side of the grid `union_rings` bins by. Finer cells spread
+/// dense text over more threads; coarser ones leave fewer islands that
+/// cross cells to merge again.
+const UNION_CELLS: usize = 16;
+
 fn union_rings(
     items: Vec<Vec<ContourBuf>>,
     threads: usize,
@@ -585,14 +590,13 @@ fn union_rings(
     if !all.is_valid() {
         return Vec::new();
     }
-    let per_axis = ((threads * 32) as f64).sqrt().ceil() as usize;
     let cell = |v: f64, lo: f64, hi: f64| {
-        (((v - lo) / (hi - lo).max(1e-9) * per_axis as f64) as usize).min(per_axis - 1)
+        (((v - lo) / (hi - lo).max(1e-9) * UNION_CELLS as f64) as usize).min(UNION_CELLS - 1)
     };
-    let mut bins: Vec<Vec<ContourBuf>> = vec![Vec::new(); per_axis * per_axis];
+    let mut bins: Vec<Vec<ContourBuf>> = vec![Vec::new(); UNION_CELLS * UNION_CELLS];
     for item in items.into_iter().filter(|i| !i.is_empty()) {
         let c = bbox_of(&item).center();
-        let k = cell(c.y, all.min.y, all.max.y) * per_axis + cell(c.x, all.min.x, all.max.x);
+        let k = cell(c.y, all.min.y, all.max.y) * UNION_CELLS + cell(c.x, all.min.x, all.max.x);
         bins[k].extend(item);
     }
     bins.retain(|b| !b.is_empty());

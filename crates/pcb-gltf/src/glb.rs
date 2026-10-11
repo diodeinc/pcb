@@ -378,26 +378,29 @@ pub(crate) fn write(
         .map(|mesh| Grid::of(mesh.primitives.iter().map(|(_, p)| p)))
         .collect();
 
-    // Quantize and compress every primitive in parallel, in output order.
-    // Every board layer but the body is flat.
-    let jobs: Vec<(&Primitive, Grid, bool)> = board
-        .iter()
-        .map(|(layer, p)| (*p, board_grid, layer.kind != LayerKind::Body))
-        .chain(
+    // Quantize and compress every primitive in parallel. Every board layer
+    // but the body is flat.
+    let (board_encoded, model_encoded): (Vec<Encoded>, Vec<Vec<Encoded>>) = rayon::join(
+        || {
+            board
+                .par_iter()
+                .map(|(layer, p)| encode(p, board_grid, layer.kind != LayerKind::Body))
+                .collect()
+        },
+        || {
             models
                 .meshes
-                .iter()
+                .par_iter()
                 .zip(&model_grids)
-                .flat_map(|(mesh, grid)| {
-                    mesh.primitives.iter().map(move |(_, p)| (p, *grid, false))
-                }),
-        )
-        .collect();
-    let encoded: Vec<Encoded> = jobs
-        .par_iter()
-        .map(|(p, grid, flat)| encode(p, *grid, *flat))
-        .collect();
-    let mut encoded = encoded.iter();
+                .map(|(mesh, grid)| {
+                    mesh.primitives
+                        .par_iter()
+                        .map(|(_, p)| encode(p, *grid, false))
+                        .collect()
+                })
+                .collect()
+        },
+    );
 
     let mut gltf = Gltf::default();
     let mut meshes = Vec::new();
@@ -407,10 +410,8 @@ pub(crate) fn write(
     if !board.is_empty() {
         let primitives: Vec<Value> = board
             .iter()
-            .map(|(layer, _)| {
-                let material = layer_material(layer, copper);
-                gltf.primitive(encoded.next().unwrap(), material)
-            })
+            .zip(&board_encoded)
+            .map(|((layer, _), encoded)| gltf.primitive(encoded, layer_material(layer, copper)))
             .collect();
         meshes.push(json!({ "name": format!("{name}_PCB"), "primitives": primitives }));
         nodes.push(json!({ "name": "PCB", "mesh": 0, "matrix": matrix(board_grid.matrix()) }));
@@ -428,11 +429,12 @@ pub(crate) fn write(
             instances[mesh].push((&component.reference, placement));
         }
     }
-    for (mesh, placements) in models.meshes.iter().zip(&instances) {
+    for ((mesh, encoded), placements) in models.meshes.iter().zip(&model_encoded).zip(&instances) {
         let primitives: Vec<Value> = mesh
             .primitives
             .iter()
-            .map(|(color, _)| gltf.primitive(encoded.next().unwrap(), model_material(*color)))
+            .zip(encoded)
+            .map(|((color, _), encoded)| gltf.primitive(encoded, model_material(*color)))
             .collect();
         meshes.push(json!({ "name": mesh.name, "primitives": primitives }));
         // Placements are rotations with uniform scale, so each is exactly a

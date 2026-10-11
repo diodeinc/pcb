@@ -54,22 +54,35 @@ pub(crate) fn polygons_of(region: &ContourSet) -> Vec<Vec<Vec2>> {
     raw_rings(&region.to_contours())
 }
 
-/// The rings of a boolean's output, cleaned: pinched rings are split,
-/// near-collinear vertices dropped, and slivers discarded.
-pub(crate) fn rings_of(contours: &[ContourBuf]) -> Vec<Vec<Vec2>> {
-    let mut rings: Vec<Vec<Vec2>> = Vec::new();
+/// The rings of contours, each split where it passes through a vertex
+/// twice, so every ring is a simple loop.
+fn simple_rings(contours: &[ContourBuf]) -> Vec<Vec<Vec2>> {
+    let mut rings = Vec::new();
     for points in raw_rings(contours) {
         split_pinches(points, &mut rings);
     }
-    rings.into_iter().filter_map(cleaned).collect()
+    rings
 }
 
-/// A ring with near-collinear vertices dropped, or `None` for a sliver: a
-/// ring under a square micrometre is one the boolean left behind, whose
+/// A ring under a square micrometre: one the boolean left behind, whose
 /// winding OCCT cannot even tell.
+fn is_sliver(ring: &[Vec2]) -> bool {
+    ring.len() < 3 || signed_area(ring).abs() <= 1e-6
+}
+
+/// The rings of a boolean's output, cleaned: pinched rings are split,
+/// near-collinear vertices dropped, and slivers discarded.
+pub(crate) fn rings_of(contours: &[ContourBuf]) -> Vec<Vec<Vec2>> {
+    simple_rings(contours)
+        .into_iter()
+        .filter_map(cleaned)
+        .collect()
+}
+
+/// A ring with near-collinear vertices dropped, or `None` for a sliver.
 pub(crate) fn cleaned(mut ring: Vec<Vec2>) -> Option<Vec<Vec2>> {
     simplify_ring(&mut ring);
-    (ring.len() >= 3 && signed_area(&ring).abs() > 1e-6).then_some(ring)
+    (!is_sliver(&ring)).then_some(ring)
 }
 
 /// One `(outer, holes)` per island of a region, with arcs refitted.
@@ -159,11 +172,8 @@ pub(crate) fn nest(rings: Vec<Vec<Vec2>>) -> Vec<Nested> {
 /// The islands of a region with the boolean's vertices kept as they are,
 /// for callers that snap them back onto curves they know.
 pub(crate) fn raw_islands(region: &ContourSet) -> Vec<Nested> {
-    let mut rings: Vec<Vec<Vec2>> = Vec::new();
-    for points in polygons_of(region) {
-        split_pinches(points, &mut rings);
-    }
-    rings.retain(|r| r.len() >= 3 && signed_area(r).abs() > 1e-6);
+    let mut rings = simple_rings(&region.to_contours());
+    rings.retain(|r| !is_sliver(r));
     nest(rings)
 }
 
