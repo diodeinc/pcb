@@ -141,7 +141,7 @@ fn tessellate_one(model: &Model, bytes: &[u8], simplify_error: f32) -> Outcome {
     let tessellated_any = tessellated.submeshes.iter().any(|s| !s.indices.is_empty());
     let mut primitives: Vec<([f32; 4], Primitive)> = tessellated
         .submeshes
-        .into_iter()
+        .into_par_iter()
         .filter(|s| !s.indices.is_empty())
         .map(|s| {
             let ColoredSubmesh {

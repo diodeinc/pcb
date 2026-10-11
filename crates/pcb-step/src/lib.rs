@@ -646,11 +646,11 @@ pub(crate) fn decode_embedded(text: &[u8]) -> Result<Vec<u8>, Error> {
 
 fn base64_decode(text: &[u8]) -> Result<Vec<u8>, Error> {
     use base64::Engine;
-    let compact: Vec<u8> = text
-        .iter()
-        .copied()
-        .filter(|b| !b.is_ascii_whitespace())
-        .collect();
+    // Copy the runs between line breaks whole, not byte by byte.
+    let mut compact = Vec::with_capacity(text.len());
+    for run in text.split(u8::is_ascii_whitespace) {
+        compact.extend_from_slice(run);
+    }
     base64::engine::general_purpose::STANDARD
         .decode(compact)
         .map_err(|_| Error::Base64)
