@@ -144,9 +144,11 @@ Import joins schematic, netlist, and layout records by `KiCadUuidPathKey`:
 the instance sheet UUID path (`sheetpath.tstamps`) and symbol UUID.
 Schematic/netlist identities stay on these source anchors. Footprint geometry is
 matched to them by unique reference designator: a retained PCB already uses Zener
-sync UUIDs, not native schematic paths. For source PCBs only, a native
-unit path also identifies geometry when its PCB reference is stale. Ambiguous
-matches are rejected rather than choosing one footprint's geometry. The matched
+sync UUIDs, not native schematic paths. For source PCBs only, a native unit
+path takes precedence, as in KiCad, so references shuffled by re-annotation
+without Update PCB follow their paths; a reference joins only a component that
+no footprint path claims. Ambiguous matches are rejected rather than choosing
+one footprint's geometry. The matched
 PCB reference also targets its generated sync hooks, so stale references do not
 leave recovered footprints unmanaged. Reference designators do not define the
 generated hierarchy or symbol identities.
