@@ -1059,12 +1059,18 @@ fn stacked_distinct_no_connects_share_one_marker_and_preserve_conflicts() {
     // a displayed name and anchor. Pad identities, not names, identify intent.
     for instance in netlist.instances.values_mut() {
         if instance.kind == InstanceKind::Component {
-            instance.attributes.insert("__symbol_value".into(), AttributeValue::String(r#"
+            instance.attributes.insert(
+                "__symbol_value".into(),
+                AttributeValue::String(
+                    r#"
                 (symbol "MULTI_PAD" (symbol "MULTI_PAD_1_1"
-                  (pin no_connect line (at -5.08 2.54 0) (length 2.54) (name "NC") (number "1"))
-                  (pin no_connect line (at -5.08 2.54 0) (length 2.54) hide (name "NC") (number "2"))
-                  (pin no_connect line (at -5.08 2.54 0) (length 2.54) (name "NC") (number "4"))))
-            "#.into()));
+                  (pin passive line (at -5.08 2.54 0) (length 2.54) (name "NC") (number "1"))
+                  (pin passive line (at -5.08 2.54 0) (length 2.54) hide (name "NC") (number "2"))
+                  (pin passive line (at -5.08 2.54 0) (length 2.54) (name "NC") (number "4"))))
+            "#
+                    .into(),
+                ),
+            );
         }
     }
     for net in netlist.nets.values_mut() {

@@ -349,8 +349,10 @@ pub fn marked_no_connect_targets(document: &SchDocument) -> anyhow::Result<Vec<N
     Ok(physical
         .islands
         .values()
-        .filter(|island| is_open_pin_stack(island) && !island.items.is_empty())
+        .filter(|island| is_open_pin_stack(island))
         .flat_map(|island| island.pins.iter().map(|pin| pin.no_connect_target()))
+        // `no_connect`-type pins never join the marker's island.
+        .filter(|target| has_no_connect(document, target))
         .collect())
 }
 

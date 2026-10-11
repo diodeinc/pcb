@@ -4,8 +4,8 @@ use std::collections::BTreeSet;
 
 use common::kicad_builder::{KicadBuilder, TestPin};
 use pcb_kicad_sch::{
-    SchItem, SymbolSlotKey,
-    analysis::{SchematicIssue, analyze_connectivity},
+    NoConnect, Point, SchItem, SymbolSlotKey,
+    analysis::{SchematicIssue, analyze_connectivity, marked_no_connect_targets},
     connectivity::{
         ComponentIdentity, ComponentNode, ComponentOrigin, ConnectionGroup, ConnectionOrigin,
         ConnectivityGraph, Terminal,
@@ -265,26 +265,49 @@ fn distinct_managed_symbols_sharing_a_slot_still_report_duplicate() {
 }
 
 #[test]
-fn no_connect_electrical_pin_still_participates_in_connectivity() {
+fn no_connect_electrical_pins_never_connect() {
+    // KiCad's SCH_PIN::ConnectionPropagatesTo rejects PT_NC pins: stacked NC
+    // pins stay separate, and a wire touching one still reaches other pins.
     let mut builder = KicadBuilder::new();
     builder
         .define_symbol_raw(
             r#"(symbol "Test:NC"
               (symbol "NC_1_1"
                 (pin no_connect line (at 0 0 0) (length 0)
-                  (name "NC") (number "1"))))"#,
+                  (name "NC") (number "1"))
+                (pin no_connect line (at 0 0 0) (length 0)
+                  (name "NC") (number "2"))
+                (pin passive line (at 0 0 0) (length 0)
+                  (name "P") (number "3"))))"#,
         )
         .component("Test:NC", Some("U1"), (0.0, 0.0))
-        .local_label("SIGNAL", (0.0, 0.0));
+        .wire((0.0, 0.0), (1.0, 0.0))
+        .local_label("SIGNAL", (1.0, 0.0));
 
-    let graph = ConnectivityGraph::from_kicad(&builder.build()).unwrap();
-    let signal = graph
+    let mut document = builder.build();
+    let graph = ConnectivityGraph::from_kicad(&document).unwrap();
+    let mut terminal_counts = graph
         .groups
         .iter()
-        .find(|group| group.names.contains("SIGNAL"))
-        .expect("signal group");
+        .map(|group| (group.names.len(), group.terminals.len()))
+        .collect::<Vec<_>>();
+    terminal_counts.sort();
+    assert_eq!(terminal_counts, vec![(0, 1), (0, 1), (1, 1)]);
 
-    assert_eq!(signal.terminals.len(), 1);
+    // A marker on the shared anchor still covers both isolated NC pins.
+    document.pages[0].items.push(SchItem::NoConnect(NoConnect {
+        id: "nc".into(),
+        at: Point::new(0.0, 0.0),
+        unsupported: Vec::new(),
+    }));
+    let marked = marked_no_connect_targets(&document).unwrap();
+    assert_eq!(
+        marked
+            .iter()
+            .map(|target| target.pin_number.as_str())
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from(["1", "2"])
+    );
 }
 
 #[test]
