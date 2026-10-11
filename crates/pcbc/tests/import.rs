@@ -84,7 +84,7 @@ fn import_explains_how_to_upgrade_pre_kicad_9_projects() {
     for (input, expected) in [
         (
             "source/board.kicad_sch",
-            "`kicad-cli sch upgrade child.kicad_sch`",
+            "failed to parse child.kicad_sch\n  KiCad schematic version 20231120 is older than KiCad 9; upgrade it with `kicad-cli sch upgrade`",
         ),
         ("legacy/board.pro", "board.pro is a KiCad 5 legacy file"),
     ] {
