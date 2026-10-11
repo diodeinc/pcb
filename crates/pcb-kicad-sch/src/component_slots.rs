@@ -109,17 +109,21 @@ pub(crate) fn optional_unplaced_slots(
     document: &SchDocument,
     netlist: &Schematic,
 ) -> Result<BTreeSet<SymbolSlotKey>> {
+    let slots = component_symbols(netlist)?;
+    let expected = slots.iter().map(|(slot, _)| slot).collect::<BTreeSet<_>>();
+    // Only a current unit proves the component is placed; a stale one is replaced.
     let mut placed = BTreeMap::<&str, Vec<&Symbol>>::new();
     for symbol in document.pages.iter().flat_map(|page| &page.items) {
         if let SchItem::Symbol(symbol) = symbol
-            && let Some(path) = symbol.field_value("Path").filter(|path| !path.is_empty())
+            && let Some(path) = symbol.field_value("Path")
+            && SymbolSlotKey::new(path, symbol.unit).is_some_and(|slot| expected.contains(&slot))
         {
             placed.entry(path).or_default().push(symbol);
         }
     }
     let connected = connected_component_terminals(netlist);
     let mut optional = BTreeSet::new();
-    for (slot, definition) in component_symbols(netlist)? {
+    for (slot, definition) in &slots {
         let (Some(definition), Some(placed)) = (definition, placed.get(slot.component_path()))
         else {
             continue;
@@ -127,7 +131,7 @@ pub(crate) fn optional_unplaced_slots(
         if placed.iter().any(|symbol| symbol.unit == slot.unit()) {
             continue;
         }
-        let parsed = symbol::ParsedSymbolDefinition::parse(&definition)?;
+        let parsed = symbol::ParsedSymbolDefinition::parse(definition)?;
         let unit_pins = |unit: u32| {
             let mut instance = placed[0].clone();
             instance.unit = unit;
@@ -156,7 +160,7 @@ pub(crate) fn optional_unplaced_slots(
                 })
             });
         if unconnected {
-            optional.insert(slot);
+            optional.insert(slot.clone());
         }
     }
     Ok(optional)
