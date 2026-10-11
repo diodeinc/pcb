@@ -12,9 +12,9 @@ use crate::{
     GEOMETRY_EPS_MM, Point, SchDocument, SchItem, SchPage, Symbol,
     analysis::{
         ConnectivityAnalysis, ConnectivityInspection, NoConnectTarget, SchematicIssue,
-        SchematicIssueKey, analyze_connectivity, ensure_issues_resolved, ensure_no_new_issues,
-        has_no_connect, inspect_no_connects, inspect_schematic, issue_context, logical_name,
-        observed_reconcilable_connectivity,
+        SchematicIssueKey, analyze_reconcilable_connectivity, ensure_issues_resolved,
+        ensure_no_new_issues, has_no_connect, inspect_no_connects, inspect_schematic,
+        issue_context, logical_name, observed_reconcilable_connectivity,
     },
     compose,
     connectivity::{
@@ -282,7 +282,11 @@ pub(crate) fn plan_connectivity_repair_core(
     let mut current_analysis = Cow::Borrowed(&inspection.analysis);
     if !removals.is_empty() {
         current_observed = Cow::Owned(observed_reconcilable_connectivity(&simulated, netlist)?);
-        current_analysis = Cow::Owned(analyze_connectivity(expected, &current_observed.graph));
+        current_analysis = Cow::Owned(analyze_reconcilable_connectivity(
+            &simulated,
+            expected,
+            &current_observed.graph,
+        )?);
     }
 
     loop {
@@ -394,7 +398,11 @@ pub(crate) fn plan_connectivity_repair_core(
             removals.extend(fallback);
         }
         current_observed = Cow::Owned(observed_reconcilable_connectivity(&simulated, netlist)?);
-        current_analysis = Cow::Owned(analyze_connectivity(expected, &current_observed.graph));
+        current_analysis = Cow::Owned(analyze_reconcilable_connectivity(
+            &simulated,
+            expected,
+            &current_observed.graph,
+        )?);
     }
 
     removals.extend(orphaned_junctions(document, &simulated, &removals));
@@ -1155,12 +1163,14 @@ fn verify_cuts(
         }
     }
     remove_items(document, removals)?;
-    let result = observed_reconcilable_connectivity(document, netlist).map(|observed| {
-        let analysis = analyze_connectivity(expected, &observed.graph);
+    let result = observed_reconcilable_connectivity(document, netlist).and_then(|observed| {
+        let analysis = analyze_reconcilable_connectivity(document, expected, &observed.graph)?;
         // Disconnected nets are rebuilt by the realizer. Only conflicts must
         // decrease, and no existing conflict may get worse.
-        strictly_reduces_problems(current_problems, &repair_problem_counts(analysis.issues()))
-            .then_some((observed, analysis))
+        Ok(
+            strictly_reduces_problems(current_problems, &repair_problem_counts(analysis.issues()))
+                .then_some((observed, analysis)),
+        )
     });
     if !matches!(&result, Ok(Some(_))) {
         for (page, index, item) in saved {

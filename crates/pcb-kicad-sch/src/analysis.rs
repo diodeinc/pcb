@@ -312,7 +312,7 @@ pub fn inspect_schematic(
     let mut expected = expected_reconcilable_connectivity(document, netlist)?;
     apply_symbol_or_label_endpoint_requirements(document, netlist, &mut expected)?;
     let physical = observed_reconcilable_connectivity(document, netlist)?;
-    let mut analysis = analyze_connectivity(&expected, &physical.graph);
+    let mut analysis = analyze_reconcilable_connectivity(document, &expected, &physical.graph)?;
     let (_, no_connect_issues) = inspect_no_connects(document, netlist)?;
     analysis.issues.extend(no_connect_issues);
     analysis.issues.splice(
@@ -855,6 +855,32 @@ pub fn analyze_connectivity(
     }
 }
 
+/// [`analyze_connectivity`] for reconciliation's visible-pin graphs. Like
+/// KiCad's netlist, a name reaching no pins (hidden ones included), e.g. a
+/// leftover label, creates no net, so it cannot be unexpected.
+pub(crate) fn analyze_reconcilable_connectivity(
+    document: &SchDocument,
+    expected: &ConnectivityGraph,
+    observed: &ConnectivityGraph,
+) -> anyhow::Result<ConnectivityAnalysis> {
+    let mut analysis = analyze_connectivity(expected, observed);
+    let unexpected_net =
+        |issue: &SchematicIssue| matches!(issue, SchematicIssue::UnexpectedNet { .. });
+    if analysis.issues.iter().any(unexpected_net) {
+        let pinned = reduce_with_provenance(document, PinVisibility::IncludeHidden)?
+            .graph
+            .groups
+            .into_iter()
+            .filter(|group| !group.terminals.is_empty())
+            .flat_map(|group| group.names)
+            .collect::<BTreeSet<_>>();
+        analysis.issues.retain(|issue| {
+            !matches!(issue, SchematicIssue::UnexpectedNet { net_name, .. } if !pinned.contains(net_name))
+        });
+    }
+    Ok(analysis)
+}
+
 /// Compute the group relation once in both directions. Lists contain unique
 /// group indices in source order, independent of terminal/key lookup order.
 struct GroupMatches<'a> {
@@ -1088,10 +1114,7 @@ fn collect_connection_issues(
             });
         }
 
-        // Like KiCad's netlist, a name reaching no pins or ports (e.g. a
-        // leftover label) creates no net, so it cannot be unexpected.
-        let creates_net = !observed_group.terminals.is_empty();
-        for name in observed_group.names.iter().filter(|_| creates_net) {
+        for name in &observed_group.names {
             let port = Terminal::InterfacePort { name: name.clone() };
             let accepted = matching_expected
                 .iter()
