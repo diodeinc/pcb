@@ -743,12 +743,21 @@ fn disconnect_first_named_island(document: &mut SchDocument) {
 }
 
 fn add_unexpected_net(document: &mut SchDocument) {
+    // A pinless label creates no net, so attach this one to a generated net.
+    let anchor = document.pages[0]
+        .items
+        .iter()
+        .find_map(|item| match item {
+            SchItem::Label(label) => Some(label.at),
+            _ => None,
+        })
+        .expect("generated net label");
     document.pages[0]
         .items
         .push(SchItem::Label(pcb_kicad_sch::Label::new(
             "unexpected-net",
             "EXTRA",
-            Point::new(100.0, 100.0),
+            anchor,
         )));
 }
 

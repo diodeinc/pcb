@@ -1088,7 +1088,10 @@ fn collect_connection_issues(
             });
         }
 
-        for name in &observed_group.names {
+        // Like KiCad's netlist, a name reaching no pins or ports (e.g. a
+        // leftover label) creates no net, so it cannot be unexpected.
+        let creates_net = !observed_group.terminals.is_empty();
+        for name in observed_group.names.iter().filter(|_| creates_net) {
             let port = Terminal::InterfacePort { name: name.clone() };
             let accepted = matching_expected
                 .iter()
@@ -1392,7 +1395,7 @@ mod tests {
     }
 
     #[test]
-    fn reports_shorts_and_unexpected_nets() {
+    fn reports_shorts_but_not_pinless_label_nets() {
         let netlist = netlist_with_nets(&["N1", "N2"]);
         let mut page = SchPage::new("page");
         page.items.extend([
@@ -1411,7 +1414,8 @@ mod tests {
                 .iter()
                 .any(|issue| matches!(issue, SchematicIssue::Shorted { .. }))
         );
-        assert!(analysis.issues().iter().any(
+        // KiCad's netlist omits a net without pins, so a leftover label is not unexpected.
+        assert!(!analysis.issues().iter().any(
             |issue| matches!(issue, SchematicIssue::UnexpectedNet { net_name, .. } if net_name == "EXTRA")
         ));
     }
