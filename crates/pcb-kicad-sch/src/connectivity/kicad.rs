@@ -769,11 +769,18 @@ fn collect_symbol(
             pin_name: pin_name.clone(),
             pin_numbers: pin.numbers.clone(),
         };
-        output.connectables.push(Connectable {
-            geometry: Geometry::Point {
+        // KiCad never propagates connections to or from `no_connect`-type pins
+        // (SCH_PIN::ConnectionPropagatesTo), even when stacked or wired.
+        let geometry = if pin.electrical_type == "no_connect" {
+            Geometry::Contacts([None, None])
+        } else {
+            Geometry::Point {
                 at: pin.point.into(),
                 segment_interior_tolerance: None,
-            },
+            }
+        };
+        output.connectables.push(Connectable {
+            geometry,
             driver: pin.is_hidden_power_input().then(|| NameDriver {
                 name: pin_name.clone(),
                 net_name: placed
@@ -914,7 +921,8 @@ fn static_net_text(field: &str, value: &str) -> Result<String> {
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum Geometry {
     /// Bus entry endpoints that do not touch a bus; no conductive body.
-    /// An empty set also represents a virtual root bus-member port.
+    /// An empty set also represents a virtual root bus-member port or a
+    /// `no_connect`-type pin.
     Contacts([Option<GridPoint>; 2]),
     Point {
         at: GridPoint,
