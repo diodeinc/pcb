@@ -236,7 +236,7 @@ pub(crate) fn prune_obsolete_pages(
                             .get(symbol.library_key())
                             .map(crate::symbol::ParsedSymbolDefinition::parse)
                             .transpose()?
-                            .is_some_and(|definition| definition.is_unmanaged_graphic(symbol))
+                            .is_some_and(|definition| definition.is_native_off_board(symbol))
                 }
                 _ => false,
             };

@@ -179,9 +179,10 @@ converts back-side geometry and layers, and makes embedded zones and pad angles 
 - Wires, graphics, sheet relationships, native no-connects, and symbol geometry
   remain in the original schematic. Import no longer classifies passive-promotion
   candidates, substitutes symbols, or writes legacy `pcb:sch` comments.
-- Off-board pinless symbols without a `Path` remain native documentation, outside
-  KiCad's PCB netlist. Symbols with electrical pins (including hidden pins or pins
-  in another unit), or a `Path`, still require component agreement.
+- Off-board symbols without a `Path` (artwork, excluded test points or alternate
+  parts) remain native documentation, outside KiCad's PCB netlist. Their pins still
+  join wiring as in KiCad's connection graph but contribute no component terminals.
+  A `Path` still requires component agreement.
 - Embedded definitions resolve through each symbol's `lib_name` override in its
   source sheet, while `lib_id` remains its library identity. Distinct cached
   definitions generate distinct parts even when their library IDs match.

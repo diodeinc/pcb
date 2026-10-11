@@ -782,7 +782,7 @@ fn move_symbol(symbol: &mut Symbol, at: Point) {
 }
 
 #[test]
-fn only_unmanaged_off_board_pinless_symbols_are_native_documentation() {
+fn only_unmanaged_off_board_symbols_are_native_documentation() {
     let netlist = common::compile_fixture("analysis", "simple.zen");
     let baseline = plan_reconciliation(None, &netlist, "simple.kicad_sch")
         .unwrap()
@@ -806,7 +806,7 @@ fn only_unmanaged_off_board_pinless_symbols_are_native_documentation() {
         } else {
             symbol.fields.remove("Path");
         }
-        // Hidden pins in another unit still make this an electrical definition.
+        // KiCad's netlist omits off-board symbols even with (hidden, other-unit) pins.
         let pins = if pinless {
             ""
         } else {
@@ -825,7 +825,7 @@ fn only_unmanaged_off_board_pinless_symbols_are_native_documentation() {
             .items
             .push(SchItem::Symbol(symbol.clone()));
         let inspection = inspect_schematic(&document, &netlist).unwrap();
-        let documentation = pinless && !on_board && !managed;
+        let documentation = !on_board && !managed;
         assert_eq!(
             inspection.issues.is_empty(),
             documentation,
