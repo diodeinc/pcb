@@ -417,7 +417,13 @@ pub(crate) fn inspect_no_connects(
             .collect::<Vec<_>>()
     };
     let desired = targets_for(&expected_not_connected);
-    let connected = targets_for(&expected_connected);
+    // A marker on an already wired pin is inert (KiCad only warns in ERC), so
+    // only markers that leave a connected pin open conflict with the netlist.
+    let marked = marked_no_connect_targets(document)?;
+    let connected = targets_for(&expected_connected)
+        .into_iter()
+        .filter(|target| marked.contains(target))
+        .collect::<Vec<_>>();
     let markers = document.pages.iter().flat_map(|page| {
         page.items.iter().filter_map(|item| match item {
             SchItem::NoConnect(marker) => Some((&page.id, marker)),

@@ -1174,6 +1174,14 @@ fn stacked_distinct_no_connects_share_one_marker_and_preserve_conflicts() {
                 .iter()
                 .any(|issue| matches!(issue.issue, SchematicIssue::UnexpectedConnection { .. }))
         );
+        // Like KiCad, a marker on an already wired pin is inert.
+        assert!(
+            !inspect_schematic(&connected, &mixed)
+                .unwrap()
+                .issues
+                .iter()
+                .any(|issue| matches!(issue.issue, SchematicIssue::UnexpectedNoConnect { .. }))
+        );
     }
 
     // An identical symbol UUID and anchor in another file must not inherit NC.
