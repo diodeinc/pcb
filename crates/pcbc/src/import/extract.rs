@@ -72,10 +72,12 @@ pub(super) fn extract_ir(
     // Missing PCB footprints are source parity findings, not missing schematic components.
     // Reuse standalone resolution without replacing any board-embedded geometry.
     resolve_standalone_footprints(selection, staged_root, &mut netlist.components)?;
+    // A retained board carries generated Zener net names, so only a source board can break ties.
     assign_multi_net_pads(
         &mut netlist.nets,
         &netlist.netlist_order,
         &netlist.components,
+        source_pcb.is_some(),
     );
 
     Ok(ImportIr {
@@ -1142,6 +1144,7 @@ fn assign_multi_net_pads(
     nets: &mut BTreeMap<KiCadNetName, ImportNetData>,
     netlist_order: &[KiCadNetName],
     components: &BTreeMap<KiCadUuidPathKey, ImportComponentData>,
+    use_board_nets: bool,
 ) {
     let mut candidates: BTreeMap<&ImportNetPort, Vec<&KiCadNetName>> = BTreeMap::new();
     for name in netlist_order {
@@ -1153,6 +1156,7 @@ fn assign_multi_net_pads(
     for (port, names) in candidates.into_iter().filter(|(_, names)| names.len() > 1) {
         let component = components.get(&port.component);
         let board_nets = component
+            .filter(|_| use_board_nets)
             .and_then(|component| component.layout.as_ref()?.pads.get(&port.pin))
             .map(|pad| &pad.net_names);
         let kept = names
@@ -1309,7 +1313,12 @@ mod tests {
         fs::write(&path, board)?;
         let mut parsed = parse_kicad_sexpr_netlist(netlist, &BTreeMap::new())?;
         extract_kicad_layout_data(&path, None, &mut parsed.components)?;
-        assign_multi_net_pads(&mut parsed.nets, &parsed.netlist_order, &parsed.components);
+        assign_multi_net_pads(
+            &mut parsed.nets,
+            &parsed.netlist_order,
+            &parsed.components,
+            true,
+        );
 
         let pins = |net: &str| {
             parsed.nets[&KiCadNetName::from(net.to_string())]
