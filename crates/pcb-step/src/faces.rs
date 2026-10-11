@@ -585,7 +585,7 @@ fn union_rings(
     if !all.is_valid() {
         return Vec::new();
     }
-    let per_axis = ((threads * 8) as f64).sqrt().ceil() as usize;
+    let per_axis = ((threads * 32) as f64).sqrt().ceil() as usize;
     let cell = |v: f64, lo: f64, hi: f64| {
         (((v - lo) / (hi - lo).max(1e-9) * per_axis as f64) as usize).min(per_axis - 1)
     };
