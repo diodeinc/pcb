@@ -67,7 +67,11 @@ fn linked_fixture_project(
 }
 
 fn linked_hierarchy_fixture(path: &std::path::Path) -> pcb_sch::Schematic {
-    let mut netlist = common::compile_fixture("hierarchy", "root.zen");
+    linked_hierarchy_fixture_from(path, "root.zen")
+}
+
+fn linked_hierarchy_fixture_from(path: &std::path::Path, entrypoint: &str) -> pcb_sch::Schematic {
+    let mut netlist = common::compile_fixture("hierarchy", entrypoint);
     let root = netlist.root_ref.clone().unwrap();
     netlist.package_roots.insert(
         "apply-test".to_string(),
@@ -411,6 +415,311 @@ fn apply_removes_deleted_module_sheets_files_and_retained_metadata() {
             assert_eq!(fs::read(path).unwrap(), source);
         }
     }
+}
+
+fn module_sheet<'a>(
+    document: &'a pcb_kicad_sch::SchDocument,
+    file: &str,
+) -> &'a pcb_kicad_sch::Sheet {
+    document
+        .pages
+        .iter()
+        .flat_map(|page| &page.items)
+        .find_map(|item| match item {
+            SchItem::Sheet(sheet) if sheet.file_name() == file => Some(sheet.as_ref()),
+            _ => None,
+        })
+        .expect("module sheet")
+}
+
+fn sheet_pin_names(sheet: &pcb_kicad_sch::Sheet) -> BTreeSet<&str> {
+    sheet.pins.iter().map(|pin| pin.name.as_str()).collect()
+}
+
+/// KiCad's `hier_label_mismatch` check: every sheet pin has a hierarchical
+/// label in its child page and every hierarchical label has a sheet pin. Pins
+/// sit at distinct points on the sheet's left or right edge.
+fn assert_sheet_interfaces_match(document: &pcb_kicad_sch::SchDocument) {
+    for page in &document.pages {
+        for item in &page.items {
+            let SchItem::Sheet(sheet) = item else {
+                continue;
+            };
+            let child = document
+                .pages
+                .iter()
+                .find(|page| page.file_name.as_deref() == Some(sheet.file_name()))
+                .expect("child page");
+            let labels = child
+                .items
+                .iter()
+                .filter_map(|item| match item {
+                    SchItem::Label(label)
+                        if matches!(label.kind, LabelKind::Hierarchical { .. }) =>
+                    {
+                        Some(label.text.as_str())
+                    }
+                    _ => None,
+                })
+                .collect::<BTreeSet<_>>();
+            assert_eq!(
+                sheet_pin_names(sheet),
+                labels,
+                "sheet {} pins must match its hierarchical labels",
+                sheet.file_name()
+            );
+            let (at, size) = (sheet.at.unwrap(), sheet.size.unwrap());
+            for (index, pin) in sheet.pins.iter().enumerate() {
+                assert_on_connection_grid(pin.at);
+                assert!(
+                    [at.x, at.x + size.x].contains(&pin.at.x)
+                        && pin.at.y > at.y
+                        && pin.at.y < at.y + size.y,
+                    "pin {} lies on the sheet's side edge",
+                    pin.name
+                );
+                assert!(
+                    sheet.pins[..index].iter().all(|other| other.at != pin.at),
+                    "pin {} is stacked on another pin",
+                    pin.name
+                );
+            }
+        }
+    }
+}
+
+fn assert_applied_equivalent_and_stable(
+    project_dir: &std::path::Path,
+    netlist: &pcb_sch::Schematic,
+) {
+    let document = KicadProject::load(project_dir).unwrap().document;
+    assert!(
+        inspect_schematic(&document, netlist)
+            .unwrap()
+            .analysis
+            .is_equivalent()
+    );
+    assert_sheet_interfaces_match(&document);
+    let files = KicadProject::load(project_dir)
+        .unwrap()
+        .schematic_files
+        .into_iter()
+        .map(|path| {
+            let source = fs::read(&path).unwrap();
+            (path, source)
+        })
+        .collect::<Vec<_>>();
+    assert!(!apply_linked_schematic(netlist).unwrap().unwrap().changed);
+    for (path, source) in files {
+        assert_eq!(fs::read(path).unwrap(), source);
+    }
+}
+
+#[test]
+fn apply_reconciles_sheet_pins_after_swapping_a_module_instance() {
+    // ENG-3853: the same instance name now holds a module with other ios.
+    let workspace = tempfile::tempdir().unwrap();
+    let project_dir = workspace.path().join("hardware");
+    let original = linked_hierarchy_fixture(&project_dir);
+    apply_linked_schematic(&original).unwrap().unwrap();
+    let before = KicadProject::load(&project_dir).unwrap().document;
+    let filter_b = module_sheet(&before, "FILTER_B.kicad_sch").clone();
+    assert_eq!(
+        sheet_pin_names(module_sheet(&before, "FILTER_A.kicad_sch")),
+        BTreeSet::from(["INPUT", "OUTPUT"])
+    );
+
+    let swapped = linked_hierarchy_fixture_from(&project_dir, "root_swap.zen");
+    let applied = apply_linked_schematic(&swapped).unwrap().unwrap();
+    assert!(applied.changed);
+    let after = KicadProject::load(&project_dir).unwrap().document;
+    let sheet = module_sheet(&after, "FILTER_A.kicad_sch");
+    assert_eq!(
+        sheet_pin_names(sheet),
+        BTreeSet::from(["INPUT", "SENSE", "ENABLE"])
+    );
+    let before_sheet = module_sheet(&before, "FILTER_A.kicad_sch");
+    assert_eq!(
+        sheet.pins.iter().find(|pin| pin.name == "INPUT"),
+        before_sheet.pins.iter().find(|pin| pin.name == "INPUT"),
+        "retained pins keep their identity and position"
+    );
+    assert_eq!(
+        (sheet.at, sheet.size),
+        (before_sheet.at, before_sheet.size),
+        "freed and spare edge points fit the new pins"
+    );
+    assert_eq!(module_sheet(&after, "FILTER_B.kicad_sch"), &filter_b);
+    // The stale pin's parent label went with it; the new pins have drivers.
+    let root = after
+        .pages
+        .iter()
+        .find(|page| {
+            page.items
+                .iter()
+                .any(|item| matches!(item, SchItem::Sheet(_)))
+        })
+        .unwrap();
+    for pin in &sheet.pins {
+        assert!(
+            root.items
+                .iter()
+                .any(|item| matches!(item, SchItem::Label(label) if label.at == pin.at)),
+            "pin {} has a parent driver",
+            pin.name
+        );
+    }
+    assert_applied_equivalent_and_stable(&project_dir, &swapped);
+}
+
+#[test]
+fn apply_removes_sheet_pins_of_explicitly_unconnected_ios() {
+    // ENG-2347: an io passed NotConnected() leaves the module in place.
+    let workspace = tempfile::tempdir().unwrap();
+    let project_dir = workspace.path().join("hardware");
+    apply_linked_schematic(&linked_hierarchy_fixture(&project_dir))
+        .unwrap()
+        .unwrap();
+
+    let netlist = linked_hierarchy_fixture_from(&project_dir, "root_not_connected.zen");
+    assert!(apply_linked_schematic(&netlist).unwrap().unwrap().changed);
+    let after = KicadProject::load(&project_dir).unwrap().document;
+    assert_eq!(
+        sheet_pin_names(module_sheet(&after, "FILTER_A.kicad_sch")),
+        BTreeSet::from(["INPUT"])
+    );
+    assert_applied_equivalent_and_stable(&project_dir, &netlist);
+}
+
+#[test]
+fn apply_moves_stacked_sheet_pins_to_free_edge_points() {
+    // ENG-3413: coincident sheet pins short their nets in KiCad.
+    for stack in ["onto INPUT", "onto OUTPUT", "on a full sheet"] {
+        let workspace = tempfile::tempdir().unwrap();
+        let project_dir = workspace.path().join("hardware");
+        let netlist = linked_hierarchy_fixture(&project_dir);
+        apply_linked_schematic(&netlist).unwrap().unwrap();
+        let mut project = KicadProject::load(&project_dir).unwrap();
+        let root = project
+            .document
+            .pages
+            .iter_mut()
+            .find(|page| {
+                page.items
+                    .iter()
+                    .any(|item| matches!(item, SchItem::Sheet(_)))
+            })
+            .unwrap();
+        let root_file = project_dir.join(root.file_name.as_ref().unwrap());
+        let SchItem::Sheet(sheet) = root
+            .items
+            .iter_mut()
+            .find(|item| matches!(item, SchItem::Sheet(sheet) if sheet.file_name() == "FILTER_A.kicad_sch"))
+            .unwrap()
+        else {
+            unreachable!()
+        };
+        let target = match stack {
+            "onto INPUT" => {
+                sheet
+                    .pins
+                    .iter()
+                    .find(|pin| pin.name == "INPUT")
+                    .unwrap()
+                    .at
+            }
+            "onto OUTPUT" => {
+                sheet
+                    .pins
+                    .iter()
+                    .find(|pin| pin.name == "OUTPUT")
+                    .unwrap()
+                    .at
+            }
+            _ => {
+                // No spare edge point: the sheet must grow to fit the moved pin.
+                let at = sheet.at.unwrap();
+                sheet.size.as_mut().unwrap().y = 5.08;
+                Point::new(at.x, at.y + 2.54)
+            }
+        };
+        let size = sheet.size;
+        for pin in &mut sheet.pins {
+            pin.at = target;
+        }
+        let source = fs::read_to_string(&root_file).unwrap();
+        fs::write(
+            &root_file,
+            pcb_kicad_sch::patch_page_source(&source, root)
+                .unwrap()
+                .unwrap(),
+        )
+        .unwrap();
+
+        apply_linked_schematic(&netlist).unwrap().unwrap();
+        let after = KicadProject::load(&project_dir).unwrap().document;
+        let sheet = module_sheet(&after, "FILTER_A.kicad_sch");
+        assert_eq!(sheet_pin_names(sheet), BTreeSet::from(["INPUT", "OUTPUT"]));
+        assert_eq!(
+            sheet.size.unwrap().y > size.unwrap().y,
+            stack == "on a full sheet",
+            "only a full sheet grows"
+        );
+        assert_applied_equivalent_and_stable(&project_dir, &netlist);
+    }
+}
+
+#[test]
+fn apply_gives_nested_module_sheets_unique_names() {
+    // ENG-2888, ENG-3755: one linked module inside two unlinked instances.
+    let workspace = tempfile::tempdir().unwrap();
+    let project_dir = workspace.path().join("hardware");
+    let netlist = linked_hierarchy_fixture_from(&project_dir, "root_nested.zen");
+    apply_linked_schematic(&netlist).unwrap().unwrap();
+    let sheet_names = |document: &pcb_kicad_sch::SchDocument| {
+        ["CH1.PROBE.kicad_sch", "CH2.PROBE.kicad_sch"].map(|file| {
+            module_sheet(document, file)
+                .name
+                .as_ref()
+                .unwrap()
+                .value
+                .clone()
+        })
+    };
+    let created = KicadProject::load(&project_dir).unwrap();
+    assert_eq!(sheet_names(&created.document), ["CH1.PROBE", "CH2.PROBE"]);
+    assert_applied_equivalent_and_stable(&project_dir, &netlist);
+
+    // Earlier versions named both sheets after the leaf instance.
+    let mut project = created;
+    let root = project
+        .document
+        .pages
+        .iter_mut()
+        .find(|page| {
+            page.items
+                .iter()
+                .any(|item| matches!(item, SchItem::Sheet(_)))
+        })
+        .unwrap();
+    for item in &mut root.items {
+        if let SchItem::Sheet(sheet) = item {
+            sheet.name.as_mut().unwrap().value = "PROBE".to_string();
+        }
+    }
+    let root_file = project_dir.join(root.file_name.as_ref().unwrap());
+    let source = fs::read_to_string(&root_file).unwrap();
+    fs::write(
+        &root_file,
+        pcb_kicad_sch::patch_page_source(&source, root)
+            .unwrap()
+            .unwrap(),
+    )
+    .unwrap();
+    assert!(apply_linked_schematic(&netlist).unwrap().unwrap().changed);
+    let repaired = KicadProject::load(&project_dir).unwrap().document;
+    assert_eq!(sheet_names(&repaired), ["CH1.PROBE", "CH2.PROBE"]);
+    assert_applied_equivalent_and_stable(&project_dir, &netlist);
 }
 
 #[test]

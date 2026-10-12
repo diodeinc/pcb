@@ -99,6 +99,23 @@ impl HierarchyPlan {
             ancestor = ancestor.rsplit_once('.')?.0;
         }
     }
+
+    /// A module sheet's name: its path below the closest linked ancestor
+    /// module, whose page holds the sheet. Instances of one module nested in
+    /// unlinked modules share a leaf name, and KiCad requires sibling sheet
+    /// names to be unique.
+    pub(crate) fn sheet_name<'a>(&self, module_path: &'a str) -> &'a str {
+        self.linked_modules
+            .iter()
+            .filter(|module| module.path != module_path)
+            .filter_map(|module| {
+                module_path
+                    .strip_prefix(module.path.as_str())?
+                    .strip_prefix('.')
+            })
+            .min_by_key(|name| name.len())
+            .unwrap_or(module_path)
+    }
 }
 
 pub(crate) fn plan(
@@ -663,6 +680,24 @@ mod tests {
             prune_obsolete_pages(&mut document, &[]).unwrap();
             assert_eq!(document, original);
         }
+    }
+
+    #[test]
+    fn names_sheets_below_their_closest_linked_ancestor() {
+        let plan = plan(
+            ["POWER", "POWER.CHARGER", "RTD1.PROBE", "RTD2.PROBE", "RTD"]
+                .map(module)
+                .to_vec(),
+            BTreeMap::new(),
+            &[],
+            0,
+            1,
+        )
+        .unwrap();
+        assert_eq!(plan.sheet_name("POWER"), "POWER");
+        assert_eq!(plan.sheet_name("POWER.CHARGER"), "CHARGER");
+        assert_eq!(plan.sheet_name("RTD1.PROBE"), "RTD1.PROBE");
+        assert_eq!(plan.sheet_name("RTD2.PROBE"), "RTD2.PROBE");
     }
 
     #[test]

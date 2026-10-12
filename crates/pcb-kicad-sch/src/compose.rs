@@ -37,6 +37,8 @@ const PLACEMENT_BLOCK_GAP_CELLS: i32 = 4;
 const CONTEXT_LABEL_GAP_CELLS: i32 = 1;
 const CAPACITOR_BANK_BUS_OFFSET_CELLS: f64 = 2.0;
 
+mod sheet_interfaces;
+
 pub(crate) fn reconcile_document(
     existing: Option<&SchDocument>,
     netlist: &Schematic,
@@ -247,6 +249,16 @@ pub(crate) fn reconcile_document(
         &net_symbol_specs,
         &hierarchy,
     )?;
+    // Like page pruning, interface cleanup is a whole-document concern.
+    if complete {
+        sheet_interfaces::sync_generated_sheet_interfaces(
+            &mut document,
+            netlist,
+            &placed,
+            &net_symbol_specs,
+            &hierarchy,
+        )?;
+    }
 
     // A projected component's expected connectivity is already known from the
     // netlist. Attach its pins now, after placement, instead of rediscovering
@@ -873,11 +885,7 @@ fn materialize_hierarchy(
         let height = SHEET_MIN_HEIGHT_MM.max((ports.len() as f64 + 2.0) * SHEET_PIN_SPACING_MM);
         let size = Point::new(SHEET_MIN_WIDTH_MM, height);
         let at = place_sheet(document, sheet_plan.parent_page, size)?;
-        let name = sheet_plan
-            .module_path
-            .rsplit('.')
-            .next()
-            .expect("canonical module path is non-empty");
+        let name = plan.sheet_name(&sheet_plan.module_path);
         let pins = ports
             .iter()
             .enumerate()

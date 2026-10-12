@@ -1,0 +1,14 @@
+"""root.zen with FILTER_A swapped for a module with a different interface."""
+
+Project(name="Hierarchy", path="kicad", layout=False)
+
+Filter = Module("filter.zen")
+FilterSwap = Module("filter_swap.zen")
+
+SOURCE = Net("SOURCE")
+MID = Net("MID")
+SINK = Net("SINK")
+EN = Net("EN")
+
+FilterSwap(name="FILTER_A", INPUT=SOURCE, SENSE=MID, ENABLE=EN)
+Filter(name="FILTER_B", resistance="2kohms", INPUT=MID, OUTPUT=SINK)

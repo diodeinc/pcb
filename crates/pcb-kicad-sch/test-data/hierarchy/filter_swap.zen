@@ -1,0 +1,12 @@
+"""Replacement for filter.zen with a different part and interface."""
+
+Project(name="FilterSwap", path="kicad", layout=False)
+
+Resistor = Module("@stdlib/generics/Resistor.zen")
+
+INPUT = io("INPUT", Net, direction="input")
+SENSE = io("SENSE", Net, direction="output")
+ENABLE = io("ENABLE", Net, direction="input")
+
+Resistor(name="R2", value="10kohms", package="0402", P1=INPUT, P2=SENSE)
+Resistor(name="R3", value="100kohms", package="0402", P1=ENABLE, P2=SENSE)
