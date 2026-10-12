@@ -585,6 +585,65 @@ Helper(name = "X", P1 = Net("P1"))
 }
 
 #[test]
+fn test_sync_ignores_tree_of_raised_direct_dependency() {
+    let mut sandbox = Sandbox::new();
+
+    // Lib@1.0.0 requires Leaf; Lib@1.1.0 does not. Mod requires Lib@1.1.0.
+    sandbox
+        .git_fixture("https://github.com/example/components.git")
+        .write("Leaf/pcb.toml", "[dependencies]\n")
+        .write("Leaf/Leaf.zen", "P1 = io(Net)\n")
+        .write(
+            "Lib/pcb.toml",
+            "[dependencies]\n\"github.com/example/components/Leaf\" = \"1.1.0\"\n",
+        )
+        .write("Lib/Lib.zen", "P1 = io(Net)\n")
+        .commit("Add Leaf and Lib")
+        .tag("Leaf/v1.1.0", false)
+        .tag("Lib/v1.0.0", false)
+        .write("Lib/pcb.toml", "[dependencies]\n")
+        .write(
+            "Mod/pcb.toml",
+            "[dependencies]\n\"github.com/example/components/Lib\" = \"1.1.0\"\n",
+        )
+        .write("Mod/Mod.zen", "P1 = io(Net)\n")
+        .commit("Drop Leaf from Lib; add Mod")
+        .tag("Lib/v1.1.0", false)
+        .tag("Mod/v1.0.0", false)
+        .push_mirror();
+
+    sandbox
+        .write(
+            "pcb.toml",
+            r#"[workspace]
+pcb-version = "0.4"
+
+[dependencies]
+"github.com/example/components/Lib" = "1.0.0"
+"github.com/example/components/Mod" = "1.0.0"
+"#,
+        )
+        .write(
+            "board.zen",
+            r#"Lib = Module("github.com/example/components/Lib/Lib.zen")
+Mod = Module("github.com/example/components/Mod/Mod.zen")
+"#,
+        )
+        .sync();
+
+    // Mod raises Lib to 1.1.0, so the superseded Lib@1.0.0 tree must not pull
+    // in Leaf: the next sync reads the raised pin and would drop it again.
+    let manifest = read_root_manifest(&sandbox);
+    assert_eq!(hydrated_version(&manifest, "components/Lib"), "1.1.0");
+    assert!(
+        !manifest.contains("Leaf"),
+        "unexpected Leaf in:\n{manifest}"
+    );
+    let check = run_sync_check(&mut sandbox);
+    assert!(check.status.success(), "{}", command_output(&check));
+}
+
+#[test]
 fn test_root_package_url_to_package_read_only() {
     let mut sandbox = Sandbox::new();
 

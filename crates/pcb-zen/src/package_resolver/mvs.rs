@@ -418,18 +418,34 @@ impl PackageResolver {
         // Each manifest is trusted to record its complete MVS-closed tree.
         // Merging the direct dependencies' trees then closes the selection: no
         // deeper manifest can add or raise a requirement, so none is read.
-        let direct: Vec<_> = direct_remote_ids
-            .iter()
-            .filter_map(|dep_id| Some((dep_id.clone(), selected.get(dep_id)?.clone())))
-            .collect();
-        materialize_selected(
-            &self.workspace,
-            direct.iter().map(|(dep_id, version)| (dep_id, version)),
-            false,
-        )?;
-        for (dep_id, version) in &direct {
-            for (tree_id, tree_version) in self.recorded_tree(dep_id, version)? {
-                merge_floor_version(&mut selected, tree_id, tree_version);
+        // Only trees at the final direct versions count. A tree superseded by a
+        // raised direct dependency would add requirements that the next sync,
+        // reading the raised pin, drops again.
+        let floors = selected;
+        let mut selected = floors.clone();
+        loop {
+            let direct: Vec<_> = direct_remote_ids
+                .iter()
+                .filter_map(|dep_id| Some((dep_id.clone(), selected.get(dep_id)?.clone())))
+                .collect();
+            materialize_selected(
+                &self.workspace,
+                direct.iter().map(|(dep_id, version)| (dep_id, version)),
+                false,
+            )?;
+            let mut next = floors.clone();
+            for (dep_id, version) in &direct {
+                merge_floor_version(&mut next, dep_id.clone(), version.clone());
+                for (tree_id, tree_version) in self.recorded_tree(dep_id, version)? {
+                    merge_floor_version(&mut next, tree_id, tree_version);
+                }
+            }
+            let settled = direct
+                .iter()
+                .all(|(dep_id, version)| next.get(dep_id) == Some(version));
+            selected = next;
+            if settled {
+                break;
             }
         }
 
@@ -499,7 +515,12 @@ impl PackageResolver {
                 dep_version,
             ));
         }
-        tree.extend(loaded.indirect);
+        tree.extend(
+            loaded
+                .indirect
+                .into_iter()
+                .filter(|(dep_id, _)| !is_stdlib_module_path(&dep_id.path)),
+        );
         Ok(tree)
     }
 }

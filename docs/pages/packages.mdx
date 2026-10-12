@@ -81,11 +81,14 @@ Require a newer version explicitly when the project is ready to test it:
 "github.com/acme/component-lib" = "0.3.9"
 ```
 
-Resolution reads only the manifests of a package's direct dependencies and trusts
-each one to record its complete resolved tree. It merges their `[dependencies]`
-and `[dependencies.indirect]` with the package's own requirements and keeps the
-highest version in each lane. Deeper manifests cannot add a requirement, so they
-are not fetched. MVS is deterministic and does not backtrack.
+Every manifest records its complete resolved tree across `[dependencies]` and
+`[dependencies.indirect]`. To select versions, resolution therefore reads only the
+manifests of a package's direct dependencies, at their selected versions. It merges
+their trees with the package's own requirements and keeps the highest version in
+each lane. If a tree raises a direct dependency, resolution reads the raised
+version's manifest instead. Deeper manifests cannot add a requirement, so they are
+not read; `pcb sync` still downloads every selected package. MVS is deterministic
+and does not backtrack.
 
 ## Import paths as identity
 
