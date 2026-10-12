@@ -310,6 +310,36 @@ gnd = Net("GND")
 }
 
 #[test]
+fn test_sync_records_transitive_workspace_dependency_as_indirect() {
+    let mut sandbox = Sandbox::new();
+
+    sandbox
+        .write("pcb.toml", "[workspace]\npcb-version = \"0.4\"\n")
+        .write("modules/C/pcb.toml", "[dependencies]\n")
+        .write("modules/C/C.zen", "P = io(Net)\n")
+        .write("modules/B/pcb.toml", "[dependencies]\n")
+        .write("modules/B/B.zen", "load(\"../C/C.zen\", \"P\")\nQ = P\n")
+        .write("modules/A/pcb.toml", "[dependencies]\n")
+        .write("modules/A/A.zen", "load(\"../B/B.zen\", \"Q\")\n")
+        .sync();
+
+    let a = read_sandbox_file(&sandbox, "modules/A/pcb.toml");
+    let b = read_sandbox_file(&sandbox, "modules/B/pcb.toml");
+    let (dependencies, indirect) = a
+        .split_once("[dependencies.indirect]")
+        .unwrap_or_else(|| panic!("expected A to record C as indirect, got:\n{a}"));
+    assert!(dependencies.contains("modules/B"), "{a}");
+    assert!(!dependencies.contains("modules/C"), "{a}");
+    assert!(indirect.contains("modules/C@0.1"), "{a}");
+    assert!(!b.contains("[dependencies.indirect]"), "{b}");
+
+    let check = run_sync_check(&mut sandbox);
+    assert!(check.status.success(), "{}", command_output(&check));
+    let build = sandbox.snapshot_run("pcbc", ["build", "modules/A"]);
+    assert!(!build.contains("modules/C@"), "{build}");
+}
+
+#[test]
 fn test_build_rejects_unsynced_cross_package_relative_load() {
     let mut sandbox = Sandbox::new();
 

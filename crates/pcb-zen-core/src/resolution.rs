@@ -559,6 +559,12 @@ fn selected_remote_from_manifest(
                 dep_id.lane
             );
         }
+        // Sibling packages recorded for outside consumers resolve locally here.
+        if workspace.packages.contains_key(&dep_id.path)
+            || workspace.workspace_base_url().as_deref() == Some(dep_id.path.as_str())
+        {
+            continue;
+        }
         selected.insert(dep_id, version);
     }
 

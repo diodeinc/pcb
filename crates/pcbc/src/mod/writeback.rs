@@ -44,10 +44,12 @@ pub(crate) fn plan_package_manifest(
 }
 
 fn indirect_dependencies(resolution: &PackageResolution) -> BTreeMap<String, DependencySpec> {
-    resolution
+    let remote = resolution
         .resolved_remote
         .iter()
-        .filter(|(dep_id, _)| !resolution.direct_remote_ids.contains(*dep_id))
+        .filter(|(dep_id, _)| !resolution.direct_remote_ids.contains(*dep_id));
+    remote
+        .chain(&resolution.indirect_workspace)
         .map(|(dep_id, version)| {
             (
                 dep_id.indirect_key(),
