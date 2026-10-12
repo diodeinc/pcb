@@ -336,7 +336,8 @@ fn write_batched<W: Write + ?Sized>(
     sink.write_all(&w.buf)?;
     w.buf.clear();
     let mut ids = Vec::with_capacity(weights.len());
-    for wave in batches_of(weights, WAVE * 4).chunks(WAVE) {
+    let threads = rayon::current_num_threads();
+    for wave in batches_of(weights, threads * 4).chunks(threads) {
         let written: Vec<_> = wave
             .par_iter()
             .map(|range| {
@@ -351,7 +352,7 @@ fn write_batched<W: Write + ?Sized>(
         for (buf, used, batch) in written {
             let offset = w.next_id - 1;
             w.next_id += used;
-            let chunks = line_chunks(&buf, rayon::current_num_threads());
+            let chunks = line_chunks(&buf, threads);
             let moved: Vec<Vec<u8>> = chunks
                 .par_iter()
                 .map(|chunk| {
@@ -459,7 +460,7 @@ fn export_components(
     // worker threads, given id ranges in order, emitted on worker threads
     // into private buffers, and written out in order. Ids depend only on
     // model order, so the output is the same whatever the thread count.
-    let batch = WAVE * 4;
+    let batch = rayon::current_num_threads() * 4;
     // Distinct payloads by content, so one file embedded under two names
     // is still copied once.
     let mut parts_by_content: Vec<(u64, f64, Part)> = Vec::new();
@@ -637,8 +638,3 @@ fn base64_decode(text: &[u8]) -> Result<Vec<u8>, Error> {
 
 #[cfg(test)]
 mod tests;
-
-/// Batches written in parallel at a time, by the STEP writer and the model
-/// copier. Fixed, not the thread count, so the output is the same on every
-/// machine.
-const WAVE: usize = 8;

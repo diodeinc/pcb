@@ -110,7 +110,7 @@ pub(crate) fn nest(rings: Vec<Vec<Vec2>>) -> Vec<Nested> {
     let areas: Vec<f64> = rings.iter().map(|r| signed_area(r).abs()).collect();
     let indexed: Vec<IndexedRing> = rings.iter().map(|r| IndexedRing::new(r)).collect();
     let boxes: Vec<(Vec2, Vec2)> = indexed.iter().map(|r| (r.lo, r.hi)).collect();
-    let grid = BoxGrid::new(&boxes, usize::MAX);
+    let grid = BoxGrid::new(&boxes);
     let mut parent = vec![usize::MAX; n];
     let mut depth = vec![0usize; n];
     for i in 0..n {
@@ -541,7 +541,7 @@ fn crossing_arcs(rings: &[&[Piece]]) -> Vec<Vec<bool>> {
         return demote;
     }
     let boxes: Vec<(Vec2, Vec2)> = (0..flat.len()).map(|f| piece(f).edge.bbox()).collect();
-    let grid = BoxGrid::new(&boxes, 128);
+    let grid = BoxGrid::new(&boxes);
     let mut seen = vec![usize::MAX; flat.len()];
     for f in 0..flat.len() {
         let Edge::Arc { .. } = piece(f).edge else {

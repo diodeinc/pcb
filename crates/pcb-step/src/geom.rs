@@ -158,9 +158,9 @@ pub fn chord_count(r: f64, sweep: f64, max_error: f64) -> usize {
     ((sweep.abs() / step.max(1e-3)).ceil() as usize).max(1)
 }
 
-/// Boxes bucketed on a square grid of about one cell per box, so a query
-/// visits only the boxes in the cells it touches, in ascending index
-/// order.
+/// Boxes bucketed on a square grid of about one cell per box, at most
+/// 128 a side, so a query visits only the boxes in the cells it touches,
+/// in ascending index order.
 pub(crate) struct BoxGrid {
     lo: Vec2,
     scale: Vec2,
@@ -169,13 +169,13 @@ pub(crate) struct BoxGrid {
 }
 
 impl BoxGrid {
-    /// `boxes` as `(min, max)`, on at most `max_side` cells per side.
-    pub(crate) fn new(boxes: &[(Vec2, Vec2)], max_side: usize) -> Self {
+    /// `boxes` as `(min, max)`.
+    pub(crate) fn new(boxes: &[(Vec2, Vec2)]) -> Self {
         let (lo, hi) = boxes.iter().fold(
             (Vec2::splat(f64::INFINITY), Vec2::splat(f64::NEG_INFINITY)),
             |(lo, hi), b| (lo.min(b.0), hi.max(b.1)),
         );
-        let side = ((boxes.len() as f64).sqrt().ceil() as usize).clamp(1, max_side);
+        let side = ((boxes.len() as f64).sqrt().ceil() as usize).clamp(1, 128);
         let scale = (hi - lo).max(Vec2::splat(1e-9)).recip() * side as f64;
         let mut grid = BoxGrid {
             lo,

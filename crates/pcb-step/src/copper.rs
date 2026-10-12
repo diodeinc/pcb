@@ -13,13 +13,13 @@
 use pcb_ir::geom::{
     ContourBuf, ContourSet, FillRule, GeometryAccuracy, PathCmd, Point, Resolution,
 };
+use rayon::prelude::*;
 
 use crate::board::{Board, Fill, Pad, PadKind, PadShape, Physical, Primitive, Track, Via};
 use crate::geom::{KICAD_MAX_ERROR, Vec2, ccw_sweep, circle_center, rotate_kicad};
 use crate::outline::{Edge, Frame, Loop, Solid, crosses, orient};
 use crate::rings::{IndexedRing, loops_of, polygons_of};
 use crate::scene::Prism;
-use rayon::prelude::*;
 
 /// KiCad's plating thickness for through holes.
 pub(crate) const PLATING: f64 = 0.025;

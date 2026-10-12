@@ -848,7 +848,7 @@ impl Analysis {
             .step_by(STATEMENT_CHUNK)
             .map(|start| start..(start + STATEMENT_CHUNK).min(self.closure.len()))
             .collect();
-        let copied: Vec<_> = ranges.into_par_iter().map(copy_range).collect();
+        let copied: Vec<Result<Vec<u8>, Error>> = ranges.into_par_iter().map(copy_range).collect();
         for copied in copied {
             w.buf.extend_from_slice(&copied?);
         }

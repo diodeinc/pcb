@@ -6,6 +6,7 @@
 use std::f64::consts::TAU;
 
 use pcb_ir::geom::{BBox, ContourBuf, ContourSet, FillRule, PathCmd};
+use rayon::prelude::*;
 
 use crate::board::{
     Board, Knockout, Machining, Mouth, Physical, Shape, ShapeKind, Tech, Text, Via,
@@ -14,8 +15,6 @@ use crate::copper::{
     PLATING, circle_edges, contour, grown_pad_outline, pad_drill, pad_outline, point, resolution,
     stroke_contour,
 };
-use rayon::prelude::*;
-
 use crate::font;
 use crate::geom::{
     BoxGrid, KICAD_MAX_ERROR, Vec2, ccw_sweep, circle_center, point_in_polygon, rotate_kicad,
@@ -568,18 +567,17 @@ fn less(
     }
 }
 
-/// The cleaned rings of the union of `items`, unioned cell by cell:
-/// items are binned on a `UNION_CELLS` square grid by position and each
-/// bin is unioned on its own thread. Only islands of different bins that meet are unioned again,
-/// group by group, from the boolean's own vertices so shared edges still
-/// coincide. Strokes overlap within a text, openings within a
-/// footprint; the rest of the board is disjoint and costs nothing to
-/// combine.
 /// Cells per side of the grid `union_rings` bins by. Finer cells spread
 /// dense text over more threads; coarser ones leave fewer islands that
 /// cross cells to merge again.
 const UNION_CELLS: usize = 16;
 
+/// The cleaned rings of the union of `items`, unioned cell by cell:
+/// items are binned by position and each bin is unioned in parallel.
+/// Only islands of different bins that meet are unioned again, group by
+/// group, from the boolean's own vertices so shared edges still coincide.
+/// Strokes overlap within a text, openings within a footprint; the rest
+/// of the board is disjoint and costs nothing to combine.
 fn union_rings(
     items: Vec<Vec<ContourBuf>>,
     what: &str,
@@ -649,7 +647,7 @@ fn union_rings(
     // Group the islands that meet. `meet` tests from the island whose box
     // starts further left.
     let boxes: Vec<(Vec2, Vec2)> = (0..islands.len()).map(bounds).collect();
-    let grid = BoxGrid::new(&boxes, usize::MAX);
+    let grid = BoxGrid::new(&boxes);
     let mut group: Vec<usize> = (0..islands.len()).collect();
     fn root(group: &mut [usize], mut x: usize) -> usize {
         while group[x] != x {
