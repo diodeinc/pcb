@@ -5,7 +5,7 @@
 
 use anyhow::Result;
 use clap::{Args, Subcommand};
-use pcb_step::cli::{CopperArgs, ExportArgs};
+use pcb_step::cli::{CopperArgs, ExportArgs, VisualArgs};
 
 #[derive(Args)]
 pub struct GltfArgs {
@@ -16,10 +16,15 @@ pub struct GltfArgs {
 #[derive(Subcommand)]
 enum Commands {
     /// Export a board to a GLB file: body, drills, copper, models, silkscreen and solder mask
-    Export(ExportArgs),
+    Export {
+        #[command(flatten)]
+        args: ExportArgs,
+        #[command(flatten)]
+        visual: VisualArgs,
+    },
 }
 
 pub fn execute(args: GltfArgs) -> Result<()> {
-    let Commands::Export(args) = args.command;
-    args.run("glb", CopperArgs::OUTER, pcb_gltf::export)
+    let Commands::Export { args, visual } = args.command;
+    args.run("glb", CopperArgs::OUTER, Some(&visual), pcb_gltf::export)
 }

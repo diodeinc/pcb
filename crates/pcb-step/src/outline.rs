@@ -314,6 +314,7 @@ pub(crate) fn orient(edges: Vec<Edge>, ccw: bool) -> Vec<Edge> {
 }
 
 /// One board solid: an outer loop and the holes through it.
+#[derive(Clone)]
 pub struct Solid {
     pub outer: Loop,
     pub holes: Vec<Loop>,
@@ -331,6 +332,124 @@ impl Frame {
     pub(crate) fn point(&self, p: Vec2) -> Vec2 {
         Vec2::new(p.x - self.origin.x, self.origin.y - p.y)
     }
+}
+
+/// What to do with a board whose `Edge.Cuts` cannot make a body.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum OutlinePolicy {
+    #[default]
+    Strict,
+    /// For viewing: the rounded hull of what is on the board.
+    Synthesize,
+}
+
+/// How far the synthetic body extends beyond the items it holds, mm.
+const SYNTHETIC_MARGIN: f64 = 1.5;
+const SYNTHETIC_ARC_SEGMENTS: usize = 16;
+
+/// The body, and whether it is synthesized.
+pub(crate) fn outline_solids(
+    board: &Board,
+    frame: Frame,
+    policy: OutlinePolicy,
+    warnings: &mut Vec<String>,
+) -> Result<(Vec<Solid>, bool), Error> {
+    match board_solids(board, frame) {
+        Err(err @ (Error::Outline(_) | Error::OpenOutline(_)))
+            if policy == OutlinePolicy::Synthesize =>
+        {
+            let Some(solids) = synthesize(board, frame) else {
+                return Err(err);
+            };
+            warnings.push(format!(
+                "{err}; the board body is synthesized from the items on the board"
+            ));
+            Ok((solids, true))
+        }
+        result => result.map(|solids| (solids, false)),
+    }
+}
+
+fn synthesize(board: &Board, frame: Frame) -> Option<Vec<Solid>> {
+    let mut points: Vec<Vec2> = Vec::new();
+    for fp in &board.footprints {
+        points.push(frame.point(fp.at));
+    }
+    for pad in &board.pads {
+        let r = pad.size.x.max(pad.size.y) * 0.5;
+        let c = frame.point(pad.at);
+        for (dx, dy) in [(-r, -r), (r, -r), (r, r), (-r, r)] {
+            points.push(c + Vec2::new(dx, dy));
+        }
+    }
+    for track in &board.tracks {
+        points.push(frame.point(track.a));
+        points.push(frame.point(track.b));
+    }
+    for via in &board.vias {
+        points.push(frame.point(via.at));
+    }
+    for hole in &board.holes {
+        points.push(frame.point(hole.a));
+        points.push(frame.point(hole.b));
+    }
+    points.retain(|p| p.x.is_finite() && p.y.is_finite());
+    if points.is_empty() {
+        return None;
+    }
+    let mut grown = Vec::with_capacity(points.len() * SYNTHETIC_ARC_SEGMENTS);
+    let hull = convex_hull(points);
+    for p in &hull {
+        for k in 0..SYNTHETIC_ARC_SEGMENTS {
+            let a = std::f64::consts::TAU * k as f64 / SYNTHETIC_ARC_SEGMENTS as f64;
+            grown.push(*p + Vec2::new(a.cos(), a.sin()) * SYNTHETIC_MARGIN);
+        }
+    }
+    let ring = convex_hull(grown);
+    if ring.len() < 3 {
+        return None;
+    }
+    let edges: Vec<Edge> = (0..ring.len())
+        .map(|i| Edge::Line {
+            a: ring[i],
+            b: ring[(i + 1) % ring.len()],
+        })
+        .collect();
+    let mut outer = Loop::new(edges);
+    if outer.area() < 0.0 {
+        outer.reverse();
+    }
+    Some(vec![Solid {
+        outer,
+        holes: Vec::new(),
+        round: Vec::new(),
+    }])
+}
+
+/// Andrew's monotone chain, counter-clockwise.
+fn convex_hull(mut points: Vec<Vec2>) -> Vec<Vec2> {
+    points.sort_by(|a, b| a.x.total_cmp(&b.x).then(a.y.total_cmp(&b.y)));
+    points.dedup_by(|a, b| a.distance_squared(*b) < 1e-12);
+    if points.len() < 3 {
+        return points;
+    }
+    let cross = |o: Vec2, a: Vec2, b: Vec2| (a - o).perp_dot(b - o);
+    let mut hull: Vec<Vec2> = Vec::with_capacity(points.len() * 2);
+    for &p in &points {
+        while hull.len() >= 2 && cross(hull[hull.len() - 2], hull[hull.len() - 1], p) <= 0.0 {
+            hull.pop();
+        }
+        hull.push(p);
+    }
+    let lower = hull.len() + 1;
+    for &p in points.iter().rev().skip(1) {
+        while hull.len() >= lower && cross(hull[hull.len() - 2], hull[hull.len() - 1], p) <= 0.0 {
+            hull.pop();
+        }
+        hull.push(p);
+    }
+    hull.pop();
+    hull
 }
 
 /// Chain the `Edge.Cuts` graphics into solids, one per outer loop.

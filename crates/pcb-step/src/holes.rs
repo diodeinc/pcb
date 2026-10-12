@@ -16,6 +16,7 @@ use crate::geom::Vec2;
 
 /// A round hole: its centre and `(z, radius)` profile, top down. A radius of zero
 /// at either end is the flat floor of a pocket.
+#[derive(Clone)]
 pub struct RoundHole {
     pub center: Vec2,
     pub profile: Vec<(f64, f64)>,

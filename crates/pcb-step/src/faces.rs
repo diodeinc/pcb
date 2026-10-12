@@ -20,7 +20,7 @@ use crate::geom::{
     BoxGrid, KICAD_MAX_ERROR, Vec2, ccw_sweep, circle_center, point_in_polygon, rotate_kicad,
     signed_area,
 };
-use crate::outline::{Edge, Frame, Loop, Solid, board_solids, flatten, orient};
+use crate::outline::{Edge, Frame, Loop, Solid, flatten, orient};
 use crate::outline_font::Fonts;
 use crate::rings::{IndexedRing, Nested, cleaned, fit, nest, nested_of, raw_islands, rings_of};
 
@@ -46,13 +46,15 @@ pub(crate) struct TechLayer {
 pub(crate) fn build(
     board: &Board,
     frame: Frame,
+    solids: &[Solid],
     physical: &Physical,
     silk: bool,
     mask: bool,
+    cut_vias: bool,
     variables: &[(String, String)],
     warnings: &mut Vec<String>,
 ) -> Result<Vec<TechLayer>, crate::Error> {
-    let edge = BoardEdge::new(&board_solids(board, frame)?);
+    let edge = BoardEdge::new(solids);
     let fonts = Fonts::load(board, warnings);
     let mut layers = Vec::new();
     if silk {
@@ -71,7 +73,9 @@ pub(crate) fn build(
             let faces = if tech.silk() {
                 silk_faces(board, frame, &edge, &fonts, *tech, variables, &mut notes)
             } else {
-                mask_faces(board, frame, &edge, &fonts, *tech, variables, &mut notes)
+                mask_faces(
+                    board, frame, &edge, &fonts, *tech, cut_vias, variables, &mut notes,
+                )
             };
             (faces, notes)
         })
@@ -98,7 +102,7 @@ pub(crate) fn build(
 /// The board edge flattened to chords within KiCad's maximum error: a
 /// long arc of large radius does not fit pcb-ir's arc budget, and KiCad
 /// clips to a polygon too.
-struct BoardEdge {
+pub(crate) struct BoardEdge {
     /// Outers counter-clockwise, cutouts clockwise.
     rings: Vec<Vec<Vec2>>,
     /// Bounding box of every ring segment.
@@ -106,7 +110,7 @@ struct BoardEdge {
 }
 
 impl BoardEdge {
-    fn new(outline: &[Solid]) -> Self {
+    pub(crate) fn new(outline: &[Solid]) -> Self {
         let mut rings = Vec::new();
         for solid in outline {
             rings.push(flatten(&solid.outer.edges, KICAD_MAX_ERROR));
@@ -127,18 +131,18 @@ impl BoardEdge {
     }
 
     /// Whether a segment of the edge runs through the box.
-    fn meets(&self, (lo, hi): (Vec2, Vec2)) -> bool {
+    pub(crate) fn meets(&self, (lo, hi): (Vec2, Vec2)) -> bool {
         self.segments
             .iter()
             .any(|(slo, shi)| slo.x <= hi.x && lo.x <= shi.x && slo.y <= hi.y && lo.y <= shi.y)
     }
 
     /// Whether `p` is on the board: inside an outer and not in a cutout.
-    fn contains(&self, p: Vec2) -> bool {
+    pub(crate) fn contains(&self, p: Vec2) -> bool {
         self.rings.iter().filter(|r| point_in_polygon(p, r)).count() % 2 == 1
     }
 
-    fn region(&self, warnings: &mut Vec<String>) -> Option<ContourSet> {
+    pub(crate) fn region(&self, warnings: &mut Vec<String>) -> Option<ContourSet> {
         let contours: Vec<ContourBuf> = self.rings.iter().map(|r| polyline_contour(r)).collect();
         region(&contours, "board outline", warnings)
     }
@@ -278,7 +282,12 @@ pub(crate) fn expand(text: &str, variables: &[(String, String)]) -> String {
 /// The contours of one graphic. Strokes are cut into dashes by the
 /// shape's line style, each line, arc and polygon edge starting its
 /// pattern afresh, as KiCad plots them.
-fn shape_contours(board: &Board, frame: Frame, shape: &Shape, out: &mut Vec<ContourBuf>) {
+pub(crate) fn shape_contours(
+    board: &Board,
+    frame: Frame,
+    shape: &Shape,
+    out: &mut Vec<ContourBuf>,
+) {
     let w = shape.width;
     let pattern = shape.style.pattern(w, board.dash_ratio, board.gap_ratio);
     let stroke = |a: Vec2, mid: Vec2, b: Vec2, out: &mut Vec<ContourBuf>| {
@@ -795,6 +804,7 @@ fn mask_faces(
     edge: &BoardEdge,
     fonts: &Fonts,
     tech: Tech,
+    cut_vias: bool,
     variables: &[(String, String)],
     warnings: &mut Vec<String>,
 ) -> Vec<Face> {
@@ -852,6 +862,17 @@ fn mask_faces(
             ))]);
         }
     }
+    // As KiCad's VRML export, tented or not.
+    if cut_vias {
+        for via in board.vias.iter().filter(|v| v.drill > 0.0) {
+            if via_reaches(board, via, tech.front()) {
+                openings.push(vec![contour(&circle_edges(
+                    frame.point(via.at),
+                    via.drill * 0.5,
+                ))]);
+            }
+        }
+    }
     openings.extend(drawn_items(board, frame, fonts, tech, variables, warnings));
     openings.extend(
         pierce_edges(board, frame, tech)
@@ -876,4 +897,107 @@ fn mask_faces(
     }
     rings.extend(rings_of(&region.to_contours()));
     nest(rings).iter().map(face).collect()
+}
+
+/// Above the mask, under the silkscreen.
+const PASTE_ABOVE_COPPER: f64 = 0.025;
+
+pub(crate) struct PasteLayer {
+    pub(crate) front: bool,
+    pub(crate) z: f64,
+    pub(crate) faces: Vec<Face>,
+}
+
+/// Solder paste as KiCad's VRML export draws it, DNP footprints included.
+pub(crate) fn paste(
+    board: &Board,
+    frame: Frame,
+    physical: &Physical,
+    warnings: &mut Vec<String>,
+) -> Vec<PasteLayer> {
+    let last = physical.copper_z.len() - 1;
+    let mut layers = Vec::new();
+    for front in [true, false] {
+        let side = usize::from(!front);
+        let what = format!("{} solder paste", if front { "front" } else { "back" });
+        let mut openings: Vec<Vec<ContourBuf>> = Vec::new();
+        for pad in board.pads.iter().filter(|p| p.paste[side]) {
+            let margin = paste_margin(board, pad);
+            if let Some(contours) = paste_aperture(board, frame, pad, margin, warnings) {
+                openings.push(contours);
+            }
+        }
+        if openings.is_empty() {
+            continue;
+        }
+        let faces: Vec<Face> = nest(union_rings(openings, &what, warnings))
+            .iter()
+            .map(face)
+            .collect();
+        if faces.is_empty() {
+            continue;
+        }
+        let z = if front {
+            physical.copper_z[0].1 + PASTE_ABOVE_COPPER
+        } else {
+            physical.copper_z[last].0 - PASTE_ABOVE_COPPER
+        };
+        layers.push(PasteLayer { front, z, faces });
+    }
+    layers
+}
+
+/// `PAD::GetSolderPasteMargin`: the margin on each axis.
+fn paste_margin(board: &Board, pad: &crate::board::Pad) -> Vec2 {
+    let margin = pad.paste_margin.unwrap_or(board.paste_margin);
+    let ratio = pad.paste_ratio.unwrap_or(board.paste_ratio);
+    Vec2::new(
+        (margin + pad.size.x * ratio).max(-pad.size.x * 0.5),
+        (margin + pad.size.y * ratio).max(-pad.size.y * 0.5),
+    )
+}
+
+/// An even margin offsets the outline; an uneven one resizes the pad.
+fn paste_aperture(
+    board: &Board,
+    frame: Frame,
+    pad: &crate::board::Pad,
+    margin: Vec2,
+    warnings: &mut Vec<String>,
+) -> Option<Vec<ContourBuf>> {
+    use crate::board::PadShape;
+    let custom = matches!(pad.shape, PadShape::Custom { .. });
+    if margin.x.abs().max(margin.y.abs()) < 1e-9 {
+        return pad_outline(board, frame, pad, warnings).map(|e| vec![contour(&e)]);
+    }
+    let even = (margin.x - margin.y).abs() < 1e-9;
+    if even || custom {
+        // Custom pads take the x margin on both axes.
+        if let Some(edges) = grown_pad_outline(pad, frame, margin.x) {
+            return Some(vec![contour(&edges)]);
+        }
+        let exact = contour(&pad_outline(board, frame, pad, warnings)?);
+        let grown = ContourSet::from_contours(
+            std::slice::from_ref(&exact),
+            FillRule::NonZero,
+            resolution(),
+        )
+        .and_then(|set| {
+            if margin.x > 0.0 {
+                set.disk_dilate(margin.x)
+            } else {
+                set.disk_erode(-margin.x)
+            }
+        });
+        return Some(match grown {
+            Ok(set) => set.to_contours(),
+            Err(_) => vec![exact],
+        });
+    }
+    let mut resized = pad.clone();
+    resized.size = Vec2::new(pad.size.x + 2.0 * margin.x, pad.size.y + 2.0 * margin.y);
+    if resized.size.x <= 1e-9 || resized.size.y <= 1e-9 {
+        return None;
+    }
+    pad_outline(board, frame, &resized, warnings).map(|e| vec![contour(&e)])
 }

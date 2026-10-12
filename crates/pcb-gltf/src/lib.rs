@@ -1,7 +1,7 @@
 //! KiCad PCB to glTF 2.0 binary (GLB) export: the assembly `pcb-step`
 //! writes as STEP, as triangle meshes. The board comes from the same
-//! [`Scene`]; each distinct embedded STEP model is tessellated once with
-//! foxtrot and placed by every footprint that uses it.
+//! [`Scene`]; each distinct STEP model is tessellated once with foxtrot,
+//! or VRML model read, and placed by every footprint that uses it.
 //!
 //! The output frame is the STEP frame converted to glTF's: metres, y up.
 
@@ -9,6 +9,7 @@ mod board;
 mod glb;
 mod mesh;
 mod models;
+mod wrl;
 
 use std::io::Write;
 
@@ -30,27 +31,23 @@ pub fn export(
     let mut scene = Scene::components(board, options, &mut report.warnings);
     let mut layer_warnings = Vec::new();
     let board_pool = rayon::ThreadPoolBuilder::new().build()?;
-    let (layers, mut models) = rayon::join(
+    let (built, mut models) = rayon::join(
         || -> Result<_> {
             board_pool.install(|| {
-                let layers = Scene::layers(board, options, &mut layer_warnings)?;
-                let meshes = board::mesh(&layers);
-                Ok((layers, meshes))
+                let built = Scene::layers(board, options, &mut layer_warnings)?;
+                let meshes = board::mesh(&built.layers);
+                Ok((built, meshes))
             })
         },
-        || models::tessellate(board, &scene),
+        || models::tessellate(board, options, &scene),
     );
     report.warnings.append(&mut layer_warnings);
     report.warnings.append(&mut models.report.warnings);
     report.failed_models += models.report.failed_models;
-    let (layers, meshes) = layers?;
-    scene.layers = layers;
-    glb::write(
-        &options.name,
-        &scene,
-        board.copper_color(),
-        &meshes,
-        &models,
-        sink,
-    )
+    let (built, meshes) = built?;
+    scene.layers = built.layers;
+    scene.synthetic_outline = built.synthetic_outline;
+    scene.resolve(board, options, &models.outcomes);
+    report.coverage = scene.coverage.clone();
+    glb::write(board, options, &scene, &meshes, &models, sink)
 }

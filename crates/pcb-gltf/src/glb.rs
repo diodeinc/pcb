@@ -6,6 +6,7 @@
 //! buffer is compressed with `EXT_meshopt_compression`. A root node converts
 //! the millimetre, z-up scene to glTF's metres, y up.
 
+use std::collections::HashMap;
 use std::f64::consts::FRAC_PI_2;
 use std::io::Write;
 
@@ -17,6 +18,7 @@ use meshopt_rs::vertex::VertexEncodingVersion;
 use meshopt_rs::vertex::buffer::{encode_vertex_buffer, encode_vertex_buffer_bound};
 use meshopt_rs::vertex::filter::encode_filter_oct_8;
 use pcb_step::scene::{Layer, LayerKind, Scene};
+use pcb_step::{Board, Options};
 use rayon::prelude::*;
 use serde_json::{Value, json};
 
@@ -72,6 +74,7 @@ fn layer_material(layer: &Layer, copper: [f64; 3]) -> Material {
         LayerKind::Copper | LayerKind::Pads | LayerKind::Vias => (0.0, 0.4),
         LayerKind::Silkscreen { .. } => (0.0, 0.9),
         LayerKind::Soldermask { .. } => (0.0, 0.4),
+        LayerKind::Paste { .. } => (0.0, 0.7),
     };
     let srgb = if layer.kind.is_copper() {
         copper
@@ -80,7 +83,16 @@ fn layer_material(layer: &Layer, copper: [f64; 3]) -> Material {
     };
     let [r, g, b] = srgb.map(|c| srgb_to_linear(c as f32));
     Material {
-        color: [r, g, b, 1.0 - layer.transparency.unwrap_or(0.0) as f32],
+        // Opaque silkscreen, as in KiCad's VRML export.
+        color: [
+            r,
+            g,
+            b,
+            match layer.kind {
+                LayerKind::Silkscreen { .. } => 1.0,
+                _ => 1.0 - layer.transparency.unwrap_or(0.0) as f32,
+            },
+        ],
         metallic,
         roughness,
         double_sided: false,
@@ -108,32 +120,49 @@ fn srgb_to_linear(c: f32) -> f32 {
 }
 
 /// The 16-bit grid a mesh's positions are snapped to: a position is
-/// `origin + q * step`. One step on every axis keeps the dequantization a
-/// uniform scale, which instance transforms can absorb.
+/// `origin + q * step`. A model's step is uniform so instance transforms
+/// can absorb it; the board's vertical step is its own, or a wide board
+/// would merge mask and copper.
 #[derive(Clone, Copy)]
 struct Grid {
     origin: DVec3,
-    step: f64,
+    step: DVec3,
 }
 
 impl Grid {
-    fn of<'a>(primitives: impl IntoIterator<Item = &'a Primitive>) -> Self {
+    fn bounds<'a>(primitives: impl IntoIterator<Item = &'a Primitive>) -> (DVec3, DVec3) {
         let (mut lo, mut hi) = (DVec3::INFINITY, DVec3::NEG_INFINITY);
         for p in primitives.into_iter().flat_map(|p| &p.positions) {
             let p = DVec3::from(p.map(f64::from));
             lo = lo.min(p);
             hi = hi.max(p);
         }
+        (lo, hi)
+    }
+
+    fn of<'a>(primitives: impl IntoIterator<Item = &'a Primitive>) -> Self {
+        let (lo, hi) = Self::bounds(primitives);
         let extent = (hi - lo).max_element();
         Grid {
             origin: lo,
-            step: if extent > 0.0 { extent / 65535.0 } else { 1.0 },
+            step: DVec3::splat(if extent > 0.0 { extent / 65535.0 } else { 1.0 }),
+        }
+    }
+
+    fn of_board<'a>(primitives: impl IntoIterator<Item = &'a Primitive>) -> Self {
+        let (lo, hi) = Self::bounds(primitives);
+        let d = hi - lo;
+        let step = |extent: f64| if extent > 0.0 { extent / 65535.0 } else { 1.0 };
+        let xy = step(d.x.max(d.y));
+        Grid {
+            origin: lo,
+            step: DVec3::new(xy, xy, step(d.z)),
         }
     }
 
     /// Grid units to millimetres.
     fn matrix(&self) -> DMat4 {
-        DMat4::from_translation(self.origin) * DMat4::from_scale(DVec3::splat(self.step))
+        DMat4::from_translation(self.origin) * DMat4::from_scale(self.step)
     }
 }
 
@@ -175,7 +204,12 @@ fn encode(primitive: &Primitive, grid: Grid, flat: bool) -> Encoded {
         let unit: Vec<[f32; 4]> = primitive
             .normals
             .iter()
-            .map(|&[x, y, z]| [x, y, z, 0.0])
+            .map(|&[x, y, z]| {
+                // Loaders apply the inverse of the node's (uneven) scale.
+                let n = DVec3::new(x as f64, y as f64, z as f64) * grid.step;
+                let n = (n / grid.step.max_element()).normalize_or_zero().as_vec3();
+                [n.x, n.y, n.z, 0.0]
+            })
             .collect();
         let mut normals = vec![[0u8; 4]; unit.len()];
         encode_filter_oct_8(normals.iter_mut(), 8, unit.iter());
@@ -357,21 +391,25 @@ fn matrix(m: DMat4) -> Value {
     json!(m.to_cols_array())
 }
 
+const PROXY_COLOR: [f32; 4] = [0.85, 0.35, 0.2, 0.6];
+
 pub(crate) fn write(
-    name: &str,
+    board: &Board,
+    options: &Options,
     scene: &Scene,
-    copper: [f64; 3],
     layers: &[Primitive],
     models: &Models,
     sink: &mut dyn Write,
 ) -> Result<()> {
-    let board: Vec<(&Layer, &Primitive)> = scene
+    let name = options.name.as_str();
+    let copper = board.copper_color();
+    let board_layers: Vec<(&Layer, &Primitive)> = scene
         .layers
         .iter()
         .zip(layers)
         .filter(|(_, primitive)| !primitive.is_empty())
         .collect();
-    let board_grid = Grid::of(board.iter().map(|(_, p)| *p));
+    let board_grid = Grid::of_board(board_layers.iter().map(|(_, p)| *p));
     let model_grids: Vec<Grid> = models
         .meshes
         .iter()
@@ -382,7 +420,7 @@ pub(crate) fn write(
     // but the body is flat.
     let (board_encoded, model_encoded): (Vec<Encoded>, Vec<Vec<Encoded>>) = rayon::join(
         || {
-            board
+            board_layers
                 .par_iter()
                 .map(|(layer, p)| encode(p, board_grid, layer.kind != LayerKind::Body))
                 .collect()
@@ -407,28 +445,55 @@ pub(crate) fn write(
     let mut nodes = vec![Value::Null];
     let mut children = Vec::new();
 
-    if !board.is_empty() {
-        let primitives: Vec<Value> = board
+    if !board_layers.is_empty() {
+        let primitives: Vec<Value> = board_layers
             .iter()
             .zip(&board_encoded)
-            .map(|((layer, _), encoded)| gltf.primitive(encoded, layer_material(layer, copper)))
+            .map(|((layer, _), encoded)| {
+                let mut primitive = gltf.primitive(encoded, layer_material(layer, copper));
+                primitive["extras"] = layer_extras(layer);
+                primitive
+            })
             .collect();
         meshes.push(json!({ "name": format!("{name}_PCB"), "primitives": primitives }));
         nodes.push(json!({ "name": "PCB", "mesh": 0, "matrix": matrix(board_grid.matrix()) }));
         children.push(nodes.len() - 1);
     }
 
-    // Each model's placements, in footprint order.
-    let mut instances: Vec<Vec<(&str, DMat4)>> = vec![Vec::new(); models.meshes.len()];
+    struct Placement<'a> {
+        reference: &'a str,
+        coverage: Option<usize>,
+        matrix: DMat4,
+    }
+    let mut instances: Vec<Vec<Placement>> = (0..models.meshes.len()).map(|_| Vec::new()).collect();
     for component in &scene.components {
         if let Some(mesh) = models.of_model[component.model] {
             let scale = scene.models[component.model].scale;
-            let placement = component.transform
-                * DMat4::from_scale(DVec3::splat(scale))
-                * model_grids[mesh].matrix();
-            instances[mesh].push((&component.reference, placement));
+            // Scale precedes rotation, so this decomposes without shear.
+            let matrix =
+                component.transform * DMat4::from_scale(scale) * model_grids[mesh].matrix();
+            instances[mesh].push(Placement {
+                reference: &component.reference,
+                coverage: Some(component.coverage),
+                matrix,
+            });
         }
     }
+    let mut drawn: HashMap<usize, Value> = HashMap::new();
+    let instancing = |gltf: &mut Gltf, placements: &[Placement]| {
+        let (mut translations, mut rotations, mut scales) = (Vec::new(), Vec::new(), Vec::new());
+        for placement in placements {
+            let (scale, rotation, translation) = placement.matrix.to_scale_rotation_translation();
+            translations.push(translation.as_vec3().to_array());
+            rotations.push(rotation.normalize().as_quat().to_array());
+            scales.push(scale.as_vec3().to_array());
+        }
+        json!({
+            "TRANSLATION": gltf.floats(&translations, "VEC3"),
+            "ROTATION": gltf.floats(&rotations, "VEC4"),
+            "SCALE": gltf.floats(&scales, "VEC3"),
+        })
+    };
     for ((mesh, encoded), placements) in models.meshes.iter().zip(&model_encoded).zip(&instances) {
         let primitives: Vec<Value> = mesh
             .primitives
@@ -437,23 +502,42 @@ pub(crate) fn write(
             .map(|((color, _), encoded)| gltf.primitive(encoded, model_material(*color)))
             .collect();
         meshes.push(json!({ "name": mesh.name, "primitives": primitives }));
-        // Placements are rotations with uniform scale, so each is exactly a
-        // translation, rotation and scale.
-        let (mut translations, mut rotations, mut scales) = (Vec::new(), Vec::new(), Vec::new());
-        for (_, placement) in placements {
-            let (scale, rotation, translation) = placement.to_scale_rotation_translation();
-            translations.push(translation.as_vec3().to_array());
-            rotations.push(rotation.normalize().as_quat().to_array());
-            scales.push(scale.as_vec3().to_array());
+        let attributes = instancing(&mut gltf, placements);
+        let references: Vec<&str> = placements.iter().map(|p| p.reference).collect();
+        let node = nodes.len();
+        for (index, placement) in placements.iter().enumerate() {
+            if let Some(c) = placement.coverage {
+                drawn.insert(c, json!({ "node": node, "index": index }));
+            }
         }
-        let attributes = json!({
-            "TRANSLATION": gltf.floats(&translations, "VEC3"),
-            "ROTATION": gltf.floats(&rotations, "VEC4"),
-            "SCALE": gltf.floats(&scales, "VEC3"),
-        });
-        let references: Vec<&str> = placements.iter().map(|(r, _)| *r).collect();
         nodes.push(json!({
             "name": mesh.name,
+            "mesh": meshes.len() - 1,
+            "extensions": { INSTANCING: { "attributes": attributes } },
+            "extras": { "references": references },
+        }));
+        children.push(node);
+    }
+
+    if !scene.proxies.is_empty() {
+        let cube = Primitive::unit_cube();
+        let grid = Grid::of([&cube]);
+        let encoded = encode(&cube, grid, false);
+        let primitive = gltf.primitive(&encoded, model_material(PROXY_COLOR));
+        meshes.push(json!({ "name": "proxy", "primitives": [primitive] }));
+        let placements: Vec<Placement> = scene
+            .proxies
+            .iter()
+            .map(|proxy| Placement {
+                reference: &proxy.reference,
+                coverage: None,
+                matrix: proxy.transform * grid.matrix(),
+            })
+            .collect();
+        let attributes = instancing(&mut gltf, &placements);
+        let references: Vec<&str> = placements.iter().map(|p| p.reference).collect();
+        nodes.push(json!({
+            "name": "proxy",
             "mesh": meshes.len() - 1,
             "extensions": { INSTANCING: { "attributes": attributes } },
             "extras": { "references": references },
@@ -467,7 +551,15 @@ pub(crate) fn write(
 
     // Millimetres to metres, then z up to y up.
     let root = DMat4::from_rotation_x(-FRAC_PI_2) * DMat4::from_scale(DVec3::splat(0.001));
-    nodes[0] = json!({ "name": name, "matrix": matrix(root), "children": children });
+    let manifest = pcb_step::manifest::manifest(board, options, scene, &|coverage| {
+        drawn.get(&coverage).cloned()
+    });
+    nodes[0] = json!({
+        "name": name,
+        "matrix": matrix(root),
+        "children": children,
+        "extras": { "pcb": manifest },
+    });
 
     let extensions = [MESHOPT, QUANTIZATION, INSTANCING];
     let document = json!({
@@ -504,4 +596,20 @@ pub(crate) fn write(
     sink.write_all(b"BIN\0")?;
     sink.write_all(&gltf.bin)?;
     Ok(())
+}
+
+fn layer_extras(layer: &Layer) -> Value {
+    let (kind, side) = match layer.kind {
+        LayerKind::Body => ("body", None),
+        LayerKind::Copper => ("copper", None),
+        LayerKind::Pads => ("pads", None),
+        LayerKind::Vias => ("vias", None),
+        LayerKind::Silkscreen { front } => ("silkscreen", Some(front)),
+        LayerKind::Soldermask { front } => ("soldermask", Some(front)),
+        LayerKind::Paste { front } => ("paste", Some(front)),
+    };
+    json!({
+        "layer": kind,
+        "side": side.map(|front| if front { "front" } else { "back" }),
+    })
 }

@@ -70,6 +70,7 @@ pub(crate) fn build(
     frame: Frame,
     physical: &Physical,
     options: CopperOptions,
+    clip: Option<&crate::faces::BoardEdge>,
     warnings: &mut Vec<String>,
 ) -> Copper {
     let mut copper = Copper::default();
@@ -78,10 +79,12 @@ pub(crate) fn build(
     if mask == 0 {
         return copper;
     }
+    let clip = clip.and_then(|edge| edge.region(warnings).map(|region| Clip { edge, region }));
     let layout = Layout {
         board,
         frame,
         physical,
+        clip,
         connectivity: Connectivity::new(board, frame),
         mask,
         last,
@@ -101,7 +104,12 @@ pub(crate) fn build(
             })
             .collect();
         for (solids, cut, notes) in results {
-            copper.pads.extend(solids);
+            match &layout.clip {
+                Some(clip) => copper
+                    .pads
+                    .extend(solids.into_iter().flat_map(|prism| clip_prism(clip, prism))),
+                None => copper.pads.extend(solids),
+            }
             for (layer, c) in cut {
                 knockouts.pads[layer as usize].push(c);
             }
@@ -123,7 +131,10 @@ pub(crate) fn build(
                 physical.copper_z[bottom as usize].0,
                 physical.copper_z[top as usize].1,
             ) {
-                copper.vias.push(tube);
+                match &layout.clip {
+                    Some(clip) => copper.vias.extend(clip_prism(clip, tube)),
+                    None => copper.vias.push(tube),
+                }
             }
         }
     }
@@ -143,8 +154,21 @@ pub(crate) fn build(
     copper
 }
 
+struct Clip<'a> {
+    edge: &'a crate::faces::BoardEdge,
+    region: ContourSet,
+}
+
+impl Clip<'_> {
+    /// Whether copper spanning `bbox` may lie off the board.
+    fn needed(&self, bbox: (Vec2, Vec2)) -> bool {
+        self.edge.meets(bbox) || !self.edge.contains(bbox.0)
+    }
+}
+
 /// What every copper solid is built from.
 struct Layout<'a> {
+    clip: Option<Clip<'a>>,
     board: &'a Board<'a>,
     frame: Frame,
     physical: &'a Physical,
@@ -878,6 +902,7 @@ struct Group {
     tracks: Vec<usize>,
     fills: Vec<usize>,
     vias: Vec<usize>,
+    shapes: Vec<usize>,
 }
 
 fn group_by_layer_and_net(board: &Board, options: CopperOptions, mask: u64) -> Vec<Group> {
@@ -892,6 +917,7 @@ fn group_by_layer_and_net(board: &Board, options: CopperOptions, mask: u64) -> V
                     tracks: Vec::new(),
                     fills: Vec::new(),
                     vias: Vec::new(),
+                    shapes: Vec::new(),
                 });
                 groups.len() - 1
             }
@@ -913,6 +939,16 @@ fn group_by_layer_and_net(board: &Board, options: CopperOptions, mask: u64) -> V
             }
         }
     }
+    if options.tracks {
+        for (i, shape) in board.shapes.iter().enumerate() {
+            if let crate::board::Tech::Copper(layer) = shape.layer
+                && mask & (1 << layer.min(63)) != 0
+            {
+                let g = find(layer as u32, 0, &mut groups);
+                groups[g].shapes.push(i);
+            }
+        }
+    }
     if options.zones {
         for (i, f) in board.fills.iter().enumerate() {
             if mask & (1 << f.layer.min(63)) != 0 {
@@ -922,7 +958,9 @@ fn group_by_layer_and_net(board: &Board, options: CopperOptions, mask: u64) -> V
         }
     }
     // Largest groups first so the thread pool tails off evenly.
-    groups.sort_by_key(|g| std::cmp::Reverse(g.tracks.len() + g.fills.len() * 8 + g.vias.len()));
+    groups.sort_by_key(|g| {
+        std::cmp::Reverse(g.tracks.len() + g.fills.len() * 8 + g.vias.len() + g.shapes.len())
+    });
     groups
 }
 
@@ -1114,6 +1152,9 @@ fn island_solids(
             contours.push(c);
         }
     }
+    for &i in &group.shapes {
+        crate::faces::shape_contours(board, frame, &board.shapes[i], &mut contours);
+    }
     for &i in &group.vias {
         let via: &Via = &board.vias[i];
         if via.size <= via.drill {
@@ -1179,6 +1220,17 @@ fn island_solids(
             }
         }
     };
+    let region = match &layout.clip {
+        Some(clip) => {
+            let bbox = region_bbox(&region);
+            if clip.needed(bbox) {
+                or_unclipped(region.intersection(&clip.region), region, &mut warnings)
+            } else {
+                region
+            }
+        }
+        None => region,
+    };
     let (z0, z1) = physical.copper_z[group.layer as usize];
     let solids = loops_of(&region)
         .into_iter()
@@ -1193,6 +1245,61 @@ fn island_solids(
         })
         .collect();
     (solids, warnings)
+}
+
+fn region_bbox(region: &ContourSet) -> (Vec2, Vec2) {
+    let rings = polygons_of(region);
+    rings.iter().flatten().fold(
+        (Vec2::splat(f64::INFINITY), Vec2::splat(f64::NEG_INFINITY)),
+        |(lo, hi), p| (lo.min(*p), hi.max(*p)),
+    )
+}
+
+fn or_unclipped(
+    result: Result<ContourSet, pcb_ir::geom::AccuracyError>,
+    unclipped: ContourSet,
+    warnings: &mut Vec<String>,
+) -> ContourSet {
+    result.unwrap_or_else(|err| {
+        warnings.push(format!(
+            "copper could not be cut to the board outline: {err}"
+        ));
+        unclipped
+    })
+}
+
+fn clip_prism(clip: &Clip, prism: Prism) -> Vec<Prism> {
+    let (lo, hi) = prism.solid.outer.bbox();
+    if !clip.needed((lo, hi)) && clip.edge.contains(hi) {
+        return vec![prism];
+    }
+    let mut contours = vec![contour(&orient(prism.solid.outer.edges.clone(), true))];
+    contours.extend(
+        prism
+            .solid
+            .holes
+            .iter()
+            .map(|h| contour(&orient(h.edges.clone(), false))),
+    );
+    let Ok(region) = ContourSet::from_contours(&contours, FillRule::NonZero, resolution()) else {
+        return vec![prism];
+    };
+    let Ok(clipped) = region.intersection(&clip.region) else {
+        return vec![prism];
+    };
+    let (z0, z1) = (prism.z0, prism.z1);
+    loops_of(&clipped)
+        .into_iter()
+        .map(|(outer, holes)| Prism {
+            z0,
+            z1,
+            solid: Solid {
+                outer,
+                holes,
+                round: Vec::new(),
+            },
+        })
+        .collect()
 }
 
 /// Subtract a hole loop from an outline loop in 2D.

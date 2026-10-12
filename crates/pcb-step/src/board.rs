@@ -42,6 +42,8 @@ pub struct Board<'a> {
     pub(crate) texts: Vec<Text>,
     /// Solder mask expansion around pads from `(setup ...)`, in mm.
     pub(crate) mask_expansion: f64,
+    pub(crate) paste_margin: f64,
+    pub(crate) paste_ratio: f64,
     /// Dash and gap lengths of dashed strokes as multiples of the stroke
     /// width, from the plot parameters.
     pub(crate) dash_ratio: f64,
@@ -49,7 +51,7 @@ pub struct Board<'a> {
     /// Whether vias are tented by default on the front and back.
     pub(crate) tent: [bool; 2],
     /// Net ids by the name or number written in the file; 0 is no net.
-    nets: std::collections::HashMap<&'a str, u32>,
+    pub(crate) nets: std::collections::HashMap<&'a str, u32>,
 }
 
 /// A layer drawn on the outside of the board.
@@ -59,6 +61,8 @@ pub(crate) enum Tech {
     BackSilk,
     FrontMask,
     BackMask,
+    /// Index among the copper layers.
+    Copper(u8),
 }
 
 impl Tech {
@@ -70,6 +74,15 @@ impl Tech {
             "B.Mask" => Some(Self::BackMask),
             _ => None,
         }
+    }
+
+    fn of_layer(name: &str, copper: &[&str]) -> Option<Self> {
+        Self::from_layer(name).or_else(|| {
+            copper
+                .iter()
+                .position(|c| *c == name)
+                .map(|i| Self::Copper(i.min(62) as u8))
+        })
     }
 
     pub(crate) fn front(self) -> bool {
@@ -196,12 +209,28 @@ pub(crate) struct StackLayer {
 
 pub(crate) struct Footprint<'a> {
     pub(crate) reference: &'a str,
+    pub(crate) lib_id: Cow<'a, str>,
+    pub(crate) value: Cow<'a, str>,
+    pub(crate) uuid: &'a str,
     pub(crate) at: Vec2,
     pub(crate) rotation: f64,
     pub(crate) back: bool,
     pub(crate) dnp: bool,
-    pub(crate) unspecified: bool,
+    pub(crate) mount: Mount,
+    pub(crate) exclude_from_bom: bool,
+    pub(crate) exclude_from_pos: bool,
+    pub(crate) board_only: bool,
+    pub(crate) nets: Vec<&'a str>,
+    /// Pad bounds in the footprint's own frame.
+    pub(crate) extent: Option<(Vec2, Vec2)>,
     pub(crate) models: std::ops::Range<u32>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Mount {
+    Smd,
+    ThroughHole,
+    Unspecified,
 }
 
 /// The front and back answer of a `(tenting ...)`-style setting, in the
@@ -231,6 +260,7 @@ fn parse_front_back<'a>(p: &mut Parser<'a>) -> Result<[Option<bool>; 2], Error> 
 
 pub(crate) struct ModelRef<'a> {
     pub(crate) name: &'a str,
+    pub(crate) hidden: bool,
     pub(crate) offset: Vec3,
     pub(crate) rotate: Vec3,
     pub(crate) scale: Vec3,
@@ -296,6 +326,10 @@ pub(crate) struct Pad {
     pub(crate) mask: [bool; 2],
     /// Its own or its footprint's mask margin; the board's applies otherwise.
     pub(crate) mask_margin: Option<f64>,
+    pub(crate) paste: [bool; 2],
+    /// Its own or its footprint's; the board's applies otherwise.
+    pub(crate) paste_margin: Option<f64>,
+    pub(crate) paste_ratio: Option<f64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -487,6 +521,8 @@ impl<'a> Board<'a> {
             shape_points: Vec::new(),
             texts: Vec::new(),
             mask_expansion: 0.0,
+            paste_margin: 0.0,
+            paste_ratio: 0.0,
             dash_ratio: DEFAULT_DASH_RATIO,
             gap_ratio: DEFAULT_GAP_RATIO,
             tent: [false; 2],
@@ -525,9 +561,16 @@ impl<'a> Board<'a> {
                     parse_text_box(&mut p, 0.0, &mut board.texts, shapes, points)?;
                 }
                 _ => {
-                    let mut shapes =
-                        graphics.then_some((&mut board.shapes, &mut board.shape_points));
-                    parse_graphic(&mut p, name, "gr_", &mut board.edges, &mut shapes)?
+                    let mut shapes = (graphics || copper)
+                        .then_some((&mut board.shapes, &mut board.shape_points));
+                    parse_graphic(
+                        &mut p,
+                        name,
+                        "gr_",
+                        &board.copper_layers,
+                        &mut board.edges,
+                        &mut shapes,
+                    )?
                 }
             }
         }
@@ -602,6 +645,14 @@ impl<'a> Board<'a> {
                 }
                 "pad_to_mask_clearance" => {
                     self.mask_expansion = p.f64("pad_to_mask_clearance")?;
+                    p.skip()?;
+                }
+                "pad_to_paste_clearance" => {
+                    self.paste_margin = p.f64("pad_to_paste_clearance")?;
+                    p.skip()?;
+                }
+                "pad_to_paste_clearance_ratio" => {
+                    self.paste_ratio = p.f64("pad_to_paste_clearance_ratio")?;
                     p.skip()?;
                 }
                 "tenting" => {
@@ -700,14 +751,22 @@ impl<'a> Board<'a> {
         p: &mut Parser<'a>,
         scratch: &mut FootprintScratch<'a>,
     ) -> Result<(), Error> {
-        p.atom()?; // library id
+        let lib_id = p.atom()?.map(unescape).unwrap_or(Cow::Borrowed(""));
         let mut fp = Footprint {
             reference: "",
+            lib_id,
+            value: Cow::Borrowed(""),
+            uuid: "",
             at: Vec2::ZERO,
             rotation: 0.0,
             back: false,
             dnp: false,
-            unspecified: true,
+            mount: Mount::Unspecified,
+            exclude_from_bom: false,
+            exclude_from_pos: false,
+            board_only: false,
+            nets: Vec::new(),
+            extent: None,
             models: self.models.len() as u32..self.models.len() as u32,
         };
         scratch.holes.clear();
@@ -718,6 +777,8 @@ impl<'a> Board<'a> {
         scratch.texts.clear();
         scratch.value = Cow::Borrowed("");
         let mut mask_margin = None;
+        let mut paste_margin = None;
+        let mut paste_ratio = None;
 
         while let Some(name) = p.open()? {
             match name {
@@ -730,11 +791,19 @@ impl<'a> Board<'a> {
                     fp.back = p.atom()?.is_some_and(|l| l.starts_with("B."));
                     p.skip()?;
                 }
+                "uuid" | "tstamp" => {
+                    fp.uuid = p.atom()?.unwrap_or("");
+                    p.skip()?;
+                }
                 "attr" => {
                     while let Some(a) = p.atom()? {
                         match a {
-                            "smd" | "through_hole" => fp.unspecified = false,
+                            "smd" => fp.mount = Mount::Smd,
+                            "through_hole" => fp.mount = Mount::ThroughHole,
                             "dnp" => fp.dnp = true,
+                            "exclude_from_bom" => fp.exclude_from_bom = true,
+                            "exclude_from_pos_files" => fp.exclude_from_pos = true,
+                            "board_only" => fp.board_only = true,
                             _ => {}
                         }
                     }
@@ -777,6 +846,14 @@ impl<'a> Board<'a> {
                     mask_margin = Some(p.f64("solder_mask_margin")?);
                     p.skip()?;
                 }
+                "solder_paste_margin" => {
+                    paste_margin = Some(p.f64("solder_paste_margin")?);
+                    p.skip()?;
+                }
+                "solder_paste_ratio" => {
+                    paste_ratio = Some(p.f64("solder_paste_ratio")?);
+                    p.skip()?;
+                }
                 "pad" => {
                     let (hole, pad) = parse_pad(
                         p,
@@ -795,6 +872,14 @@ impl<'a> Board<'a> {
                         hole.net = net;
                         scratch.holes.push(hole);
                     }
+                    if let Some((pad, net)) = &pad {
+                        if let Some(net) = net.filter(|n| !n.is_empty() && *n != "0")
+                            && !fp.nets.contains(&net)
+                        {
+                            fp.nets.push(net);
+                        }
+                        grow_extent(&mut fp.extent, pad, fp.rotation);
+                    }
                     // Pads are copper, and also what opens the mask.
                     if let Some((mut pad, _)) = pad
                         && (scratch.copper || scratch.graphics)
@@ -810,10 +895,16 @@ impl<'a> Board<'a> {
                 }
                 "embedded_files" => self.parse_embedded_files(p)?,
                 _ => {
-                    let mut shapes = scratch
-                        .graphics
+                    let mut shapes = (scratch.graphics || scratch.copper)
                         .then_some((&mut scratch.shapes, &mut scratch.shape_points));
-                    parse_graphic(p, name, "fp_", &mut scratch.edges, &mut shapes)?
+                    parse_graphic(
+                        p,
+                        name,
+                        "fp_",
+                        &self.copper_layers,
+                        &mut scratch.edges,
+                        &mut shapes,
+                    )?
                 }
             }
         }
@@ -887,10 +978,13 @@ impl<'a> Board<'a> {
             self.pads.push(Pad {
                 at: place(pad.at),
                 mask_margin: pad.mask_margin.or(mask_margin),
+                paste_margin: pad.paste_margin.or(paste_margin),
+                paste_ratio: pad.paste_ratio.or(paste_ratio),
                 ..pad.clone()
             });
         }
         fp.models.end = self.models.len() as u32;
+        fp.value = std::mem::take(&mut scratch.value);
         self.footprints.push(fp);
         Ok(())
     }
@@ -1319,6 +1413,9 @@ fn parse_pad<'a>(
     let mut machining = Machining::default();
     let mut mask = [false; 2];
     let mut mask_margin = None;
+    let mut paste = [false; 2];
+    let mut paste_margin = None;
+    let mut paste_ratio = None;
     let first_primitive = primitives.len() as u32;
     while let Some(name) = p.open()? {
         match name {
@@ -1335,11 +1432,16 @@ fn parse_pad<'a>(
                         "F.Mask" => mask[0] = true,
                         "B.Mask" => mask[1] = true,
                         "*.Mask" | "F&B.Mask" => mask = [true; 2],
+                        "F.Paste" => paste[0] = true,
+                        "B.Paste" => paste[1] = true,
+                        "*.Paste" | "F&B.Paste" => paste = [true; 2],
                         _ => {}
                     }
                 }
             }
             "solder_mask_margin" => mask_margin = Some(p.f64("solder_mask_margin")?),
+            "solder_paste_margin" => paste_margin = Some(p.f64("solder_paste_margin")?),
+            "solder_paste_margin_ratio" => paste_ratio = Some(p.f64("solder_paste_margin_ratio")?),
             "rect_delta" => {
                 if let PadShape::Trapezoid { delta } = &mut shape {
                     *delta = p.xy("rect_delta")?;
@@ -1432,7 +1534,9 @@ fn parse_pad<'a>(
             net: 0,
         }
     });
-    let pad = (layers != 0 && size.x > 0.0 && size.y > 0.0).then_some(Pad {
+    // A pad on the mask or paste layers alone still opens them.
+    let has_aperture = mask.contains(&true) || paste.contains(&true);
+    let pad = ((layers != 0 || has_aperture) && size.x > 0.0 && size.y > 0.0).then_some(Pad {
         at,
         rotation,
         shape,
@@ -1448,6 +1552,9 @@ fn parse_pad<'a>(
         primitives: first_primitive..primitives.len() as u32,
         mask,
         mask_margin,
+        paste,
+        paste_margin,
+        paste_ratio,
     });
     Ok((hole, pad.map(|pad| (pad, net_atom))))
 }
@@ -1628,6 +1735,26 @@ fn parse_machining(
     }
 }
 
+fn grow_extent(extent: &mut Option<(Vec2, Vec2)>, pad: &Pad, footprint_rotation: f64) {
+    let relative = (pad.rotation - footprint_rotation).to_radians();
+    let half = pad.size * 0.5;
+    let (sin, cos) = relative.sin_cos();
+    let hx = (half.x * cos).abs() + (half.y * sin).abs();
+    let hy = (half.x * sin).abs() + (half.y * cos).abs();
+    let center = pad.at + rotate_kicad(pad.offset, relative.to_degrees());
+    let (lo, hi) = (
+        Vec2::new(center.x - hx, center.y - hy),
+        Vec2::new(center.x + hx, center.y + hy),
+    );
+    *extent = Some(match *extent {
+        None => (lo, hi),
+        Some((a, b)) => (
+            Vec2::new(a.x.min(lo.x), a.y.min(lo.y)),
+            Vec2::new(b.x.max(hi.x), b.y.max(hi.y)),
+        ),
+    });
+}
+
 fn parse_model<'a>(p: &mut Parser<'a>) -> Result<Option<ModelRef<'a>>, Error> {
     let Some(name) = p.atom()? else {
         p.skip()?;
@@ -1635,6 +1762,7 @@ fn parse_model<'a>(p: &mut Parser<'a>) -> Result<Option<ModelRef<'a>>, Error> {
     };
     let mut model = ModelRef {
         name,
+        hidden: false,
         offset: Vec3::ZERO,
         rotate: Vec3::ZERO,
         scale: Vec3::ONE,
@@ -1664,9 +1792,8 @@ fn parse_model<'a>(p: &mut Parser<'a>) -> Result<Option<ModelRef<'a>>, Error> {
         }
         p.skip()?;
     }
-    let lower = name.to_ascii_lowercase();
-    let is_step = lower.ends_with(".step") || lower.ends_with(".stp");
-    Ok((!hidden && is_step).then_some(model))
+    model.hidden = hidden;
+    Ok(Some(model))
 }
 
 /// One graphic item, appended to `out` as line and arc edges if it lies on
@@ -1678,6 +1805,7 @@ fn parse_graphic<'a>(
     p: &mut Parser<'a>,
     name: &str,
     prefix: &str,
+    copper_layers: &[&str],
     out: &mut Vec<RawEdge>,
     shapes: &mut Option<(&mut Vec<Shape>, &mut Vec<Vec2>)>,
 ) -> Result<(), Error> {
@@ -1709,7 +1837,7 @@ fn parse_graphic<'a>(
             "layer" => {
                 let layer = p.atom()?.unwrap_or("");
                 on_edge = layer == "Edge.Cuts";
-                tech = Tech::from_layer(layer);
+                tech = Tech::of_layer(layer, copper_layers);
             }
             "width" => width = p.f64("width")?,
             "stroke" => {

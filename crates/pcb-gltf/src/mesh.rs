@@ -66,6 +66,24 @@ impl Primitive {
         }
     }
 
+    pub(crate) fn unit_cube() -> Self {
+        let mut p = Self::default();
+        for axis in 0..3 {
+            let (u, v) = (DVec3::AXES[(axis + 1) % 3], DVec3::AXES[(axis + 2) % 3]);
+            for n in [DVec3::AXES[axis], -DVec3::AXES[axis]] {
+                let c = n * 0.5;
+                let corners = [
+                    c - (u + v) * 0.5,
+                    c + (u - v) * 0.5,
+                    c + (u + v) * 0.5,
+                    c - (u - v) * 0.5,
+                ];
+                p.quad(corners.map(|q| (q, n)), n);
+            }
+        }
+        p
+    }
+
     pub(crate) fn append(&mut self, other: Primitive) {
         let base = self.positions.len() as u32;
         self.positions.extend(other.positions);
