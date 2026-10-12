@@ -40,6 +40,8 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - `pcb import` keeps embedded 3D models in the footprints it generates.
 - `pcb import --force` no longer deletes a KiCad project that lives inside its output before reading it.
 - `pcb apply schematic` reads KiCad 10 project bus aliases, so it no longer adds labels to bus nets after a KiCad save.
+- `pcb apply schematic` keeps each generated module sheet's pins in step with the module's ios. It removes pins of ios that were removed, renamed by a swapped module or passed `NotConnected()`, together with their child hierarchical labels and parent labels. It adds pins for new ios on free points of the sheet edge instead of joining them through global labels, and moves pins stacked on one point, which KiCad shorts together.
+- `pcb apply schematic` names a module sheet after its path below the closest module with its own sheet, so instances of one module nested in modules without sheets no longer share a sheet name; existing duplicate names are renamed.
 - Schematic sheet paths written with Windows separators, including `..`, resolve as KiCad resolves them.
 - KiCad netlist (`.net`) libparts use the same part name as their components.
 - `pcb step export` accepts footprint text placed as `(at x y unlocked)`, as KiCad writes unrotated text.

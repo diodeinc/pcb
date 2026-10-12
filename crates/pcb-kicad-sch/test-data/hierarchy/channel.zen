@@ -1,0 +1,8 @@
+"""Unlinked module wrapping a linked filter."""
+
+Filter = Module("filter.zen")
+
+INPUT = io("INPUT", Net)
+OUTPUT = io("OUTPUT", Net)
+
+Filter(name="PROBE", resistance="1kohms", INPUT=INPUT, OUTPUT=OUTPUT)

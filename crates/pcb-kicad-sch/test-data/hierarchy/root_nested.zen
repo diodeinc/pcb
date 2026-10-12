@@ -1,0 +1,12 @@
+"""Two instances of an unlinked module that each hold the same linked child."""
+
+Project(name="Hierarchy", path="kicad", layout=False)
+
+Channel = Module("channel.zen")
+
+SOURCE = Net("SOURCE")
+MID = Net("MID")
+SINK = Net("SINK")
+
+Channel(name="CH1", INPUT=SOURCE, OUTPUT=MID)
+Channel(name="CH2", INPUT=MID, OUTPUT=SINK)
