@@ -157,3 +157,61 @@ pub fn chord_count(r: f64, sweep: f64, max_error: f64) -> usize {
     let step = 2.0 * (1.0 - max_error / r).clamp(-1.0, 1.0).acos();
     ((sweep.abs() / step.max(1e-3)).ceil() as usize).max(1)
 }
+
+/// Boxes bucketed on a square grid of about one cell per box, so a query
+/// visits only the boxes in the cells it touches, in ascending index
+/// order.
+pub(crate) struct BoxGrid {
+    lo: Vec2,
+    scale: Vec2,
+    side: usize,
+    cells: Vec<Vec<u32>>,
+}
+
+impl BoxGrid {
+    /// `boxes` as `(min, max)`, on at most `max_side` cells per side.
+    pub(crate) fn new(boxes: &[(Vec2, Vec2)], max_side: usize) -> Self {
+        let (lo, hi) = boxes.iter().fold(
+            (Vec2::splat(f64::INFINITY), Vec2::splat(f64::NEG_INFINITY)),
+            |(lo, hi), b| (lo.min(b.0), hi.max(b.1)),
+        );
+        let side = ((boxes.len() as f64).sqrt().ceil() as usize).clamp(1, max_side);
+        let scale = (hi - lo).max(Vec2::splat(1e-9)).recip() * side as f64;
+        let mut grid = BoxGrid {
+            lo,
+            scale,
+            side,
+            cells: vec![Vec::new(); side * side],
+        };
+        for (i, b) in boxes.iter().enumerate() {
+            let ((x0, y0), (x1, y1)) = (grid.coord(b.0), grid.coord(b.1));
+            for y in y0..=y1 {
+                for x in x0..=x1 {
+                    grid.cells[y * side + x].push(i as u32);
+                }
+            }
+        }
+        grid
+    }
+
+    fn coord(&self, p: Vec2) -> (usize, usize) {
+        let c = ((p - self.lo) * self.scale).clamp(Vec2::ZERO, Vec2::splat((self.side - 1) as f64));
+        (c.x as usize, c.y as usize)
+    }
+
+    /// The boxes in the cell holding `p`: every box that holds it, and
+    /// maybe others.
+    pub(crate) fn at(&self, p: Vec2) -> &[u32] {
+        let (x, y) = self.coord(p);
+        &self.cells[y * self.side + x]
+    }
+
+    /// The boxes in the cells `b` covers: every box that meets it, and
+    /// maybe others. A box in several of those cells comes once per cell.
+    pub(crate) fn near(&self, b: (Vec2, Vec2)) -> impl Iterator<Item = usize> + '_ {
+        let ((x0, y0), (x1, y1)) = (self.coord(b.0), self.coord(b.1));
+        (y0..=y1)
+            .flat_map(move |y| (x0..=x1).flat_map(move |x| &self.cells[y * self.side + x]))
+            .map(|&i| i as usize)
+    }
+}

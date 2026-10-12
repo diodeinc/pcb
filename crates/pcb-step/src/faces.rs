@@ -18,7 +18,8 @@ use rayon::prelude::*;
 
 use crate::font;
 use crate::geom::{
-    KICAD_MAX_ERROR, Vec2, ccw_sweep, circle_center, point_in_polygon, rotate_kicad, signed_area,
+    BoxGrid, KICAD_MAX_ERROR, Vec2, ccw_sweep, circle_center, point_in_polygon, rotate_kicad,
+    signed_area,
 };
 use crate::outline::{Edge, Frame, Loop, Solid, board_solids, flatten, orient};
 use crate::outline_font::Fonts;
@@ -645,9 +646,10 @@ fn union_rings(
             == 1;
         reaches || covers
     };
-    // Group the islands that meet, sweeping their boxes along x.
-    let mut order: Vec<usize> = (0..islands.len()).collect();
-    order.sort_by(|&a, &b| bounds(a).0.x.total_cmp(&bounds(b).0.x));
+    // Group the islands that meet. `meet` tests from the island whose box
+    // starts further left.
+    let boxes: Vec<(Vec2, Vec2)> = (0..islands.len()).map(bounds).collect();
+    let grid = BoxGrid::new(&boxes, usize::MAX);
     let mut group: Vec<usize> = (0..islands.len()).collect();
     fn root(group: &mut [usize], mut x: usize) -> usize {
         while group[x] != x {
@@ -656,14 +658,24 @@ fn union_rings(
         }
         x
     }
-    for (k, &a) in order.iter().enumerate() {
-        let (lo, hi) = bounds(a);
-        for &b in &order[k + 1..] {
-            let (blo, bhi) = bounds(b);
-            if blo.x > hi.x {
-                break;
+    let mut seen = vec![usize::MAX; islands.len()];
+    for i in 0..islands.len() {
+        let (lo, hi) = boxes[i];
+        for j in grid.near(boxes[i]) {
+            if j <= i || seen[j] == i || islands[i].0 == islands[j].0 {
+                continue;
             }
-            if islands[a].0 != islands[b].0 && blo.y <= hi.y && lo.y <= bhi.y && meet(a, b) {
+            seen[j] = i;
+            let (jlo, jhi) = boxes[j];
+            if jlo.x > hi.x || lo.x > jhi.x || jlo.y > hi.y || lo.y > jhi.y {
+                continue;
+            }
+            let (a, b) = if (lo.x, i) <= (jlo.x, j) {
+                (i, j)
+            } else {
+                (j, i)
+            };
+            if meet(a, b) {
                 let (ra, rb) = (root(&mut group, a), root(&mut group, b));
                 group[ra.max(rb)] = ra.min(rb);
             }
