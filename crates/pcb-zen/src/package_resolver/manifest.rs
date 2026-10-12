@@ -67,18 +67,12 @@ fn load_manifest_for_module_version(
     if pcb_zen_core::package_url::is_canonical_registry_reference(module_path) {
         manifest.canonicalize_package_references()?;
     }
-    let has_indirect_table = manifest_has_indirect_table(&content)?;
-
-    let indirect = if has_indirect_table {
-        manifest
-            .dependencies
-            .indirect
-            .into_iter()
-            .map(|(raw_key, spec)| parse_indirect_dependency(&raw_key, spec))
-            .collect::<Result<BTreeMap<_, _>>>()?
-    } else {
-        BTreeMap::new()
-    };
+    let indirect = manifest
+        .dependencies
+        .indirect
+        .into_iter()
+        .map(|(raw_key, spec)| parse_indirect_dependency(&raw_key, spec))
+        .collect::<Result<BTreeMap<_, _>>>()?;
 
     Ok(ManifestRequirements {
         direct: manifest.dependencies.direct,
@@ -115,14 +109,6 @@ fn parse_indirect_dependency(
         );
     }
     Ok((dep_id, version))
-}
-
-fn manifest_has_indirect_table(content: &str) -> Result<bool> {
-    let value: toml::Value = toml::from_str(content)?;
-    Ok(value
-        .get("dependencies")
-        .and_then(|deps| deps.get("indirect"))
-        .is_some())
 }
 
 pub(crate) fn package_version_root(

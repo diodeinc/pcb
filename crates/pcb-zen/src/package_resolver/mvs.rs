@@ -312,6 +312,9 @@ impl PackageResolver {
         Ok(())
     }
 
+    /// Link a direct remote dependency to every package in its recorded tree.
+    /// Trees are trusted to be closed, so this reaches the whole selection
+    /// without reading deeper manifests.
     fn populate_remote_graph(
         &mut self,
         dep_id: &ResolvedDepId,
@@ -328,68 +331,21 @@ impl PackageResolver {
             dep_id: dep_id.clone(),
             version: version.clone(),
         };
-        let loaded = self
-            .manifest_loader
-            .load(&self.workspace, &dep_id.path, version)
-            .with_context(|| format!("Failed to load {}@{}", dep_id.path, version))?;
-
-        for (child_path, child_spec) in loaded.direct {
-            if is_stdlib_module_path(&child_path) {
-                continue;
-            }
-            let child_version = self
-                .spec_resolver
-                .resolve_spec(&child_path, &child_spec)
-                .with_context(|| format!("Failed to resolve graph dependency {}", child_path))?;
-            let child_dep_id = ResolvedDepId::for_version(child_path, &child_version);
-            self.add_remote_graph_edge(
-                from.clone(),
-                child_dep_id,
-                selected_remote,
-                graph,
-                seen_remote,
-            )?;
-        }
-
-        for (child_dep_id, _) in loaded.indirect {
-            self.add_remote_graph_edge(
-                from.clone(),
-                child_dep_id,
-                selected_remote,
-                graph,
-                seen_remote,
-            )?;
+        for (child_dep_id, _) in self.recorded_tree(dep_id, version)? {
+            let selected_version = selected_remote.get(&child_dep_id).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Resolved closure is missing graph node {}",
+                    child_dep_id.path
+                )
+            })?;
+            let to = DepGraphNode::Remote {
+                dep_id: child_dep_id,
+                version: selected_version.clone(),
+            };
+            graph.add_edge(from.clone(), to);
         }
 
         Ok(())
-    }
-
-    fn add_remote_graph_edge(
-        &mut self,
-        from: DepGraphNode,
-        child_dep_id: ResolvedDepId,
-        selected_remote: &BTreeMap<ResolvedDepId, Version>,
-        graph: &mut DepGraph,
-        seen_remote: &mut BTreeSet<(ResolvedDepId, Version)>,
-    ) -> Result<()> {
-        let selected_version = selected_remote.get(&child_dep_id).ok_or_else(|| {
-            anyhow::anyhow!(
-                "Resolved closure is missing graph node {}",
-                child_dep_id.path
-            )
-        })?;
-        let to = DepGraphNode::Remote {
-            dep_id: child_dep_id.clone(),
-            version: selected_version.clone(),
-        };
-        graph.add_edge(from, to.clone());
-        self.populate_remote_graph(
-            &child_dep_id,
-            selected_version,
-            selected_remote,
-            graph,
-            seen_remote,
-        )
     }
 
     fn workspace_package_dep<'a>(&'a self, dep_path: &'a str) -> Option<&'a str> {
@@ -453,58 +409,28 @@ impl PackageResolver {
         workspace_floors: BTreeMap<ResolvedDepId, Version>,
     ) -> Result<PackageResolution> {
         let mut selected = BTreeMap::<ResolvedDepId, Version>::new();
-        let mut queue = VecDeque::<ResolvedDepId>::new();
 
-        let direct_remote_ids = self.seed_specs(
-            &scanned.remote,
-            "direct dependency",
-            &mut selected,
-            &mut queue,
-        )?;
+        let direct_remote_ids =
+            self.seed_specs(&scanned.remote, "direct dependency", &mut selected)?;
         for (dep_id, version) in imported_workspace_floors {
-            enqueue_floor_version(&mut selected, dep_id.clone(), version.clone(), &mut queue);
+            merge_floor_version(&mut selected, dep_id.clone(), version.clone());
         }
 
-        // Walk the graph one level at a time, materializing each level's
-        // packages together so their contents arrive in one fetch per repo.
-        while !queue.is_empty() {
-            let level: Vec<_> = queue.drain(..).collect();
-            materialize_selected(
-                &self.workspace,
-                level
-                    .iter()
-                    .filter_map(|dep_id| Some((dep_id, selected.get(dep_id)?))),
-                false,
-            )?;
-
-            for dep_id in level {
-                let Some(version) = selected.get(&dep_id).cloned() else {
-                    continue;
-                };
-                let loaded = self
-                    .manifest_loader
-                    .load(&self.workspace, &dep_id.path, &version)
-                    .with_context(|| format!("Failed to load {}@{}", dep_id.path, version))?;
-                for (dep_path, dep_spec) in loaded.direct {
-                    if is_stdlib_module_path(&dep_path) {
-                        continue;
-                    }
-                    let dep_version = self
-                        .spec_resolver
-                        .resolve_spec(&dep_path, &dep_spec)
-                        .with_context(|| {
-                            format!("Failed to resolve transitive dependency {}", dep_path)
-                        })?;
-                    enqueue_floor_version(
-                        &mut selected,
-                        ResolvedDepId::for_version(dep_path, &dep_version),
-                        dep_version,
-                        &mut queue,
-                    );
-                }
-                for (transitive_id, dep_version) in loaded.indirect {
-                    enqueue_floor_version(&mut selected, transitive_id, dep_version, &mut queue);
-                }
+        // Each manifest is trusted to record its complete MVS-closed tree.
+        // Merging the direct dependencies' trees then closes the selection: no
+        // deeper manifest can add or raise a requirement, so none is read.
+        let direct: Vec<_> = direct_remote_ids
+            .iter()
+            .filter_map(|dep_id| Some((dep_id.clone(), selected.get(dep_id)?.clone())))
+            .collect();
+        materialize_selected(
+            &self.workspace,
+            direct.iter().map(|(dep_id, version)| (dep_id, version)),
+            false,
+        )?;
+        for (dep_id, version) in &direct {
+            for (tree_id, tree_version) in self.recorded_tree(dep_id, version)? {
+                merge_floor_version(&mut selected, tree_id, tree_version);
             }
         }
 
@@ -536,7 +462,6 @@ impl PackageResolver {
         deps: &BTreeMap<String, DependencySpec>,
         label: &str,
         selected: &mut BTreeMap<ResolvedDepId, Version>,
-        queue: &mut VecDeque<ResolvedDepId>,
     ) -> Result<BTreeSet<ResolvedDepId>> {
         let mut dep_ids = BTreeSet::new();
         for (module_path, spec) in deps {
@@ -545,10 +470,39 @@ impl PackageResolver {
                 .resolve_spec(module_path, spec)
                 .with_context(|| format!("Failed to resolve {} {}", label, module_path))?;
             let dep_id = ResolvedDepId::for_version(module_path.clone(), &version);
-            enqueue_floor_version(selected, dep_id.clone(), version, queue);
+            merge_floor_version(selected, dep_id.clone(), version);
             dep_ids.insert(dep_id);
         }
         Ok(dep_ids)
+    }
+
+    /// The resolved tree a remote package's manifest records: its direct
+    /// dependencies plus `[dependencies.indirect]`, stdlib excluded.
+    fn recorded_tree(
+        &mut self,
+        dep_id: &ResolvedDepId,
+        version: &Version,
+    ) -> Result<Vec<(ResolvedDepId, Version)>> {
+        let loaded = self
+            .manifest_loader
+            .load(&self.workspace, &dep_id.path, version)
+            .with_context(|| format!("Failed to load {}@{}", dep_id.path, version))?;
+        let mut tree = Vec::new();
+        for (dep_path, dep_spec) in loaded.direct {
+            if is_stdlib_module_path(&dep_path) {
+                continue;
+            }
+            let dep_version = self
+                .spec_resolver
+                .resolve_spec(&dep_path, &dep_spec)
+                .with_context(|| format!("Failed to resolve transitive dependency {}", dep_path))?;
+            tree.push((
+                ResolvedDepId::for_version(dep_path, &dep_version),
+                dep_version,
+            ));
+        }
+        tree.extend(loaded.indirect);
+        Ok(tree)
     }
 }
 
@@ -630,9 +584,9 @@ fn merge_floor_version(
     selected: &mut BTreeMap<ResolvedDepId, Version>,
     dep_id: ResolvedDepId,
     version: Version,
-) -> bool {
+) {
     if is_stdlib_module_path(&dep_id.path) {
-        return false;
+        return;
     }
     let should_update = match selected.get(&dep_id) {
         Some(current) => version > *current,
@@ -640,17 +594,5 @@ fn merge_floor_version(
     };
     if should_update {
         selected.insert(dep_id, version);
-    }
-    should_update
-}
-
-fn enqueue_floor_version(
-    selected: &mut BTreeMap<ResolvedDepId, Version>,
-    dep_id: ResolvedDepId,
-    version: Version,
-    queue: &mut VecDeque<ResolvedDepId>,
-) {
-    if merge_floor_version(selected, dep_id.clone(), version) {
-        queue.push_back(dep_id);
     }
 }

@@ -81,10 +81,11 @@ Require a newer version explicitly when the project is ready to test it:
 "github.com/acme/component-lib" = "0.3.9"
 ```
 
-Resolution starts with all workspace packages' direct dependencies, fetches
-selected manifests, and raises versions to satisfy transitive requirements until
-the graph stops changing. It then traces the final graph from workspace roots,
-discarding superseded versions. MVS is deterministic and does not backtrack.
+Resolution reads only the manifests of a package's direct dependencies and trusts
+each one to record its complete resolved tree. It merges their `[dependencies]`
+and `[dependencies.indirect]` with the package's own requirements and keeps the
+highest version in each lane. Deeper manifests cannot add a requirement, so they
+are not fetched. MVS is deterministic and does not backtrack.
 
 ## Import paths as identity
 
