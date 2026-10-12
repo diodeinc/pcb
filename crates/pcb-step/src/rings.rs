@@ -4,8 +4,9 @@
 use std::f64::consts::PI;
 
 use pcb_ir::geom::{ContourBuf, ContourSet};
+use rayon::prelude::*;
 
-use crate::geom::{Vec2, circle_center, signed_area};
+use crate::geom::{BoxGrid, Vec2, circle_center, signed_area};
 use crate::outline::{Edge, Loop, intersect, orient};
 
 /// Points this close to a circle are refitted onto it. Polygonized arcs
@@ -54,27 +55,40 @@ pub(crate) fn polygons_of(region: &ContourSet) -> Vec<Vec<Vec2>> {
     raw_rings(&region.to_contours())
 }
 
-/// The rings of a boolean's output, cleaned: pinched rings are split,
-/// near-collinear vertices dropped, and slivers discarded.
-pub(crate) fn rings_of(contours: &[ContourBuf]) -> Vec<Vec<Vec2>> {
-    let mut rings: Vec<Vec<Vec2>> = Vec::new();
+/// The rings of contours, each split where it passes through a vertex
+/// twice, so every ring is a simple loop.
+fn simple_rings(contours: &[ContourBuf]) -> Vec<Vec<Vec2>> {
+    let mut rings = Vec::new();
     for points in raw_rings(contours) {
         split_pinches(points, &mut rings);
     }
-    rings.into_iter().filter_map(cleaned).collect()
+    rings
 }
 
-/// A ring with near-collinear vertices dropped, or `None` for a sliver: a
-/// ring under a square micrometre is one the boolean left behind, whose
+/// A ring under a square micrometre: one the boolean left behind, whose
 /// winding OCCT cannot even tell.
+fn is_sliver(ring: &[Vec2]) -> bool {
+    ring.len() < 3 || signed_area(ring).abs() <= 1e-6
+}
+
+/// The rings of a boolean's output, cleaned: pinched rings are split,
+/// near-collinear vertices dropped, and slivers discarded.
+pub(crate) fn rings_of(contours: &[ContourBuf]) -> Vec<Vec<Vec2>> {
+    simple_rings(contours)
+        .into_iter()
+        .filter_map(cleaned)
+        .collect()
+}
+
+/// A ring with near-collinear vertices dropped, or `None` for a sliver.
 pub(crate) fn cleaned(mut ring: Vec<Vec2>) -> Option<Vec<Vec2>> {
     simplify_ring(&mut ring);
-    (ring.len() >= 3 && signed_area(&ring).abs() > 1e-6).then_some(ring)
+    (!is_sliver(&ring)).then_some(ring)
 }
 
 /// One `(outer, holes)` per island of a region, with arcs refitted.
 pub(crate) fn loops_of(region: &ContourSet) -> Vec<(Loop, Vec<Loop>)> {
-    nested_of(region).iter().map(|n| fit(n, 1)).collect()
+    nested_of(region).iter().map(fit).collect()
 }
 
 /// An island of a region as point lists: its outer ring and its holes.
@@ -95,34 +109,14 @@ pub(crate) fn nest(rings: Vec<Vec<Vec2>>) -> Vec<Nested> {
     let n = rings.len();
     let areas: Vec<f64> = rings.iter().map(|r| signed_area(r).abs()).collect();
     let indexed: Vec<IndexedRing> = rings.iter().map(|r| IndexedRing::new(r)).collect();
-    // Rings are bucketed by the grid cells their boxes cover, so each probe
-    // only tests the rings whose box can hold it, in ascending order.
-    let (lo, hi) = indexed.iter().fold(
-        (Vec2::splat(f64::INFINITY), Vec2::splat(f64::NEG_INFINITY)),
-        |(lo, hi), r| (lo.min(r.lo), hi.max(r.hi)),
-    );
-    let per_axis = (n as f64).sqrt().ceil().max(1.0) as usize;
-    let scale = (hi - lo).max(Vec2::splat(1e-9)).recip() * per_axis as f64;
-    let cell = |p: Vec2| {
-        let c = ((p - lo) * scale).min(Vec2::splat((per_axis - 1) as f64));
-        (c.x as usize, c.y as usize)
-    };
-    let mut cells: Vec<Vec<u32>> = vec![Vec::new(); per_axis * per_axis];
-    for (j, r) in indexed.iter().enumerate() {
-        let ((x0, y0), (x1, y1)) = (cell(r.lo), cell(r.hi));
-        for y in y0..=y1 {
-            for x in x0..=x1 {
-                cells[y * per_axis + x].push(j as u32);
-            }
-        }
-    }
+    let boxes: Vec<(Vec2, Vec2)> = indexed.iter().map(|r| (r.lo, r.hi)).collect();
+    let grid = BoxGrid::new(&boxes);
     let mut parent = vec![usize::MAX; n];
     let mut depth = vec![0usize; n];
     for i in 0..n {
         let probe = rings[i][0];
         let mut best = f64::INFINITY;
-        let (x, y) = cell(probe);
-        for &j in &cells[y * per_axis + x] {
+        for &j in grid.at(probe) {
             let j = j as usize;
             if i != j && areas[j] > areas[i] && indexed[j].contains(&rings[j], probe) {
                 depth[i] += 1;
@@ -159,23 +153,18 @@ pub(crate) fn nest(rings: Vec<Vec<Vec2>>) -> Vec<Nested> {
 /// The islands of a region with the boolean's vertices kept as they are,
 /// for callers that snap them back onto curves they know.
 pub(crate) fn raw_islands(region: &ContourSet) -> Vec<Nested> {
-    let mut rings: Vec<Vec<Vec2>> = Vec::new();
-    for points in polygons_of(region) {
-        split_pinches(points, &mut rings);
-    }
-    rings.retain(|r| r.len() >= 3 && signed_area(r).abs() > 1e-6);
+    let mut rings = simple_rings(&region.to_contours());
+    rings.retain(|r| !is_sliver(r));
     nest(rings)
 }
 
 /// The loops of one island with arcs refitted, the outer counter-clockwise
-/// and the holes clockwise. Rings are refitted on `threads` threads.
-pub(crate) fn fit(island: &Nested, threads: usize) -> (Loop, Vec<Loop>) {
+/// and the holes clockwise. Rings are refitted in parallel.
+pub(crate) fn fit(island: &Nested) -> (Loop, Vec<Loop>) {
     let rings: Vec<&[Vec2]> = std::iter::once(island.outer.as_slice())
         .chain(island.holes.iter().map(Vec::as_slice))
         .collect();
-    let pieces = crate::parallel_map(if rings.len() >= 64 { threads } else { 1 }, &rings, |r| {
-        refit_pieces(r)
-    });
+    let pieces: Vec<Vec<Piece>> = rings.par_iter().map(|r| refit_pieces(r)).collect();
     let refs: Vec<&[Piece]> = pieces.iter().map(Vec::as_slice).collect();
     let demote = crossing_arcs(&refs);
     let mut loops = rings
@@ -552,72 +541,41 @@ fn crossing_arcs(rings: &[&[Piece]]) -> Vec<Vec<bool>> {
         return demote;
     }
     let boxes: Vec<(Vec2, Vec2)> = (0..flat.len()).map(|f| piece(f).edge.bbox()).collect();
-    let lo = boxes
-        .iter()
-        .fold(Vec2::splat(f64::INFINITY), |m, b| m.min(b.0));
-    let hi = boxes
-        .iter()
-        .fold(Vec2::splat(f64::NEG_INFINITY), |m, b| m.max(b.1));
-    let cells = ((flat.len() as f64).sqrt() as usize).clamp(1, 128);
-    let extent = (hi - lo).max(Vec2::splat(1e-9));
-    let cell_of = |p: Vec2| -> (usize, usize) {
-        let c = ((p - lo) / extent * cells as f64).floor();
-        (
-            (c.x.max(0.0) as usize).min(cells - 1),
-            (c.y.max(0.0) as usize).min(cells - 1),
-        )
-    };
-    let mut grid: Vec<Vec<u32>> = vec![Vec::new(); cells * cells];
-    for (f, b) in boxes.iter().enumerate() {
-        let (x0, y0) = cell_of(b.0);
-        let (x1, y1) = cell_of(b.1);
-        for y in y0..=y1 {
-            for x in x0..=x1 {
-                grid[y * cells + x].push(f as u32);
-            }
-        }
-    }
+    let grid = BoxGrid::new(&boxes);
     let mut seen = vec![usize::MAX; flat.len()];
     for f in 0..flat.len() {
         let Edge::Arc { .. } = piece(f).edge else {
             continue;
         };
         let (rf, kf) = flat[f];
-        let (x0, y0) = cell_of(boxes[f].0);
-        let (x1, y1) = cell_of(boxes[f].1);
-        for y in y0..=y1 {
-            for x in x0..=x1 {
-                for &g in &grid[y * cells + x] {
-                    let g = g as usize;
-                    if g == f || seen[g] == f {
-                        continue;
-                    }
-                    seen[g] = f;
-                    let (a, b) = (&boxes[f], &boxes[g]);
-                    if a.0.x > b.1.x || b.0.x > a.1.x || a.0.y > b.1.y || b.0.y > a.1.y {
-                        continue;
-                    }
-                    // Neighbours in one ring share a vertex.
-                    let (rg, kg) = flat[g];
-                    let n = rings[rf].len();
-                    let shared = if rf == rg && (kf + 1) % n == kg {
-                        Some(piece(f).edge.end())
-                    } else if rf == rg && (kg + 1) % n == kf {
-                        Some(piece(g).edge.end())
-                    } else {
-                        None
-                    };
-                    let mut crossing = false;
-                    intersect(&piece(f).edge, &piece(g).edge, &mut |p| {
-                        if shared.is_none_or(|s| p.distance(s) > VERTEX_TOLERANCE) {
-                            crossing = true;
-                        }
-                    });
-                    if crossing {
-                        demote[rf][kf] = true;
-                        demote[rg][kg] |= matches!(piece(g).edge, Edge::Arc { .. });
-                    }
+        for g in grid.near(boxes[f]) {
+            if g == f || seen[g] == f {
+                continue;
+            }
+            seen[g] = f;
+            let (a, b) = (&boxes[f], &boxes[g]);
+            if a.0.x > b.1.x || b.0.x > a.1.x || a.0.y > b.1.y || b.0.y > a.1.y {
+                continue;
+            }
+            // Neighbours in one ring share a vertex.
+            let (rg, kg) = flat[g];
+            let n = rings[rf].len();
+            let shared = if rf == rg && (kf + 1) % n == kg {
+                Some(piece(f).edge.end())
+            } else if rf == rg && (kg + 1) % n == kf {
+                Some(piece(g).edge.end())
+            } else {
+                None
+            };
+            let mut crossing = false;
+            intersect(&piece(f).edge, &piece(g).edge, &mut |p| {
+                if shared.is_none_or(|s| p.distance(s) > VERTEX_TOLERANCE) {
+                    crossing = true;
                 }
+            });
+            if crossing {
+                demote[rf][kf] = true;
+                demote[rg][kg] |= matches!(piece(g).edge, Edge::Arc { .. });
             }
         }
     }

@@ -6,6 +6,7 @@
 use std::f64::consts::TAU;
 
 use pcb_ir::geom::{BBox, ContourBuf, ContourSet, FillRule, PathCmd};
+use rayon::prelude::*;
 
 use crate::board::{
     Board, Knockout, Machining, Mouth, Physical, Shape, ShapeKind, Tech, Text, Via,
@@ -16,7 +17,8 @@ use crate::copper::{
 };
 use crate::font;
 use crate::geom::{
-    KICAD_MAX_ERROR, Vec2, ccw_sweep, circle_center, point_in_polygon, rotate_kicad, signed_area,
+    BoxGrid, KICAD_MAX_ERROR, Vec2, ccw_sweep, circle_center, point_in_polygon, rotate_kicad,
+    signed_area,
 };
 use crate::outline::{Edge, Frame, Loop, Solid, board_solids, flatten, orient};
 use crate::outline_font::Fonts;
@@ -48,7 +50,6 @@ pub(crate) fn build(
     silk: bool,
     mask: bool,
     variables: &[(String, String)],
-    threads: usize,
     warnings: &mut Vec<String>,
 ) -> Result<Vec<TechLayer>, crate::Error> {
     let edge = BoardEdge::new(&board_solids(board, frame)?);
@@ -62,19 +63,19 @@ pub(crate) fn build(
         layers.push(Tech::FrontMask);
         layers.push(Tech::BackMask);
     }
-    let built = crate::parallel_map(threads, &layers, |tech| {
-        let mut notes = Vec::new();
-        let faces = if tech.silk() {
-            silk_faces(
-                board, frame, &edge, &fonts, *tech, variables, threads, &mut notes,
-            )
-        } else {
-            mask_faces(
-                board, frame, &edge, &fonts, *tech, variables, threads, &mut notes,
-            )
-        };
-        (faces, notes)
-    });
+    let built: Vec<_> = layers
+        .par_iter()
+        .with_max_len(1)
+        .map(|tech| {
+            let mut notes = Vec::new();
+            let faces = if tech.silk() {
+                silk_faces(board, frame, &edge, &fonts, *tech, variables, &mut notes)
+            } else {
+                mask_faces(board, frame, &edge, &fonts, *tech, variables, &mut notes)
+            };
+            (faces, notes)
+        })
+        .collect();
     let mut out = Vec::with_capacity(layers.len());
     for (tech, (faces, notes)) in layers.into_iter().zip(built) {
         warnings.extend(notes);
@@ -194,7 +195,6 @@ fn drawn_items(
     fonts: &Fonts,
     tech: Tech,
     variables: &[(String, String)],
-    threads: usize,
     warnings: &mut Vec<String>,
 ) -> Vec<Vec<ContourBuf>> {
     enum Item<'a> {
@@ -214,17 +214,20 @@ fn drawn_items(
                 .map(Item::Text),
         )
         .collect();
-    let drawn = crate::parallel_map(threads, &items, |item| {
-        let mut out = Vec::new();
-        let mut notes = Vec::new();
-        match item {
-            Item::Shape(shape) => shape_contours(board, frame, shape, &mut out),
-            Item::Text(text) => {
-                text_contours(board, frame, fonts, text, variables, &mut notes, &mut out)
+    let drawn: Vec<_> = items
+        .par_iter()
+        .map(|item| {
+            let mut out = Vec::new();
+            let mut notes = Vec::new();
+            match item {
+                Item::Shape(shape) => shape_contours(board, frame, shape, &mut out),
+                Item::Text(text) => {
+                    text_contours(board, frame, fonts, text, variables, &mut notes, &mut out)
+                }
             }
-        }
-        (out, notes)
-    });
+            (out, notes)
+        })
+        .collect();
     drawn
         .into_iter()
         .map(|(out, notes)| {
@@ -564,16 +567,19 @@ fn less(
     }
 }
 
+/// Cells per side of the grid `union_rings` bins by. Finer cells spread
+/// dense text over more threads; coarser ones leave fewer islands that
+/// cross cells to merge again.
+const UNION_CELLS: usize = 16;
+
 /// The cleaned rings of the union of `items`, unioned cell by cell:
-/// items are binned by position and each bin is unioned on its own
-/// thread. Only islands of different bins that meet are unioned again,
-/// group by group, from the boolean's own vertices so shared edges still
-/// coincide. Strokes overlap within a text, openings within a
-/// footprint; the rest of the board is disjoint and costs nothing to
-/// combine.
+/// items are binned by position and each bin is unioned in parallel.
+/// Only islands of different bins that meet are unioned again, group by
+/// group, from the boolean's own vertices so shared edges still coincide.
+/// Strokes overlap within a text, openings within a footprint; the rest
+/// of the board is disjoint and costs nothing to combine.
 fn union_rings(
     items: Vec<Vec<ContourBuf>>,
-    threads: usize,
     what: &str,
     warnings: &mut Vec<String>,
 ) -> Vec<Vec<Vec2>> {
@@ -585,24 +591,27 @@ fn union_rings(
     if !all.is_valid() {
         return Vec::new();
     }
-    let per_axis = ((threads * 8) as f64).sqrt().ceil() as usize;
     let cell = |v: f64, lo: f64, hi: f64| {
-        (((v - lo) / (hi - lo).max(1e-9) * per_axis as f64) as usize).min(per_axis - 1)
+        (((v - lo) / (hi - lo).max(1e-9) * UNION_CELLS as f64) as usize).min(UNION_CELLS - 1)
     };
-    let mut bins: Vec<Vec<ContourBuf>> = vec![Vec::new(); per_axis * per_axis];
+    let mut bins: Vec<Vec<ContourBuf>> = vec![Vec::new(); UNION_CELLS * UNION_CELLS];
     for item in items.into_iter().filter(|i| !i.is_empty()) {
         let c = bbox_of(&item).center();
-        let k = cell(c.y, all.min.y, all.max.y) * per_axis + cell(c.x, all.min.x, all.max.x);
+        let k = cell(c.y, all.min.y, all.max.y) * UNION_CELLS + cell(c.x, all.min.x, all.max.x);
         bins[k].extend(item);
     }
     bins.retain(|b| !b.is_empty());
-    let unioned = crate::parallel_map(threads, &bins, |bin| {
-        let mut notes = Vec::new();
-        let islands = region(bin, what, &mut notes)
-            .map(|r| raw_islands(&r))
-            .unwrap_or_default();
-        (islands, notes)
-    });
+    let unioned: Vec<_> = bins
+        .par_iter()
+        .with_max_len(1)
+        .map(|bin| {
+            let mut notes = Vec::new();
+            let islands = region(bin, what, &mut notes)
+                .map(|r| raw_islands(&r))
+                .unwrap_or_default();
+            (islands, notes)
+        })
+        .collect();
     // (bin, island, its rings indexed); the outer ring comes first.
     let mut islands: Vec<(usize, Nested, Vec<IndexedRing>)> = Vec::new();
     for (k, (found, notes)) in unioned.into_iter().enumerate() {
@@ -635,9 +644,10 @@ fn union_rings(
             == 1;
         reaches || covers
     };
-    // Group the islands that meet, sweeping their boxes along x.
-    let mut order: Vec<usize> = (0..islands.len()).collect();
-    order.sort_by(|&a, &b| bounds(a).0.x.total_cmp(&bounds(b).0.x));
+    // Group the islands that meet. `meet` tests from the island whose box
+    // starts further left.
+    let boxes: Vec<(Vec2, Vec2)> = (0..islands.len()).map(bounds).collect();
+    let grid = BoxGrid::new(&boxes);
     let mut group: Vec<usize> = (0..islands.len()).collect();
     fn root(group: &mut [usize], mut x: usize) -> usize {
         while group[x] != x {
@@ -646,14 +656,24 @@ fn union_rings(
         }
         x
     }
-    for (k, &a) in order.iter().enumerate() {
-        let (lo, hi) = bounds(a);
-        for &b in &order[k + 1..] {
-            let (blo, bhi) = bounds(b);
-            if blo.x > hi.x {
-                break;
+    let mut seen = vec![usize::MAX; islands.len()];
+    for i in 0..islands.len() {
+        let (lo, hi) = boxes[i];
+        for j in grid.near(boxes[i]) {
+            if j <= i || seen[j] == i || islands[i].0 == islands[j].0 {
+                continue;
             }
-            if islands[a].0 != islands[b].0 && blo.y <= hi.y && lo.y <= bhi.y && meet(a, b) {
+            seen[j] = i;
+            let (jlo, jhi) = boxes[j];
+            if jlo.x > hi.x || lo.x > jhi.x || jlo.y > hi.y || lo.y > jhi.y {
+                continue;
+            }
+            let (a, b) = if (lo.x, i) <= (jlo.x, j) {
+                (i, j)
+            } else {
+                (j, i)
+            };
+            if meet(a, b) {
                 let (ra, rb) = (root(&mut group, a), root(&mut group, b));
                 group[ra.max(rb)] = ra.min(rb);
             }
@@ -665,25 +685,29 @@ fn union_rings(
         groups[r].push(x);
     }
     groups.retain(|g| !g.is_empty());
-    let merged = crate::parallel_map(threads, &groups, |ids| {
-        let mut notes = Vec::new();
-        let rings = if let [only] = ids[..] {
-            let island = &islands[only].1;
-            std::iter::once(&island.outer)
-                .chain(&island.holes)
-                .filter_map(|r| cleaned(r.clone()))
-                .collect()
-        } else {
-            let all: Vec<ContourBuf> = ids
-                .iter()
-                .flat_map(|&i| island_contours(&islands[i].1))
-                .collect();
-            region(&all, what, &mut notes)
-                .map(|r| rings_of(&r.to_contours()))
-                .unwrap_or_default()
-        };
-        (rings, notes)
-    });
+    let merged: Vec<_> = groups
+        .par_iter()
+        .with_max_len(1)
+        .map(|ids| {
+            let mut notes = Vec::new();
+            let rings = if let [only] = ids[..] {
+                let island = &islands[only].1;
+                std::iter::once(&island.outer)
+                    .chain(&island.holes)
+                    .filter_map(|r| cleaned(r.clone()))
+                    .collect()
+            } else {
+                let all: Vec<ContourBuf> = ids
+                    .iter()
+                    .flat_map(|&i| island_contours(&islands[i].1))
+                    .collect();
+                region(&all, what, &mut notes)
+                    .map(|r| rings_of(&r.to_contours()))
+                    .unwrap_or_default()
+            };
+            (rings, notes)
+        })
+        .collect();
     let mut rings = Vec::new();
     for (r, notes) in merged {
         rings.extend(r);
@@ -692,8 +716,8 @@ fn union_rings(
     rings
 }
 
-fn face(island: &Nested, threads: usize) -> Face {
-    let (outer, holes) = fit(island, threads);
+fn face(island: &Nested) -> Face {
+    let (outer, holes) = fit(island);
     Face { outer, holes }
 }
 
@@ -707,12 +731,11 @@ fn silk_faces(
     fonts: &Fonts,
     tech: Tech,
     variables: &[(String, String)],
-    threads: usize,
     warnings: &mut Vec<String>,
 ) -> Vec<Face> {
     let what = format!("{} silkscreen", if tech.front() { "front" } else { "back" });
-    let items = drawn_items(board, frame, fonts, tech, variables, threads, warnings);
-    let islands = nest(union_rings(items, threads, &what, warnings));
+    let items = drawn_items(board, frame, fonts, tech, variables, warnings);
+    let islands = nest(union_rings(items, &what, warnings));
     let boxes: Vec<(Vec2, Vec2)> = islands.iter().map(|i| ring_bbox(&i.outer)).collect();
     let outline = boxes
         .iter()
@@ -724,35 +747,36 @@ fn silk_faces(
         .map(|edges| (contour(edges), edges_bbox(edges)))
         .collect();
     let work: Vec<(&Nested, (Vec2, Vec2))> = islands.iter().zip(boxes).collect();
-    let trimmed = crate::parallel_map(threads, &work, |&(island, bbox)| {
-        let mut notes = Vec::new();
-        let hits: Vec<ContourBuf> = cutters
-            .iter()
-            .filter(|(_, b)| overlaps(*b, bbox))
-            .map(|(c, _)| c.clone())
-            .collect();
-        let outline = outline.as_ref().filter(|_| edge.meets(bbox));
-        if hits.is_empty() && outline.is_none() {
-            // Untouched: wholly on the board, or wholly off it.
-            let on_board = edge.contains(island.outer[0]);
-            return (
-                on_board.then(|| face(island, 1)).into_iter().collect(),
-                notes,
-            );
-        }
-        let Some(mut region) = self::region(&island_contours(island), &what, &mut notes) else {
-            return (Vec::new(), notes);
-        };
-        if !hits.is_empty() {
-            region = less(region, &hits, &what, &mut notes);
-        }
-        if let Some(outline) = outline {
-            let result = region.intersection(outline);
-            region = or_keep(result, region, &what, &mut notes);
-        }
-        let faces = nested_of(&region).iter().map(|i| face(i, 1)).collect();
-        (faces, notes)
-    });
+    let trimmed: Vec<_> = work
+        .par_iter()
+        .with_max_len(1)
+        .map(|&(island, bbox)| {
+            let mut notes = Vec::new();
+            let hits: Vec<ContourBuf> = cutters
+                .iter()
+                .filter(|(_, b)| overlaps(*b, bbox))
+                .map(|(c, _)| c.clone())
+                .collect();
+            let outline = outline.as_ref().filter(|_| edge.meets(bbox));
+            if hits.is_empty() && outline.is_none() {
+                // Untouched: wholly on the board, or wholly off it.
+                let on_board = edge.contains(island.outer[0]);
+                return (on_board.then(|| face(island)).into_iter().collect(), notes);
+            }
+            let Some(mut region) = self::region(&island_contours(island), &what, &mut notes) else {
+                return (Vec::new(), notes);
+            };
+            if !hits.is_empty() {
+                region = less(region, &hits, &what, &mut notes);
+            }
+            if let Some(outline) = outline {
+                let result = region.intersection(outline);
+                region = or_keep(result, region, &what, &mut notes);
+            }
+            let faces = nested_of(&region).iter().map(face).collect();
+            (faces, notes)
+        })
+        .collect();
     let mut faces = Vec::new();
     for (f, notes) in trimmed {
         faces.extend(f);
@@ -772,7 +796,6 @@ fn mask_faces(
     fonts: &Fonts,
     tech: Tech,
     variables: &[(String, String)],
-    threads: usize,
     warnings: &mut Vec<String>,
 ) -> Vec<Face> {
     let what = format!(
@@ -829,9 +852,7 @@ fn mask_faces(
             ))]);
         }
     }
-    openings.extend(drawn_items(
-        board, frame, fonts, tech, variables, threads, warnings,
-    ));
+    openings.extend(drawn_items(board, frame, fonts, tech, variables, warnings));
     openings.extend(
         pierce_edges(board, frame, tech)
             .iter()
@@ -842,7 +863,7 @@ fn mask_faces(
     };
     let mut rings = Vec::new();
     let mut at_edge = Vec::new();
-    for island in nest(union_rings(openings, threads, &what, warnings)) {
+    for island in nest(union_rings(openings, &what, warnings)) {
         if edge.meets(ring_bbox(&island.outer)) {
             at_edge.extend(island_contours(&island));
         } else if edge.contains(island.outer[0]) {
@@ -854,8 +875,5 @@ fn mask_faces(
         region = less(region, &at_edge, &what, warnings);
     }
     rings.extend(rings_of(&region.to_contours()));
-    nest(rings)
-        .iter()
-        .map(|island| face(island, threads))
-        .collect()
+    nest(rings).iter().map(face).collect()
 }

@@ -14,6 +14,7 @@
 use std::borrow::Cow;
 
 use memchr::{memchr, memchr2, memchr3};
+use rayon::prelude::*;
 
 use crate::Error;
 use crate::geom::{Transform, Vec3};
@@ -22,6 +23,11 @@ use crate::step::{Part, Placement, Root, Writer};
 const NONE: u32 = u32::MAX;
 /// KiCad's `USER_PREC`: the precision its OCCT reader applies to models.
 const MODEL_ACCURACY: f64 = 1e-4;
+
+/// Statements a donor is scanned and copied in per parallel job: a model
+/// smaller than this is one job, since a board's models are already
+/// copied in parallel.
+const STATEMENT_CHUNK: usize = 1 << 16;
 
 #[derive(Clone, Copy)]
 struct Stmt {
@@ -646,23 +652,22 @@ impl Donor {
     }
 
     /// The entity references of every statement, by statement index.
-    /// Scanning the text is most of the closure's cost, and a large
-    /// donor is scanned on several threads.
+    /// Scanning the text is most of the closure's cost, so a large donor
+    /// is scanned in chunks in parallel.
     fn references(&self) -> Adjacency {
-        let chunk = (self.stmts.len() / self.threads()).max(1);
-        let ranges: Vec<std::ops::Range<usize>> = (0..self.stmts.len())
-            .step_by(chunk)
-            .map(|start| start..(start + chunk).min(self.stmts.len()))
+        let scanned: Vec<(Vec<u32>, Vec<u32>)> = self
+            .stmts
+            .par_chunks(STATEMENT_CHUNK)
+            .map(|stmts| {
+                let mut offsets = Vec::with_capacity(stmts.len());
+                let mut items = Vec::new();
+                for stmt in stmts {
+                    offsets.push(items.len() as u32);
+                    scan_refs(self.body(*stmt), |r| items.push(r));
+                }
+                (offsets, items)
+            })
             .collect();
-        let scanned = crate::parallel_map(ranges.len(), &ranges, |range| {
-            let mut offsets = Vec::with_capacity(range.len());
-            let mut items = Vec::new();
-            for stmt in &self.stmts[range.clone()] {
-                offsets.push(items.len() as u32);
-                scan_refs(self.body(*stmt), |r| items.push(r));
-            }
-            (offsets, items)
-        });
         let mut offsets = Vec::with_capacity(self.stmts.len() + 1);
         let mut items = Vec::new();
         for (chunk_offsets, chunk_items) in scanned {
@@ -672,17 +677,6 @@ impl Donor {
         }
         offsets.push(items.len() as u32);
         Adjacency { offsets, items }
-    }
-
-    /// Worker threads worth spending on this donor: only a large one is
-    /// worth splitting, since the models of a board are already copied
-    /// in parallel.
-    fn threads(&self) -> usize {
-        if self.data.len() < 4 << 20 {
-            1
-        } else {
-            crate::worker_threads()
-        }
     }
 
     /// The 3D basis curve of a surface curve, or of a complex entity that
@@ -821,7 +815,7 @@ impl Analysis {
         };
 
         // Statements are copied in rank order; a large donor is copied
-        // in chunks on several threads and the chunks joined.
+        // in chunks in parallel and the chunks joined.
         let copy_range = |range: std::ops::Range<usize>| -> Result<Vec<u8>, Error> {
             let mut out = Vec::with_capacity(range.len() * 72);
             for rank in range {
@@ -850,13 +844,12 @@ impl Analysis {
             }
             Ok(out)
         };
-        let threads = donor.threads();
-        let chunk = self.closure.len().div_ceil(threads).max(1);
         let ranges: Vec<std::ops::Range<usize>> = (0..self.closure.len())
-            .step_by(chunk)
-            .map(|start| start..(start + chunk).min(self.closure.len()))
+            .step_by(STATEMENT_CHUNK)
+            .map(|start| start..(start + STATEMENT_CHUNK).min(self.closure.len()))
             .collect();
-        for copied in crate::parallel_map(threads, &ranges, |r| copy_range(r.clone())) {
+        let copied: Vec<Result<Vec<u8>, Error>> = ranges.into_par_iter().map(copy_range).collect();
+        for copied in copied {
             w.buf.extend_from_slice(&copied?);
         }
 

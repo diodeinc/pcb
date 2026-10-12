@@ -13,6 +13,7 @@
 use pcb_ir::geom::{
     ContourBuf, ContourSet, FillRule, GeometryAccuracy, PathCmd, Point, Resolution,
 };
+use rayon::prelude::*;
 
 use crate::board::{Board, Fill, Pad, PadKind, PadShape, Physical, Primitive, Track, Via};
 use crate::geom::{KICAD_MAX_ERROR, Vec2, ccw_sweep, circle_center, rotate_kicad};
@@ -69,7 +70,6 @@ pub(crate) fn build(
     frame: Frame,
     physical: &Physical,
     options: CopperOptions,
-    threads: usize,
     warnings: &mut Vec<String>,
 ) -> Copper {
     let mut copper = Copper::default();
@@ -89,13 +89,17 @@ pub(crate) fn build(
     let mut knockouts = Knockouts::drills(board, frame, last);
 
     if options.pads {
-        let results = crate::parallel_map(threads, &board.pads, |pad| {
-            let mut out = Vec::new();
-            let mut cut = Vec::new();
-            let mut notes = Vec::new();
-            pad_solids(&layout, pad, &knockouts, &mut out, &mut cut, &mut notes);
-            (out, cut, notes)
-        });
+        let results: Vec<_> = board
+            .pads
+            .par_iter()
+            .map(|pad| {
+                let mut out = Vec::new();
+                let mut cut = Vec::new();
+                let mut notes = Vec::new();
+                pad_solids(&layout, pad, &knockouts, &mut out, &mut cut, &mut notes);
+                (out, cut, notes)
+            })
+            .collect();
         for (solids, cut, notes) in results {
             copper.pads.extend(solids);
             for (layer, c) in cut {
@@ -126,9 +130,11 @@ pub(crate) fn build(
 
     if options.tracks || options.zones {
         let groups = group_by_layer_and_net(board, options, mask);
-        let results = crate::parallel_map(threads, &groups, |group| {
-            island_solids(&layout, group, &knockouts)
-        });
+        let results: Vec<_> = groups
+            .par_iter()
+            .with_max_len(1)
+            .map(|group| island_solids(&layout, group, &knockouts))
+            .collect();
         for (solids, notes) in results {
             copper.islands.extend(solids);
             warnings.extend(notes);

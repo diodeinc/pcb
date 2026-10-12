@@ -7,7 +7,7 @@ use glam::DMat4;
 use crate::board::{self, Board, Physical, Tech};
 use crate::geom::{Transform, Vec2};
 use crate::outline::{Frame, board_solids, cut_holes, cut_round};
-use crate::{Error, Options, Origin, copper, faces, glob_match, holes, model_key, worker_threads};
+use crate::{Error, Options, Origin, copper, faces, glob_match, holes, model_key};
 
 pub use crate::faces::Face;
 pub use crate::geom::{KICAD_MAX_ERROR, chord_count};
@@ -160,14 +160,7 @@ impl Scene {
             inner: options.inner_copper,
         };
         if copper_options.any() {
-            let copper = copper::build(
-                board,
-                frame,
-                &physical,
-                copper_options,
-                worker_threads(),
-                warnings,
-            );
+            let copper = copper::build(board, frame, &physical, copper_options, warnings);
             let copper_rgb = [0.7, 0.61, 0.0];
             let pad_rgb = if options.components {
                 [0.5; 3]
@@ -203,7 +196,6 @@ impl Scene {
                 options.silkscreen,
                 options.soldermask,
                 &variables,
-                worker_threads(),
                 warnings,
             )?;
             for layer in tech_layers {

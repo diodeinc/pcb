@@ -26,6 +26,8 @@ mod step;
 use std::fmt;
 use std::io::Write;
 
+use rayon::prelude::*;
+
 use crate::donor::Donor;
 use crate::geom::{Transform, Vec2};
 use crate::scene::{LayerKind, Scene, Shape};
@@ -223,7 +225,6 @@ ENDSEC;\nDATA;\n",
     let mut placements: Vec<u32> = Vec::new();
     export_components(board, &scene, &root, &mut w, sink, report, &mut placements)?;
 
-    let threads = worker_threads();
     for layer in &scene.layers {
         let (suffix, occurrence) = match layer.kind {
             LayerKind::Body => ("PCB", "PCB"),
@@ -263,7 +264,7 @@ ENDSEC;\nDATA;\n",
                     .iter()
                     .map(|s| loop_edges(&s.solid.outer, &s.solid.holes))
                     .collect();
-                let ids = write_batched(&mut w, sink, threads, &weights, |local, i| {
+                let ids = write_batched(&mut w, sink, &weights, |local, i| {
                     let s = &solids[i];
                     local.solid(&format!("{suffix} {}", i + 1), &s.solid, s.z0, s.z1)
                 })?;
@@ -283,7 +284,7 @@ ENDSEC;\nDATA;\n",
                     .iter()
                     .map(|f| loop_edges(&f.outer, &f.holes))
                     .collect();
-                let ids = write_batched(&mut w, sink, threads, &weights, |local, i| {
+                let ids = write_batched(&mut w, sink, &weights, |local, i| {
                     let face = &faces[i];
                     local.flat_face(&face.outer, &face.holes, *z, *up)
                 })?;
@@ -329,31 +330,37 @@ ENDSEC;\nDATA;\n",
 fn write_batched<W: Write + ?Sized>(
     w: &mut Writer,
     sink: &mut W,
-    threads: usize,
     weights: &[usize],
     emit: impl Fn(&mut Writer, usize) -> u32 + Sync,
 ) -> Result<Vec<u32>, Error> {
     sink.write_all(&w.buf)?;
     w.buf.clear();
     let mut ids = Vec::with_capacity(weights.len());
+    let threads = rayon::current_num_threads();
     for wave in batches_of(weights, threads * 4).chunks(threads) {
-        let written = parallel_map(threads, wave, |range| {
-            let mut local = Writer::new(1);
-            local
-                .buf
-                .reserve(weights[range.clone()].iter().sum::<usize>() * 640);
-            let ids: Vec<u32> = range.clone().map(|i| emit(&mut local, i)).collect();
-            (local.buf, local.next_id - 1, ids)
-        });
+        let written: Vec<_> = wave
+            .par_iter()
+            .map(|range| {
+                let mut local = Writer::new(1);
+                local
+                    .buf
+                    .reserve(weights[range.clone()].iter().sum::<usize>() * 640);
+                let ids: Vec<u32> = range.clone().map(|i| emit(&mut local, i)).collect();
+                (local.buf, local.next_id - 1, ids)
+            })
+            .collect();
         for (buf, used, batch) in written {
             let offset = w.next_id - 1;
             w.next_id += used;
             let chunks = line_chunks(&buf, threads);
-            let moved = parallel_map(threads, &chunks, |chunk| {
-                let mut out = Vec::with_capacity(chunk.len() + chunk.len() / 16);
-                step::relocate_ids(chunk, offset, &mut out);
-                out
-            });
+            let moved: Vec<Vec<u8>> = chunks
+                .par_iter()
+                .map(|chunk| {
+                    let mut out = Vec::with_capacity(chunk.len() + chunk.len() / 16);
+                    step::relocate_ids(chunk, offset, &mut out);
+                    out
+                })
+                .collect();
             for chunk in &moved {
                 sink.write_all(chunk)?;
             }
@@ -438,40 +445,6 @@ fn load_model(board: &Board, key: &str) -> Loaded {
     }
 }
 
-/// Map `items` on up to `threads` worker threads, preserving order.
-pub(crate) fn parallel_map<T: Sync, R: Send>(
-    threads: usize,
-    items: &[T],
-    f: impl Fn(&T) -> R + Sync,
-) -> Vec<R> {
-    if threads <= 1 || items.len() <= 1 {
-        return items.iter().map(&f).collect();
-    }
-    let next = std::sync::atomic::AtomicUsize::new(0);
-    let results: std::sync::Mutex<Vec<Option<R>>> =
-        std::sync::Mutex::new((0..items.len()).map(|_| None).collect());
-    std::thread::scope(|scope| {
-        for _ in 0..threads.min(items.len()) {
-            scope.spawn(|| {
-                loop {
-                    let i = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                    if i >= items.len() {
-                        break;
-                    }
-                    let r = f(&items[i]);
-                    results.lock().unwrap()[i] = Some(r);
-                }
-            });
-        }
-    });
-    results
-        .into_inner()
-        .unwrap()
-        .into_iter()
-        .map(|r| r.unwrap())
-        .collect()
-}
-
 /// Copy each distinct model into the file and place its occurrences.
 fn export_components(
     board: &Board,
@@ -487,8 +460,7 @@ fn export_components(
     // worker threads, given id ranges in order, emitted on worker threads
     // into private buffers, and written out in order. Ids depend only on
     // model order, so the output is the same whatever the thread count.
-    let threads = worker_threads();
-    let batch = threads * 4;
+    let batch = rayon::current_num_threads() * 4;
     // Distinct payloads by content, so one file embedded under two names
     // is still copied once.
     let mut parts_by_content: Vec<(u64, f64, Part)> = Vec::new();
@@ -502,7 +474,11 @@ fn export_components(
     }
     for first in (0..scene.models.len()).step_by(batch) {
         let models = &scene.models[first..(first + batch).min(scene.models.len())];
-        let loaded = parallel_map(threads, models, |model| load_model(board, &model.key));
+        let loaded: Vec<Loaded> = models
+            .par_iter()
+            .with_max_len(1)
+            .map(|model| load_model(board, &model.key))
+            .collect();
 
         let mut jobs: Vec<Job> = Vec::new();
         for (offset, loaded) in loaded.into_iter().enumerate() {
@@ -545,18 +521,22 @@ fn export_components(
                 }
             }
         }
-        let emitted = parallel_map(threads, &jobs, |job| -> Result<_, Error> {
-            if job.base == 0 {
-                return Ok(None);
-            }
-            let mut local = Writer::new(job.base);
-            let name = scene.models[job.index].name();
-            let part = job
-                .analysis
-                .emit(&job.donor, &mut local, root, name, job.scale)?;
-            debug_assert_eq!(local.next_id, job.base + job.analysis.id_budget());
-            Ok(Some((local.buf, part)))
-        });
+        let emitted: Vec<_> = jobs
+            .par_iter()
+            .with_max_len(1)
+            .map(|job| -> Result<_, Error> {
+                if job.base == 0 {
+                    return Ok(None);
+                }
+                let mut local = Writer::new(job.base);
+                let name = scene.models[job.index].name();
+                let part = job
+                    .analysis
+                    .emit(&job.donor, &mut local, root, name, job.scale)?;
+                debug_assert_eq!(local.next_id, job.base + job.analysis.id_budget());
+                Ok(Some((local.buf, part)))
+            })
+            .collect();
 
         sink.write_all(&w.buf)?;
         w.buf.clear();
@@ -658,11 +638,3 @@ fn base64_decode(text: &[u8]) -> Result<Vec<u8>, Error> {
 
 #[cfg(test)]
 mod tests;
-
-/// Worker threads for the parallel stages: the machine's parallelism,
-/// never more than eight.
-pub(crate) fn worker_threads() -> usize {
-    std::thread::available_parallelism()
-        .map_or(1, |n| n.get())
-        .min(8)
-}
