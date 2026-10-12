@@ -4,10 +4,10 @@ pub mod footprint;
 
 use anyhow::{Context, Result, anyhow};
 use pcb_command_runner::CommandRunner;
-use pcb_sexpr::Sexpr;
+use pcb_sexpr::scan::{self, Token};
 use std::collections::HashMap;
 use std::fs::File;
-use std::io::{BufReader, Write};
+use std::io::Write;
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use tempfile::{NamedTempFile, TempDir};
@@ -155,20 +155,20 @@ fn read_board_kicad_major_version(pcb_path: &Path) -> Result<Option<u32>> {
         return Ok(None);
     }
 
-    let file = File::open(pcb_path)
+    let bytes = std::fs::read(pcb_path)
         .with_context(|| format!("Failed to read PCB file: {}", pcb_path.display()))?;
-    let mut version = None;
-    pcb_sexpr::walk_stream(BufReader::new(file), |node| {
-        let Some(items) = node.as_list() else {
-            return true;
-        };
-        if items.first().and_then(Sexpr::as_sym) == Some("generator_version") {
-            version = items.get(1).and_then(Sexpr::as_str).and_then(version_major);
-            return false;
-        }
-        true
-    })
-    .with_context(|| format!("Failed to parse PCB file: {}", pcb_path.display()))?;
+    // Only the header matters, so ignore anything after invalid UTF-8.
+    let text = std::str::from_utf8(&bytes).unwrap_or_else(|err| {
+        std::str::from_utf8(&bytes[..err.valid_up_to()]).expect("valid UTF-8 prefix")
+    });
+    let mut tokens = scan::tokens(text);
+    let version = tokens
+        .find(|(range, token)| {
+            *token == Token::Open && scan::head(text, range.start) == "generator_version"
+        })
+        .and_then(|_| tokens.next())
+        .filter(|(_, token)| *token == Token::String)
+        .and_then(|(range, _)| version_major(&text[range]));
 
     Ok(version)
 }

@@ -183,7 +183,7 @@ pub fn format_tree(sexpr: &Sexpr, mode: FormatMode) -> String {
 /// Unlike `%g` it never falls back to exponent notation. At most ten decimals
 /// are kept: KiCad formats whole internal units (1 nm at the finest), so noise
 /// near zero, such as `cos(90°)`, is written as `0` as a KiCad save would.
-fn format_float(f: f64) -> String {
+pub(crate) fn format_float(f: f64) -> String {
     if f == 0.0 {
         return "0".to_string();
     }
@@ -191,6 +191,34 @@ fn format_float(f: f64) -> String {
     match trim_float(format!("{f:.decimals$}")) {
         zero if zero == "-0" => "0".to_string(),
         formatted => formatted,
+    }
+}
+
+/// Whether [`format_float`] or `i64::to_string` reproduces `atom`, the source
+/// text of a parsed number of kind `kind`.
+pub(crate) fn is_canonical_number(kind: &SexprKind, atom: &str) -> bool {
+    let digits = atom.strip_prefix('-').unwrap_or(atom);
+    let (int, frac) = match kind {
+        SexprKind::Int(_) if atom != "-0" => (digits, ""),
+        SexprKind::F64(_) => match digits.split_once('.') {
+            Some((int, frac)) if !frac.is_empty() && !frac.ends_with('0') => (int, frac),
+            _ => return false,
+        },
+        _ => return false,
+    };
+    let is_digits = |s: &str| s.bytes().all(|b| b.is_ascii_digit());
+    if int.is_empty()
+        || !is_digits(int)
+        || !is_digits(frac)
+        || (int.len() > 1 && int.starts_with('0'))
+    {
+        return false;
+    }
+    // `format_float` keeps 10 significant digits, and 10 decimals below 1.
+    match (kind, int) {
+        (SexprKind::Int(_), _) => true,
+        (_, "0") => frac.len() <= 10,
+        _ => int.len() + frac.len() <= 10,
     }
 }
 
@@ -208,20 +236,7 @@ fn write_compact(sexpr: &Sexpr, out: &mut String) {
             out.push_str(&escape_string(s));
             out.push('"');
         }
-        SexprKind::Int(n) => {
-            if let Some(raw) = sexpr.raw_atom.as_deref() {
-                out.push_str(raw);
-            } else {
-                out.push_str(&n.to_string());
-            }
-        }
-        SexprKind::F64(f) => {
-            if let Some(raw) = sexpr.raw_atom.as_deref() {
-                out.push_str(raw);
-            } else {
-                out.push_str(&format_float(*f));
-            }
-        }
+        SexprKind::Int(_) | SexprKind::F64(_) => out.push_str(&sexpr.atom_text().unwrap()),
         SexprKind::List(items) => {
             out.push('(');
             for (idx, item) in items.iter().enumerate() {

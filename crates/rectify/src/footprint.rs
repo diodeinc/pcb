@@ -441,10 +441,7 @@ fn parse_embedded_file(list: &[Sexpr]) -> Result<Option<(String, Vec<u8>)>> {
     // stitch them back together and strip the delimiter / whitespace.
     let mut b64_clean = String::new();
     for item in data_list.iter().skip(1) {
-        let atom = match &item.kind {
-            SexprKind::Symbol(s) | SexprKind::String(s) => s.as_str(),
-            _ => item.raw_atom.as_deref().unwrap_or(""),
-        };
+        let atom = item.atom_text().unwrap_or_default();
         for ch in atom.chars() {
             if !ch.is_whitespace() && ch != '|' {
                 b64_clean.push(ch);

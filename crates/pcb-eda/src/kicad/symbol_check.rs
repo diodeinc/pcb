@@ -5,6 +5,7 @@
 //! advice is KLC-derived style. An unnamed pin is neither: KiCad 10 writes it
 //! as `(name "")` and it takes its number as its signal name.
 
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
@@ -796,7 +797,7 @@ fn check_form(
     let what = match role {
         "symbol" => "a symbol".to_string(),
         "unit" => "a unit symbol".to_string(),
-        _ => format!("`{}`", items.first().map_or("()", raw)),
+        _ => format!("`{}`", items.first().map_or("()".into(), raw)),
     };
     let mut rest = items.get(1..).unwrap_or_default();
     for atom in form.atoms {
@@ -830,7 +831,7 @@ fn check_form(
         match child_role(role, head) {
             Some(role) => check_form(item, role, def, report),
             None => {
-                let found = list.first().map_or("()", raw);
+                let found = list.first().map_or("()".into(), raw);
                 let message = format!("`{found}` is not something KiCad accepts in {what}");
                 report(&PARSE, head_span(item), message, None);
             }
@@ -847,8 +848,8 @@ fn check_atom(
     report: &mut impl FnMut(&Rule, Span, String, Option<Edit>),
 ) {
     let written = raw(node);
-    if atom.is_number() && !is_plain_decimal(written) {
-        let fix = plain_decimal(written).map(|plain| def.edit(node.span, plain));
+    if atom.is_number() && !is_plain_decimal(&written) {
+        let fix = plain_decimal(&written).map(|plain| def.edit(node.span, plain));
         let message = format!("`{written}` is not a plain decimal");
         report(&NUMBER_FORMAT, node.span, message, fix);
     }
@@ -858,7 +859,7 @@ fn check_atom(
     let head = parent
         .as_list()
         .and_then(|items| items.first())
-        .map_or("()", raw);
+        .map_or("()".into(), raw);
     let message = match atom {
         Atom::Word(what, words) => {
             format!(
@@ -870,7 +871,7 @@ fn check_atom(
     };
     // The two values tools most often invent: a solid fill is `outline`, and
     // centred text has no `justify`.
-    let fix = match (role, written) {
+    let fix = match (role, written.as_ref()) {
         ("fill_type", "solid") => Some(def.edit(node.span, "outline")),
         ("justify", "center") if parent.as_list().is_some_and(|items| items.len() == 2) => {
             Some(def.edit(parent.span, ""))
@@ -1465,11 +1466,8 @@ fn nm(mm: f64) -> i64 {
 }
 
 /// An atom as written in the file.
-fn raw(node: &Sexpr) -> &str {
-    node.raw_atom
-        .as_deref()
-        .or_else(|| node.as_atom())
-        .unwrap_or("(…)")
+fn raw(node: &Sexpr) -> Cow<'_, str> {
+    node.atom_text().unwrap_or(Cow::Borrowed("(…)"))
 }
 
 fn quoted(node: &Sexpr) -> String {

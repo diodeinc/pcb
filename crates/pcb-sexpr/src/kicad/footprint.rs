@@ -162,7 +162,7 @@ fn validate_embedded_file(file: &[Sexpr], issues: &mut Vec<FootprintValidationIs
     };
     let checksum_span = list_span(checksum_list);
     let data_span = list_span(data_list);
-    let Some(stored_checksum) = checksum_list.get(1).and_then(atom_text) else {
+    let Some(stored_checksum) = checksum_list.get(1).and_then(Sexpr::atom_text) else {
         issues.push(FootprintValidationIssue::new(
             format!("Embedded file `{name}` has an invalid checksum field"),
             checksum_span,
@@ -352,17 +352,9 @@ fn collect_data_payload(data_list: &[Sexpr]) -> Option<String> {
 fn collect_child_atom_text(list: &[Sexpr], start: usize) -> Option<String> {
     let mut text = String::new();
     for node in list.get(start..)? {
-        text.push_str(&atom_text(node)?);
+        text.push_str(&node.atom_text()?);
     }
     Some(text)
-}
-
-fn atom_text(node: &Sexpr) -> Option<String> {
-    if let Some(raw) = &node.raw_atom {
-        Some(raw.clone())
-    } else {
-        node.as_atom().map(str::to_owned)
-    }
 }
 
 #[cfg(test)]
