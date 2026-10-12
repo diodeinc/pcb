@@ -195,12 +195,12 @@ pub(crate) fn format_float(f: f64) -> String {
 }
 
 /// Whether [`format_float`] or `i64::to_string` reproduces `atom`, the source
-/// text of a parsed number of kind `kind`.
-pub(crate) fn is_canonical_number(kind: &SexprKind, atom: &str) -> bool {
+/// text of a parsed integer (`is_int`) or float.
+pub(crate) fn is_canonical_number(is_int: bool, atom: &str) -> bool {
     let digits = atom.strip_prefix('-').unwrap_or(atom);
-    let (int, frac) = match kind {
-        SexprKind::Int(_) if atom != "-0" => (digits, ""),
-        SexprKind::F64(_) => match digits.split_once('.') {
+    let (int, frac) = match is_int {
+        true if atom != "-0" => (digits, ""),
+        false => match digits.split_once('.') {
             Some((int, frac)) if !frac.is_empty() && !frac.ends_with('0') => (int, frac),
             _ => return false,
         },
@@ -215,8 +215,8 @@ pub(crate) fn is_canonical_number(kind: &SexprKind, atom: &str) -> bool {
         return false;
     }
     // `format_float` keeps 10 significant digits, and 10 decimals below 1.
-    match (kind, int) {
-        (SexprKind::Int(_), _) => true,
+    match (is_int, int) {
+        (true, _) => true,
         (_, "0") => frac.len() <= 10,
         _ => int.len() + frac.len() <= 10,
     }

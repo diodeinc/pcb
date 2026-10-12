@@ -1,6 +1,9 @@
 //! A simple S-expression parser that preserves the exact format of atoms
 //! and tracks source spans for each node.
 //!
+//! [`Doc::parse`] reads a file into a flat array of nodes, and is the fastest
+//! way to read one. [`parse`] makes an owned [`Sexpr`] tree to build or edit.
+//!
 //! # Tree Traversal and Patching
 //!
 //! This crate provides generic APIs for walking S-expression trees and applying
@@ -10,14 +13,18 @@
 //! - [`Sexpr::walk_strings`] - Walk only string literals
 //! - [`PatchSet`] - Collect patches and write directly to any `std::io::Write`
 
+mod arena;
 pub mod board;
 pub mod edit;
 pub mod formatter;
 pub mod kicad;
+mod parser;
 pub mod scan;
 
 use std::borrow::Cow;
 use std::fmt;
+
+pub use arena::{Doc, Node, NodeKind};
 
 /// Find a direct child list `(name ...)` within a list of [`Sexpr`] nodes.
 pub fn find_child_list<'a>(items: &'a [Sexpr], name: &str) -> Option<&'a [Sexpr]> {
@@ -494,131 +501,57 @@ impl From<bool> for Sexpr {
     }
 }
 
-/// Parse a string into an S-expression
+/// Parse the first S-expression of a string into an owned tree.
+///
+/// To only read the result, [`Doc::parse`] is faster.
 pub fn parse(input: &str) -> Result<Sexpr, ParseError> {
-    let mut parser = Parser { input, pos: 0 };
-    parser.skip_whitespace();
-    parser.parse_node()
+    parser::scan(input, &mut Tree, true)?
+        .pop()
+        .ok_or(ParseError::UnexpectedEof)
 }
 
 /// Parse a string into multiple S-expressions
 pub fn parse_all(input: &str) -> Result<Vec<Sexpr>, ParseError> {
-    let mut parser = Parser { input, pos: 0 };
-    let mut roots = Vec::new();
-    loop {
-        parser.skip_whitespace();
-        if parser.peek().is_none() {
-            return Ok(roots);
-        }
-        roots.push(parser.parse_node()?);
-    }
+    parser::scan(input, &mut Tree, false)
 }
 
-/// Delimiters are ASCII, so scanning bytes never splits a UTF-8 character.
-fn is_delimiter(b: u8) -> bool {
-    b.is_ascii_whitespace() || b == b'(' || b == b')'
-}
+/// Builds [`Sexpr`] trees for [`parser::scan`].
+struct Tree;
 
-struct Parser<'a> {
-    input: &'a str,
-    pos: usize,
-}
+impl<'s> parser::Sink<'s> for Tree {
+    type Node = Sexpr;
 
-impl Parser<'_> {
-    fn peek(&self) -> Option<u8> {
-        self.input.as_bytes().get(self.pos).copied()
+    fn symbol(&mut self, start: u32, text: &'s str) -> Sexpr {
+        let span = Span::new(start as usize, start as usize + text.len());
+        Sexpr::with_span(SexprKind::Symbol(text.to_owned()), span)
     }
 
-    fn skip_whitespace(&mut self) {
-        let bytes = self.input.as_bytes();
-        while let Some(&b) = bytes.get(self.pos) {
-            if b.is_ascii_whitespace() {
-                self.pos += 1;
-            } else if b == b';' {
-                self.pos = memchr::memchr(b'\n', &bytes[self.pos..])
-                    .map_or(bytes.len(), |i| self.pos + i + 1);
-            } else {
-                break;
-            }
-        }
-    }
-
-    /// Parse the node at `pos`, which is not whitespace.
-    fn parse_node(&mut self) -> Result<Sexpr, ParseError> {
-        let start = self.pos;
-        let kind = match self.peek() {
-            None => return Err(ParseError::UnexpectedEof),
-            Some(b')') => return Err(ParseError::UnexpectedChar(')', '(')),
-            Some(b'(') => {
-                self.pos += 1;
-                let mut items = Vec::new();
-                loop {
-                    self.skip_whitespace();
-                    match self.peek() {
-                        None => return Err(ParseError::UnclosedList),
-                        Some(b')') => break,
-                        Some(_) => items.push(self.parse_node()?),
-                    }
-                }
-                self.pos += 1;
-                SexprKind::List(items)
-            }
-            Some(b'"') => SexprKind::String(self.parse_string()?),
-            Some(_) => return Ok(self.parse_atom()),
+    fn number(
+        &mut self,
+        start: u32,
+        text: &'s str,
+        number: parser::Number,
+        canonical: bool,
+    ) -> Sexpr {
+        let kind = match number {
+            parser::Number::Int(n) => SexprKind::Int(n),
+            parser::Number::F64(f) => SexprKind::F64(f),
         };
-        Ok(Sexpr::with_span(kind, Span::new(start, self.pos)))
-    }
-
-    fn parse_string(&mut self) -> Result<String, ParseError> {
-        let bytes = self.input.as_bytes();
-        self.pos += 1;
-        let mut value = String::new();
-        loop {
-            let run = memchr::memchr2(b'"', b'\\', &bytes[self.pos..])
-                .ok_or(ParseError::UnterminatedString)?;
-            value.push_str(&self.input[self.pos..self.pos + run]);
-            self.pos += run + 1;
-            if bytes[self.pos - 1] == b'"' {
-                return Ok(value);
-            }
-            let escaped = self.input[self.pos..]
-                .chars()
-                .next()
-                .ok_or(ParseError::UnterminatedString)?;
-            self.pos += escaped.len_utf8();
-            value.push(match escaped {
-                'n' => '\n',
-                'r' => '\r',
-                't' => '\t',
-                other => other,
-            });
-        }
-    }
-
-    fn parse_atom(&mut self) -> Sexpr {
-        let start = self.pos;
-        let bytes = self.input.as_bytes();
-        while bytes.get(self.pos).is_some_and(|&b| !is_delimiter(b)) {
-            self.pos += 1;
-        }
-        let atom = &self.input[start..self.pos];
-        let kind = if let Ok(value) = atom.parse::<i64>() {
-            SexprKind::Int(value)
-        } else if let Ok(value) = atom.parse::<f64>() {
-            SexprKind::F64(value)
-        } else {
-            return Sexpr::with_span(
-                SexprKind::Symbol(atom.to_owned()),
-                Span::new(start, self.pos),
-            );
-        };
-        // Most numbers format back to their source text; keep only the others.
-        let raw_atom = (!formatter::is_canonical_number(&kind, atom)).then(|| atom.into());
         Sexpr {
             kind,
-            span: Span::new(start, self.pos),
-            raw_atom,
+            span: Span::new(start as usize, start as usize + text.len()),
+            raw_atom: (!canonical).then(|| text.into()),
         }
+    }
+
+    fn string(&mut self, start: u32, end: u32, text: &str, _escaped: bool) -> Sexpr {
+        let span = Span::new(start as usize, end as usize);
+        Sexpr::with_span(SexprKind::String(text.to_owned()), span)
+    }
+
+    fn list(&mut self, start: u32, end: u32, pending: &mut Vec<Sexpr>, first: usize) -> Sexpr {
+        let span = Span::new(start as usize, end as usize);
+        Sexpr::with_span(SexprKind::List(pending.drain(first..).collect()), span)
     }
 }
 
@@ -630,6 +563,8 @@ pub enum ParseError {
     UnclosedList,
     UnterminatedString,
     EmptyAtom,
+    /// Spans are 32-bit, so the input must be under 4 GiB.
+    InputTooLarge,
 }
 
 impl fmt::Display for ParseError {
@@ -642,6 +577,7 @@ impl fmt::Display for ParseError {
             ParseError::UnclosedList => write!(f, "Unclosed list"),
             ParseError::UnterminatedString => write!(f, "Unterminated string"),
             ParseError::EmptyAtom => write!(f, "Empty atom"),
+            ParseError::InputTooLarge => write!(f, "Input is 4 GiB or larger"),
         }
     }
 }
@@ -764,13 +700,33 @@ mod tests {
         assert_eq!(items[5].as_str(), Some("🔥\n\r\t\\\"é"));
         assert_eq!(roots[1].as_sym(), Some("tail"));
 
+        // A `Doc` holds the same nodes, spans and number text.
+        let input = format!("{input} (at 1.27 -5 (\"a\\\"b\" \"c\")) \"x\\ty\"");
+        let doc = Doc::parse_all(input.as_str()).unwrap();
+        let tree: Vec<_> = doc.roots().iter().map(Node::to_sexpr).collect();
+        assert_eq!(
+            format!("{tree:?}"),
+            format!("{:?}", parse_all(&input).unwrap())
+        );
+        let items = doc.root().as_list().unwrap();
+        assert_eq!(items[1].atom_text().as_deref(), Some("+001"));
+        assert_eq!(items[1].as_int(), Some(1));
+        assert_eq!(items[5].as_str(), Some("🔥\n\r\t\\\"é"));
+        let at = doc.roots()[2].as_list().unwrap();
+        assert_eq!(at[1].kind(), NodeKind::F64(1.27));
+        assert_eq!(at[3].as_list().unwrap()[1].as_str(), Some("c"));
+        assert_eq!(doc.roots()[3].as_str(), Some("x\ty"));
+        let span = at[3].span();
+        assert_eq!(&input[span.start..span.end], "(\"a\\\"b\" \"c\")");
+
         for (input, error) in [
             ("", ParseError::UnexpectedEof),
             ("(日本語", ParseError::UnclosedList),
             ("\"🔥\\", ParseError::UnterminatedString),
             (")", ParseError::UnexpectedChar(')', '(')),
         ] {
-            assert_eq!(parse(input), Err(error));
+            assert_eq!(parse(input).unwrap_err(), error);
+            assert_eq!(Doc::parse_all(input).unwrap_err(), error);
         }
     }
 
@@ -827,6 +783,8 @@ mod tests {
                 "{lexeme}"
             );
             assert_eq!(node.to_string(), *lexeme);
+            let doc = Doc::parse(lexeme.as_str()).unwrap();
+            assert_eq!(doc.root().atom_text().as_deref(), Some(lexeme.as_str()));
         }
         // KiCad's usual numbers need no copy of their text.
         let node = parse("(at 1.27 -0.5 90)").unwrap();

@@ -20,7 +20,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ### Changed
 
 - `pcb step export` opens the solder mask for pads that sit only on mask or paste layers, and draws graphics on copper layers as copper, as KiCad does.
-- Parse KiCad files about 1.4x faster.
+- Parse KiCad files about 1.5x faster.
 
 ## [0.4.76] - 2026-10-12
 
