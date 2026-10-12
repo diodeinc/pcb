@@ -23,9 +23,5 @@ tempfile = { workspace = true }
 # Foxtrot STEP parsing + tessellation
 triangulate = { workspace = true, features = ["parallel"] }
 
-[build-dependencies]
-sha2 = { workspace = true }
-toml = { workspace = true }
-
 [dev-dependencies]
 zstd = { workspace = true }

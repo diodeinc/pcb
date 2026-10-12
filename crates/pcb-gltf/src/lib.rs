@@ -13,7 +13,7 @@ mod models;
 
 use std::io::Write;
 
-pub use cache::{CacheStats, ENV as MODEL_CACHE_ENV, ModelCache};
+pub use cache::{CacheStats, ModelCache};
 
 use anyhow::Result;
 use pcb_step::scene::Scene;
