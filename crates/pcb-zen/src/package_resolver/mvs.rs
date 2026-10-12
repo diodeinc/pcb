@@ -21,7 +21,7 @@ pub struct PackageResolution {
     /// Sibling workspace packages reached only through other siblings, at the
     /// pins an outside consumer sees. Recorded in `[dependencies.indirect]`;
     /// inside the workspace they are always resolved locally.
-    pub indirect_workspace: BTreeMap<String, Version>,
+    pub indirect_workspace: BTreeMap<ResolvedDepId, Version>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -251,14 +251,14 @@ impl PackageResolver {
             }
         }
 
-        let (imported_workspace_floors, indirect_workspace) =
+        let (imported_workspace_floors, workspace_floors) =
             self.import_workspace_closure(&scanned)?;
 
         self.run_remote_mvs(
             &scanned,
             &current_config.dependencies.direct,
             &imported_workspace_floors,
-            indirect_workspace,
+            workspace_floors,
         )
         .with_context(|| {
             format!(
@@ -400,35 +400,37 @@ impl PackageResolver {
     }
 
     /// Merges what each direct sibling brings along: its remote floors and the
-    /// sibling packages it depends on (directly or transitively).
+    /// sibling packages it depends on (directly or transitively), per lane.
     fn import_workspace_closure(
         &mut self,
         scanned: &ScannedDirectDeps,
-    ) -> Result<(BTreeMap<ResolvedDepId, Version>, BTreeMap<String, Version>)> {
+    ) -> Result<(
+        BTreeMap<ResolvedDepId, Version>,
+        BTreeMap<ResolvedDepId, Version>,
+    )> {
         // Board workspaces are never consumed from outside, so their sibling
         // packages stay local and only need their remote closure recorded.
         let record_siblings = !self.workspace_has_board();
-        let mut floors = BTreeMap::new();
-        let mut indirect_workspace = BTreeMap::<String, Version>::new();
+        let mut remote_floors = BTreeMap::new();
+        let mut workspace_floors = BTreeMap::new();
         for workspace_dep in &scanned.workspace {
             let child = self.resolve_package(workspace_dep)?;
             for (dep_id, version) in child.resolved_remote {
-                merge_floor_version(&mut floors, dep_id, version);
+                merge_floor_version(&mut remote_floors, dep_id, version);
+            }
+            if !record_siblings {
+                continue;
             }
             let child_siblings = child.direct.iter().filter_map(|(path, spec)| {
                 self.workspace_package_dep(path)?;
-                Some((path.clone(), pinned_version(spec)?))
+                let version = pinned_version(spec)?;
+                Some((ResolvedDepId::for_version(path.clone(), &version), version))
             });
-            for (path, version) in child_siblings.chain(child.indirect_workspace) {
-                if record_siblings && !scanned.workspace.contains(&path) {
-                    let current = indirect_workspace
-                        .entry(path)
-                        .or_insert_with(|| version.clone());
-                    *current = (*current).clone().max(version);
-                }
+            for (dep_id, version) in child_siblings.chain(child.indirect_workspace) {
+                merge_floor_version(&mut workspace_floors, dep_id, version);
             }
         }
-        Ok((floors, indirect_workspace))
+        Ok((remote_floors, workspace_floors))
     }
 
     fn workspace_has_board(&self) -> bool {
@@ -466,7 +468,7 @@ impl PackageResolver {
         scanned: &ScannedDirectDeps,
         existing_direct: &BTreeMap<String, DependencySpec>,
         imported_workspace_floors: &BTreeMap<ResolvedDepId, Version>,
-        indirect_workspace: BTreeMap<String, Version>,
+        workspace_floors: BTreeMap<ResolvedDepId, Version>,
     ) -> Result<PackageResolution> {
         let mut selected = BTreeMap::<ResolvedDepId, Version>::new();
         let mut queue = VecDeque::<ResolvedDepId>::new();
@@ -524,14 +526,23 @@ impl PackageResolver {
             }
         }
 
+        let direct = fold_direct_dependencies(
+            &self.workspace,
+            scanned,
+            existing_direct,
+            &selected,
+            &direct_remote_ids,
+            &workspace_floors,
+        )?;
+        // A lane a direct sibling pin already covers needs no indirect entry.
+        let mut indirect_workspace = workspace_floors;
+        for path in &scanned.workspace {
+            if let Some(version) = direct.get(path).and_then(pinned_version) {
+                indirect_workspace.remove(&ResolvedDepId::for_version(path.clone(), &version));
+            }
+        }
         Ok(PackageResolution {
-            direct: fold_direct_dependencies(
-                &self.workspace,
-                scanned,
-                existing_direct,
-                &selected,
-                &direct_remote_ids,
-            )?,
+            direct,
             direct_remote_ids,
             resolved_remote: selected,
             indirect_workspace,
@@ -565,6 +576,7 @@ fn fold_direct_dependencies(
     existing_direct: &BTreeMap<String, DependencySpec>,
     resolved_remote: &BTreeMap<ResolvedDepId, Version>,
     direct_remote_ids: &BTreeSet<ResolvedDepId>,
+    workspace_floors: &BTreeMap<ResolvedDepId, Version>,
 ) -> Result<BTreeMap<String, DependencySpec>> {
     let mut direct = BTreeMap::new();
 
@@ -582,13 +594,17 @@ fn fold_direct_dependencies(
     }
 
     for module_path in &scanned.workspace {
+        let mut version =
+            workspace_package_version(workspace, module_path, existing_direct.get(module_path))?;
+        // A sibling that pins this package higher in the same lane raises our pin.
+        if let Some(floor) =
+            workspace_floors.get(&ResolvedDepId::for_version(module_path.clone(), &version))
+        {
+            version = version.max(floor.clone());
+        }
         direct.insert(
             module_path.clone(),
-            DependencySpec::Version(workspace_package_version(
-                workspace,
-                module_path,
-                existing_direct.get(module_path),
-            )?),
+            DependencySpec::Version(version.to_string()),
         );
     }
 
@@ -599,7 +615,7 @@ fn workspace_package_version(
     workspace: &crate::WorkspaceInfo,
     package_url: &str,
     existing_pin: Option<&DependencySpec>,
-) -> Result<String> {
+) -> Result<Version> {
     let Some(pkg) = workspace.packages.get(package_url) else {
         anyhow::bail!(
             "Workspace dependency {} is not a workspace package",
@@ -616,7 +632,7 @@ fn workspace_package_version(
     if let Some(pinned) = existing_pin.and_then(pinned_version) {
         version = version.max(pinned);
     }
-    Ok(version.to_string())
+    Ok(version)
 }
 
 fn pinned_version(spec: &DependencySpec) -> Option<Version> {
