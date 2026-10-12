@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
-use pcb_zen::package_resolver::PackageResolution;
+use pcb_zen::package_resolver::{PackageResolution, ResolvedDepId};
 use pcb_zen_core::config::{DependencySpec, PcbToml};
 
 use super::target::AddTarget;
@@ -44,10 +44,17 @@ pub(crate) fn plan_package_manifest(
 }
 
 fn indirect_dependencies(resolution: &PackageResolution) -> BTreeMap<String, DependencySpec> {
-    resolution
+    let remote = resolution
         .resolved_remote
         .iter()
-        .filter(|(dep_id, _)| !resolution.direct_remote_ids.contains(*dep_id))
+        .filter(|(dep_id, _)| !resolution.direct_remote_ids.contains(*dep_id));
+    let workspace = resolution
+        .indirect_workspace
+        .iter()
+        .map(|(path, version)| (ResolvedDepId::for_version(path.clone(), version), version));
+    remote
+        .map(|(dep_id, version)| (dep_id.clone(), version))
+        .chain(workspace)
         .map(|(dep_id, version)| {
             (
                 dep_id.indirect_key(),

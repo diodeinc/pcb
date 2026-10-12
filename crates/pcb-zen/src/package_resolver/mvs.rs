@@ -18,6 +18,10 @@ pub struct PackageResolution {
     pub direct: BTreeMap<String, DependencySpec>,
     pub direct_remote_ids: BTreeSet<ResolvedDepId>,
     pub resolved_remote: BTreeMap<ResolvedDepId, Version>,
+    /// Sibling workspace packages reached only through other siblings, at the
+    /// pins an outside consumer sees. Recorded in `[dependencies.indirect]`;
+    /// inside the workspace they are always resolved locally.
+    pub indirect_workspace: BTreeMap<String, Version>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -247,12 +251,14 @@ impl PackageResolver {
             }
         }
 
-        let imported_workspace_floors = self.import_workspace_floors(&scanned)?;
+        let (imported_workspace_floors, indirect_workspace) =
+            self.import_workspace_closure(&scanned)?;
 
         self.run_remote_mvs(
             &scanned,
             &current_config.dependencies.direct,
             &imported_workspace_floors,
+            indirect_workspace,
         )
         .with_context(|| {
             format!(
@@ -393,18 +399,48 @@ impl PackageResolver {
         (self.workspace.workspace_base_url().as_deref() == Some(dep_path)).then_some(dep_path)
     }
 
-    fn import_workspace_floors(
+    /// Merges what each direct sibling brings along: its remote floors and the
+    /// sibling packages it depends on (directly or transitively).
+    fn import_workspace_closure(
         &mut self,
         scanned: &ScannedDirectDeps,
-    ) -> Result<BTreeMap<ResolvedDepId, Version>> {
-        let mut imported = BTreeMap::new();
+    ) -> Result<(BTreeMap<ResolvedDepId, Version>, BTreeMap<String, Version>)> {
+        // Board workspaces are never consumed from outside, so their sibling
+        // packages stay local and only need their remote closure recorded.
+        let record_siblings = !self.workspace_has_board();
+        let mut floors = BTreeMap::new();
+        let mut indirect_workspace = BTreeMap::<String, Version>::new();
         for workspace_dep in &scanned.workspace {
             let child = self.resolve_package(workspace_dep)?;
             for (dep_id, version) in child.resolved_remote {
-                merge_floor_version(&mut imported, dep_id, version);
+                merge_floor_version(&mut floors, dep_id, version);
+            }
+            let child_siblings = child.direct.iter().filter_map(|(path, spec)| {
+                self.workspace_package_dep(path)?;
+                Some((path.clone(), pinned_version(spec)?))
+            });
+            for (path, version) in child_siblings.chain(child.indirect_workspace) {
+                if record_siblings && !scanned.workspace.contains(&path) {
+                    let current = indirect_workspace
+                        .entry(path)
+                        .or_insert_with(|| version.clone());
+                    *current = (*current).clone().max(version);
+                }
             }
         }
-        Ok(imported)
+        Ok((floors, indirect_workspace))
+    }
+
+    fn workspace_has_board(&self) -> bool {
+        self.workspace
+            .config
+            .as_ref()
+            .is_some_and(PcbToml::is_board)
+            || self
+                .workspace
+                .packages
+                .values()
+                .any(|pkg| pkg.config.is_board())
     }
 
     fn package_manifest_source(&self, package_url: &str) -> Result<(PathBuf, PcbToml)> {
@@ -430,6 +466,7 @@ impl PackageResolver {
         scanned: &ScannedDirectDeps,
         existing_direct: &BTreeMap<String, DependencySpec>,
         imported_workspace_floors: &BTreeMap<ResolvedDepId, Version>,
+        indirect_workspace: BTreeMap<String, Version>,
     ) -> Result<PackageResolution> {
         let mut selected = BTreeMap::<ResolvedDepId, Version>::new();
         let mut queue = VecDeque::<ResolvedDepId>::new();
@@ -497,6 +534,7 @@ impl PackageResolver {
             )?,
             direct_remote_ids,
             resolved_remote: selected,
+            indirect_workspace,
         })
     }
 
