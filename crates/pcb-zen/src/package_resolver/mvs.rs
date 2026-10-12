@@ -410,8 +410,7 @@ impl PackageResolver {
     ) -> Result<PackageResolution> {
         let mut selected = BTreeMap::<ResolvedDepId, Version>::new();
 
-        let direct_remote_ids =
-            self.seed_specs(&scanned.remote, "direct dependency", &mut selected)?;
+        let direct_remote_ids = self.seed_specs(&scanned.remote, &mut selected)?;
         for (dep_id, version) in imported_workspace_floors {
             merge_floor_version(&mut selected, dep_id.clone(), version.clone());
         }
@@ -460,7 +459,6 @@ impl PackageResolver {
     fn seed_specs(
         &mut self,
         deps: &BTreeMap<String, DependencySpec>,
-        label: &str,
         selected: &mut BTreeMap<ResolvedDepId, Version>,
     ) -> Result<BTreeSet<ResolvedDepId>> {
         let mut dep_ids = BTreeSet::new();
@@ -468,7 +466,7 @@ impl PackageResolver {
             let version = self
                 .spec_resolver
                 .resolve_spec(module_path, spec)
-                .with_context(|| format!("Failed to resolve {} {}", label, module_path))?;
+                .with_context(|| format!("Failed to resolve direct dependency {}", module_path))?;
             let dep_id = ResolvedDepId::for_version(module_path.clone(), &version);
             merge_floor_version(selected, dep_id.clone(), version);
             dep_ids.insert(dep_id);
