@@ -312,9 +312,7 @@ impl PackageResolver {
         Ok(())
     }
 
-    /// Link a direct remote dependency to every package in its recorded tree.
-    /// Trees are trusted to be closed, so this reaches the whole selection
-    /// without reading deeper manifests.
+    /// Links a direct remote dependency to each package in its recorded tree.
     fn populate_remote_graph(
         &mut self,
         dep_id: &ResolvedDepId,
@@ -415,12 +413,9 @@ impl PackageResolver {
             merge_floor_version(&mut selected, dep_id.clone(), version.clone());
         }
 
-        // Each manifest is trusted to record its complete MVS-closed tree.
-        // Merging the direct dependencies' trees then closes the selection: no
-        // deeper manifest can add or raise a requirement, so none is read.
-        // Only trees at the final direct versions count. A tree superseded by a
-        // raised direct dependency would add requirements that the next sync,
-        // reading the raised pin, drops again.
+        // Every manifest records its complete tree, so the trees of the direct
+        // dependencies at their final versions close the selection. Recompute
+        // until no tree raises a direct dependency.
         let floors = selected;
         let mut selected = floors.clone();
         loop {
