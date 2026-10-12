@@ -25,14 +25,18 @@ pub fn export(
     report: &mut Report,
 ) -> Result<()> {
     // The models need only the components, so they tessellate while the
-    // layers are built.
+    // layers are built, on a pool of their own: in one queue, whichever
+    // is on the critical path would wait behind the other's work.
     let mut scene = Scene::components(board, options, &mut report.warnings);
     let mut layer_warnings = Vec::new();
+    let board_pool = rayon::ThreadPoolBuilder::new().build()?;
     let (layers, mut models) = rayon::join(
         || -> Result<_> {
-            let layers = Scene::layers(board, options, &mut layer_warnings)?;
-            let meshes = board::mesh(&layers);
-            Ok((layers, meshes))
+            board_pool.install(|| {
+                let layers = Scene::layers(board, options, &mut layer_warnings)?;
+                let meshes = board::mesh(&layers);
+                Ok((layers, meshes))
+            })
         },
         || models::tessellate(board, &scene),
     );

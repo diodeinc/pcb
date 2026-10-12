@@ -4,6 +4,7 @@
 use std::f64::consts::PI;
 
 use pcb_ir::geom::{ContourBuf, ContourSet};
+use rayon::prelude::*;
 
 use crate::geom::{Vec2, circle_center, signed_area};
 use crate::outline::{Edge, Loop, intersect, orient};
@@ -87,7 +88,7 @@ pub(crate) fn cleaned(mut ring: Vec<Vec2>) -> Option<Vec<Vec2>> {
 
 /// One `(outer, holes)` per island of a region, with arcs refitted.
 pub(crate) fn loops_of(region: &ContourSet) -> Vec<(Loop, Vec<Loop>)> {
-    nested_of(region).iter().map(|n| fit(n, 1)).collect()
+    nested_of(region).iter().map(fit).collect()
 }
 
 /// An island of a region as point lists: its outer ring and its holes.
@@ -178,14 +179,12 @@ pub(crate) fn raw_islands(region: &ContourSet) -> Vec<Nested> {
 }
 
 /// The loops of one island with arcs refitted, the outer counter-clockwise
-/// and the holes clockwise. Rings are refitted on `threads` threads.
-pub(crate) fn fit(island: &Nested, threads: usize) -> (Loop, Vec<Loop>) {
+/// and the holes clockwise. Rings are refitted in parallel.
+pub(crate) fn fit(island: &Nested) -> (Loop, Vec<Loop>) {
     let rings: Vec<&[Vec2]> = std::iter::once(island.outer.as_slice())
         .chain(island.holes.iter().map(Vec::as_slice))
         .collect();
-    let pieces = crate::parallel_map(if rings.len() >= 64 { threads } else { 1 }, &rings, |r| {
-        refit_pieces(r)
-    });
+    let pieces: Vec<Vec<Piece>> = rings.par_iter().map(|r| refit_pieces(r)).collect();
     let refs: Vec<&[Piece]> = pieces.iter().map(Vec::as_slice).collect();
     let demote = crossing_arcs(&refs);
     let mut loops = rings

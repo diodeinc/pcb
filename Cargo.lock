@@ -4048,6 +4048,7 @@ dependencies = [
  "kurbo",
  "memchr",
  "pcb-ir",
+ "rayon",
  "rustybuzz",
  "serde_json",
  "zstd",
