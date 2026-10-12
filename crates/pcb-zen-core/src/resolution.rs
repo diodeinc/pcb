@@ -549,10 +549,6 @@ fn selected_remote_from_manifest(
 
     for (raw_key, spec) in &config.dependencies.indirect {
         let dep_id = parse_lane_qualified_key(raw_key)?;
-        // Sibling packages recorded for outside consumers resolve locally here.
-        if !is_remote_manifest_dependency(workspace, &dep_id.path, spec) {
-            continue;
-        }
         let version = exact_manifest_version(raw_key, spec)?;
         let expected_lane = compatibility_lane(&version);
         if dep_id.lane != expected_lane {
@@ -562,6 +558,12 @@ fn selected_remote_from_manifest(
                 expected_lane,
                 dep_id.lane
             );
+        }
+        // Sibling packages recorded for outside consumers resolve locally here.
+        if workspace.packages.contains_key(&dep_id.path)
+            || workspace.workspace_base_url().as_deref() == Some(dep_id.path.as_str())
+        {
+            continue;
         }
         selected.insert(dep_id, version);
     }
