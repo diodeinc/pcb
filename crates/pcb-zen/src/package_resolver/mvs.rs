@@ -312,7 +312,8 @@ impl PackageResolver {
         Ok(())
     }
 
-    /// Links a direct remote dependency to each package in its recorded tree.
+    /// Links a remote package to each package in its recorded tree, then
+    /// visits those packages so the graph keeps their own edges.
     fn populate_remote_graph(
         &mut self,
         dep_id: &ResolvedDepId,
@@ -337,10 +338,17 @@ impl PackageResolver {
                 )
             })?;
             let to = DepGraphNode::Remote {
-                dep_id: child_dep_id,
+                dep_id: child_dep_id.clone(),
                 version: selected_version.clone(),
             };
             graph.add_edge(from.clone(), to);
+            self.populate_remote_graph(
+                &child_dep_id,
+                selected_version,
+                selected_remote,
+                graph,
+                seen_remote,
+            )?;
         }
 
         Ok(())
