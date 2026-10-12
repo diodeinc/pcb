@@ -59,9 +59,9 @@ output: the GLB and the warnings are those of an uncached export.
 
 - An entry is addressed by the SHA-256 of the decoded STEP bytes, the
   simplification tolerance (which carries the model's scale) and a salt of
-  the entry format, this crate's version and the tessellation sources.
-  Placement, file name and board do not matter. Bump `FORMAT` in
-  `src/cache.rs` when foxtrot or meshopt-rs change what they produce.
+  the entry format, the tessellation sources and the workspace
+  `Cargo.toml`, which pins foxtrot and meshopt-rs. Placement, file name and
+  board do not matter.
 - Entries are checksummed and renamed into place, so concurrent writers are
   safe; a missing, truncated or damaged entry is recomputed and rewritten,
   and a directory that cannot be written is only read. Problems are logged

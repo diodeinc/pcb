@@ -8,9 +8,8 @@
 //!
 //! An entry is keyed by the SHA-256 of a salt, the effective simplification
 //! tolerance (which carries the model's scale) and the decoded STEP bytes.
-//! The salt is the entry format, this crate's version and the sources of
-//! `mesh.rs` and `models.rs`. Bump [`FORMAT`] when a tessellation
-//! dependency (foxtrot, meshopt-rs) changes what it produces.
+//! The salt is the entry format, the sources of `mesh.rs` and `models.rs`,
+//! and the workspace `Cargo.toml`, which pins foxtrot and meshopt-rs.
 //!
 //! The cache can only make an export faster: an entry that is missing,
 //! unreadable, truncated or fails its checksum is recomputed and rewritten,
@@ -34,9 +33,8 @@ use crate::mesh::Primitive;
 /// The environment variable naming the cache directory.
 const ENV: &str = "PCB_GLTF_MODEL_CACHE_DIR";
 
-/// Bump when the entry encoding, or what a tessellation dependency
-/// produces, changes.
-const FORMAT: &str = "pcb-gltf model cache 3";
+/// Bump when the entry encoding changes.
+const FORMAT: &str = "pcb-gltf model cache 4";
 
 /// What tessellating one payload gave, independent of the model's name.
 #[derive(Debug, PartialEq)]
@@ -82,7 +80,7 @@ impl ModelCache {
         let mut salt = Sha256::new();
         for part in [
             FORMAT,
-            env!("CARGO_PKG_VERSION"),
+            include_str!("../../../Cargo.toml"),
             include_str!("mesh.rs"),
             include_str!("models.rs"),
         ] {
@@ -114,7 +112,9 @@ impl ModelCache {
     }
 
     pub(crate) fn get(&self, key: &Key) -> Option<Tessellation> {
-        let found = fs::read(self.path(key)).ok().and_then(|data| decode(&data));
+        let found = fs::read(self.path(key))
+            .ok()
+            .and_then(|data| decode(&data, key));
         let mut stats = self.stats.lock().unwrap();
         *if found.is_some() {
             &mut stats.hits
@@ -131,7 +131,7 @@ impl ModelCache {
             .prefix(".entry-")
             .tempfile_in(&self.dir)
             .and_then(|mut tmp| {
-                tmp.write_all(&encode(tessellation))?;
+                tmp.write_all(&encode(tessellation, key))?;
                 tmp.persist(self.path(key)).map_err(|e| e.error)
             });
         if let Err(err) = written {
@@ -144,8 +144,8 @@ impl ModelCache {
     }
 }
 
-/// `sha256(body) body`, with the body in little-endian fixed-width fields.
-fn encode(t: &Tessellation) -> Vec<u8> {
+/// `sha256(key body) body`, so an entry under another key's name is refused, with the body in little-endian fixed-width fields.
+fn encode(t: &Tessellation, key: &Key) -> Vec<u8> {
     fn len(body: &mut Vec<u8>, n: usize) {
         body.extend((n as u64).to_le_bytes());
     }
@@ -183,13 +183,13 @@ fn encode(t: &Tessellation) -> Vec<u8> {
             }
         }
     }
-    [Sha256::digest(&body).as_slice(), &body].concat()
+    [checksum(key, &body).as_slice(), &body].concat()
 }
 
 /// The tessellation `data` encodes, if it is whole.
-fn decode(data: &[u8]) -> Option<Tessellation> {
+fn decode(data: &[u8], key: &Key) -> Option<Tessellation> {
     let (sum, body) = data.split_at_checked(32)?;
-    if Sha256::digest(body).as_slice() != sum {
+    if checksum(key, body).as_slice() != sum {
         return None;
     }
     let mut r = Reader(body);
@@ -227,6 +227,14 @@ fn decode(data: &[u8]) -> Option<Tessellation> {
         face_failures,
         primitives,
     })
+}
+
+fn checksum(key: &Key, body: &[u8]) -> Key {
+    Sha256::new()
+        .chain_update(key)
+        .chain_update(body)
+        .finalize()
+        .into()
 }
 
 struct Reader<'a>(&'a [u8]);
@@ -282,15 +290,17 @@ mod tests {
             face_failures: Some((2, 9)),
             primitives: Ok(vec![([0.1, 0.2, 0.3, 1.0], primitive)]),
         };
-        let data = encode(&t);
-        assert_eq!(decode(&data), Some(t));
+        let key = [1; 32];
+        let data = encode(&t, &key);
+        assert_eq!(decode(&data, &key), Some(t));
+        assert!(decode(&data, &[2; 32]).is_none());
         for len in 0..data.len() {
-            assert!(decode(&data[..len]).is_none(), "truncated to {len}");
+            assert!(decode(&data[..len], &key).is_none(), "truncated to {len}");
         }
         for i in 0..data.len() {
             let mut bad = data.clone();
             bad[i] ^= 0x40;
-            assert!(decode(&bad).is_none(), "byte {i} flipped");
+            assert!(decode(&bad, &key).is_none(), "byte {i} flipped");
         }
     }
 }
