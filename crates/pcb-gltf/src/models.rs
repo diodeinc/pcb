@@ -9,6 +9,7 @@ use pcb_step::{Board, Report, content_hash};
 use rayon::prelude::*;
 use triangulate::colored_mesh::{ColoredSubmesh, tessellate_step_bytes};
 
+use crate::cache::{ModelCache, Tessellation};
 use crate::mesh::Primitive;
 
 /// How far simplification may move a model's surface, in output
@@ -31,7 +32,7 @@ pub(crate) struct Models {
     pub(crate) report: Report,
 }
 
-pub(crate) fn tessellate(board: &Board, scene: &Scene) -> Models {
+pub(crate) fn tessellate(board: &Board, scene: &Scene, cache: Option<&ModelCache>) -> Models {
     let decoded: Vec<_> = scene
         .models
         .par_iter()
@@ -73,13 +74,25 @@ pub(crate) fn tessellate(board: &Board, scene: &Scene) -> Models {
         .with_max_len(1)
         .map(|i| {
             let (model, bytes, scale) = &payloads[i];
-            (
-                i,
-                tessellate_one(model, bytes, SIMPLIFY_ERROR / *scale as f32),
-            )
+            let simplify_error = SIMPLIFY_ERROR / *scale as f32;
+            let tessellation = match cache {
+                None => tessellate_one(bytes, simplify_error),
+                Some(cache) => {
+                    let key = cache.key(bytes, simplify_error);
+                    cache.get(&key).unwrap_or_else(|| {
+                        let tessellation = tessellate_one(bytes, simplify_error);
+                        cache.put(&key, &tessellation);
+                        tessellation
+                    })
+                }
+            };
+            (i, outcome(model, tessellation))
         })
         .collect();
     outcomes.sort_by_key(|(i, _)| *i);
+    if let Some(cache) = cache {
+        cache.log_summary();
+    }
 
     let mut meshes = Vec::new();
     let mut mesh_of_payload = Vec::with_capacity(outcomes.len());
@@ -117,27 +130,39 @@ struct Outcome {
     notes: Vec<String>,
 }
 
+/// The mesh and notes for `model` from tessellating its payload.
+fn outcome(model: &Model, tessellation: Tessellation) -> Outcome {
+    let key = &model.key;
+    let notes = tessellation
+        .face_failures
+        .map(|(failures, faces)| {
+            format!("model {key}: {failures} of {faces} faces could not be tessellated")
+        })
+        .into_iter()
+        .collect();
+    let mesh = tessellation.primitives.map(|primitives| {
+        (!primitives.is_empty()).then(|| Mesh {
+            name: model.name().to_owned(),
+            primitives,
+        })
+    });
+    Outcome { mesh, notes }
+}
+
 /// Tessellate one payload and simplify it within `simplify_error` model
 /// millimetres.
-fn tessellate_one(model: &Model, bytes: &[u8], simplify_error: f32) -> Outcome {
-    let key = &model.key;
-    let mut notes = Vec::new();
+fn tessellate_one(bytes: &[u8], simplify_error: f32) -> Tessellation {
     let (tessellated, stats) = match tessellate_step_bytes(bytes) {
         Ok(ok) => ok,
         Err(err) => {
-            return Outcome {
-                mesh: Err(err),
-                notes,
+            return Tessellation {
+                face_failures: None,
+                primitives: Err(err),
             };
         }
     };
-    if !stats.failures.is_empty() {
-        notes.push(format!(
-            "model {key}: {} of {} faces could not be tessellated",
-            stats.failures.len(),
-            stats.num_faces
-        ));
-    }
+    let face_failures = (!stats.failures.is_empty())
+        .then_some((stats.failures.len() as u64, stats.num_faces as u64));
     let tessellated_any = tessellated.submeshes.iter().any(|s| !s.indices.is_empty());
     let mut primitives: Vec<([f32; 4], Primitive)> = tessellated
         .submeshes
@@ -163,19 +188,17 @@ fn tessellate_one(model: &Model, bytes: &[u8], simplify_error: f32) -> Outcome {
         // Simplification drops solids smaller than the error budget.
         .filter(|(_, p)| !p.indices.is_empty())
         .collect();
-    if primitives.is_empty() {
-        let mesh = match tessellated_any || stats.failures.is_empty() {
-            true => Ok(None),
-            false => Err("no faces could be tessellated".to_owned()),
+    if primitives.is_empty() && !tessellated_any && !stats.failures.is_empty() {
+        return Tessellation {
+            face_failures,
+            primitives: Err("no faces could be tessellated".to_owned()),
         };
-        return Outcome { mesh, notes };
     }
     // Order primitives by colour.
     primitives.sort_by(|a, b| a.0.map(f32::to_bits).cmp(&b.0.map(f32::to_bits)));
-    let name = model.name().to_owned();
-    Outcome {
-        mesh: Ok(Some(Mesh { name, primitives })),
-        notes,
+    Tessellation {
+        face_failures,
+        primitives: Ok(primitives),
     }
 }
 

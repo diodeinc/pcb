@@ -6,11 +6,14 @@
 //! The output frame is the STEP frame converted to glTF's: metres, y up.
 
 mod board;
+mod cache;
 mod glb;
 mod mesh;
 mod models;
 
 use std::io::Write;
+
+pub use cache::{CacheStats, ENV as MODEL_CACHE_ENV, ModelCache};
 
 use anyhow::Result;
 use pcb_step::scene::Scene;
@@ -18,9 +21,31 @@ use pcb_step::{Board, Options, Report};
 
 /// Write the GLB for `board` to `sink`, adding warnings and models that
 /// could not be read to `report` as they are found.
+///
+/// Tessellated models are cached on disk when `PCB_GLTF_MODEL_CACHE_DIR`
+/// names a directory; see [`ModelCache`].
 pub fn export(
     board: &Board,
     options: &Options,
+    sink: &mut dyn Write,
+    report: &mut Report,
+) -> Result<()> {
+    export_with_cache(
+        board,
+        options,
+        ModelCache::from_env().as_ref(),
+        sink,
+        report,
+    )
+}
+
+/// [`export`] with the model cache given rather than read from the
+/// environment. The output and the report are the same with any cache, or
+/// none.
+pub fn export_with_cache(
+    board: &Board,
+    options: &Options,
+    cache: Option<&ModelCache>,
     sink: &mut dyn Write,
     report: &mut Report,
 ) -> Result<()> {
@@ -38,7 +63,7 @@ pub fn export(
                 Ok((layers, meshes))
             })
         },
-        || models::tessellate(board, &scene),
+        || models::tessellate(board, &scene, cache),
     );
     report.warnings.append(&mut layer_warnings);
     report.warnings.append(&mut models.report.warnings);

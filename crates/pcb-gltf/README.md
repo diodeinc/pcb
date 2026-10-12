@@ -47,3 +47,39 @@ Models come from the board's embedded files; nothing is looked up on disk.
   node. The origin options move it as they move the STEP output.
 
 The output is deterministic.
+
+## Model cache
+
+Tessellating models is most of an export's time on boards with large
+models. Set `PCB_GLTF_MODEL_CACHE_DIR` to a directory and `pcb gltf export`
+keeps each tessellated model there, so the same STEP file on another board,
+or on a later revision of the same board, is not tessellated again. It is
+off when the variable is unset, and it never changes the output: the GLB
+and the warnings are byte-for-byte those of an uncached export.
+
+- **Keys.** An entry is addressed by the SHA-256 of the decoded STEP bytes,
+  the simplification tolerance (which carries the model's scale), and a
+  salt: the entry format, the CPU architecture, the sources of the
+  tessellation and simplification code, and the locked versions of the
+  crates they use (`build.rs` reads them from `Cargo.lock`). Changing any of
+  them leaves old entries unused rather than wrong. Where the placement,
+  the file name or the board differs, the entry is the same.
+- **Entries** hold the simplified primitives, or the reason the model could
+  not be tessellated, and how many faces failed. Warnings and the mesh name
+  are rebuilt from the model that uses the entry, so they read as they do
+  uncached.
+- **Safety.** Entries are written to a unique temporary file and renamed
+  into place, so readers see a whole entry or none and concurrent writers
+  (threads, processes, containers sharing a volume) cannot corrupt one
+  another. Each entry carries its key and a checksum; a truncated, damaged
+  or misplaced entry is a miss and is rewritten. A directory that cannot be
+  created disables the cache; one that cannot be written is read from only.
+  Problems go to the log (`RUST_LOG=pcb_gltf=debug`, or `--debug`), not to
+  the export's warnings.
+- **Upkeep.** Nothing evicts entries or removes temporary files left by a
+  killed process; delete the directory, or old files from it, whenever.
+  Use a directory on local disk: the cache reads whole entries and is not
+  built for network latency.
+
+Embedders pass a [`ModelCache`] to `export_with_cache` and read its
+`stats()`.

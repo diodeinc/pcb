@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added
+
+- `PCB_GLTF_MODEL_CACHE_DIR` makes `pcb gltf export` keep tessellated models on disk and reuse them across boards and revisions. The GLB and its warnings are the same with or without it.
+
 ## [0.4.75] - 2026-10-12
 
 ### Added

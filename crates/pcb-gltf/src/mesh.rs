@@ -14,7 +14,7 @@ use rustc_hash::FxHashMap;
 const SIMPLIFY_CHUNK: usize = 1 << 17;
 
 /// Triangles of one material.
-#[derive(Default)]
+#[derive(Default, Debug, PartialEq)]
 pub(crate) struct Primitive {
     pub(crate) positions: Vec<[f32; 3]>,
     pub(crate) normals: Vec<[f32; 3]>,

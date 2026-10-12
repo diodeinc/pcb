@@ -3769,12 +3769,17 @@ dependencies = [
  "anyhow",
  "glam 0.34.1",
  "i_triangle",
+ "log",
  "meshopt-rs",
  "pcb-step",
  "rayon",
  "rustc-hash",
  "serde_json",
+ "sha2",
+ "tempfile",
+ "toml",
  "triangulate",
+ "zstd",
 ]
 
 [[package]]
