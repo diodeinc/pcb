@@ -1,0 +1,8 @@
+"""A nested module without Project()."""
+
+Resistor = Module("@stdlib/generics/Resistor.zen")
+
+A = io("A", Net)
+B = io("B", Net)
+
+Resistor(name="R", value="10kohms", package="0402", P1=A, P2=B)

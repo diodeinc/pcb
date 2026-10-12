@@ -1,0 +1,12 @@
+"""Two instances of a module without Project(), organized onto child sheets in KiCad."""
+
+Project(name="Hierarchy", path="kicad", layout=False)
+
+Filter = Module("sheetless_filter.zen")
+
+SOURCE = Net("SOURCE")
+MID = Net("MID")
+SINK = Net("SINK")
+
+Filter(name="FILTER_A", resistance="1kohms", INPUT=SOURCE, OUTPUT=MID, extended=True)
+Filter(name="FILTER_B", resistance="2kohms", INPUT=MID, OUTPUT=SINK, swapped=True)

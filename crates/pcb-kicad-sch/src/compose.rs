@@ -1919,12 +1919,18 @@ struct NetDriverIsland {
     island: IslandRef,
     canonical_target: usize,
     needs_global: bool,
+    /// The page's hierarchical label for the net reaches beyond this island,
+    /// which joins it only through a hierarchical driver of its own.
+    joins_interface: bool,
 }
 
+/// Group a net's visible terminals by physical island. `interfaces` holds,
+/// per page, the hierarchical names through which that page exposes the net.
 fn net_driver_islands(
     document: &SchDocument,
     targets: &[PinTarget],
     observed: &PhysicalConnectivity,
+    interfaces: &BTreeMap<usize, &BTreeSet<String>>,
 ) -> Result<Vec<NetDriverIsland>> {
     let mut targets_by_island = BTreeMap::<IslandRef, Vec<usize>>::new();
     for (target_index, target) in targets.iter().enumerate() {
@@ -1961,9 +1967,46 @@ fn net_driver_islands(
                 .contains(&ConnectionOrigin::KiCadIsland(island.clone()))
         })
     };
+    // A hierarchical driver merges an island with the page's existing
+    // hierarchical label of the same name, so it joins whatever that label
+    // already reaches through the parent's sheet pin.
+    let hierarchical_group = |page_index: usize| {
+        let names = interfaces.get(&page_index)?;
+        let page = &document.pages[page_index];
+        page.items.iter().find_map(|item| {
+            let SchItem::Label(label) = item else {
+                return None;
+            };
+            if !matches!(label.kind, LabelKind::Hierarchical { .. }) || !names.contains(&label.text)
+            {
+                return None;
+            }
+            let label = ConnectivityItemRef::Label {
+                page_id: page.id.clone(),
+                id: label.id.clone(),
+            };
+            let (island, _) = observed
+                .islands
+                .iter()
+                .find(|(_, provenance)| provenance.items.contains(&label))?;
+            island_group(island)
+        })
+    };
+    let mut joins_interface = BTreeSet::new();
     let island_groups = targets_by_island
-        .keys()
-        .map(|island| (island.clone(), island_group(island)))
+        .iter()
+        .map(|(island, target_indices)| {
+            let own = island_group(island);
+            let page_index = targets[target_indices[0]].page_index;
+            let group = match hierarchical_group(page_index) {
+                Some(group) if Some(group) != own => {
+                    joins_interface.insert(island.clone());
+                    Some(group)
+                }
+                _ => own,
+            };
+            (island.clone(), group)
+        })
         .collect::<BTreeMap<_, _>>();
     let net_page_count = targets
         .iter()
@@ -1983,6 +2026,7 @@ fn net_driver_islands(
                     other.page_id != island.page_id && group != &island_groups[&island]
                 });
             NetDriverIsland {
+                joins_interface: joins_interface.contains(&island),
                 island,
                 canonical_target,
                 needs_global,
@@ -2065,7 +2109,7 @@ pub(crate) fn plan_net_driver_kinds(
         .collect::<BTreeSet<_>>();
     let placed = placed_symbols_from_document(document, &expected_slots)?;
     let targets = connectivity_targets(netlist, &placed, nets)?;
-    let contexts = page_driver_contexts(document, netlist, root_page)?;
+    let contexts = page_driver_contexts(document, netlist, &placed, root_page)?;
     let specs = net_symbols::specs(netlist)?;
     let root_ports = netlist
         .root_ref
@@ -2091,11 +2135,16 @@ pub(crate) fn plan_net_driver_kinds(
         let global_pages = if specs.contains_key(net_name) {
             BTreeSet::new()
         } else {
-            net_driver_islands(document, net_targets, &observed)?
-                .into_iter()
-                .filter(|island| island.needs_global)
-                .map(|island| net_targets[island.canonical_target].page_index)
-                .collect::<BTreeSet<_>>()
+            net_driver_islands(
+                document,
+                net_targets,
+                &observed,
+                &net_interfaces(&contexts, net_name),
+            )?
+            .into_iter()
+            .filter(|island| island.needs_global)
+            .map(|island| net_targets[island.canonical_target].page_index)
+            .collect::<BTreeSet<_>>()
         };
         if root_ports.contains_key(net_name) {
             pages.insert(root_page);
@@ -2232,7 +2281,7 @@ fn add_hierarchy_connectivity(
         .map(|net| net.name.clone())
         .collect();
     let targets = connectivity_targets(netlist, placed, &all_nets)?;
-    let page_contexts = page_driver_contexts(document, netlist, plan.root_page())?;
+    let page_contexts = page_driver_contexts(document, netlist, placed, plan.root_page())?;
 
     for sheet_plan in &plan.sheets {
         let ports = module_ports(netlist, &sheet_plan.instance_ref)?;
@@ -2291,7 +2340,7 @@ fn add_connectivity_drivers(
     target_nets: &BTreeSet<String>,
 ) -> Result<()> {
     let anchors_by_net = connectivity_targets(netlist, placed, target_nets)?;
-    let page_contexts = page_driver_contexts(document, netlist, root_page)?;
+    let page_contexts = page_driver_contexts(document, netlist, placed, root_page)?;
     ensure_context_endpoints(
         document,
         &anchors_by_net,
@@ -2488,7 +2537,12 @@ fn sync_net_drivers(
         if net_symbol_specs.contains_key(net_name) {
             continue;
         }
-        for driver_island in net_driver_islands(document, targets, &observed)? {
+        for driver_island in net_driver_islands(
+            document,
+            targets,
+            &observed,
+            &net_interfaces(page_contexts, net_name),
+        )? {
             let target = &targets[driver_island.canonical_target];
             let provenance = &observed.islands[&driver_island.island];
             let interface_names = page_contexts
@@ -2506,6 +2560,28 @@ fn sync_net_drivers(
             } else {
                 has_named_driver(provenance, net_name)
             };
+            // A net this page exposes through a hierarchical label but other
+            // pages reach without one needs both drivers: the hierarchical
+            // label joins the sheet interface, the global label the rest.
+            if driver_island.needs_global
+                && driver_island.joins_interface
+                && let Some(interface_names) = interface_names
+                && !island_has_hierarchical_driver(
+                    document,
+                    target.page_index,
+                    provenance,
+                    interface_names,
+                )
+            {
+                let key = format!("{}:interface", target.label_key(net_name));
+                let id = available_deterministic_id(document, &key);
+                let mut label =
+                    driver_label(net_name, Some(interface_names), false, id, target.point);
+                label.spin = target.spin;
+                document.pages[target.page_index]
+                    .items
+                    .push(SchItem::Label(label));
+            }
             if has_driver {
                 continue;
             }
@@ -2621,7 +2697,8 @@ fn plan_net_symbol_runs(
             continue;
         }
 
-        for driver_island in net_driver_islands(document, targets, &observed)? {
+        // Net symbols name their islands; no hierarchical label bridges them.
+        for driver_island in net_driver_islands(document, targets, &observed, &BTreeMap::new())? {
             let target = &targets[driver_island.canonical_target];
             let provenance = &observed.islands[&driver_island.island];
             let has_driver = if driver_island.needs_global {
@@ -2905,9 +2982,21 @@ fn points_coincide(left: Point, right: Point) -> bool {
 
 type PageDriverContexts = BTreeMap<usize, BTreeMap<String, BTreeSet<String>>>;
 
+/// The interface names through which each page exposes one net.
+fn net_interfaces<'a>(
+    contexts: &'a PageDriverContexts,
+    net_name: &str,
+) -> BTreeMap<usize, &'a BTreeSet<String>> {
+    contexts
+        .iter()
+        .filter_map(|(page_index, context)| Some((*page_index, context.get(net_name)?)))
+        .collect()
+}
+
 fn page_driver_contexts(
     document: &SchDocument,
     netlist: &Schematic,
+    placed: &BTreeMap<SymbolSlotKey, PlacedSymbol>,
     root_page: usize,
 ) -> Result<PageDriverContexts> {
     // A page's interface names come from its identity: the root page speaks
@@ -2930,6 +3019,7 @@ fn page_driver_contexts(
         }
     }
 
+    let identified = module_by_page.keys().copied().collect::<BTreeSet<_>>();
     let mut contexts = module_by_page
         .into_iter()
         .map(|(page_index, module_ref)| {
@@ -2971,7 +3061,126 @@ fn page_driver_contexts(
             break;
         }
     }
+
+    // A page without a module identity may already expose nets through its
+    // own hierarchical labels: a module instance without Project() that the
+    // user (or import) organized onto a child sheet carries its interface
+    // that way. Those observed names connect, so they take precedence over
+    // inherited ones for the nets they carry.
+    for (page_index, names_by_net) in observed_page_interfaces(document, netlist, placed)? {
+        if identified.contains(&page_index) {
+            continue;
+        }
+        contexts.entry(page_index).or_default().extend(names_by_net);
+    }
     Ok(contexts)
+}
+
+/// Hierarchical labels that already bridge exactly one Zener net to another
+/// page, by page and net. A connection's net is read from the netlist nets of
+/// its placed pins and its logical names; dangling and shorted connections
+/// expose nothing.
+fn observed_page_interfaces(
+    document: &SchDocument,
+    netlist: &Schematic,
+    placed: &BTreeMap<SymbolSlotKey, PlacedSymbol>,
+) -> Result<PageDriverContexts> {
+    let has_hierarchical_labels = document.pages.iter().any(|page| {
+        page.items.iter().any(|item| {
+            matches!(item, SchItem::Label(label) if matches!(label.kind, LabelKind::Hierarchical { .. }))
+        })
+    });
+    if !has_hierarchical_labels {
+        return Ok(PageDriverContexts::new());
+    }
+    let nets = named_connected_nets(netlist)
+        .map(|net| net.name.clone())
+        .collect::<BTreeSet<_>>();
+    let mut net_by_pin = BTreeMap::new();
+    for (net_name, targets) in connectivity_targets(netlist, placed, &nets)? {
+        for target in targets {
+            net_by_pin.insert(
+                target.physical_pin(&document.pages[target.page_index].id),
+                net_name.clone(),
+            );
+        }
+    }
+    let observed = reduce_with_provenance(document, PinVisibility::VisibleOnly)?;
+    let page_index_by_id = document
+        .pages
+        .iter()
+        .enumerate()
+        .map(|(index, page)| (page.id.as_str(), index))
+        .collect::<BTreeMap<_, _>>();
+
+    let mut interfaces = PageDriverContexts::new();
+    for group in &observed.graph.groups {
+        let islands = group
+            .origins
+            .iter()
+            .filter_map(|origin| match origin {
+                ConnectionOrigin::KiCadIsland(island) => Some(island),
+                ConnectionOrigin::ZenerNet { .. } => None,
+            })
+            .collect::<Vec<_>>();
+        // Island page ids name sheet instances, so this counts instances.
+        let instances = islands
+            .iter()
+            .map(|island| island.page_id.as_str())
+            .collect::<BTreeSet<_>>();
+        if instances.len() < 2 {
+            continue;
+        }
+        let mut group_nets = group
+            .names
+            .intersection(&nets)
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        let mut labels = Vec::new();
+        for island in &islands {
+            let Some(provenance) = observed.islands.get(*island) else {
+                continue;
+            };
+            group_nets.extend(
+                provenance
+                    .pins
+                    .iter()
+                    .filter_map(|pin| net_by_pin.get(pin).cloned()),
+            );
+            for item in &provenance.items {
+                let ConnectivityItemRef::Label { page_id, id } = item else {
+                    continue;
+                };
+                let Some(&page_index) = page_index_by_id.get(page_id.as_str()) else {
+                    continue;
+                };
+                labels.extend(document.pages[page_index].items.iter().filter_map(
+                    |item| match item {
+                        SchItem::Label(label)
+                            if label.id == *id
+                                && matches!(label.kind, LabelKind::Hierarchical { .. }) =>
+                        {
+                            Some((page_index, label.text.clone()))
+                        }
+                        _ => None,
+                    },
+                ));
+            }
+        }
+        let mut group_nets = group_nets.into_iter();
+        let (Some(net_name), None) = (group_nets.next(), group_nets.next()) else {
+            continue;
+        };
+        for (page_index, text) in labels {
+            interfaces
+                .entry(page_index)
+                .or_default()
+                .entry(net_name.clone())
+                .or_default()
+                .insert(text);
+        }
+    }
+    Ok(interfaces)
 }
 
 fn ensure_context_endpoints(
