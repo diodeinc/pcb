@@ -19,3 +19,8 @@ rustc-hash = { workspace = true }
 serde_json = { workspace = true }
 # Foxtrot STEP parsing + tessellation
 triangulate = { workspace = true, features = ["parallel"] }
+
+[dev-dependencies]
+base64 = { workspace = true }
+tempfile = { workspace = true }
+zstd = { workspace = true }

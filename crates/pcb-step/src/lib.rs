@@ -10,11 +10,14 @@ mod board;
 #[cfg(feature = "cli")]
 pub mod cli;
 mod copper;
+mod coverage;
 mod donor;
 mod faces;
 mod font;
 mod geom;
 mod holes;
+pub mod manifest;
+mod models;
 mod newstroke;
 mod outline;
 mod outline_font;
@@ -34,6 +37,10 @@ use crate::scene::{LayerKind, Scene, Shape};
 use crate::step::{Part, Root, Writer};
 
 pub use board::Board;
+pub use coverage::{Coverage, ModelCoverage, Status};
+pub use models::{LoadedModel, MAX_EXTERNAL_BYTES, ModelError, ModelFormat, ModelResolver};
+pub use outline::OutlinePolicy;
+pub use scene::ProxyMode;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Origin {
@@ -49,6 +56,9 @@ pub struct Options {
     pub components: bool,
     /// Cut via drills into the body as well as pad drills.
     pub cut_vias: bool,
+    /// Draw the board as KiCad's VRML export does: surface vias bored
+    /// through body and mask, copper trimmed to the outline, and paste.
+    pub visual: bool,
     /// Copper: pad prisms and plating; tracks with via rings and barrels;
     /// zone fills. Outer layers only unless `inner_copper`.
     pub pads: bool,
@@ -68,6 +78,10 @@ pub struct Options {
     /// Project text variables, substituted into `${NAME}` in silkscreen
     /// text as KiCad substitutes them.
     pub text_variables: Vec<(String, String)>,
+    /// Where models that are not embedded may be read from.
+    pub models: ModelResolver,
+    pub outline: OutlinePolicy,
+    pub proxies: ProxyMode,
 }
 
 impl Default for Options {
@@ -76,6 +90,7 @@ impl Default for Options {
             board_body: true,
             components: true,
             cut_vias: false,
+            visual: false,
             pads: false,
             tracks: false,
             zones: false,
@@ -88,6 +103,9 @@ impl Default for Options {
             origin: Origin::Board,
             name: "board".to_owned(),
             text_variables: Vec::new(),
+            models: ModelResolver::default(),
+            outline: OutlinePolicy::Strict,
+            proxies: ProxyMode::Off,
         }
     }
 }
@@ -97,26 +115,20 @@ pub struct Report {
     pub warnings: Vec<String>,
     /// Models that were found but could not be used.
     pub failed_models: usize,
+    pub coverage: Coverage,
 }
 
 impl Report {
-    /// A model the board does not embed.
-    pub fn missing_model(&mut self, key: &str) {
-        self.warnings
-            .push(format!("could not find 3D model: {key}"));
-    }
-
-    /// A model with nothing to draw.
-    pub fn empty_model(&mut self, key: &str) {
-        self.warnings
-            .push(format!("model has no solid geometry: {key}"));
-    }
-
-    /// A model that was found but could not be used.
-    pub fn failed_model(&mut self, key: &str, err: &dyn fmt::Display) {
-        self.warnings
-            .push(format!("could not load model {key}: {err}"));
-        self.failed_models += 1;
+    pub fn model_error(&mut self, key: &str, err: &ModelError) {
+        self.warnings.push(match err {
+            ModelError::Absent(_) => format!("could not find 3D model: {key}"),
+            ModelError::Unsupported(_) => format!("skipped 3D model {key}: {err}"),
+            ModelError::Empty => format!("model has no solid geometry: {key}"),
+            ModelError::Failed(_) => {
+                self.failed_models += 1;
+                format!("could not load model {key}: {err}")
+            }
+        });
     }
 }
 
@@ -179,15 +191,23 @@ impl Board<'_> {
         fallback
     }
 
-    /// The decoded STEP payload of an embedded model, or `None` when the
-    /// board embeds no file of that name.
-    pub fn model(&self, key: &str) -> Option<Result<Vec<u8>, Error>> {
-        self.embedded_step(key).map(decode_embedded)
+    pub fn load_model(
+        &self,
+        resolver: &ModelResolver,
+        reference: &str,
+    ) -> Result<LoadedModel, ModelError> {
+        let embedded = reference.strip_prefix("kicad-embed://");
+        let name = embedded.unwrap_or(reference);
+        let Some(data) = self.embedded_step(name) else {
+            return match embedded {
+                Some(_) => Err(ModelError::Absent("not embedded in the board".to_owned())),
+                None => resolver.load(reference),
+            };
+        };
+        let format = ModelFormat::of_path(name).ok_or_else(models::unsupported_format)?;
+        let bytes = decode_embedded(data).map_err(|e| ModelError::Failed(e.to_string()))?;
+        Ok(LoadedModel { bytes, format })
     }
-}
-
-fn model_key(path: &str) -> &str {
-    path.strip_prefix("kicad-embed://").unwrap_or(path)
 }
 
 /// The names every font embedded in a board answers to, lowercased: the
@@ -208,7 +228,7 @@ pub fn export(
     sink: &mut dyn Write,
     report: &mut Report,
 ) -> Result<(), Error> {
-    let scene = Scene::build(board, options, &mut report.warnings)?;
+    let mut scene = Scene::build(board, options, &mut report.warnings)?;
 
     let mut w = Writer::new(1);
     let root = Root::reserve(&mut w);
@@ -223,7 +243,18 @@ FILE_SCHEMA(('AUTOMOTIVE_DESIGN { 1 0 10303 214 1 1 1 1 }'));\n\
 ENDSEC;\nDATA;\n",
     );
     let mut placements: Vec<u32> = Vec::new();
-    export_components(board, &scene, &root, &mut w, sink, report, &mut placements)?;
+    let outcomes = export_components(
+        board,
+        options,
+        &scene,
+        &root,
+        &mut w,
+        sink,
+        report,
+        &mut placements,
+    )?;
+    scene.resolve(board, options, &outcomes);
+    report.coverage = scene.coverage.clone();
 
     for layer in &scene.layers {
         let (suffix, occurrence) = match layer.kind {
@@ -235,6 +266,8 @@ ENDSEC;\nDATA;\n",
             LayerKind::Silkscreen { front: false } => ("silkscreen", "Bottom Silkscreen"),
             LayerKind::Soldermask { front: true } => ("soldermask", "Top Soldermask"),
             LayerKind::Soldermask { front: false } => ("soldermask", "Bottom Soldermask"),
+            LayerKind::Paste { front: true } => ("paste", "Top Paste"),
+            LayerKind::Paste { front: false } => ("paste", "Bottom Paste"),
         };
         // OCCT encodes KiCad's colours from linear to sRGB.
         let srgb = layer.color.map(board::linear_to_srgb);
@@ -413,13 +446,6 @@ fn loop_edges(outer: &outline::Loop, holes: &[outline::Loop]) -> usize {
     outer.edges.len() + holes.iter().map(|h| h.edges.len()).sum::<usize>()
 }
 
-enum Loaded {
-    Missing,
-    Failed(String),
-    Empty,
-    Ready(Box<Ready>),
-}
-
 struct Ready {
     hash: u64,
     donor: Donor,
@@ -427,35 +453,52 @@ struct Ready {
 }
 
 /// Decode and analyze one model. Runs on a worker thread.
-fn load_model(board: &Board, key: &str) -> Loaded {
-    let payload = match board.model(key) {
-        Some(Ok(bytes)) => bytes,
-        Some(Err(err)) => return Loaded::Failed(err.to_string()),
-        None => return Loaded::Missing,
-    };
-    let hash = content_hash(&payload);
-    match Donor::parse(payload).and_then(|donor| donor.analyze().map(|a| (donor, a))) {
-        Ok((_, analysis)) if analysis.is_empty() => Loaded::Empty,
-        Ok((donor, analysis)) => Loaded::Ready(Box::new(Ready {
-            hash,
-            donor,
-            analysis,
-        })),
-        Err(err) => Loaded::Failed(err.to_string()),
+fn load_model(
+    board: &Board,
+    resolver: &ModelResolver,
+    model: &scene::Model,
+) -> Result<Box<Ready>, ModelError> {
+    if model.uniform_scale().is_none() {
+        return Err(ModelError::Unsupported(format!(
+            "non-uniform scale {} cannot be placed in a STEP assembly",
+            model.scale
+        )));
     }
+    let loaded = board.load_model(resolver, &model.key)?;
+    if loaded.format != ModelFormat::Step {
+        return Err(ModelError::Unsupported(
+            "VRML models cannot be written to STEP".to_owned(),
+        ));
+    }
+    let hash = content_hash(&loaded.bytes);
+    let donor = Donor::parse(loaded.bytes).map_err(|e| ModelError::Failed(e.to_string()))?;
+    let analysis = donor
+        .analyze()
+        .map_err(|e| ModelError::Failed(e.to_string()))?;
+    if analysis.is_empty() {
+        return Err(ModelError::Empty);
+    }
+    Ok(Box::new(Ready {
+        hash,
+        donor,
+        analysis,
+    }))
 }
 
 /// Copy each distinct model into the file and place its occurrences.
+#[allow(clippy::too_many_arguments)]
 fn export_components(
     board: &Board,
+    options: &Options,
     scene: &Scene,
     root: &Root,
     w: &mut Writer,
     sink: &mut dyn Write,
     report: &mut Report,
     placements: &mut Vec<u32>,
-) -> Result<(), Error> {
+) -> Result<Vec<Result<(), ModelError>>, Error> {
     let mut parts: Vec<Option<Part>> = vec![None; scene.models.len()];
+    let mut outcomes = Vec::with_capacity(scene.models.len());
     // Models are copied in batches: each batch is decoded and analyzed on
     // worker threads, given id ranges in order, emitted on worker threads
     // into private buffers, and written out in order. Ids depend only on
@@ -474,27 +517,26 @@ fn export_components(
     }
     for first in (0..scene.models.len()).step_by(batch) {
         let models = &scene.models[first..(first + batch).min(scene.models.len())];
-        let loaded: Vec<Loaded> = models
+        let loaded: Vec<_> = models
             .par_iter()
             .with_max_len(1)
-            .map(|model| load_model(board, &model.key))
+            .map(|model| load_model(board, &options.models, model))
             .collect();
 
         let mut jobs: Vec<Job> = Vec::new();
         for (offset, loaded) in loaded.into_iter().enumerate() {
             let index = first + offset;
             let model = &scene.models[index];
+            outcomes.push(loaded.as_ref().map(|_| ()).map_err(Clone::clone));
             match loaded {
-                Loaded::Missing => report.missing_model(&model.key),
-                Loaded::Empty => report.empty_model(&model.key),
-                Loaded::Failed(err) => report.failed_model(&model.key, &err),
-                Loaded::Ready(ready) => {
+                Err(err) => report.model_error(&model.key, &err),
+                Ok(ready) => {
                     let Ready {
                         hash,
                         donor,
                         analysis,
                     } = *ready;
-                    let scale = model.scale;
+                    let scale = model.uniform_scale().unwrap_or(1.0);
                     if let Some((_, _, part)) = parts_by_content
                         .iter()
                         .find(|(h, s, _)| *h == hash && *s == scale)
@@ -567,7 +609,7 @@ fn export_components(
         );
         placements.push(axis);
     }
-    Ok(())
+    Ok(outcomes)
 }
 
 /// Cheap content fingerprint for deduplicating identical model payloads.

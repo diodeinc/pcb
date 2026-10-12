@@ -91,13 +91,15 @@ fn parses_board_semantics() {
 
     let fp = &board.footprints[0];
     assert_eq!(fp.reference, "R1");
-    assert!(fp.back && fp.dnp && !fp.unspecified);
+    assert!(fp.back && fp.dnp && fp.mount == crate::board::Mount::Smd);
     assert_eq!(fp.rotation, 90.0);
-    assert_eq!(fp.models, 0..2);
+    assert_eq!(fp.models, 0..4);
     assert_eq!(board.models[0].name, "kicad-embed://part.step");
     assert_eq!(board.models[0].rotate, Vec3::new(0.0, 0.0, 45.0));
-    assert_eq!(board.models[1].name, "${KIPRJMOD}/ext.stp");
-    assert_eq!(board.models[1].scale, Vec3::splat(2.0));
+    assert!(!board.models[0].hidden && board.models[1].hidden);
+    assert_eq!(board.models[2].name, "${KIPRJMOD}/ext.stp");
+    assert_eq!(board.models[2].scale, Vec3::splat(2.0));
+    assert!(board.models[3].name.ends_with(".wrl"));
 
     // Pad 1 is at footprint-local (1, 0); the footprint is rotated 90
     // degrees counter-clockwise on screen, which in y-down coordinates
@@ -531,6 +533,8 @@ fn components_are_copied_once_and_placed_per_footprint() {
     ));
     let (text, report) = export_text(&board, &bare());
     assert_eq!(report.warnings, ["could not find 3D model: missing.step"]);
+    let missing: Vec<_> = report.coverage.incomplete().map(|m| &m.model).collect();
+    assert_eq!(missing, ["missing.step"]);
     assert_eq!(report.failed_models, 0);
     // The file schema and rebuilt assembly protocol must both declare AP214.
     assert!(text.contains("FILE_SCHEMA(('AUTOMOTIVE_DESIGN { 1 0 10303 214 1 1 1 1 }'))"));

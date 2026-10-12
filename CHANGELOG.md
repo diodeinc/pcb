@@ -8,6 +8,19 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added
+
+- `pcb gltf export` reads VRML (`.wrl`) models and keeps non-uniform model scales.
+- `pcb gltf export` and `pcb step export` read models that are not embedded only from `--project-models`, `--model-var NAME=DIR` and `--model-dir DIR`.
+- `--coverage FILE` lists every model as rendered, hidden, filtered, absent, unsupported or failed; `--require-complete` fails if any are missing.
+- `pcb gltf export` embeds a scene manifest in the GLB: footprint identity, DNP and mount metadata, nets, stackup, and the instance that draws each model.
+- `pcb gltf export` draws solder paste, bores vias through the body and mask, and trims copper to the board outline, as KiCad's VRML export does.
+- `pcb gltf export --synthesize-outline` gives a board without a usable Edge.Cuts a body; `--proxy-missing-models` and `--footprint-only` draw boxes for footprints; `--include-inner-copper` exports inner copper.
+
+### Changed
+
+- `pcb step export` opens the solder mask for pads that sit only on mask or paste layers, and draws graphics on copper layers as copper, as KiCad does.
+
 ## [0.4.76] - 2026-10-12
 
 ## [0.4.75] - 2026-10-12

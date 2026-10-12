@@ -3767,6 +3767,7 @@ name = "pcb-gltf"
 version = "0.4.76"
 dependencies = [
  "anyhow",
+ "base64 0.23.1",
  "glam 0.34.1",
  "i_triangle",
  "meshopt-rs",
@@ -3774,7 +3775,9 @@ dependencies = [
  "rayon",
  "rustc-hash",
  "serde_json",
+ "tempfile",
  "triangulate",
+ "zstd",
 ]
 
 [[package]]
@@ -4050,6 +4053,7 @@ dependencies = [
  "pcb-ir",
  "rayon",
  "rustybuzz",
+ "serde",
  "serde_json",
  "zstd",
 ]

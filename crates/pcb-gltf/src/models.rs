@@ -1,15 +1,16 @@
-//! Footprint models: every distinct embedded STEP payload, decoded and
-//! tessellated once with foxtrot, largest first, on the rayon pool.
+//! Footprint models: every distinct STEP or VRML payload, decoded and
+//! tessellated once (STEP with foxtrot), largest first, on the rayon pool.
 
 use std::collections::HashMap;
 
 use glam::Vec3;
 use pcb_step::scene::{Model, Scene};
-use pcb_step::{Board, Report, content_hash};
+use pcb_step::{Board, ModelError, ModelFormat, Options, Report, content_hash};
 use rayon::prelude::*;
 use triangulate::colored_mesh::{ColoredSubmesh, tessellate_step_bytes};
 
 use crate::mesh::Primitive;
+use crate::wrl;
 
 /// How far simplification may move a model's surface, in output
 /// millimetres: the tolerance models are tessellated to.
@@ -27,110 +28,142 @@ pub(crate) struct Models {
     pub(crate) meshes: Vec<Mesh>,
     /// For each of the scene's models, its mesh, if it could be made.
     pub(crate) of_model: Vec<Option<usize>>,
+    pub(crate) outcomes: Vec<Result<(), ModelError>>,
     /// Warnings, and models that were found but could not be used.
     pub(crate) report: Report,
 }
 
-pub(crate) fn tessellate(board: &Board, scene: &Scene) -> Models {
-    let decoded: Vec<_> = scene
+struct Payload<'a> {
+    model: &'a Model,
+    bytes: Vec<u8>,
+    format: ModelFormat,
+    /// Largest scale it is placed at, which bounds simplification.
+    scale: f64,
+}
+
+pub(crate) fn tessellate(board: &Board, options: &Options, scene: &Scene) -> Models {
+    let loaded: Vec<_> = scene
         .models
         .par_iter()
-        .map(|model| board.model(&model.key))
+        .map(|model| board.load_model(&options.models, &model.key))
         .collect();
 
     let mut report = Report::default();
     // Distinct payloads by content, so one file embedded under two names,
-    // or used at two scales, is tessellated once. Each keeps the largest
-    // scale it is placed at.
-    let mut payloads: Vec<(&Model, Vec<u8>, f64)> = Vec::new();
-    let mut by_hash: HashMap<u64, usize> = HashMap::new();
-    let mut payload_of: Vec<Option<usize>> = Vec::with_capacity(decoded.len());
-    for (model, decoded) in scene.models.iter().zip(decoded) {
-        payload_of.push(match decoded {
-            None => {
-                report.missing_model(&model.key);
-                None
-            }
-            Some(Err(err)) => {
-                report.failed_model(&model.key, &err);
-                None
-            }
-            Some(Ok(bytes)) => {
-                let i = *by_hash.entry(content_hash(&bytes)).or_insert_with(|| {
-                    payloads.push((model, bytes, 0.0));
-                    payloads.len() - 1
+    // or used at two scales, is tessellated once.
+    let mut payloads: Vec<Payload> = Vec::new();
+    let mut by_hash: HashMap<(u64, ModelFormat), usize> = HashMap::new();
+    let mut payload_of = Vec::with_capacity(loaded.len());
+    for (model, loaded) in scene.models.iter().zip(loaded) {
+        if let Err(err) = &loaded {
+            report.model_error(&model.key, err);
+        }
+        payload_of.push(loaded.map(|loaded| {
+            let key = (content_hash(&loaded.bytes), loaded.format);
+            let i = *by_hash.entry(key).or_insert_with(|| {
+                payloads.push(Payload {
+                    model,
+                    bytes: loaded.bytes,
+                    format: loaded.format,
+                    scale: 0.0,
                 });
-                payloads[i].2 = payloads[i].2.max(model.scale);
-                Some(i)
-            }
-        });
+                payloads.len() - 1
+            });
+            payloads[i].scale = payloads[i].scale.max(model.scale.max_element());
+            i
+        }));
     }
 
     let mut order: Vec<usize> = (0..payloads.len()).collect();
-    order.sort_by_key(|&i| std::cmp::Reverse(payloads[i].1.len()));
-    let mut outcomes: Vec<(usize, Outcome)> = order
+    order.sort_by_key(|&i| std::cmp::Reverse(payloads[i].bytes.len()));
+    let mut results: Vec<(usize, Tessellated)> = order
         .into_par_iter()
         .with_max_len(1)
         .map(|i| {
-            let (model, bytes, scale) = &payloads[i];
-            (
-                i,
-                tessellate_one(model, bytes, SIMPLIFY_ERROR / *scale as f32),
-            )
+            let p = &payloads[i];
+            (i, tessellate_one(p, SIMPLIFY_ERROR / p.scale as f32))
         })
         .collect();
-    outcomes.sort_by_key(|(i, _)| *i);
+    results.sort_by_key(|(i, _)| *i);
 
     let mut meshes = Vec::new();
-    let mut mesh_of_payload = Vec::with_capacity(outcomes.len());
-    for (i, outcome) in outcomes {
-        report.warnings.extend(outcome.notes);
-        mesh_of_payload.push(match outcome.mesh {
-            Ok(Some(mesh)) => {
-                meshes.push(mesh);
-                Some(meshes.len() - 1)
-            }
-            Ok(None) => {
-                report.empty_model(&payloads[i].0.key);
-                None
-            }
-            Err(err) => {
-                report.failed_model(&payloads[i].0.key, &err);
-                None
-            }
-        });
-    }
+    let mesh_of_payload: Vec<Result<usize, ModelError>> = results
+        .into_iter()
+        .map(|(i, result)| {
+            report.warnings.extend(result.notes);
+            result
+                .mesh
+                .map(|mesh| {
+                    meshes.push(mesh);
+                    meshes.len() - 1
+                })
+                .inspect_err(|err| report.model_error(&payloads[i].model.key, err))
+        })
+        .collect();
+    let (of_model, outcomes) = payload_of
+        .into_iter()
+        .map(|p| match p.and_then(|p| mesh_of_payload[p].clone()) {
+            Ok(mesh) => (Some(mesh), Ok(())),
+            Err(err) => (None, Err(err)),
+        })
+        .unzip();
     Models {
         meshes,
-        of_model: payload_of
-            .into_iter()
-            .map(|p| p.and_then(|p| mesh_of_payload[p]))
-            .collect(),
+        of_model,
+        outcomes,
         report,
     }
 }
 
 /// What tessellating one payload gave.
-struct Outcome {
-    /// The model's mesh, or `None` when it has no faces at all.
-    mesh: Result<Option<Mesh>, String>,
+struct Tessellated {
+    mesh: Result<Mesh, ModelError>,
     notes: Vec<String>,
 }
 
 /// Tessellate one payload and simplify it within `simplify_error` model
 /// millimetres.
-fn tessellate_one(model: &Model, bytes: &[u8], simplify_error: f32) -> Outcome {
-    let key = &model.key;
+fn tessellate_one(payload: &Payload, simplify_error: f32) -> Tessellated {
+    let key = &payload.model.key;
     let mut notes = Vec::new();
-    let (tessellated, stats) = match tessellate_step_bytes(bytes) {
-        Ok(ok) => ok,
-        Err(err) => {
-            return Outcome {
-                mesh: Err(err),
-                notes,
-            };
-        }
+    let primitives = match payload.format {
+        ModelFormat::Wrl => wrl::parse(&payload.bytes).map(|parsed| {
+            notes.extend(parsed.notes.iter().map(|n| format!("model {key}: {n}")));
+            parsed.primitives
+        }),
+        ModelFormat::Step => step_primitives(&payload.bytes, key, &mut notes),
     };
+    let mesh = primitives
+        .map_err(ModelError::Failed)
+        .and_then(|primitives| {
+            let mut primitives: Vec<([f32; 4], Primitive)> = primitives
+                .into_par_iter()
+                .map(|(color, mut primitive)| {
+                    primitive.simplify(simplify_error);
+                    primitive.optimize();
+                    (color, primitive)
+                })
+                // Simplification drops solids smaller than the error budget.
+                .filter(|(_, p)| !p.is_empty())
+                .collect();
+            if primitives.is_empty() {
+                return Err(ModelError::Empty);
+            }
+            primitives.sort_by(|a, b| a.0.map(f32::to_bits).cmp(&b.0.map(f32::to_bits)));
+            Ok(Mesh {
+                name: payload.model.name().to_owned(),
+                primitives,
+            })
+        });
+    Tessellated { mesh, notes }
+}
+
+fn step_primitives(
+    bytes: &[u8],
+    key: &str,
+    notes: &mut Vec<String>,
+) -> Result<Vec<([f32; 4], Primitive)>, String> {
+    let (tessellated, stats) = tessellate_step_bytes(bytes)?;
     if !stats.failures.is_empty() {
         notes.push(format!(
             "model {key}: {} of {} faces could not be tessellated",
@@ -138,8 +171,7 @@ fn tessellate_one(model: &Model, bytes: &[u8], simplify_error: f32) -> Outcome {
             stats.num_faces
         ));
     }
-    let tessellated_any = tessellated.submeshes.iter().any(|s| !s.indices.is_empty());
-    let mut primitives: Vec<([f32; 4], Primitive)> = tessellated
+    let primitives: Vec<_> = tessellated
         .submeshes
         .into_par_iter()
         .filter(|s| !s.indices.is_empty())
@@ -151,32 +183,18 @@ fn tessellate_one(model: &Model, bytes: &[u8], simplify_error: f32) -> Outcome {
                 indices,
             } = s;
             repair_normals(&positions, &mut normals, &indices);
-            let mut primitive = Primitive {
+            let primitive = Primitive {
                 positions,
                 normals,
                 indices,
             };
-            primitive.simplify(simplify_error);
-            primitive.optimize();
             (color, primitive)
         })
-        // Simplification drops solids smaller than the error budget.
-        .filter(|(_, p)| !p.indices.is_empty())
         .collect();
-    if primitives.is_empty() {
-        let mesh = match tessellated_any || stats.failures.is_empty() {
-            true => Ok(None),
-            false => Err("no faces could be tessellated".to_owned()),
-        };
-        return Outcome { mesh, notes };
+    if primitives.is_empty() && !stats.failures.is_empty() {
+        return Err("no faces could be tessellated".to_owned());
     }
-    // Order primitives by colour.
-    primitives.sort_by(|a, b| a.0.map(f32::to_bits).cmp(&b.0.map(f32::to_bits)));
-    let name = model.name().to_owned();
-    Outcome {
-        mesh: Ok(Some(Mesh { name, primitives })),
-        notes,
-    }
+    Ok(primitives)
 }
 
 /// Give every vertex a unit normal, as glTF requires. Foxtrot leaves a

@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 use atomicwrites::{AtomicFile, OverwriteBehavior};
 
-use crate::{Board, Options, Origin, Report};
+use crate::{Board, ModelResolver, Options, Origin, OutlinePolicy, ProxyMode, Report};
 
 #[derive(clap::Args)]
 pub struct ExportArgs {
@@ -55,6 +55,47 @@ pub struct ExportArgs {
     /// Use a user origin in millimetres, e.g. 25.4x25.4
     #[arg(long, value_name = "XxY", value_parser = parse_user_origin)]
     user_origin: Option<(f64, f64)>,
+    /// Read models that are not embedded from files under DIR (repeatable).
+    /// Without this, `--model-var` and `--project-models`, only the board's
+    /// embedded models are read and the board cannot make the exporter read
+    /// any other file.
+    #[arg(long, value_name = "DIR", value_hint = clap::ValueHint::DirPath)]
+    model_dir: Vec<PathBuf>,
+    /// Define a model path variable, e.g. KICAD9_3DMODEL_DIR=/usr/share/kicad/3dmodels
+    /// (repeatable). The directory is also read from.
+    #[arg(long, value_name = "NAME=DIR", value_parser = parse_model_var)]
+    model_var: Vec<(String, PathBuf)>,
+    /// Read models from the board's own directory, as KiCad's ${KIPRJMOD}
+    #[arg(long)]
+    project_models: bool,
+    /// Write the per-footprint model coverage to this JSON file, even when
+    /// the export fails
+    #[arg(long, value_name = "FILE", value_hint = clap::ValueHint::FilePath)]
+    coverage: Option<PathBuf>,
+    /// Fail, after writing the output, if a model a footprint names is
+    /// absent, unsupported or failed
+    #[arg(long)]
+    require_complete: bool,
+}
+
+#[derive(clap::Args, Clone, Default)]
+pub struct VisualArgs {
+    /// Give a board whose Edge.Cuts is missing or unusable a body that is
+    /// the rounded hull of what is on it, instead of failing. Unfinished and
+    /// module boards; never for manufacturing output.
+    #[arg(long)]
+    synthesize_outline: bool,
+    /// Draw a box over the pads of every footprint whose model is named but
+    /// cannot be drawn
+    #[arg(long, conflicts_with = "footprint_only")]
+    proxy_missing_models: bool,
+    /// Draw a box over the pads of every footprint and no models, without
+    /// reading any
+    #[arg(long)]
+    footprint_only: bool,
+    /// Export copper on inner layers too (outer layers only by default)
+    #[arg(long)]
+    include_inner_copper: bool,
 }
 
 /// Which copper to export.
@@ -85,15 +126,39 @@ impl CopperArgs {
 }
 
 impl ExportArgs {
-    fn options(&self, copper: CopperArgs) -> Options {
-        Options {
+    fn resolver(&self) -> Result<ModelResolver> {
+        let mut resolver = ModelResolver::default();
+        if self.project_models {
+            let dir = std::path::absolute(&self.board)
+                .ok()
+                .and_then(|b| b.parent().map(Path::to_path_buf))
+                .context("cannot find the board's directory")?;
+            resolver = resolver.define("KIPRJMOD", &dir)?;
+        }
+        for dir in &self.model_dir {
+            resolver = resolver
+                .allow_root(dir)
+                .with_context(|| format!("cannot use model directory {}", dir.display()))?;
+        }
+        for (name, dir) in &self.model_var {
+            resolver = resolver
+                .define(name, dir)
+                .with_context(|| format!("cannot use model directory {}", dir.display()))?;
+        }
+        Ok(resolver)
+    }
+
+    fn options(&self, copper: CopperArgs, visual: Option<&VisualArgs>) -> Result<Options> {
+        let visual_args = visual.cloned().unwrap_or_default();
+        Ok(Options {
             board_body: !self.no_board_body,
             components: !self.no_components,
             cut_vias: self.cut_vias_in_body,
+            visual: visual.is_some(),
             pads: copper.include_pads,
             tracks: copper.include_tracks,
             zones: copper.include_zones,
-            inner_copper: copper.include_inner_copper,
+            inner_copper: copper.include_inner_copper || visual_args.include_inner_copper,
             silkscreen: !self.no_silkscreen,
             soldermask: !self.no_soldermask,
             include_dnp: !self.no_dnp,
@@ -115,7 +180,20 @@ impl ExportArgs {
                 .unwrap_or("board")
                 .to_owned(),
             text_variables: project_text_variables(&self.board.with_extension("kicad_pro")),
-        }
+            models: self.resolver()?,
+            outline: if visual_args.synthesize_outline {
+                OutlinePolicy::Synthesize
+            } else {
+                OutlinePolicy::Strict
+            },
+            proxies: if visual_args.footprint_only {
+                ProxyMode::All
+            } else if visual_args.proxy_missing_models {
+                ProxyMode::Missing
+            } else {
+                ProxyMode::Off
+            },
+        })
     }
 
     /// Export the board and its `copper` with `write`, to the output path
@@ -129,6 +207,7 @@ impl ExportArgs {
         &self,
         extension: &str,
         copper: CopperArgs,
+        visual: Option<&VisualArgs>,
         write: impl FnOnce(&Board, &Options, &mut dyn Write, &mut Report) -> Result<()>,
     ) -> Result<()> {
         let board = &self.board;
@@ -139,11 +218,11 @@ impl ExportArgs {
         if output.exists() && fs::canonicalize(board).ok() == fs::canonicalize(&output).ok() {
             bail!("Output {} is the board itself", output.display());
         }
-        let options = self.options(copper);
+        let options = self.options(copper, visual)?;
         let data =
             fs::read(board).with_context(|| format!("Failed to read {}", board.display()))?;
         let any_copper = options.pads || options.tracks || options.zones;
-        let graphics = options.silkscreen || options.soldermask;
+        let graphics = options.silkscreen || options.soldermask || options.visual;
         let parsed = Board::parse_with(&data, any_copper, graphics)
             .map_err(anyhow::Error::from)
             .with_context(|| format!("Failed to parse {}", board.display()))?;
@@ -165,6 +244,15 @@ impl ExportArgs {
         for warning in &report.warnings {
             eprintln!("warning: {warning}");
         }
+        if let Some(path) = &self.coverage {
+            let mut doc = report.coverage.to_json();
+            if let Err(err) = &written {
+                doc["complete"] = false.into();
+                doc["error"] = format!("{err:#}").into();
+            }
+            fs::write(path, serde_json::to_vec_pretty(&doc)?)
+                .with_context(|| format!("Failed to write {}", path.display()))?;
+        }
         written.with_context(|| format!("Failed to export {}", board.display()))?;
         if report.failed_models > 0 {
             bail!(
@@ -173,8 +261,31 @@ impl ExportArgs {
                 report.failed_models
             );
         }
+        if self.require_complete && !report.coverage.is_complete() {
+            let missing: Vec<String> = report
+                .coverage
+                .incomplete()
+                .map(|m| format!("{} ({})", m.reference, m.model))
+                .collect();
+            bail!(
+                "{} written, but {} models are missing, e.g. {}",
+                output.display(),
+                missing.len(),
+                missing[..missing.len().min(5)].join(", ")
+            );
+        }
         Ok(())
     }
+}
+
+fn parse_model_var(value: &str) -> Result<(String, PathBuf), String> {
+    let (name, dir) = value
+        .split_once('=')
+        .ok_or_else(|| format!("bad model variable {value}; expected NAME=DIR"))?;
+    if name.is_empty() || dir.is_empty() {
+        return Err(format!("bad model variable {value}; expected NAME=DIR"));
+    }
+    Ok((name.to_owned(), PathBuf::from(dir)))
 }
 
 fn parse_user_origin(value: &str) -> Result<(f64, f64), String> {

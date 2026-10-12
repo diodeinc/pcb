@@ -2,44 +2,68 @@
 //! writers of other formats. Coordinates are millimetres in the output
 //! frame (origin applied, y up, z up from the bottom of the board body).
 
-use glam::DMat4;
+use glam::{DMat4, DVec3};
 
 use crate::board::{self, Board, Physical, Tech};
+use crate::coverage::{Coverage, ModelCoverage, Status};
 use crate::geom::{Transform, Vec2};
-use crate::outline::{Frame, board_solids, cut_holes, cut_round};
-use crate::{Error, Options, Origin, copper, faces, glob_match, holes, model_key};
+use crate::models::ModelError;
+use crate::outline::{Frame, cut_holes, cut_round, outline_solids};
+use crate::{Error, Options, Origin, copper, faces, glob_match, holes};
 
 pub use crate::faces::Face;
 pub use crate::geom::{KICAD_MAX_ERROR, chord_count};
 pub use crate::holes::RoundHole;
-pub use crate::outline::{Loop, Solid, Vertex};
+pub use crate::outline::{Loop, OutlinePolicy, Solid, Vertex};
 
 /// Standoff KiCad leaves between the copper surface and a model.
 const MODEL_STANDOFF: f64 = 0.05;
+const PROXY_HEIGHT: f64 = 1.0;
+const PASTE_RGB: [f64; 3] = [0.5; 3];
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ProxyMode {
+    #[default]
+    Off,
+    Missing,
+    /// Every footprint, and no models.
+    All,
+}
 
 pub struct Scene {
-    /// Distinct model files at one scale, in order of first use.
+    /// Distinct model references at one scale, in order of first use.
     pub models: Vec<Model>,
     /// Model placements, in footprint order.
     pub components: Vec<Component>,
+    pub proxies: Vec<Proxy>,
     /// Board body, copper, silkscreen and solder mask, in output order.
     pub layers: Vec<Layer>,
+    /// What became of every model reference. Until a writer has loaded the
+    /// models and called [`Scene::resolve`], placed models read `Rendered`.
+    pub coverage: Coverage,
+    pub synthetic_outline: bool,
 }
 
-/// A model file used at one uniform scale.
+/// A model reference used at one scale.
 pub struct Model {
-    /// The model's name among the board's embedded files.
+    /// The model as the footprint names it, with `kicad-embed://` if so.
     pub key: String,
-    pub scale: f64,
+    /// Per-axis, before the model's rotation.
+    pub scale: DVec3,
 }
 
 impl Model {
     /// The model's display name: the file stem of its key.
     pub fn name(&self) -> &str {
-        std::path::Path::new(&self.key)
+        std::path::Path::new(self.key.rsplit(['/', '\\']).next().unwrap_or(&self.key))
             .file_stem()
             .and_then(|s| s.to_str())
             .unwrap_or(&self.key)
+    }
+
+    pub fn uniform_scale(&self) -> Option<f64> {
+        let s = self.scale;
+        ((s.x - s.y).abs() <= 1e-9 && (s.x - s.z).abs() <= 1e-9).then_some(s.x)
     }
 }
 
@@ -48,7 +72,16 @@ pub struct Component {
     /// Index into [`Scene::models`].
     pub model: usize,
     pub reference: String,
+    pub footprint: usize,
+    pub coverage: usize,
     /// Model frame to output frame, scale not included.
+    pub transform: DMat4,
+}
+
+pub struct Proxy {
+    pub reference: String,
+    pub footprint: usize,
+    /// Places the unit cube.
     pub transform: DMat4,
 }
 
@@ -77,6 +110,9 @@ pub enum LayerKind {
     Soldermask {
         front: bool,
     },
+    Paste {
+        front: bool,
+    },
 }
 
 impl LayerKind {
@@ -103,6 +139,11 @@ pub struct Prism {
     pub solid: Solid,
 }
 
+pub struct Built {
+    pub layers: Vec<Layer>,
+    pub synthetic_outline: bool,
+}
+
 impl Scene {
     pub fn build(
         board: &Board,
@@ -117,7 +158,9 @@ impl Scene {
             return Err(Error::NothingToExport);
         }
         let mut scene = Self::components(board, options, warnings);
-        scene.layers = Self::layers(board, options, warnings)?;
+        let built = Self::layers(board, options, warnings)?;
+        scene.layers = built.layers;
+        scene.synthetic_outline = built.synthetic_outline;
         Ok(scene)
     }
 
@@ -127,17 +170,18 @@ impl Scene {
         let mut scene = Scene {
             models: Vec::new(),
             components: Vec::new(),
+            proxies: Vec::new(),
             layers: Vec::new(),
+            coverage: Coverage::default(),
+            synthetic_outline: false,
         };
-        if options.components {
-            scene.place_components(
-                board,
-                options,
-                frame(board, options),
-                &board.physical(),
-                warnings,
-            );
-        }
+        scene.place_components(
+            board,
+            options,
+            frame(board, options),
+            &board.physical(),
+            warnings,
+        );
         scene
     }
 
@@ -146,21 +190,45 @@ impl Scene {
         board: &Board,
         options: &Options,
         warnings: &mut Vec<String>,
-    ) -> Result<Vec<Layer>, Error> {
+    ) -> Result<Built, Error> {
         let frame = frame(board, options);
         let physical = board.physical();
         let mut layers = Vec::new();
-        if options.board_body {
-            layers.push(body(board, options, frame, &physical, warnings)?);
-        }
+        let mut synthetic_outline = false;
         let copper_options = copper::CopperOptions {
             pads: options.pads,
             tracks: options.tracks,
             zones: options.zones,
             inner: options.inner_copper,
         };
+        let mut solids = Vec::new();
+        if options.board_body
+            || options.silkscreen
+            || options.soldermask
+            || (options.visual && copper_options.any())
+        {
+            (solids, synthetic_outline) = outline_solids(board, frame, options.outline, warnings)?;
+        }
+        if options.board_body {
+            layers.push(body(
+                board,
+                options,
+                frame,
+                &physical,
+                solids.clone(),
+                warnings,
+            ));
+        }
         if copper_options.any() {
-            let copper = copper::build(board, frame, &physical, copper_options, warnings);
+            let edge = options.visual.then(|| faces::BoardEdge::new(&solids));
+            let copper = copper::build(
+                board,
+                frame,
+                &physical,
+                copper_options,
+                edge.as_ref(),
+                warnings,
+            );
             let copper_rgb = [0.7, 0.61, 0.0];
             let pad_rgb = if options.components {
                 [0.5; 3]
@@ -182,6 +250,20 @@ impl Scene {
                 }
             }
         }
+        if options.visual {
+            for layer in faces::paste(board, frame, &physical, warnings) {
+                layers.push(Layer {
+                    kind: LayerKind::Paste { front: layer.front },
+                    color: PASTE_RGB,
+                    transparency: None,
+                    shape: Shape::Faces {
+                        z: layer.z,
+                        up: layer.front,
+                        faces: layer.faces,
+                    },
+                });
+            }
+        }
         if options.silkscreen || options.soldermask {
             let variables: Vec<(String, String)> = board
                 .title_block
@@ -192,9 +274,11 @@ impl Scene {
             let tech_layers = faces::build(
                 board,
                 frame,
+                &solids,
                 &physical,
                 options.silkscreen,
                 options.soldermask,
+                options.visual,
                 &variables,
                 warnings,
             )?;
@@ -214,6 +298,7 @@ impl Scene {
                         board.mask_color(front),
                         0.17,
                     ),
+                    Tech::Copper(_) => unreachable!("faces are built for silkscreen and mask only"),
                 };
                 layers.push(Layer {
                     kind,
@@ -227,7 +312,48 @@ impl Scene {
                 });
             }
         }
-        Ok(layers)
+        Ok(Built {
+            layers,
+            synthetic_outline,
+        })
+    }
+
+    /// Record the writer's outcome for each of [`Scene::models`] and add
+    /// missing-model proxies.
+    pub fn resolve(
+        &mut self,
+        board: &Board,
+        options: &Options,
+        outcomes: &[Result<(), ModelError>],
+    ) {
+        for component in &self.components {
+            if let Err(err) = &outcomes[component.model] {
+                let entry = &mut self.coverage.models[component.coverage];
+                entry.status = err.status();
+                entry.detail = Some(err.to_string());
+            }
+        }
+        if options.proxies != ProxyMode::Missing {
+            return;
+        }
+        let models = &self.coverage.models;
+        let mut footprints: Vec<usize> = models
+            .iter()
+            .filter(|m| m.status.is_missing())
+            .map(|m| m.footprint)
+            .collect();
+        footprints.dedup();
+        footprints.retain(|&fp| {
+            !models
+                .iter()
+                .any(|m| m.footprint == fp && m.status == Status::Rendered)
+        });
+        let (frame, physical) = (frame(board, options), board.physical());
+        self.proxies.extend(
+            footprints
+                .into_iter()
+                .filter_map(|fp| proxy(board, fp, frame, &physical)),
+        );
     }
 
     /// Place every selected footprint's models with KiCad's transform:
@@ -243,41 +369,68 @@ impl Scene {
     ) {
         let top = physical.body_top + physical.front_copper;
         let bottom = -physical.back_copper;
-        for fp in &board.footprints {
-            if (fp.dnp && !options.include_dnp)
-                || (fp.unspecified && !options.include_unspecified)
-                || !(options.component_filter.is_empty()
-                    || options
-                        .component_filter
-                        .iter()
-                        .any(|g| glob_match(g, fp.reference)))
+        for (index, fp) in board.footprints.iter().enumerate() {
+            let filtered = if !options.components {
+                Some("components are not exported")
+            } else if fp.dnp && !options.include_dnp {
+                Some("DNP")
+            } else if fp.mount == board::Mount::Unspecified && !options.include_unspecified {
+                Some("no SMD or through-hole attribute")
+            } else if !(options.component_filter.is_empty()
+                || options
+                    .component_filter
+                    .iter()
+                    .any(|g| glob_match(g, fp.reference)))
             {
-                continue;
-            }
+                Some("not in the component filter")
+            } else if options.proxies == ProxyMode::All {
+                self.proxies.extend(proxy(board, index, frame, physical));
+                Some("footprint-only")
+            } else {
+                None
+            };
             for model in &board.models[fp.models.start as usize..fp.models.end as usize] {
+                let mut entry = |status, detail: Option<String>| {
+                    self.coverage.models.push(ModelCoverage {
+                        footprint: index,
+                        reference: fp.reference.to_owned(),
+                        model: model.path().into_owned(),
+                        status,
+                        detail,
+                    })
+                };
                 let scale = model.scale;
-                if (scale.x - scale.y).abs() > 1e-9
-                    || (scale.x - scale.z).abs() > 1e-9
-                    || scale.x <= 0.0
-                {
-                    warnings.push(format!(
-                        "{}: skipped model with non-uniform scale: {}",
-                        fp.reference, model.name
-                    ));
+                if let Some(why) = filtered {
+                    entry(Status::Filtered, Some(why.to_owned()));
                     continue;
                 }
-                let path = model.path();
-                let key = model_key(&path);
-                let index = match self
+                if model.hidden {
+                    entry(Status::Hidden, None);
+                    continue;
+                }
+                if !scale.is_finite() || scale.min_element() <= 0.0 {
+                    warnings.push(format!(
+                        "{}: skipped model with non-positive scale: {}",
+                        fp.reference, model.name
+                    ));
+                    entry(
+                        Status::Unsupported,
+                        Some(format!("scale {scale} is not positive")),
+                    );
+                    continue;
+                }
+                entry(Status::Rendered, None);
+                let key = model.path();
+                let index_of = match self
                     .models
                     .iter()
-                    .position(|m| m.key == key && m.scale == scale.x)
+                    .position(|m| m.key == key && m.scale == scale)
                 {
                     Some(i) => i,
                     None => {
                         self.models.push(Model {
-                            key: key.to_owned(),
-                            scale: scale.x,
+                            key: key.into_owned(),
+                            scale,
                         });
                         self.models.len() - 1
                     }
@@ -300,8 +453,10 @@ impl Scene {
                     .then(&Transform::rotation_y(-rotate.y.to_radians()))
                     .then(&Transform::rotation_x(-rotate.x.to_radians()));
                 self.components.push(Component {
-                    model: index,
+                    model: index_of,
                     reference: fp.reference.to_owned(),
+                    footprint: index,
+                    coverage: self.coverage.models.len() - 1,
                     transform: transform.0,
                 });
             }
@@ -309,7 +464,29 @@ impl Scene {
     }
 }
 
-fn frame(board: &Board, options: &Options) -> Frame {
+/// The box over a footprint's pads.
+fn proxy(board: &Board, index: usize, frame: Frame, physical: &Physical) -> Option<Proxy> {
+    let fp = &board.footprints[index];
+    let (lo, hi) = fp.extent?;
+    // The footprint's frame has y down; the output's has y up.
+    let (lo, hi) = (Vec2::new(lo.x, -hi.y), Vec2::new(hi.x, -lo.y));
+    let z0 = if fp.back {
+        -physical.back_copper - PROXY_HEIGHT
+    } else {
+        physical.body_top + physical.front_copper + MODEL_STANDOFF
+    };
+    let size = DVec3::new((hi.x - lo.x).max(0.1), (hi.y - lo.y).max(0.1), PROXY_HEIGHT);
+    let center = ((lo + hi) * 0.5).extend(z0 + PROXY_HEIGHT * 0.5);
+    let placement = Transform::translation(frame.point(fp.at).extend(0.0))
+        .then(&Transform::rotation_z(fp.rotation.to_radians()));
+    Some(Proxy {
+        reference: fp.reference.to_owned(),
+        footprint: index,
+        transform: placement.0 * DMat4::from_translation(center) * DMat4::from_scale(size),
+    })
+}
+
+pub(crate) fn frame(board: &Board, options: &Options) -> Frame {
     let origin = match options.origin {
         Origin::Board => Vec2::ZERO,
         Origin::Drill => board.aux_origin,
@@ -328,9 +505,9 @@ fn body(
     options: &Options,
     frame: Frame,
     physical: &Physical,
+    solids: Vec<Solid>,
     warnings: &mut Vec<String>,
-) -> Result<Layer, Error> {
-    let solids = board_solids(board, frame)?;
+) -> Layer {
     let mut drills = Vec::new();
     let mut machined = Vec::new();
     for hole in &board.holes {
@@ -353,8 +530,20 @@ fn body(
             machined.push(round);
         }
     }
-    if options.cut_vias {
+    if options.cut_vias || options.visual {
+        let last = physical.copper_z.len().saturating_sub(1) as u32;
         for via in &board.vias {
+            if options.visual {
+                // As KiCad's VRML export: filled, tented or blind alike.
+                if via.top == 0 || via.bottom == last {
+                    drills.push(Loop::stadium(
+                        frame.point(via.at),
+                        frame.point(via.at),
+                        via.drill * 0.5,
+                    ));
+                }
+                continue;
+            }
             let Some(round) = holes::via_hole(frame.point(via.at), via, physical, warnings) else {
                 continue;
             };
@@ -381,7 +570,7 @@ fn body(
     } else {
         board.body_color()
     };
-    Ok(Layer {
+    Layer {
         kind: LayerKind::Body,
         color,
         transparency: None,
@@ -395,5 +584,5 @@ fn body(
                 })
                 .collect(),
         ),
-    })
+    }
 }
