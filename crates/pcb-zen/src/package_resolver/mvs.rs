@@ -408,18 +408,12 @@ impl PackageResolver {
         BTreeMap<ResolvedDepId, Version>,
         BTreeMap<ResolvedDepId, Version>,
     )> {
-        // Board workspaces are never consumed from outside, so their sibling
-        // packages stay local and only need their remote closure recorded.
-        let record_siblings = !self.workspace_has_board();
         let mut remote_floors = BTreeMap::new();
         let mut workspace_floors = BTreeMap::new();
         for workspace_dep in &scanned.workspace {
             let child = self.resolve_package(workspace_dep)?;
             for (dep_id, version) in child.resolved_remote {
                 merge_floor_version(&mut remote_floors, dep_id, version);
-            }
-            if !record_siblings {
-                continue;
             }
             let child_siblings = child.direct.iter().filter_map(|(path, spec)| {
                 self.workspace_package_dep(path)?;
@@ -431,18 +425,6 @@ impl PackageResolver {
             }
         }
         Ok((remote_floors, workspace_floors))
-    }
-
-    fn workspace_has_board(&self) -> bool {
-        self.workspace
-            .config
-            .as_ref()
-            .is_some_and(PcbToml::is_board)
-            || self
-                .workspace
-                .packages
-                .values()
-                .any(|pkg| pkg.config.is_board())
     }
 
     fn package_manifest_source(&self, package_url: &str) -> Result<(PathBuf, PcbToml)> {
