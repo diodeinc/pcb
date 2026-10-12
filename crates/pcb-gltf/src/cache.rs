@@ -116,11 +116,10 @@ impl ModelCache {
             .ok()
             .and_then(|data| decode(&data, key));
         let mut stats = self.stats.lock().unwrap();
-        *if found.is_some() {
-            &mut stats.hits
-        } else {
-            &mut stats.misses
-        } += 1;
+        match found {
+            Some(_) => stats.hits += 1,
+            None => stats.misses += 1,
+        }
         found
     }
 
@@ -138,13 +137,10 @@ impl ModelCache {
             log::warn!("model cache: cannot write to {}: {err}", self.dir.display());
         }
     }
-
-    pub(crate) fn log_summary(&self) {
-        log::debug!("model cache {}: {:?}", self.dir.display(), self.stats());
-    }
 }
 
-/// `sha256(key body) body`, so an entry under another key's name is refused, with the body in little-endian fixed-width fields.
+/// `sha256(key body) body`, so an entry under another key's name is
+/// refused. The body is little-endian fixed-width fields.
 fn encode(t: &Tessellation, key: &Key) -> Vec<u8> {
     fn len(body: &mut Vec<u8>, n: usize) {
         body.extend((n as u64).to_le_bytes());

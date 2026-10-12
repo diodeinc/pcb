@@ -90,9 +90,6 @@ pub(crate) fn tessellate(board: &Board, scene: &Scene, cache: Option<&ModelCache
         })
         .collect();
     outcomes.sort_by_key(|(i, _)| *i);
-    if let Some(cache) = cache {
-        cache.log_summary();
-    }
 
     let mut meshes = Vec::new();
     let mut mesh_of_payload = Vec::with_capacity(outcomes.len());

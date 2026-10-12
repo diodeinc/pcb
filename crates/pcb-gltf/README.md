@@ -63,9 +63,7 @@ output: the GLB and the warnings are those of an uncached export.
   `Cargo.toml`, which pins foxtrot and meshopt-rs. Placement, file name and
   board do not matter.
 - Entries are checksummed and renamed into place, so concurrent writers are
-  safe; a missing, truncated or damaged entry is recomputed and rewritten,
-  and a directory that cannot be written is only read. Problems are logged
-  (`RUST_LOG=pcb_gltf=debug`), not reported as warnings.
-- Nothing evicts entries or removes temporary files from killed processes.
+  safe; a missing or damaged entry is recomputed and rewritten, and a
+  directory that cannot be written is only read. Nothing evicts entries.
 
 Embedders pass a `ModelCache` to `export_with_cache` and read its `stats()`.
