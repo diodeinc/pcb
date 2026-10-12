@@ -1003,13 +1003,15 @@ fn with_remote_fallback<T>(
     repo_url: &str,
     mut operation: impl FnMut(&str, bool) -> anyhow::Result<T>,
 ) -> anyhow::Result<(T, String)> {
-    let https_url = format!("https://{}.git", repo_url);
-    match operation(&https_url, false) {
-        Ok(value) => Ok((value, https_url)),
-        Err(_) => {
-            let ssh_url = format_ssh_url(repo_url);
-            operation(&ssh_url, true).map(|value| (value, ssh_url))
-        }
+    let https_url = format!("https://{repo_url}.git");
+    let https_err = match operation(&https_url, false) {
+        Ok(value) => return Ok((value, https_url)),
+        Err(err) => err,
+    };
+    let ssh_url = format_ssh_url(repo_url);
+    match operation(&ssh_url, true) {
+        Ok(value) => Ok((value, ssh_url)),
+        Err(ssh_err) => anyhow::bail!("{https_url}: {https_err:#}; {ssh_url}: {ssh_err:#}"),
     }
 }
 
@@ -1206,6 +1208,23 @@ mod tests {
                     true
                 ),
             ]
+        );
+    }
+
+    #[test]
+    fn remote_fallback_reports_both_errors_https_first() {
+        let err = with_remote_fallback::<()>("code.diode.computer/diode/registry", |url, _| {
+            if url.starts_with("https://") {
+                anyhow::bail!("transport 'https' not allowed");
+            }
+            anyhow::bail!("transport 'ssh' not allowed")
+        })
+        .unwrap_err();
+
+        assert_eq!(
+            err.to_string(),
+            "https://code.diode.computer/diode/registry.git: transport 'https' not allowed; \
+             git@code.diode.computer:diode/registry.git: transport 'ssh' not allowed"
         );
     }
 

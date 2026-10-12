@@ -21,6 +21,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 - `pcb step export` opens the solder mask for pads that sit only on mask or paste layers, and draws graphics on copper layers as copper, as KiCad does.
 
+### Fixed
+
+- When a git fetch fails over both HTTPS and SSH, pcb reports both errors, HTTPS first, instead of only the SSH one.
+
 ## [0.4.76] - 2026-10-12
 
 ## [0.4.75] - 2026-10-12
