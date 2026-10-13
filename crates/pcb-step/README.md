@@ -93,7 +93,7 @@ The defaults follow KiCad's exporter (`pcbnew/exporters/step/`):
   one product per side, coloured from the stackup with KiCad's
   transparency. Silkscreen is the union of the layer's graphics and text
   with the drills, backdrills and counterbores taken out, clipped to the
-  board. Text is KiCad's stroke font (`newstroke`, embedded up to U+26FF)
+  board. Text is KiCad's stroke font (the `newstroke` crate, U+0020 to U+FFEE)
   laid out with KiCad's spacing, justification, italic tilt and markup;
   `${NAME}` variables come from the project file beside the board, and
   `${REFERENCE}`/`${VALUE}` from the footprint. The mask is the board
@@ -130,8 +130,7 @@ would silently export its bounding box.
 | `src/copper.rs` | Pad outlines, track strokes, per-layer unions through pcb-ir with pads and drills cut out, plating tubes. |
 | `src/rings.rs` | Rings from a boolean into loops: vertex merge, pinch split, nesting, arc refit with a crossing guard. |
 | `src/faces.rs` | Silkscreen and mask faces: strokes, fills and openings unioned cell by cell in parallel, drills cut and the board edge applied where they meet an island. |
-| `src/font.rs` | KiCad's stroke font: glyph decoding, line layout, justification, markup, pen width. |
-| `src/newstroke.rs` | The `newstroke` glyph table, generated from `common/newstroke_font.cpp`. |
+| `src/font.rs` | KiCad's stroke font from the `newstroke` crate: line layout, justification, markup, pen width. |
 | `src/outline_font.rs` | Outline fonts: embedded and bundled faces, HarfBuzz shaping, KiCad's outline layout, glyphs as rings. |
 | `fonts/` | Liberation Sans, the fallback face, under the SIL Open Font License. |
 | `src/donor.rs` | Donor STEP files: statement split, kind byte per statement, product tree, geometry closure, renumbered copy. |

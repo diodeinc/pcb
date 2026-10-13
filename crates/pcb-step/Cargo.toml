@@ -20,6 +20,7 @@ clap = { workspace = true, optional = true }
 glam = { workspace = true }
 kurbo = { workspace = true }
 memchr = { workspace = true }
+newstroke = { workspace = true }
 pcb-ir = { workspace = true }
 pcb-sexpr = { workspace = true }
 rayon = { workspace = true }
