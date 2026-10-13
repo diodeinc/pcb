@@ -8,6 +8,8 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+## [0.4.78] - 2026-10-13
+
 ### Added
 
 - `pcb ipc2581 edit provenance` records a production run's parties, BOM header, history attributes, and configuration properties in the IPC-2581 file; board arrays keep them and `pcb ipc2581 info --format json` reports them under `provenance`.
@@ -2345,7 +2347,8 @@ Tvs(package="DO-214AA", direction="Unidirectional", reverse_standoff_voltage="24
 - Error on invalid type passed to `io()`
 - Format the auto-generated component .zen files
 
-[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.4.77...HEAD
+[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.4.78...HEAD
+[0.4.78]: https://github.com/diodeinc/pcb/compare/v0.4.77...v0.4.78
 [0.4.77]: https://github.com/diodeinc/pcb/compare/v0.4.76...v0.4.77
 [0.4.76]: https://github.com/diodeinc/pcb/compare/v0.4.75...v0.4.76
 [0.4.75]: https://github.com/diodeinc/pcb/compare/v0.4.74...v0.4.75
