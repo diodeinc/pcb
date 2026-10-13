@@ -201,3 +201,29 @@ jobs:
           name: pcbc-${{ matrix.target }}
           path: artifacts/*
           retention-days: 3
+
+  smoke-windows:
+    if: inputs.cross_windows
+    needs: build
+    runs-on: blacksmith-4vcpu-windows-2025
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: |
+            lib/std
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: pcbc-x86_64-pc-windows-msvc
+          path: artifacts
+
+      - name: Run cross-compiled pcbc
+        shell: bash
+        run: |
+          set -euxo pipefail
+          cp artifacts/pcbc-x86_64-pc-windows-msvc.exe pcbc.exe
+          ./pcbc.exe --version
+          git clone -q --depth 1 https://code.diode.computer/demo/b/DM0002.git
+          cd DM0002
+          ../pcbc.exe build -S bom
