@@ -10,7 +10,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Changed
 
-- `pcb rectify` is built into `pcbc`. Releases no longer ship the separate `pcb-rectify` binary, and the `pcb` shim no longer downloads or reports it.
+- `pcb rectify` is built into `pcbc`; the separate `pcb-rectify` binary is gone.
 
 ## [0.4.80] - 2026-10-13
 
