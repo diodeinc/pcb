@@ -4,10 +4,9 @@ pub mod footprint;
 
 use anyhow::{Context, Result, anyhow};
 use pcb_command_runner::CommandRunner;
-use pcb_sexpr::Sexpr;
 use std::collections::HashMap;
 use std::fs::File;
-use std::io::{BufReader, Write};
+use std::io::Write;
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use tempfile::{NamedTempFile, TempDir};
@@ -155,22 +154,16 @@ fn read_board_kicad_major_version(pcb_path: &Path) -> Result<Option<u32>> {
         return Ok(None);
     }
 
-    let file = File::open(pcb_path)
+    let source = std::fs::read_to_string(pcb_path)
         .with_context(|| format!("Failed to read PCB file: {}", pcb_path.display()))?;
-    let mut version = None;
-    pcb_sexpr::walk_stream(BufReader::new(file), |node| {
-        let Some(items) = node.as_list() else {
-            return true;
-        };
-        if items.first().and_then(Sexpr::as_sym) == Some("generator_version") {
-            version = items.get(1).and_then(Sexpr::as_str).and_then(version_major);
-            return false;
-        }
-        true
-    })
-    .with_context(|| format!("Failed to parse PCB file: {}", pcb_path.display()))?;
-
-    Ok(version)
+    let arena = pcb_sexpr::Arena::new();
+    let root = arena
+        .parse(&source)
+        .with_context(|| format!("Failed to parse PCB file: {}", pcb_path.display()))?;
+    Ok(root
+        .find_list("generator_version")
+        .and_then(|items| items.get(1)?.as_str())
+        .and_then(version_major))
 }
 
 fn installed_kicad_major_version() -> Result<Option<u32>> {
@@ -656,17 +649,24 @@ mod tests {
     }
 
     #[test]
-    fn read_board_kicad_major_version_stops_after_header() {
+    fn read_board_kicad_major_version_reads_the_header() {
         let temp = tempdir().expect("tempdir");
         let pcb_path = temp.path().join("layout.kicad_pcb");
-        let mut pcb =
-            b"(kicad_pcb\n\t(generator \"pcbnew\")\n\t(generator_version \"10.0\")\n".to_vec();
-        pcb.extend_from_slice(&[0xff, 0xfe, 0xfd]);
-        fs::write(&pcb_path, pcb).expect("write pcb");
-
-        assert_eq!(
-            read_board_kicad_major_version(&pcb_path).expect("read board version"),
-            Some(10)
-        );
+        let read = |pcb: &str| {
+            fs::write(&pcb_path, pcb).expect("write pcb");
+            read_board_kicad_major_version(&pcb_path).map_err(|e| format!("{e:#}"))
+        };
+        for (pcb, expected) in [
+            ("(kicad_pcb (generator_version \"10.0\"))", Some(10)),
+            ("(kicad_pcb ( generator_version \"1\\0.0\"))", Some(10)),
+            (
+                "; (generator_version \"9.0\")\n(kicad_pcb (generator_version \"10.0\"))",
+                Some(10),
+            ),
+            ("(kicad_pcb (generator \"pcbnew\"))", None),
+        ] {
+            assert_eq!(read(pcb), Ok(expected), "{pcb}");
+        }
+        assert!(read("(kicad_pcb (generator_version \"10.0\"").is_err());
     }
 }

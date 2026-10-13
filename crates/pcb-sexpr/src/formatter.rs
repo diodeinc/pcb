@@ -183,7 +183,7 @@ pub fn format_tree(sexpr: &Sexpr, mode: FormatMode) -> String {
 /// Unlike `%g` it never falls back to exponent notation. At most ten decimals
 /// are kept: KiCad formats whole internal units (1 nm at the finest), so noise
 /// near zero, such as `cos(90°)`, is written as `0` as a KiCad save would.
-fn format_float(f: f64) -> String {
+pub(crate) fn format_float(f: f64) -> String {
     if f == 0.0 {
         return "0".to_string();
     }
@@ -208,20 +208,7 @@ fn write_compact(sexpr: &Sexpr, out: &mut String) {
             out.push_str(&escape_string(s));
             out.push('"');
         }
-        SexprKind::Int(n) => {
-            if let Some(raw) = sexpr.raw_atom.as_deref() {
-                out.push_str(raw);
-            } else {
-                out.push_str(&n.to_string());
-            }
-        }
-        SexprKind::F64(f) => {
-            if let Some(raw) = sexpr.raw_atom.as_deref() {
-                out.push_str(raw);
-            } else {
-                out.push_str(&format_float(*f));
-            }
-        }
+        SexprKind::Int(_) | SexprKind::F64(_) => out.push_str(&sexpr.atom_text().unwrap()),
         SexprKind::List(items) => {
             out.push('(');
             for (idx, item) in items.iter().enumerate() {

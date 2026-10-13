@@ -1,6 +1,9 @@
 //! A simple S-expression parser that preserves the exact format of atoms
 //! and tracks source spans for each node.
 //!
+//! [`Arena::parse`] reads a file into nodes in a bump arena, and is the fastest
+//! way to read one. [`parse`] makes an owned [`Sexpr`] tree to build or edit.
+//!
 //! # Tree Traversal and Patching
 //!
 //! This crate provides generic APIs for walking S-expression trees and applying
@@ -10,14 +13,20 @@
 //! - [`Sexpr::walk_strings`] - Walk only string literals
 //! - [`PatchSet`] - Collect patches and write directly to any `std::io::Write`
 
+#![forbid(unsafe_code)]
+
+mod arena;
 pub mod board;
 pub mod edit;
 pub mod formatter;
 pub mod kicad;
+mod parser;
 pub mod scan;
 
+use std::borrow::Cow;
 use std::fmt;
-use std::io::BufRead;
+
+pub use arena::{Arena, Node, NodeKind};
 
 /// Find a direct child list `(name ...)` within a list of [`Sexpr`] nodes.
 pub fn find_child_list<'a>(items: &'a [Sexpr], name: &str) -> Option<&'a [Sexpr]> {
@@ -181,7 +190,7 @@ pub struct Sexpr {
         feature = "serde",
         serde(default, skip_serializing_if = "Option::is_none")
     )]
-    pub raw_atom: Option<String>,
+    pub raw_atom: Option<Box<str>>,
 }
 
 impl PartialEq for Sexpr {
@@ -251,6 +260,19 @@ impl Sexpr {
         match &self.kind {
             SexprKind::Symbol(s) | SexprKind::String(s) => Some(s),
             _ => None,
+        }
+    }
+
+    /// Get the atom as written: symbol and string text, or number source text.
+    pub fn atom_text(&self) -> Option<Cow<'_, str>> {
+        if let Some(raw) = &self.raw_atom {
+            return Some(Cow::Borrowed(raw));
+        }
+        match &self.kind {
+            SexprKind::Symbol(s) | SexprKind::String(s) => Some(Cow::Borrowed(s)),
+            SexprKind::Int(n) => Some(Cow::Owned(n.to_string())),
+            SexprKind::F64(f) => Some(Cow::Owned(formatter::format_float(*f))),
+            SexprKind::List(_) => None,
         }
     }
 
@@ -481,332 +503,61 @@ impl From<bool> for Sexpr {
     }
 }
 
-/// Parse a string into an S-expression
+/// Parse the first S-expression of a string into an owned tree.
+///
+/// To only read the result, [`Arena::parse`] is faster.
 pub fn parse(input: &str) -> Result<Sexpr, ParseError> {
-    log::trace!("Parsing S-expression from {} bytes of input", input.len());
-    let result = finish_in_memory_parse(parse_stream(input.as_bytes(), Some(1), |_| true))
-        .and_then(|roots| roots.into_iter().next().ok_or(ParseError::UnexpectedEof));
-    match &result {
-        Ok(_) => log::trace!("Successfully parsed S-expression"),
-        Err(e) => log::trace!("Failed to parse S-expression: {e:?}"),
-    }
-    result
+    parser::scan(input, &mut Tree, true)?
+        .pop()
+        .ok_or(ParseError::UnexpectedEof)
 }
 
 /// Parse a string into multiple S-expressions
 pub fn parse_all(input: &str) -> Result<Vec<Sexpr>, ParseError> {
-    log::trace!(
-        "Parsing multiple S-expressions from {} bytes of input",
-        input.len()
-    );
-    let result = finish_in_memory_parse(parse_stream(input.as_bytes(), None, |_| true));
-    match &result {
-        Ok(exprs) => log::trace!("Successfully parsed {} S-expressions", exprs.len()),
-        Err(e) => log::trace!("Failed to parse S-expressions: {e:?}"),
-    }
-    result
+    parser::scan(input, &mut Tree, false)
 }
 
-#[derive(Debug)]
-struct StreamListFrame {
-    start: usize,
-    items: Vec<Sexpr>,
-}
+/// Builds [`Sexpr`] trees for [`parser::scan`].
+struct Tree;
 
-#[derive(Debug, Default)]
-enum StreamMode {
-    #[default]
-    Normal,
-    Comment,
-    Atom {
-        start: usize,
-        bytes: Vec<u8>,
-    },
-    String {
-        start: usize,
-        bytes: Vec<u8>,
-        escaped: bool,
-    },
-}
+impl<'s> parser::Sink<'s> for Tree {
+    type Node = Sexpr;
 
-/// Errors that can occur while walking S-expressions from a buffered reader.
-#[derive(Debug)]
-pub enum StreamParseError {
-    Io(std::io::Error),
-    Parse(ParseError),
-    Utf8(std::string::FromUtf8Error),
-}
-
-impl fmt::Display for StreamParseError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            StreamParseError::Io(err) => write!(f, "{err}"),
-            StreamParseError::Parse(err) => write!(f, "{err}"),
-            StreamParseError::Utf8(err) => write!(f, "{err}"),
-        }
-    }
-}
-
-impl std::error::Error for StreamParseError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            StreamParseError::Io(err) => Some(err),
-            StreamParseError::Parse(err) => Some(err),
-            StreamParseError::Utf8(err) => Some(err),
-        }
-    }
-}
-
-impl From<std::io::Error> for StreamParseError {
-    fn from(value: std::io::Error) -> Self {
-        Self::Io(value)
-    }
-}
-
-impl From<ParseError> for StreamParseError {
-    fn from(value: ParseError) -> Self {
-        Self::Parse(value)
-    }
-}
-
-impl From<std::string::FromUtf8Error> for StreamParseError {
-    fn from(value: std::string::FromUtf8Error) -> Self {
-        Self::Utf8(value)
-    }
-}
-
-fn stream_parse_atom(bytes: Vec<u8>, span: Span) -> Result<Sexpr, StreamParseError> {
-    let atom_str = String::from_utf8(bytes)?;
-
-    if let Ok(int_val) = atom_str.parse::<i64>() {
-        Ok(Sexpr {
-            kind: SexprKind::Int(int_val),
-            span,
-            raw_atom: Some(atom_str),
-        })
-    } else if let Ok(float_val) = atom_str.parse::<f64>() {
-        Ok(Sexpr {
-            kind: SexprKind::F64(float_val),
-            span,
-            raw_atom: Some(atom_str),
-        })
-    } else {
-        Ok(Sexpr::with_span(SexprKind::Symbol(atom_str), span))
-    }
-}
-
-fn stream_finish_node<F>(
-    stack: &mut [StreamListFrame],
-    roots: &mut Vec<Sexpr>,
-    root_limit: Option<usize>,
-    node: Sexpr,
-    visit: &mut F,
-) -> bool
-where
-    F: FnMut(&Sexpr) -> bool,
-{
-    if !visit(&node) {
-        return false;
+    fn symbol(&mut self, start: u32, text: &'s str) -> Sexpr {
+        let span = Span::new(start as usize, start as usize + text.len());
+        Sexpr::with_span(SexprKind::Symbol(text.to_owned()), span)
     }
 
-    if let Some(parent) = stack.last_mut() {
-        parent.items.push(node);
-    } else {
-        roots.push(node);
-        if root_limit.is_some_and(|limit| roots.len() >= limit) {
-            return false;
-        }
-    }
-
-    true
-}
-
-fn parse_stream<R, F>(
-    mut reader: R,
-    root_limit: Option<usize>,
-    mut visit: F,
-) -> Result<Vec<Sexpr>, StreamParseError>
-where
-    R: BufRead,
-    F: FnMut(&Sexpr) -> bool,
-{
-    let mut stack: Vec<StreamListFrame> = Vec::new();
-    let mut roots = Vec::new();
-    let mut mode = StreamMode::Normal;
-    let mut offset = 0usize;
-
-    loop {
-        let buffer = match reader.fill_buf() {
-            Ok(buffer) => buffer,
-            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
-            Err(error) => return Err(error.into()),
+    fn number(
+        &mut self,
+        start: u32,
+        text: &'s str,
+        number: parser::Number,
+        canonical: bool,
+    ) -> Sexpr {
+        let kind = match number {
+            parser::Number::Int(n) => SexprKind::Int(n),
+            parser::Number::F64(f) => SexprKind::F64(f),
         };
-        if buffer.is_empty() {
-            break;
-        }
-
-        let mut i = 0usize;
-        while i < buffer.len() {
-            let byte = buffer[i];
-
-            match &mut mode {
-                StreamMode::Normal => match byte {
-                    b'(' => stack.push(StreamListFrame {
-                        start: offset,
-                        items: Vec::new(),
-                    }),
-                    b')' => {
-                        let Some(frame) = stack.pop() else {
-                            return Err(ParseError::UnexpectedChar(')', '(').into());
-                        };
-                        let node = Sexpr::with_span(
-                            SexprKind::List(frame.items),
-                            Span::new(frame.start, offset + 1),
-                        );
-                        if !stream_finish_node(&mut stack, &mut roots, root_limit, node, &mut visit)
-                        {
-                            reader.consume(i + 1);
-                            return Ok(roots);
-                        }
-                    }
-                    b'"' => {
-                        mode = StreamMode::String {
-                            start: offset,
-                            bytes: Vec::new(),
-                            escaped: false,
-                        };
-                    }
-                    b';' => mode = StreamMode::Comment,
-                    _ if byte.is_ascii_whitespace() => {}
-                    _ => {
-                        mode = StreamMode::Atom {
-                            start: offset,
-                            bytes: Vec::new(),
-                        };
-                        continue;
-                    }
-                },
-                StreamMode::Comment => {
-                    let len = memchr::memchr(b'\n', &buffer[i..]).unwrap_or(buffer.len() - i);
-                    i += len;
-                    offset += len;
-                    if i < buffer.len() {
-                        mode = StreamMode::Normal;
-                    }
-                    continue;
-                }
-                StreamMode::Atom { start, bytes } => {
-                    let len = buffer[i..]
-                        .iter()
-                        .position(|b| b.is_ascii_whitespace() || matches!(b, b'(' | b')'))
-                        .unwrap_or(buffer.len() - i);
-                    bytes.extend_from_slice(&buffer[i..i + len]);
-                    i += len;
-                    offset += len;
-                    if i < buffer.len() {
-                        let node =
-                            stream_parse_atom(std::mem::take(bytes), Span::new(*start, offset))?;
-                        mode = StreamMode::Normal;
-                        if !stream_finish_node(&mut stack, &mut roots, root_limit, node, &mut visit)
-                        {
-                            reader.consume(i);
-                            return Ok(roots);
-                        }
-                    }
-                    continue;
-                }
-                StreamMode::String {
-                    start,
-                    bytes,
-                    escaped,
-                } => {
-                    if *escaped {
-                        match byte {
-                            b'n' => bytes.push(b'\n'),
-                            b'r' => bytes.push(b'\r'),
-                            b't' => bytes.push(b'\t'),
-                            b'\\' => bytes.push(b'\\'),
-                            b'"' => bytes.push(b'"'),
-                            _ => bytes.push(byte),
-                        }
-                        *escaped = false;
-                    } else {
-                        match byte {
-                            b'\\' => *escaped = true,
-                            b'"' => {
-                                let node = Sexpr::with_span(
-                                    SexprKind::String(String::from_utf8(std::mem::take(bytes))?),
-                                    Span::new(*start, offset + 1),
-                                );
-                                mode = StreamMode::Normal;
-                                if !stream_finish_node(
-                                    &mut stack, &mut roots, root_limit, node, &mut visit,
-                                ) {
-                                    reader.consume(i + 1);
-                                    return Ok(roots);
-                                }
-                            }
-                            _ => {
-                                let len = memchr::memchr2(b'"', b'\\', &buffer[i..])
-                                    .unwrap_or(buffer.len() - i);
-                                bytes.extend_from_slice(&buffer[i..i + len]);
-                                i += len;
-                                offset += len;
-                                continue;
-                            }
-                        }
-                    }
-                }
-            }
-
-            i += 1;
-            offset += 1;
-        }
-        reader.consume(i);
-    }
-
-    match mode {
-        StreamMode::Normal | StreamMode::Comment => {}
-        StreamMode::Atom { start, bytes } => {
-            let node = stream_parse_atom(bytes, Span::new(start, offset))?;
-            if !stream_finish_node(&mut stack, &mut roots, root_limit, node, &mut visit) {
-                return Ok(roots);
-            }
-        }
-        StreamMode::String { .. } => return Err(ParseError::UnterminatedString.into()),
-    }
-
-    if !stack.is_empty() {
-        return Err(ParseError::UnclosedList.into());
-    }
-
-    Ok(roots)
-}
-
-fn finish_in_memory_parse<T>(result: Result<T, StreamParseError>) -> Result<T, ParseError> {
-    match result {
-        Ok(value) => Ok(value),
-        Err(StreamParseError::Parse(err)) => Err(err),
-        Err(StreamParseError::Io(err)) => unreachable!(
-            "buffered parsing over in-memory input should not fail with I/O errors: {err}"
-        ),
-        Err(StreamParseError::Utf8(err)) => {
-            unreachable!("buffered parsing over UTF-8 input should not fail UTF-8 decoding: {err}")
+        Sexpr {
+            kind,
+            span: Span::new(start as usize, start as usize + text.len()),
+            raw_atom: (!canonical).then(|| text.into()),
         }
     }
-}
 
-/// Walk a buffered S-expression stream, visiting each node as soon as it is fully parsed.
-///
-/// Nodes are yielded in post-order: child atoms and lists are visited before their parent list.
-/// Returning `false` from the callback stops parsing immediately without consuming the rest of
-/// the reader.
-pub fn walk_stream<R, F>(reader: R, mut visit: F) -> Result<(), StreamParseError>
-where
-    R: BufRead,
-    F: FnMut(&Sexpr) -> bool,
-{
-    parse_stream(reader, None, |node| visit(node)).map(|_| ())
+    fn string(&mut self, start: u32, end: u32, text: &'s str, unescaped: Option<&str>) -> Sexpr {
+        let span = Span::new(start as usize, end as usize);
+        Sexpr::with_span(
+            SexprKind::String(unescaped.unwrap_or(text).to_owned()),
+            span,
+        )
+    }
+
+    fn list(&mut self, start: u32, end: u32, pending: &mut Vec<Sexpr>, first: usize) -> Sexpr {
+        let span = Span::new(start as usize, end as usize);
+        Sexpr::with_span(SexprKind::List(pending.drain(first..).collect()), span)
+    }
 }
 
 /// Errors that can occur during parsing
@@ -817,6 +568,8 @@ pub enum ParseError {
     UnclosedList,
     UnterminatedString,
     EmptyAtom,
+    /// Spans are 32-bit, so the input must be under 4 GiB.
+    InputTooLarge,
 }
 
 impl fmt::Display for ParseError {
@@ -829,6 +582,7 @@ impl fmt::Display for ParseError {
             ParseError::UnclosedList => write!(f, "Unclosed list"),
             ParseError::UnterminatedString => write!(f, "Unterminated string"),
             ParseError::EmptyAtom => write!(f, "Empty atom"),
+            ParseError::InputTooLarge => write!(f, "Input is 4 GiB or larger"),
         }
     }
 }
@@ -935,93 +689,115 @@ impl fmt::Display for Sexpr {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::{BufReader, Cursor};
 
     #[test]
-    fn test_buffer_boundaries() {
+    fn test_atoms_and_errors() {
         let input =
             "(;comment )\"\n日本語 +001 12.000000 foo;bar a\"b \"🔥\\n\\r\\t\\\\\\\"\\é\") tail";
-        let expected = parse_all(input).unwrap();
-        for capacity in 1..=input.len() {
-            let actual = parse_stream(
-                BufReader::with_capacity(capacity, Cursor::new(input)),
-                None,
-                |_| true,
-            )
-            .unwrap();
-            // Debug includes spans and raw atoms, unlike Sexpr's PartialEq.
-            assert_eq!(format!("{actual:?}"), format!("{expected:?}"));
-            let items = actual[0].as_list().unwrap();
-            assert_eq!(items[1].raw_atom.as_deref(), Some("+001"));
-            assert_eq!(items[2].raw_atom.as_deref(), Some("12.000000"));
-            assert_eq!(items[5].as_str(), Some("🔥\n\r\t\\\"é"));
-        }
+        let roots = parse_all(input).unwrap();
+        assert_eq!(roots.len(), 2);
+        let items = roots[0].as_list().unwrap();
+        assert_eq!(items[0].as_sym(), Some("日本語"));
+        assert_eq!(items[1].raw_atom.as_deref(), Some("+001"));
+        assert_eq!(items[2].raw_atom.as_deref(), Some("12.000000"));
+        assert_eq!(items[3].as_sym(), Some("foo;bar"));
+        assert_eq!(items[4].as_sym(), Some("a\"b"));
+        assert_eq!(items[5].as_str(), Some("🔥\n\r\t\\\"é"));
+        assert_eq!(roots[1].as_sym(), Some("tail"));
+
+        // An `Arena` holds the same nodes, spans and number text.
+        let input = format!("(root {input} (at 1.27 -5 (\"a\\\"b\" \"c\")) \"x\\ty\")");
+        let arena = Arena::new();
+        let root = arena.parse(&input).unwrap();
+        assert_eq!(
+            format!("{:?}", root.to_sexpr()),
+            format!("{:?}", parse(&input).unwrap())
+        );
+        let [_, first, _, at, last] = root.as_list().unwrap() else {
+            panic!("expected five items");
+        };
+        let items = first.as_list().unwrap();
+        assert_eq!(items[1].atom_text().as_deref(), Some("+001"));
+        assert_eq!(items[1].as_int(), Some(1));
+        assert_eq!(items[5].as_str(), Some("🔥\n\r\t\\\"é"));
+        let at = at.as_list().unwrap();
+        assert_eq!(at[1].kind(), NodeKind::F64(1.27));
+        assert_eq!(at[3].as_list().unwrap()[1].as_str(), Some("c"));
+        assert_eq!(last.as_str(), Some("x\ty"));
+        let span = at[3].span();
+        assert_eq!(&input[span.start..span.end], "(\"a\\\"b\" \"c\")");
+
         for (input, error) in [
+            ("", ParseError::UnexpectedEof),
             ("(日本語", ParseError::UnclosedList),
             ("\"🔥\\", ParseError::UnterminatedString),
             (")", ParseError::UnexpectedChar(')', '(')),
         ] {
-            for capacity in 1..=input.len() {
-                assert_eq!(
-                    finish_in_memory_parse(parse_stream(
-                        BufReader::with_capacity(capacity, Cursor::new(input)),
-                        None,
-                        |_| true,
-                    )),
-                    Err(error.clone()),
-                );
-            }
+            assert_eq!(parse(input).unwrap_err(), error);
+            assert_eq!(Arena::new().parse(input).unwrap_err(), error);
         }
     }
 
     #[test]
-    fn test_stop_leaves_trailing_bytes_unconsumed() {
-        for prefix in ["日本語", "\"🔥\"", "(日本語)"] {
-            let input = [prefix.as_bytes(), b" \xff"].concat();
-            for capacity in 1..=input.len() {
-                let mut reader = BufReader::with_capacity(capacity, Cursor::new(&input));
-                parse_stream(&mut reader, Some(1), |_| true).unwrap();
-                assert_eq!(reader.fill_buf().unwrap()[0], b' ');
-                let mut reader = BufReader::with_capacity(capacity, Cursor::new(&input));
-                walk_stream(&mut reader, |node| {
-                    node.as_sym() == Some("日本語") && prefix.starts_with('(')
-                })
-                .unwrap();
-                assert_eq!(reader.fill_buf().unwrap()[0], b' ');
+    fn test_numbers_keep_source_text() {
+        let mut lexemes: Vec<String> = [
+            "0",
+            "-0",
+            "+1",
+            "007",
+            "1e3",
+            "1E3",
+            ".5",
+            "5.",
+            "-.5",
+            "12.0",
+            "-0.0",
+            "1.27",
+            "-12.5",
+            "0.1",
+            "-0.5",
+            "0.0000000001",
+            "0.00000000001",
+            "123456789.5",
+            "1234567890.5",
+            "99999999999999999999",
+            "-9223372036854775808",
+            "inf",
+            "NaN",
+            "0.30000000000000004",
+        ]
+        .map(String::from)
+        .into();
+        // Every decimal shape up to 12 integer and 12 fraction digits.
+        for int_digits in 0..=12 {
+            for frac_digits in 0..=12 {
+                for digit in ["0", "1", "7", "9"] {
+                    let int = if int_digits == 0 {
+                        "0".to_string()
+                    } else {
+                        "9".repeat(int_digits - 1) + "1"
+                    };
+                    let frac = "3".repeat(frac_digits.max(1) - 1) + digit;
+                    lexemes.push(format!("{int}.{frac}"));
+                    lexemes.push(format!("-{int}.{frac}"));
+                }
             }
         }
-    }
-
-    #[test]
-    fn test_stream_retries_interrupted_reads() {
-        struct InterruptOnce {
-            cursor: Cursor<&'static [u8]>,
-            at: Option<u64>,
+        for lexeme in &lexemes {
+            let node = parse(lexeme).unwrap();
+            assert_eq!(
+                node.atom_text().as_deref(),
+                Some(lexeme.as_str()),
+                "{lexeme}"
+            );
+            assert_eq!(node.to_string(), *lexeme);
+            let arena = Arena::new();
+            let node = arena.parse(lexeme).unwrap();
+            assert_eq!(node.atom_text().as_deref(), Some(lexeme.as_str()));
         }
-        impl std::io::Read for InterruptOnce {
-            fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-                if self.at == Some(self.cursor.position()) {
-                    self.at = None;
-                    return Err(std::io::ErrorKind::Interrupted.into());
-                }
-                self.cursor.read(buf)
-            }
-        }
-        for at in [0, 3] {
-            let reader = InterruptOnce {
-                cursor: Cursor::new(b"(a b)"),
-                at: Some(at),
-            };
-            let mut symbols = Vec::new();
-            walk_stream(BufReader::with_capacity(1, reader), |node| {
-                if let Some(symbol) = node.as_sym() {
-                    symbols.push(symbol.to_owned());
-                }
-                true
-            })
-            .unwrap();
-            assert_eq!(symbols, ["a", "b"]);
-        }
+        // KiCad's usual numbers need no copy of their text.
+        let node = parse("(at 1.27 -0.5 90)").unwrap();
+        assert!(node.as_list().unwrap().iter().all(|n| n.raw_atom.is_none()));
     }
 
     #[test]
@@ -1080,54 +856,6 @@ mod tests {
         assert_eq!(parsed.len(), 2);
         assert_eq!(parsed[0].to_string(), "(a)");
         assert_eq!(parsed[1].to_string(), "(b)");
-    }
-
-    #[test]
-    fn test_walk_stream_visits_completed_nodes() {
-        let mut seen = Vec::new();
-        walk_stream(Cursor::new("(root (child 1) \"tail\")"), |node| {
-            match &node.kind {
-                SexprKind::List(items) => seen.push(
-                    items
-                        .first()
-                        .and_then(Sexpr::as_sym)
-                        .unwrap_or("<empty>")
-                        .to_string(),
-                ),
-                SexprKind::String(value) => seen.push(format!("\"{value}\"")),
-                SexprKind::Int(value) => seen.push(value.to_string()),
-                SexprKind::F64(value) => seen.push(value.to_string()),
-                SexprKind::Symbol(value) => seen.push(value.clone()),
-            }
-            true
-        })
-        .unwrap();
-
-        assert_eq!(
-            seen,
-            vec!["root", "child", "1", "child", "\"tail\"", "root"]
-        );
-    }
-
-    #[test]
-    fn test_walk_stream_can_stop_before_trailing_bytes() {
-        let input =
-            b"(kicad_pcb\n\t(generator \"pcbnew\")\n\t(generator_version \"10.0\")\n\xff\xfe\xfd";
-        let mut seen = Vec::new();
-
-        walk_stream(Cursor::new(&input[..]), |node| {
-            let Some(items) = node.as_list() else {
-                return true;
-            };
-            let Some(tag) = items.first().and_then(Sexpr::as_sym) else {
-                return true;
-            };
-            seen.push(tag.to_string());
-            tag != "generator_version"
-        })
-        .unwrap();
-
-        assert_eq!(seen, vec!["generator", "generator_version"]);
     }
 
     #[test]

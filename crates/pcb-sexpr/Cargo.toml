@@ -9,6 +9,7 @@ description = "S-expression parser for PCB file formats"
 
 [dependencies]
 base64 = { workspace = true }
+bumpalo = { workspace = true }
 hex = { workspace = true }
 log = { workspace = true }
 memchr = { workspace = true }
