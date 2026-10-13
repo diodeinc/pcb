@@ -1,108 +1,81 @@
+# EXPERIMENT BRANCH ONLY: parameterized pcbc release build for timing
+# comparisons. The publish job is removed, so this never releases anything.
 name: Release pcbc
 
 on:
-  push:
-    tags:
-      - 'v*.*.*'
   workflow_dispatch:
     inputs:
       tag:
-        description: 'pcbc release tag, such as v0.3.83'
-        required: true
+        description: 'unused tag, kept for compatibility'
+        required: false
         type: string
       dry_run:
-        description: 'Build artifacts without publishing to S3 or GitHub Releases'
+        description: 'unused, always dry'
+        required: false
+        type: boolean
+        default: true
+      lto:
+        description: 'profile.dist lto (fat, thin, off)'
+        required: false
+        type: string
+        default: fat
+      codegen_units:
+        description: 'profile.dist codegen-units'
+        required: false
+        type: string
+        default: '1'
+      single_cargo:
+        description: 'Build pcbc and pcb-rectify in one cargo invocation'
         required: false
         type: boolean
         default: false
+      cross_arm:
+        description: 'Cross-compile aarch64 Linux targets on x64 with cargo-zigbuild'
+        required: false
+        type: boolean
+        default: false
+      big_runners:
+        description: 'Use 32 vCPU Linux/Windows and 12 vCPU macOS runners'
+        required: false
+        type: boolean
+        default: false
+      label:
+        description: 'Experiment label'
+        required: false
+        type: string
+        default: ''
+
+run-name: 'release-exp ${{ inputs.label }} lto=${{ inputs.lto }} cgu=${{ inputs.codegen_units }} single=${{ inputs.single_cargo }} cross_arm=${{ inputs.cross_arm }} big=${{ inputs.big_runners }}'
 
 permissions:
   contents: read
 
 jobs:
-  prepare:
-    runs-on: blacksmith-16vcpu-ubuntu-2404
-    outputs:
-      tag: ${{ steps.release.outputs.tag }}
-      version: ${{ steps.release.outputs.version }}
-      prerelease: ${{ steps.release.outputs.prerelease }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ inputs.dry_run && github.ref_name || inputs.tag || github.ref_name }}
-          persist-credentials: false
-
-      - name: Setup Rust
-        uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1.17.0
-        with:
-          cache-bin: false
-          cache: false
-
-      - id: release
-        shell: bash
-        env:
-          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
-        run: |
-          set -euo pipefail
-          tag="$RELEASE_TAG"
-          case "$tag" in
-            v*) version="${tag#v}" ;;
-            *) echo "Unsupported pcbc release tag: $tag" >&2; exit 1 ;;
-          esac
-
-          actual=$(cargo metadata --no-deps --format-version=1 \
-            | jq -r '.packages[] | select(.name == "pcbc") | .version')
-          if [ "$actual" != "$version" ]; then
-            echo "pcbc version is $actual, but tag requests $version" >&2
-            exit 1
-          fi
-
-          prerelease=false
-          if [[ "$version" == *-* ]]; then
-            prerelease=true
-          fi
-
-          echo "tag=$tag" >> "$GITHUB_OUTPUT"
-          echo "version=$version" >> "$GITHUB_OUTPUT"
-          echo "prerelease=$prerelease" >> "$GITHUB_OUTPUT"
-
-      - name: Prepare stdlib source archive
-        run: |
-          set -euo pipefail
-          if ! command -v zstd >/dev/null; then
-            sudo apt-get update
-            sudo apt-get install -y zstd
-          fi
-          mkdir -p artifacts
-          git archive --format=tar HEAD:lib/std | zstd -q -3 -c > artifacts/stdlib.tar.zst
-          sha256sum artifacts/stdlib.tar.zst > artifacts/stdlib.tar.zst.sha256
-
-      - name: Upload stdlib source archive
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: pcbc-stdlib
-          path: artifacts/stdlib.tar.zst*
-
   build:
-    needs: prepare
     name: build pcbc (${{ matrix.target }})
     strategy:
       fail-fast: false
       matrix:
         include:
           - target: aarch64-apple-darwin
-            runner: blacksmith-6vcpu-macos-15
+            runner: ${{ inputs.big_runners && 'blacksmith-12vcpu-macos-15' || 'blacksmith-6vcpu-macos-15' }}
           - target: aarch64-unknown-linux-gnu
-            runner: blacksmith-16vcpu-ubuntu-2404-arm
+            runner: ${{ inputs.cross_arm && (inputs.big_runners && 'blacksmith-32vcpu-ubuntu-2404' || 'blacksmith-16vcpu-ubuntu-2404') || (inputs.big_runners && 'blacksmith-32vcpu-ubuntu-2404-arm' || 'blacksmith-16vcpu-ubuntu-2404-arm') }}
           - target: aarch64-unknown-linux-musl
-            runner: blacksmith-16vcpu-ubuntu-2404-arm
+            runner: ${{ inputs.cross_arm && (inputs.big_runners && 'blacksmith-32vcpu-ubuntu-2404' || 'blacksmith-16vcpu-ubuntu-2404') || (inputs.big_runners && 'blacksmith-32vcpu-ubuntu-2404-arm' || 'blacksmith-16vcpu-ubuntu-2404-arm') }}
           - target: x86_64-unknown-linux-gnu
-            runner: blacksmith-16vcpu-ubuntu-2404
+            runner: ${{ inputs.big_runners && 'blacksmith-32vcpu-ubuntu-2404' || 'blacksmith-16vcpu-ubuntu-2404' }}
           - target: x86_64-unknown-linux-musl
-            runner: blacksmith-16vcpu-ubuntu-2404
+            runner: ${{ inputs.big_runners && 'blacksmith-32vcpu-ubuntu-2404' || 'blacksmith-16vcpu-ubuntu-2404' }}
           - target: x86_64-pc-windows-msvc
-            runner: blacksmith-16vcpu-windows-2025
+            runner: ${{ inputs.big_runners && 'blacksmith-32vcpu-windows-2025' || 'blacksmith-16vcpu-windows-2025' }}
     runs-on: ${{ matrix.runner }}
+    timeout-minutes: 40
+    env:
+      CARGO_PROFILE_DIST_LTO: ${{ inputs.lto }}
+      CARGO_PROFILE_DIST_CODEGEN_UNITS: ${{ inputs.codegen_units }}
+      SINGLE_CARGO: ${{ inputs.single_cargo }}
+      CROSS: ${{ inputs.cross_arm && contains(matrix.target, 'aarch64-unknown-linux') }}
     steps:
       - name: Enable Windows long paths
         if: runner.os == 'Windows'
@@ -110,7 +83,6 @@ jobs:
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ inputs.dry_run && github.ref_name || needs.prepare.outputs.tag }}
           persist-credentials: false
 
       - name: Setup Rust
@@ -122,11 +94,20 @@ jobs:
           target: ${{ matrix.target }}
 
       - name: Install Linux musl build dependencies
-        if: contains(matrix.target, 'linux-musl')
+        if: contains(matrix.target, 'linux-musl') && env.CROSS != 'true'
         shell: bash
         run: |
           sudo apt-get update
           sudo apt-get install -y musl-tools musl-dev
+
+      - name: Install cargo-zigbuild
+        if: env.CROSS == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m venv "$RUNNER_TEMP/zb"
+          "$RUNNER_TEMP/zb/bin/pip" install -q ziglang cargo-zigbuild
+          echo "$RUNNER_TEMP/zb/bin" >> "$GITHUB_PATH"
 
       - name: Install zstd
         shell: bash
@@ -154,13 +135,25 @@ jobs:
           TARGET: ${{ matrix.target }}
         run: |
           set -euo pipefail
-          if [[ "$TARGET" == *linux-musl ]]; then
+          cargo_cmd=(cargo build)
+          if [[ "$CROSS" == "true" ]]; then
+            cargo_cmd=(cargo zigbuild)
+            if [[ "$TARGET" == *linux-musl ]]; then
+              export CFLAGS="-Du_int8_t=uint8_t -Du_int16_t=uint16_t -Du_int32_t=uint32_t -Du_int64_t=uint64_t"
+            fi
+          elif [[ "$TARGET" == *linux-musl ]]; then
             export CC=musl-gcc
             export RUSTFLAGS="-C linker=musl-gcc"
             export CFLAGS="-Du_int8_t=uint8_t -Du_int16_t=uint16_t -Du_int32_t=uint32_t -Du_int64_t=uint64_t"
           fi
-          cargo build --profile dist -p pcbc --bin pcbc --target "$TARGET"
-          cargo build --profile dist -p rectify --bin pcb-rectify --target "$TARGET"
+          start=$(date +%s)
+          if [[ "$SINGLE_CARGO" == "true" ]]; then
+            "${cargo_cmd[@]}" --profile dist -p pcbc --bin pcbc -p rectify --bin pcb-rectify --target "$TARGET"
+          else
+            "${cargo_cmd[@]}" --profile dist -p pcbc --bin pcbc --target "$TARGET"
+            "${cargo_cmd[@]}" --profile dist -p rectify --bin pcb-rectify --target "$TARGET"
+          fi
+          echo "BUILD_SECONDS=$(( $(date +%s) - start ))"
 
       - name: Prepare artifacts
         shell: bash
@@ -178,84 +171,12 @@ jobs:
             fi
             cp "target/$TARGET/dist/$exe" "artifacts/$artifact"
             zstd -q -f -3 "artifacts/$artifact" -o "artifacts/$artifact.zst"
-            if command -v shasum >/dev/null; then
-              shasum -a 256 "artifacts/$artifact" > "artifacts/$artifact.sha256"
-            else
-              sha256sum "artifacts/$artifact" > "artifacts/$artifact.sha256"
-            fi
           done
+          ls -l artifacts
 
       - name: Upload artifacts
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: pcbc-${{ matrix.target }}
           path: artifacts/*
-
-  publish:
-    needs:
-      - prepare
-      - build
-    runs-on: blacksmith-16vcpu-ubuntu-2404
-    env:
-      PRERELEASE: ${{ needs.prepare.outputs.prerelease }}
-      RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
-      RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
-    permissions:
-      contents: write
-      id-token: write
-    steps:
-      - name: Download artifacts
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          pattern: pcbc-*
-          path: artifacts
-          merge-multiple: true
-
-      - name: Configure AWS credentials
-        if: ${{ github.event_name != 'workflow_dispatch' || inputs.dry_run != true }}
-        uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6.2.3
-        with:
-          role-to-assume: ${{ vars.AWS_PCB_RELEASE_S3_ROLE_ARN }}
-          aws-region: us-east-1
-
-      - name: Upload artifacts to S3
-        if: ${{ github.event_name != 'workflow_dispatch' || inputs.dry_run != true }}
-        run: |
-          # Upload every artifact first. None of this is discoverable yet: the
-          # shim only resolves versions that have a completion marker under
-          # pcb/index/ (written by the next step), so a partially-synced release
-          # is invisible.
-          aws s3 sync artifacts/ "s3://diode-pcb-releases/pcb/$RELEASE_TAG/" \
-            --cache-control "public, max-age=31536000, immutable"
-
-      - name: Publish release completion marker
-        if: ${{ github.event_name != 'workflow_dispatch' || inputs.dry_run != true }}
-        run: |
-          # Single atomic PutObject that "commits" the release. Written last, so
-          # the shim never resolves a half-uploaded version. The shim only keys
-          # off the marker's presence; the body is informational.
-          jq -n \
-            --arg version "$RELEASE_VERSION" \
-            --arg tag "$RELEASE_TAG" \
-            --arg published_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-            '{ version: $version, tag: $tag, published_at: $published_at }' > release.json
-          aws s3 cp release.json "s3://diode-pcb-releases/pcb/index/$RELEASE_TAG" \
-            --cache-control "public, max-age=31536000, immutable" \
-            --content-type "application/json"
-
-      - name: Create GitHub release
-        if: ${{ github.event_name != 'workflow_dispatch' || inputs.dry_run != true }}
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GH_REPO: ${{ github.repository }}
-        run: |
-          prerelease_flag=""
-          if [ "$PRERELEASE" = "true" ]; then
-            prerelease_flag="--prerelease"
-          fi
-          gh release create "$RELEASE_TAG" \
-            --verify-tag \
-            $prerelease_flag \
-            --title "$RELEASE_VERSION - $(date -u +%Y-%m-%d)" \
-            --notes "Release $RELEASE_TAG" \
-            artifacts/*
+          retention-days: 3
