@@ -1,8 +1,8 @@
-use std::{collections::BTreeSet, fmt, io::Read};
+use std::{collections::BTreeSet, fmt};
 
-use base64::Engine;
 use sha2::{Digest, Sha256};
 
+use super::embedded::decode_embedded_payload;
 use crate::{Sexpr, Span, find_all_child_lists, find_child_list};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -170,26 +170,24 @@ fn validate_embedded_file(file: &[Sexpr], issues: &mut Vec<FootprintValidationIs
         return;
     };
 
-    let compressed = match base64::engine::general_purpose::STANDARD.decode(encoded.as_bytes()) {
+    let decompressed = match decode_embedded_payload(encoded.as_bytes()) {
         Ok(bytes) => bytes,
         Err(err) => {
             issues.push(FootprintValidationIssue::new(
-                format!("Embedded file `{name}` has invalid base64 data: {err}"),
+                format!("Embedded file `{name}` has {err}"),
                 data_span,
             ));
             return;
         }
     };
-    let decompressed = match decode_zstd(&compressed) {
-        Ok(bytes) => bytes,
-        Err(err) => {
-            issues.push(FootprintValidationIssue::new(
-                format!("Embedded file `{name}` has invalid zstd data: {err}"),
-                data_span,
-            ));
-            return;
-        }
-    };
+    // KiCad loads only zstd payloads; "KLUv/" is the base64 of zstd's magic.
+    if !encoded.starts_with("KLUv/") {
+        issues.push(FootprintValidationIssue::new(
+            format!("Embedded file `{name}` has invalid zstd data: not a zstd frame"),
+            data_span,
+        ));
+        return;
+    }
     if !checksum_matches(&stored_checksum, &decompressed) {
         let mmh3 = embedded_file_checksum(&decompressed);
         let sha256 = sha256_hash(&decompressed);
@@ -200,16 +198,6 @@ fn validate_embedded_file(file: &[Sexpr], issues: &mut Vec<FootprintValidationIs
             checksum_span,
         ));
     }
-}
-
-fn decode_zstd(compressed: &[u8]) -> Result<Vec<u8>, String> {
-    let mut decoder =
-        ruzstd::decoding::StreamingDecoder::new(compressed).map_err(|err| err.to_string())?;
-    let mut decompressed = Vec::new();
-    decoder
-        .read_to_end(&mut decompressed)
-        .map_err(|err| err.to_string())?;
-    Ok(decompressed)
 }
 
 fn checksum_matches(stored: &str, data: &[u8]) -> bool {
@@ -359,6 +347,8 @@ fn collect_child_atom_text(list: &[Sexpr], start: usize) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    use base64::Engine;
+
     use super::*;
 
     fn embedded_payload(bytes: &[u8]) -> (String, String) {

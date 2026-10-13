@@ -1,16 +1,11 @@
 //! KiCad's stroke font laid out the way KiCad lays it out: the glyphs of
-//! `newstroke.rs`, KiCad's line spacing, justification, italic tilt and
+//! the `newstroke` crate, KiCad's line spacing, justification, italic tilt and
 //! markup, so silkscreen text lands where the plot puts it.
 
-use std::sync::OnceLock;
+use newstroke::glyph;
 
 use crate::geom::{Vec2, rotate_kicad};
-use crate::newstroke::GLYPHS;
 
-/// Glyph coordinates are stored on a 21-unit grid.
-const STROKE_SCALE: f64 = 1.0 / 21.0;
-/// Glyph rows are stored shifted so most shapes have non-negative rows.
-const FONT_OFFSET: f64 = -8.0;
 const ITALIC_TILT: f64 = 1.0 / 8.0;
 const INTERLINE_PITCH: f64 = 1.68;
 /// KiCad's stroke font shrinks the interline to match legacy spacing.
@@ -19,52 +14,6 @@ const OVERBAR_HEIGHT: f64 = 1.23;
 const SUPER_SUB_SIZE: f64 = 0.8;
 const SUPER_HEIGHT_OFFSET: f64 = 0.35;
 const SUB_HEIGHT_OFFSET: f64 = 0.15;
-
-/// A decoded glyph: polylines in a unit box, and the advance width.
-struct Glyph {
-    strokes: Vec<Vec<Vec2>>,
-    advance: f64,
-}
-
-fn glyphs() -> &'static [Glyph] {
-    static DECODED: OnceLock<Vec<Glyph>> = OnceLock::new();
-    DECODED.get_or_init(|| GLYPHS.iter().map(|g| decode(g.as_bytes())).collect())
-}
-
-fn decode(g: &[u8]) -> Glyph {
-    let coordinate = |c: u8| (c as f64 - b'R' as f64) * STROKE_SCALE;
-    let mut strokes: Vec<Vec<Vec2>> = Vec::new();
-    let mut advance = 0.0;
-    let mut start_x = 0.0;
-    let mut current: Vec<Vec2> = Vec::new();
-    for (i, pair) in g.as_chunks::<2>().0.iter().enumerate() {
-        if i == 0 {
-            start_x = coordinate(pair[0]);
-            advance = coordinate(pair[1]) - start_x;
-        } else if pair == b" R" {
-            if !current.is_empty() {
-                strokes.push(std::mem::take(&mut current));
-            }
-        } else {
-            current.push(Vec2::new(
-                coordinate(pair[0]) - start_x,
-                (pair[1] as f64 - b'R' as f64 + FONT_OFFSET) * STROKE_SCALE,
-            ));
-        }
-    }
-    if !current.is_empty() {
-        strokes.push(current);
-    }
-    Glyph { strokes, advance }
-}
-
-fn glyph_of(c: char) -> &'static Glyph {
-    let table = glyphs();
-    let index = (c as usize).wrapping_sub(' ' as usize);
-    table
-        .get(index)
-        .unwrap_or_else(|| &table['?' as usize - ' ' as usize])
-}
 
 /// How a text is drawn, as KiCad stores it.
 #[derive(Debug, Clone, PartialEq)]
@@ -262,7 +211,7 @@ pub(crate) fn measure(text: &str, size: Vec2, script: i8) -> f64 {
 
 /// Width of `text` in the stroke font at `size`, advances summed.
 fn advance_of(text: &str, size: Vec2) -> f64 {
-    let space = glyph_of(' ').advance;
+    let space = glyph(' ').advance;
     let mut x = 0.0;
     let mut count = 0usize;
     for c in text.chars() {
@@ -277,7 +226,7 @@ fn advance_of(text: &str, size: Vec2) -> f64 {
         } else if c == ' ' {
             x += size.x * space;
         } else {
-            x += size.x * glyph_of(c).advance;
+            x += size.x * glyph(c).advance;
         }
         count += 1;
     }
@@ -385,7 +334,7 @@ fn draw_run(
         }
         p
     };
-    let space = glyph_of(' ').advance;
+    let space = glyph(' ').advance;
     let start_x = pen.x;
     let mut count = 0usize;
     for c in run.text.chars() {
@@ -400,12 +349,12 @@ fn draw_run(
         } else if c == ' ' {
             pen.x += size.x * space;
         } else {
-            let glyph = glyph_of(c);
-            for stroke in &glyph.strokes {
+            let glyph = glyph(c);
+            for stroke in glyph.strokes() {
                 out.push(
                     stroke
-                        .iter()
                         .map(|p| {
+                            let p = Vec2::from(p);
                             let scaled =
                                 Vec2::new(p.x * size.x - p.y * size.y * tilt, p.y * size.y);
                             place(scaled + pen)

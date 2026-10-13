@@ -56,18 +56,24 @@ pub fn escape_attribute_field(field: &str) -> String {
     escaped
 }
 
-/// Decode the `\uXXXX` escapes of an attribute field read from a file.
+/// Decode the `\uXXXX` (UTF-16) and `\UXXXXXXXX` (code point) escapes of
+/// an attribute field read from a file.
 pub fn unescape_attribute_field(field: &str) -> String {
+    let hex_escape = |rest: &str, prefix: &str, digits: usize| {
+        rest.strip_prefix(prefix)
+            .and_then(|hex| hex.get(..digits))
+            .filter(|hex| hex.bytes().all(|byte| byte.is_ascii_hexdigit()))
+            .map(|hex| u32::from_str_radix(hex, 16).expect("hex digits"))
+    };
     let mut units = Vec::with_capacity(field.len());
     let mut rest = field;
     while let Some(ch) = rest.chars().next() {
-        let escape = rest
-            .strip_prefix("\\u")
-            .and_then(|hex| hex.get(..4))
-            .filter(|hex| hex.bytes().all(|byte| byte.is_ascii_hexdigit()));
-        if let Some(hex) = escape {
-            units.push(u16::from_str_radix(hex, 16).expect("four hex digits"));
+        if let Some(unit) = hex_escape(rest, "\\u", 4) {
+            units.push(unit as u16);
             rest = &rest[6..];
+        } else if let Some(ch) = hex_escape(rest, "\\U", 8).and_then(char::from_u32) {
+            units.extend_from_slice(ch.encode_utf16(&mut [0; 2]));
+            rest = &rest[10..];
         } else {
             units.extend_from_slice(ch.encode_utf16(&mut [0; 2]));
             rest = &rest[ch.len_utf8()..];
@@ -961,8 +967,14 @@ mod tests {
             assert_eq!(unescape_attribute_field(escaped), field);
         }
         assert_eq!(escape_attribute_field(""), "_");
-        // Anything short of a full escape is literal text.
+        assert_eq!(
+            unescape_attribute_field("\\U000000A9 \\U0001F600\\u00B5"),
+            "\u{a9} \u{1f600}\u{b5}"
+        );
+        // Anything short of a full escape, or of a Unicode scalar, is literal text.
         assert_eq!(unescape_attribute_field("\\u00B"), "\\u00B");
+        assert_eq!(unescape_attribute_field("\\U0001F60"), "\\U0001F60");
+        assert_eq!(unescape_attribute_field("\\U0000D800"), "\\U0000D800");
     }
 
     #[test]

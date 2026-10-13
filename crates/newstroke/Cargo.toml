@@ -1,0 +1,9 @@
+[package]
+name = "newstroke"
+version = { workspace = true }
+edition = { workspace = true }
+repository = { workspace = true }
+homepage = { workspace = true }
+authors = { workspace = true }
+description = "KiCad's newstroke stroke font"
+license = "GPL-2.0-or-later AND OFL-1.1"

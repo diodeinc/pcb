@@ -3291,6 +3291,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "newstroke"
+version = "0.4.80"
+
+[[package]]
 name = "nibble_vec"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4051,7 +4055,9 @@ dependencies = [
  "glam 0.34.1",
  "kurbo",
  "memchr",
+ "newstroke",
  "pcb-ir",
+ "pcb-sexpr",
  "rayon",
  "rustybuzz",
  "serde",

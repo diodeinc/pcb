@@ -18,7 +18,6 @@ mod geom;
 mod holes;
 pub mod manifest;
 mod models;
-mod newstroke;
 mod outline;
 mod outline_font;
 mod rings;

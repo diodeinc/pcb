@@ -261,22 +261,15 @@ pub(crate) fn dashes(pattern: &[f64], len: f64) -> Vec<(f64, f64)> {
     out
 }
 
-/// `${NAME}` replaced by the project's text variables; an unknown name
-/// stays as written, as KiCad shows it.
+/// `text` with the project's text variables substituted as KiCad does;
+/// an unknown `${NAME}` stays as written, as KiCad shows it.
 pub(crate) fn expand(text: &str, variables: &[(String, String)]) -> String {
-    let mut out = text.to_owned();
-    // A value may name another variable, as a title block revision of
-    // `${PCB_VERSION}` does; a few passes settle them.
-    for _ in 0..4 {
-        let next = variables.iter().fold(out.clone(), |t, (name, value)| {
-            t.replace(&format!("${{{name}}}"), value)
-        });
-        if next == out {
-            break;
-        }
-        out = next;
-    }
-    out
+    pcb_sexpr::kicad::substitute_text_variables(text, |name| {
+        variables
+            .iter()
+            .find(|(n, _)| n == name)
+            .map(|(_, value)| value.as_str())
+    })
 }
 
 /// The contours of one graphic. Strokes are cut into dashes by the

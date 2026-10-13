@@ -5,6 +5,8 @@ pub mod types;
 pub mod write;
 
 pub use pcb_intern::{Interner, Symbol};
+/// The polarity of [`GraphicalObject`]s and aperture geometry paths.
+pub use pcb_ir::geom::Polarity;
 use pcb_ir::geom::{AccuracyError, Span};
 pub use types::*;
 pub use write::{

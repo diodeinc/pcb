@@ -1,2 +1,2 @@
 *.zen linguist-language=Starlark
-crates/pcb-step/src/newstroke.rs linguist-generated=true
+crates/newstroke/src/glyphs.rs linguist-generated=true
