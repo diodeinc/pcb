@@ -48,6 +48,37 @@ const KINDS: [(&str, &str, &str); 3] = [
     ("Person", "name", "UNKNOWN"),
 ];
 
+/// The attributes of each kind of [`KINDS`] the input sets.
+const MODELLED: [&[&str]; 3] = [
+    &["id", "roleFunction", "description", "authority"],
+    &[
+        "id",
+        "name",
+        "code",
+        "codeType",
+        "address1",
+        "address2",
+        "city",
+        "stateProvince",
+        "country",
+        "postalCode",
+        "phone",
+        "fax",
+        "email",
+        "url",
+    ],
+    &[
+        "name",
+        "enterpriseRef",
+        "title",
+        "email",
+        "phone",
+        "fax",
+        "mailstop",
+        "roleRef",
+    ],
+];
+
 /// `xml` with the provenance of `input` recorded.
 pub fn set_provenance(xml: &str, input: &ProvenanceInput) -> Result<String> {
     let entries = header_entries(input)?;
@@ -91,8 +122,17 @@ pub fn set_provenance(xml: &str, input: &ProvenanceInput) -> Result<String> {
             let id = &attrs[0].1;
             match nodes.iter().find(|&&node| doc.attr(node, key) == Some(id)) {
                 Some(&node) => {
+                    // Attributes the input does not model, such as publicKey, stay.
+                    let modelled = MODELLED[kind_index];
+                    let kept_attrs = doc.attrs(node).filter(|(k, _)| !modelled.contains(k));
                     let mut writer = XmlWriter::new();
-                    writer.empty_element_with(name, attrs.iter().map(|(k, v)| (*k, v.as_str())));
+                    writer.empty_element_with(
+                        name,
+                        attrs
+                            .iter()
+                            .map(|(k, v)| (*k, v.as_str()))
+                            .chain(kept_attrs),
+                    );
                     edits.push(doc.replace(node, writer.into_string()));
                 }
                 None => new.empty_element_with(name, attrs.iter().map(|(k, v)| (*k, v.as_str()))),
@@ -306,6 +346,15 @@ fn unreferenced_placeholders(
         })
         .collect();
 
+    // An upserted entry refers to its party's role and enterprise instead.
+    let upserted = |node: Node| {
+        KINDS.iter().any(|&(kind, key, _)| {
+            doc.name(node) == kind
+                && entries
+                    .iter()
+                    .any(|(name, attrs)| *name == kind && doc.attr(node, key) == Some(&attrs[0].1))
+        })
+    };
     // (referring element, kind referred to, attribute holding the reference)
     let references = [
         ("Person", "Role", "roleRef"),
@@ -330,7 +379,7 @@ fn unreferenced_placeholders(
                     .flat_map(|&(from, _, attr)| {
                         doc.find_all(from).into_iter().map(move |node| (node, attr))
                     })
-                    .filter(|&(node, _)| !removed.contains(&node))
+                    .filter(|&(node, _)| !removed.contains(&node) && !upserted(node))
                     .filter(|&(node, _)| !(content_role_replaced && doc.name(node) == "Content"))
                     .filter(|&(node, _)| {
                         doc.name(node) != "Textual"
@@ -606,6 +655,30 @@ mod tests {
         assert!(read.roles.iter().any(|role| role.id == "Owner"));
         assert!(read.enterprises.iter().any(|e| e.id == "UNKNOWN"));
         assert!(read.persons.iter().any(|p| p.details.name == "UNKNOWN"));
+    }
+
+    #[test]
+    fn upserts_keep_public_keys_and_new_histories_keep_their_author() {
+        // The input reassigns this Person, so the placeholders it named go.
+        let person =
+            r#"<Person name="Diode" enterpriseRef="UNKNOWN" roleRef="Owner" publicKey="YWJj"/>"#;
+        let start = XML.find("<HistoryRecord").unwrap();
+        let end = XML.find("</HistoryRecord>").unwrap() + "</HistoryRecord>".len();
+        let xml = format!(
+            r#"{}<HistoryRecord number="1" origination="2026-01-01T00:00:00Z" software="KiCad EDA" lastChange="2026-01-01T00:00:00Z"/>{}"#,
+            &XML[..start],
+            &XML[end..]
+        )
+        .replace(r#"<Person name="UNKNOWN" enterpriseRef="UNKNOWN" roleRef="Owner"/>"#, person);
+        let edited = set_provenance(&xml, &input()).unwrap();
+        ipc2581::validate(&edited).unwrap();
+
+        assert!(edited.contains(r#"<Person name="Diode" enterpriseRef="diode" email="support@diode.computer" roleRef="diode-sender" publicKey="YWJj"/>"#));
+        let read = provenance(&edited);
+        assert!(!read.roles.iter().any(|role| role.id == "Owner"));
+        assert!(!read.enterprises.iter().any(|e| e.id == "UNKNOWN"));
+        assert_eq!(read.changes.len(), 1);
+        assert_eq!(read.changes[0].person_ref, "Diode");
     }
 
     #[test]

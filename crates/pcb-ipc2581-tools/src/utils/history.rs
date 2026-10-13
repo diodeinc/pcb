@@ -32,24 +32,33 @@ pub fn append_file_revision(original_xml: &str, comment: &str) -> Result<String>
 /// against the same parsed document in a single splice pass.
 pub fn file_revision_edits(doc: &Doc, comment: &str) -> Result<Vec<Edit>> {
     let (person_ref, edits) = ensure_history_person(doc, doc.root()?)?;
-    revision_edits(doc, comment, &person_ref, &[], edits)
+    revision_edits(doc, comment, &person_ref, None, &[], edits)
 }
 
 /// [`file_revision_edits`] attributed to the existing Person `person_ref`,
-/// also setting the HistoryRecord attributes `attrs`.
+/// also setting the HistoryRecord attributes `attrs`. A history this creates
+/// records the change as a ChangeRec too, so it keeps its author.
 pub fn file_revision_edits_by(
     doc: &Doc,
     comment: &str,
     person_ref: &str,
     attrs: &[(&str, &str)],
 ) -> Result<Vec<Edit>> {
-    revision_edits(doc, comment, person_ref, attrs, Vec::new())
+    revision_edits(
+        doc,
+        comment,
+        person_ref,
+        Some(person_ref),
+        attrs,
+        Vec::new(),
+    )
 }
 
 fn revision_edits(
     doc: &Doc,
     comment: &str,
     person_ref: &str,
+    author: Option<&str>,
     attrs: &[(&str, &str)],
     mut edits: Vec<Edit>,
 ) -> Result<Vec<Edit>> {
@@ -63,6 +72,9 @@ fn revision_edits(
             let attrs = with_attrs(initial_history_attrs(doc, record, &now), attrs);
             writer.start_element_with("HistoryRecord", attrs);
             write_file_revision(&mut writer, 1, comment);
+            if let Some(author) = author {
+                write_change_record(&mut writer, &now, author, "pcb", comment);
+            }
             writer.end_element("HistoryRecord");
             edits.push(doc.replace(record, writer.into_string()));
             edits
@@ -107,7 +119,7 @@ fn revision_edits(
         }
         None => {
             let mut writer = XmlWriter::new();
-            write_history_record(&mut writer, &now, comment, attrs);
+            write_history_record(&mut writer, &now, comment, author, attrs);
             // Per the schema, HistoryRecord follows Content and LogisticHeader.
             let anchor = doc
                 .children(root)
@@ -125,11 +137,13 @@ fn revision_edits(
 }
 
 /// The first HistoryRecord of a document pcb originates at `now`, its one
-/// FileRevision recording `comment`, with the extra attributes `attrs`.
+/// FileRevision recording `comment`, with the extra attributes `attrs`. With
+/// an `author`, a ChangeRec attributes the change to that Person.
 pub fn write_history_record(
     writer: &mut XmlWriter,
     now: &str,
     comment: &str,
+    author: Option<&str>,
     attrs: &[(&str, &str)],
 ) {
     let created = [
@@ -141,6 +155,9 @@ pub fn write_history_record(
     .map(|(key, value)| (key.to_string(), value.to_string()));
     writer.start_element_with("HistoryRecord", with_attrs(created.into(), attrs));
     write_file_revision(writer, 1, comment);
+    if let Some(author) = author {
+        write_change_record(writer, now, author, "pcb", comment);
+    }
     writer.end_element("HistoryRecord");
 }
 
