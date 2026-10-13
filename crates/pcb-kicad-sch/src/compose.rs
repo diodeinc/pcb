@@ -1719,6 +1719,11 @@ fn build_component_symbol(
     for next in component_fields(netlist, instance, slot, at)? {
         match fields.get_mut(&next.name) {
             Some(existing) => {
+                // An empty field draws nothing, whatever its visibility. Filling
+                // one must not surface netlist metadata the source never showed.
+                if existing.value.is_empty() && !next.value.is_empty() && next.hidden {
+                    existing.hidden = true;
+                }
                 existing.value = next.value;
             }
             None => {

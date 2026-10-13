@@ -12,6 +12,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 - `pcb rectify` is built into `pcbc`; the separate `pcb-rectify` binary is gone.
 
+### Fixed
+
+- Schematic reconciliation keeps an empty KiCad field hidden when it fills a hidden netlist value such as a datasheet URL.
+
 ## [0.4.80] - 2026-10-13
 
 ### Changed
