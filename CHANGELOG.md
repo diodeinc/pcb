@@ -8,6 +8,8 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+## [0.4.80] - 2026-10-13
+
 ### Changed
 
 - `pcb publish --check` builds the packages it would publish, unless `--no-build` is given.
@@ -2358,7 +2360,8 @@ Tvs(package="DO-214AA", direction="Unidirectional", reverse_standoff_voltage="24
 - Error on invalid type passed to `io()`
 - Format the auto-generated component .zen files
 
-[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.4.79...HEAD
+[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.4.80...HEAD
+[0.4.80]: https://github.com/diodeinc/pcb/compare/v0.4.79...v0.4.80
 [0.4.79]: https://github.com/diodeinc/pcb/compare/v0.4.78...v0.4.79
 [0.4.78]: https://github.com/diodeinc/pcb/compare/v0.4.77...v0.4.78
 [0.4.77]: https://github.com/diodeinc/pcb/compare/v0.4.76...v0.4.77
