@@ -7,6 +7,7 @@
 //! - [`schematic`] - KiCad schematic (`.kicad_sch`) helpers
 //! - [`symbol`] - KiCad symbol library (`.kicad_sym`) helpers
 //! - [`embedded`] - embedded-file payload decoding
+//! - [`text_variables`] - `${NAME}` text-variable substitution
 
 pub mod embedded;
 pub mod footprint;
@@ -14,8 +15,10 @@ pub mod netlist;
 pub mod props;
 pub mod schematic;
 pub mod symbol;
+pub mod text_variables;
 
 pub use embedded::decode_embedded_payload;
 pub use netlist::sheetpath;
 pub use props::{child_list, int_prop, string_list_prop, string_prop, sym_prop, yes_no_prop};
 pub use schematic::{schematic_at, schematic_instance_paths, schematic_pins, schematic_properties};
+pub use text_variables::substitute_text_variables;

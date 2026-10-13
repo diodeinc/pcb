@@ -15,6 +15,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ### Fixed
 
 - Schematic reconciliation keeps an empty KiCad field hidden when it fills a hidden netlist value such as a datasheet URL.
+- `pcb step export` and `pcb gltf export` expand silkscreen text variables as KiCad does, including nested names such as `${U${ROW}:VALUE}` and the `\${` escape.
 
 ## [0.4.80] - 2026-10-13
 
