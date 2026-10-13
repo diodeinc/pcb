@@ -4056,6 +4056,7 @@ dependencies = [
  "kurbo",
  "memchr",
  "newstroke",
+ "pcb-intern",
  "pcb-ir",
  "pcb-sexpr",
  "rayon",

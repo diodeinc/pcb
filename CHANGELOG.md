@@ -18,6 +18,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - `pcb step export` and `pcb gltf export` draw silkscreen text with every glyph of KiCad's stroke font, CJK included, instead of `?` past U+26FF.
 - `pcb step export` and `pcb gltf export` expand silkscreen text variables as KiCad does, including nested names such as `${U${ROW}:VALUE}` and the `\${` escape.
 - Footprint validation rejects embedded file data without its closing `|`, which KiCad cannot load.
+- `pcb step export` and `pcb gltf export` draw padstack pads with each copper layer's own shape, such as a smaller inner-layer pad, instead of the front shape on every layer.
 
 ## [0.4.80] - 2026-10-13
 

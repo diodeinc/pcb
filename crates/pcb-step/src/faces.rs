@@ -1,16 +1,15 @@
-//! Silkscreen and solder mask as flat faces just above the copper, the
-//! way `kicad-cli` exports them: silkscreen is the union of its graphics
-//! and text with the drills taken out, clipped to the board; the mask is
-//! the board with every opening taken out.
+//! Silkscreen, solder mask and paste in 2D, the way `kicad-cli` exports
+//! them: silkscreen is the union of its graphics and text with the drills
+//! taken out, clipped to the board; the mask is the union of its openings,
+//! which the scene takes out of the board; paste is the union of the pad
+//! apertures.
 
 use std::f64::consts::TAU;
 
 use pcb_ir::geom::{BBox, ContourBuf, ContourSet, FillRule, PathCmd};
 use rayon::prelude::*;
 
-use crate::board::{
-    Board, Knockout, Machining, Mouth, Physical, Shape, ShapeKind, Tech, Text, Via,
-};
+use crate::board::{Board, Knockout, Machining, Mouth, Shape, ShapeKind, Tech, Text, Via};
 use crate::copper::{
     PLATING, circle_edges, contour, grown_pad_outline, pad_drill, pad_outline, point, resolution,
     stroke_contour,
@@ -24,37 +23,25 @@ use crate::outline::{Edge, Frame, Loop, Solid, flatten, orient};
 use crate::outline_font::Fonts;
 use crate::rings::{IndexedRing, Nested, cleaned, fit, nest, nested_of, raw_islands, rings_of};
 
-/// Height of the silkscreen above the outer copper.
-const SILK_ABOVE_COPPER: f64 = 0.04;
-/// Height of the solder mask above the outer copper.
-const MASK_ABOVE_COPPER: f64 = 0.015;
-
 /// One face of a tech layer.
 pub struct Face {
     pub outer: Loop,
     pub holes: Vec<Loop>,
 }
 
-/// The faces of one tech layer and where they sit.
-pub(crate) struct TechLayer {
-    pub(crate) tech: Tech,
-    pub(crate) z: f64,
-    pub(crate) faces: Vec<Face>,
-}
-
+/// The silkscreen and mask openings of each side asked for, as islands:
+/// front and back silkscreen, then front and back mask.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn build(
     board: &Board,
     frame: Frame,
-    solids: &[Solid],
-    physical: &Physical,
+    edge: &BoardEdge,
     silk: bool,
     mask: bool,
     cut_vias: bool,
     variables: &[(String, String)],
     warnings: &mut Vec<String>,
-) -> Result<Vec<TechLayer>, crate::Error> {
-    let edge = BoardEdge::new(solids);
+) -> Vec<(Tech, Vec<Nested>)> {
     let fonts = Fonts::load(board, warnings);
     let mut layers = Vec::new();
     if silk {
@@ -70,33 +57,22 @@ pub(crate) fn build(
         .with_max_len(1)
         .map(|tech| {
             let mut notes = Vec::new();
-            let faces = if tech.silk() {
-                silk_faces(board, frame, &edge, &fonts, *tech, variables, &mut notes)
+            let islands = if tech.silk() {
+                silk_islands(board, frame, edge, &fonts, *tech, variables, &mut notes)
             } else {
-                mask_faces(
-                    board, frame, &edge, &fonts, *tech, cut_vias, variables, &mut notes,
-                )
+                mask_openings(board, frame, &fonts, *tech, cut_vias, variables, &mut notes)
             };
-            (faces, notes)
+            (islands, notes)
         })
         .collect();
-    let mut out = Vec::with_capacity(layers.len());
-    for (tech, (faces, notes)) in layers.into_iter().zip(built) {
-        warnings.extend(notes);
-        let last = physical.copper_z.len() - 1;
-        let above = if tech.silk() {
-            SILK_ABOVE_COPPER
-        } else {
-            MASK_ABOVE_COPPER
-        };
-        let z = if tech.front() {
-            physical.copper_z[0].1 + above
-        } else {
-            physical.copper_z[last].0 - above
-        };
-        out.push(TechLayer { tech, z, faces });
-    }
-    Ok(out)
+    layers
+        .into_iter()
+        .zip(built)
+        .map(|(tech, (islands, notes))| {
+            warnings.extend(notes);
+            (tech, islands)
+        })
+        .collect()
 }
 
 /// The board edge flattened to chords within KiCad's maximum error: a
@@ -159,7 +135,7 @@ fn polyline_contour(points: &[Vec2]) -> ContourBuf {
 
 /// An island of a boolean as contours: the outer counter-clockwise, the
 /// holes clockwise.
-fn island_contours(island: &Nested) -> Vec<ContourBuf> {
+pub(crate) fn island_contours(island: &Nested) -> Vec<ContourBuf> {
     let wound = |ring: &[Vec2], ccw: bool| {
         if (signed_area(ring) > 0.0) == ccw {
             polyline_contour(ring)
@@ -718,7 +694,7 @@ fn union_rings(
     rings
 }
 
-fn face(island: &Nested) -> Face {
+pub(crate) fn face(island: &Nested) -> Face {
     let (outer, holes) = fit(island);
     Face { outer, holes }
 }
@@ -726,7 +702,7 @@ fn face(island: &Nested) -> Face {
 /// The silkscreen of one side. Drills are cut and the board edge
 /// applied only to the islands they actually meet.
 #[allow(clippy::too_many_arguments)]
-fn silk_faces(
+fn silk_islands(
     board: &Board,
     frame: Frame,
     edge: &BoardEdge,
@@ -734,7 +710,7 @@ fn silk_faces(
     tech: Tech,
     variables: &[(String, String)],
     warnings: &mut Vec<String>,
-) -> Vec<Face> {
+) -> Vec<Nested> {
     let what = format!("{} silkscreen", if tech.front() { "front" } else { "back" });
     let items = drawn_items(board, frame, fonts, tech, variables, warnings);
     let islands = nest(union_rings(items, &what, warnings));
@@ -748,11 +724,11 @@ fn silk_faces(
         .iter()
         .map(|edges| (contour(edges), edges_bbox(edges)))
         .collect();
-    let work: Vec<(&Nested, (Vec2, Vec2))> = islands.iter().zip(boxes).collect();
+    let work: Vec<(Nested, (Vec2, Vec2))> = islands.into_iter().zip(boxes).collect();
     let trimmed: Vec<_> = work
-        .par_iter()
+        .into_par_iter()
         .with_max_len(1)
-        .map(|&(island, bbox)| {
+        .map(|(island, bbox)| {
             let mut notes = Vec::new();
             let hits: Vec<ContourBuf> = cutters
                 .iter()
@@ -763,9 +739,10 @@ fn silk_faces(
             if hits.is_empty() && outline.is_none() {
                 // Untouched: wholly on the board, or wholly off it.
                 let on_board = edge.contains(island.outer[0]);
-                return (on_board.then(|| face(island)).into_iter().collect(), notes);
+                return (on_board.then_some(island).into_iter().collect(), notes);
             }
-            let Some(mut region) = self::region(&island_contours(island), &what, &mut notes) else {
+            let Some(mut region) = self::region(&island_contours(&island), &what, &mut notes)
+            else {
                 return (Vec::new(), notes);
             };
             if !hits.is_empty() {
@@ -775,36 +752,32 @@ fn silk_faces(
                 let result = region.intersection(outline);
                 region = or_keep(result, region, &what, &mut notes);
             }
-            let faces = nested_of(&region).iter().map(face).collect();
-            (faces, notes)
+            (nested_of(&region), notes)
         })
         .collect();
-    let mut faces = Vec::new();
-    for (f, notes) in trimmed {
-        faces.extend(f);
+    let mut out = Vec::new();
+    for (islands, notes) in trimmed {
+        out.extend(islands);
         warnings.extend(notes);
     }
-    faces
+    out
 }
 
-/// The solder mask of one side: the board less every opening. Openings
-/// clear of the board edge are holes as they are; only those meeting it
-/// are taken out of the outline with a boolean.
-#[allow(clippy::too_many_arguments)]
-fn mask_faces(
+fn mask_what(front: bool) -> String {
+    format!("{} solder mask", if front { "front" } else { "back" })
+}
+
+/// The solder mask openings of one side, unioned.
+fn mask_openings(
     board: &Board,
     frame: Frame,
-    edge: &BoardEdge,
     fonts: &Fonts,
     tech: Tech,
     cut_vias: bool,
     variables: &[(String, String)],
     warnings: &mut Vec<String>,
-) -> Vec<Face> {
-    let what = format!(
-        "{} solder mask",
-        if tech.front() { "front" } else { "back" }
-    );
+) -> Vec<Nested> {
+    let what = mask_what(tech.front());
     let side = usize::from(!tech.front());
     let mut openings: Vec<Vec<ContourBuf>> = Vec::new();
     // Pads open the mask by their shape grown by the mask margin; a pad
@@ -872,12 +845,25 @@ fn mask_faces(
             .iter()
             .map(|e| vec![contour(e)]),
     );
+    nest(union_rings(openings, &what, warnings))
+}
+
+/// The solder mask of one side: the board less its `openings`. Openings
+/// clear of the board edge are holes as they are; only those meeting it
+/// are taken out of the outline with a boolean.
+pub(crate) fn mask_coverage(
+    edge: &BoardEdge,
+    front: bool,
+    openings: Vec<Nested>,
+    warnings: &mut Vec<String>,
+) -> Vec<Nested> {
+    let what = mask_what(front);
     let Some(mut region) = edge.region(warnings) else {
         return Vec::new();
     };
     let mut rings = Vec::new();
     let mut at_edge = Vec::new();
-    for island in nest(union_rings(openings, &what, warnings)) {
+    for island in openings {
         if edge.meets(ring_bbox(&island.outer)) {
             at_edge.extend(island_contours(&island));
         } else if edge.contains(island.outer[0]) {
@@ -889,32 +875,26 @@ fn mask_faces(
         region = less(region, &at_edge, &what, warnings);
     }
     rings.extend(rings_of(&region.to_contours()));
-    nest(rings).iter().map(face).collect()
+    nest(rings)
 }
 
-/// Above the mask, under the silkscreen.
-const PASTE_ABOVE_COPPER: f64 = 0.025;
-
-pub(crate) struct PasteLayer {
-    pub(crate) front: bool,
-    pub(crate) z: f64,
-    pub(crate) faces: Vec<Face>,
-}
-
-/// Solder paste as KiCad's VRML export draws it, DNP footprints included.
+/// Solder paste as KiCad's VRML export draws it, front side first: the
+/// sides with any paste and their islands. DNP footprints' pads are left
+/// out unless `include_dnp`.
 pub(crate) fn paste(
     board: &Board,
     frame: Frame,
-    physical: &Physical,
+    include_dnp: bool,
     warnings: &mut Vec<String>,
-) -> Vec<PasteLayer> {
-    let last = physical.copper_z.len() - 1;
+) -> Vec<(bool, Vec<Nested>)> {
     let mut layers = Vec::new();
     for front in [true, false] {
         let side = usize::from(!front);
         let what = format!("{} solder paste", if front { "front" } else { "back" });
         let mut openings: Vec<Vec<ContourBuf>> = Vec::new();
-        for pad in board.pads.iter().filter(|p| p.paste[side]) {
+        for pad in board.pads.iter().filter(|p| {
+            p.paste[side] && (include_dnp || !board.footprints[p.footprint as usize].dnp)
+        }) {
             let margin = paste_margin(board, pad);
             if let Some(contours) = paste_aperture(board, frame, pad, margin, warnings) {
                 openings.push(contours);
@@ -923,19 +903,10 @@ pub(crate) fn paste(
         if openings.is_empty() {
             continue;
         }
-        let faces: Vec<Face> = nest(union_rings(openings, &what, warnings))
-            .iter()
-            .map(face)
-            .collect();
-        if faces.is_empty() {
-            continue;
+        let islands = nest(union_rings(openings, &what, warnings));
+        if !islands.is_empty() {
+            layers.push((front, islands));
         }
-        let z = if front {
-            physical.copper_z[0].1 + PASTE_ABOVE_COPPER
-        } else {
-            physical.copper_z[last].0 - PASTE_ABOVE_COPPER
-        };
-        layers.push(PasteLayer { front, z, faces });
     }
     layers
 }

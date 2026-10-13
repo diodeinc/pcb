@@ -3,12 +3,14 @@
 //! frame (origin applied, y up, z up from the bottom of the board body).
 
 use glam::{DMat4, DVec3};
+use rayon::prelude::*;
 
 use crate::board::{self, Board, Physical, Tech};
 use crate::coverage::{Coverage, ModelCoverage, Status};
 use crate::geom::{Transform, Vec2};
 use crate::models::ModelError;
 use crate::outline::{Frame, cut_holes, cut_round, outline_solids};
+use crate::rings::loops_of;
 use crate::{Error, Options, Origin, copper, faces, glob_match, holes};
 
 pub use crate::faces::Face;
@@ -19,7 +21,11 @@ pub use crate::outline::{Loop, OutlinePolicy, Solid, Vertex};
 /// Standoff KiCad leaves between the copper surface and a model.
 const MODEL_STANDOFF: f64 = 0.05;
 const PROXY_HEIGHT: f64 = 1.0;
-const PASTE_RGB: [f64; 3] = [0.5; 3];
+pub(crate) const PASTE_RGB: [f64; 3] = [0.5; 3];
+/// Heights of the tech layers' faces above the outer copper.
+pub(crate) const MASK_ABOVE_COPPER: f64 = 0.015;
+pub(crate) const PASTE_ABOVE_COPPER: f64 = 0.025;
+pub(crate) const SILK_ABOVE_COPPER: f64 = 0.04;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum ProxyMode {
@@ -200,6 +206,7 @@ impl Scene {
             tracks: options.tracks,
             zones: options.zones,
             inner: options.inner_copper,
+            separate_pads: true,
         };
         let mut solids = Vec::new();
         if options.board_body
@@ -235,10 +242,40 @@ impl Scene {
             } else {
                 copper_rgb
             };
+            let z = &physical.copper_z;
+            let islands: Vec<Prism> = copper
+                .islands
+                .par_iter()
+                .flat_map_iter(|island| {
+                    let (z0, z1) = z[island.layer as usize];
+                    loops_of(&island.region)
+                        .into_iter()
+                        .map(move |(outer, holes)| Prism {
+                            z0,
+                            z1,
+                            solid: Solid {
+                                outer,
+                                holes,
+                                round: Vec::new(),
+                            },
+                        })
+                })
+                .collect();
+            let prisms = |pieces: Vec<copper::Piece>| -> Vec<Prism> {
+                pieces
+                    .into_iter()
+                    .map(|piece| Prism {
+                        z0: z[piece.bottom as usize].0,
+                        z1: z[piece.top as usize].1,
+                        solid: piece.solid,
+                    })
+                    .filter(|prism| prism.z1 - prism.z0 > 1e-9)
+                    .collect()
+            };
             for (solids, kind, color) in [
-                (copper.islands, LayerKind::Copper, copper_rgb),
-                (copper.pads, LayerKind::Pads, pad_rgb),
-                (copper.vias, LayerKind::Vias, copper_rgb),
+                (islands, LayerKind::Copper, copper_rgb),
+                (prisms(copper.pads), LayerKind::Pads, pad_rgb),
+                (prisms(copper.vias), LayerKind::Vias, copper_rgb),
             ] {
                 if !solids.is_empty() {
                     layers.push(Layer {
@@ -251,52 +288,64 @@ impl Scene {
             }
         }
         if options.visual {
-            for layer in faces::paste(board, frame, &physical, warnings) {
+            for (front, islands) in faces::paste(board, frame, true, warnings) {
                 layers.push(Layer {
-                    kind: LayerKind::Paste { front: layer.front },
+                    kind: LayerKind::Paste { front },
                     color: PASTE_RGB,
                     transparency: None,
                     shape: Shape::Faces {
-                        z: layer.z,
-                        up: layer.front,
-                        faces: layer.faces,
+                        z: above_copper(&physical, front, PASTE_ABOVE_COPPER),
+                        up: front,
+                        faces: islands.par_iter().map(faces::face).collect(),
                     },
                 });
             }
         }
         if options.silkscreen || options.soldermask {
-            let variables: Vec<(String, String)> = board
-                .title_block
-                .iter()
-                .chain(&options.text_variables)
-                .cloned()
-                .collect();
+            let variables = board.text_variables(&options.text_variables);
+            let edge = faces::BoardEdge::new(&solids);
             let tech_layers = faces::build(
                 board,
                 frame,
-                &solids,
-                &physical,
+                &edge,
                 options.silkscreen,
                 options.soldermask,
                 options.visual,
                 &variables,
                 warnings,
-            )?;
-            for layer in tech_layers {
-                if layer.faces.is_empty() {
+            );
+            let built: Vec<_> = tech_layers
+                .into_par_iter()
+                .with_max_len(1)
+                .map(|(tech, islands)| {
+                    let mut notes = Vec::new();
+                    let islands = if tech.silk() {
+                        islands
+                    } else {
+                        faces::mask_coverage(&edge, tech.front(), islands, &mut notes)
+                    };
+                    let faces: Vec<Face> = islands.iter().map(faces::face).collect();
+                    (tech, faces, notes)
+                })
+                .collect();
+            for (tech, faces, notes) in built {
+                warnings.extend(notes);
+                if faces.is_empty() {
                     continue;
                 }
-                let front = layer.tech.front();
-                let (kind, color, transparency) = match layer.tech {
+                let front = tech.front();
+                let (kind, color, transparency, above) = match tech {
                     Tech::FrontSilk | Tech::BackSilk => (
                         LayerKind::Silkscreen { front },
                         board.silk_color(front),
                         0.1,
+                        SILK_ABOVE_COPPER,
                     ),
                     Tech::FrontMask | Tech::BackMask => (
                         LayerKind::Soldermask { front },
                         board.mask_color(front),
                         0.17,
+                        MASK_ABOVE_COPPER,
                     ),
                     Tech::Copper(_) => unreachable!("faces are built for silkscreen and mask only"),
                 };
@@ -305,9 +354,9 @@ impl Scene {
                     color,
                     transparency: Some(transparency),
                     shape: Shape::Faces {
-                        z: layer.z,
+                        z: above_copper(&physical, front, above),
                         up: front,
-                        faces: layer.faces,
+                        faces,
                     },
                 });
             }
@@ -484,6 +533,17 @@ fn proxy(board: &Board, index: usize, frame: Frame, physical: &Physical) -> Opti
         footprint: index,
         transform: placement.0 * DMat4::from_translation(center) * DMat4::from_scale(size),
     })
+}
+
+/// Height of a face `above` the outer copper of one side, below it for
+/// the back.
+pub(crate) fn above_copper(physical: &Physical, front: bool, above: f64) -> f64 {
+    let z = &physical.copper_z;
+    if front {
+        z[0].1 + above
+    } else {
+        z[z.len() - 1].0 - above
+    }
 }
 
 pub(crate) fn frame(board: &Board, options: &Options) -> Frame {

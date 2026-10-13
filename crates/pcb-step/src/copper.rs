@@ -1,11 +1,13 @@
-//! Copper: pads, tracks, zone fills and via rings as extruded solids.
+//! Copper in 2D: pads, tracks, zone fills, via rings and plated barrels,
+//! per copper layer and net. The scene extrudes them; the board image
+//! merges them per net.
 //!
-//! Follows KiCad's exporter in what is emitted. Pads are one prism per pad
-//! per layer, kept exact (lines and arcs). Tracks, zone fills and via rings
-//! on one layer and net are unioned in 2D with pcb-ir, the drills knocked
-//! out, and each connected island extruded. Plated holes get a copper tube
-//! through the whole stack. Unlike KiCad, layer copper is cut at the drill
-//! wall and the tube fills the wall, so nothing overlaps.
+//! Follows KiCad's exporter in what is emitted. Pads are one outline per
+//! pad per layer, kept exact (lines and arcs). Tracks, zone fills and via
+//! rings on one layer and net are unioned with pcb-ir and the drills
+//! knocked out. Plated holes get a barrel through the whole stack. Unlike
+//! KiCad, layer copper is cut at the drill wall and the barrel fills the
+//! wall, so nothing overlaps.
 //!
 //! Layer indices are copper layer indices, top first, matching
 //! `Physical::copper_z`.
@@ -19,7 +21,6 @@ use crate::board::{Board, Fill, Pad, PadKind, PadShape, Physical, Primitive, Tra
 use crate::geom::{KICAD_MAX_ERROR, Vec2, ccw_sweep, circle_center, rotate_kicad};
 use crate::outline::{Edge, Frame, Loop, Solid, crosses, orient};
 use crate::rings::{IndexedRing, loops_of, polygons_of};
-use crate::scene::Prism;
 
 /// KiCad's plating thickness for through holes.
 pub(crate) const PLATING: f64 = 0.025;
@@ -30,6 +31,9 @@ pub(crate) struct CopperOptions {
     pub(crate) tracks: bool,
     pub(crate) zones: bool,
     pub(crate) inner: bool,
+    /// Cut every pad out of the islands, so pads stand as bodies of their
+    /// own; otherwise only other nets' pads are cut.
+    pub(crate) separate_pads: bool,
 }
 
 impl CopperOptions {
@@ -40,12 +44,28 @@ impl CopperOptions {
 
 #[derive(Default)]
 pub(crate) struct Copper {
-    /// Tracks, zone fills and via rings: one solid per island.
-    pub(crate) islands: Vec<Prism>,
-    /// Pad prisms and their plating tubes.
-    pub(crate) pads: Vec<Prism>,
+    /// Tracks, zone fills and via rings, one region per layer and net.
+    pub(crate) islands: Vec<Island>,
+    /// Pad outlines and their plating barrels.
+    pub(crate) pads: Vec<Piece>,
     /// Via barrels.
-    pub(crate) vias: Vec<Prism>,
+    pub(crate) vias: Vec<Piece>,
+}
+
+pub(crate) struct Island {
+    pub(crate) layer: u32,
+    pub(crate) net: u32,
+    pub(crate) region: ContourSet,
+}
+
+/// A pad's copper on one layer (`top == bottom`), or a plated barrel
+/// through copper layers `top..=bottom`.
+pub(crate) struct Piece {
+    pub(crate) top: u32,
+    pub(crate) bottom: u32,
+    pub(crate) net: u32,
+    pub(crate) barrel: bool,
+    pub(crate) solid: Solid,
 }
 
 pub(crate) fn point(v: Vec2) -> Point {
@@ -83,13 +103,12 @@ pub(crate) fn build(
     let layout = Layout {
         board,
         frame,
-        physical,
         clip,
         connectivity: Connectivity::new(board, frame),
         mask,
         last,
     };
-    let mut knockouts = Knockouts::drills(board, frame, last);
+    let mut knockouts = Knockouts::drills(board, frame, last, options.separate_pads);
 
     if options.pads {
         let results: Vec<_> = board
@@ -99,16 +118,16 @@ pub(crate) fn build(
                 let mut out = Vec::new();
                 let mut cut = Vec::new();
                 let mut notes = Vec::new();
-                pad_solids(&layout, pad, &knockouts, &mut out, &mut cut, &mut notes);
+                pad_pieces(&layout, pad, &knockouts, &mut out, &mut cut, &mut notes);
                 (out, cut, notes)
             })
             .collect();
-        for (solids, cut, notes) in results {
+        for (pieces, cut, notes) in results {
             match &layout.clip {
                 Some(clip) => copper
                     .pads
-                    .extend(solids.into_iter().flat_map(|prism| clip_prism(clip, prism))),
-                None => copper.pads.extend(solids),
+                    .extend(pieces.into_iter().flat_map(|piece| clip_piece(clip, piece))),
+                None => copper.pads.extend(pieces),
             }
             for (layer, c) in cut {
                 knockouts.pads[layer as usize].push(c);
@@ -124,16 +143,17 @@ pub(crate) fn build(
             }
             let top = via.top.min(last);
             let bottom = via.bottom.min(last);
-            if let Some(tube) = tube(
-                frame.point(via.at),
-                frame.point(via.at),
-                via.drill * 0.5,
-                physical.copper_z[bottom as usize].0,
-                physical.copper_z[top as usize].1,
-            ) {
+            if let Some(solid) = barrel(frame.point(via.at), frame.point(via.at), via.drill * 0.5) {
+                let piece = Piece {
+                    top,
+                    bottom,
+                    net: via.net,
+                    barrel: true,
+                    solid,
+                };
                 match &layout.clip {
-                    Some(clip) => copper.vias.extend(clip_prism(clip, tube)),
-                    None => copper.vias.push(tube),
+                    Some(clip) => copper.vias.extend(clip_piece(clip, piece)),
+                    None => copper.vias.push(piece),
                 }
             }
         }
@@ -144,10 +164,10 @@ pub(crate) fn build(
         let results: Vec<_> = groups
             .par_iter()
             .with_max_len(1)
-            .map(|group| island_solids(&layout, group, &knockouts))
+            .map(|group| island(&layout, group, &knockouts))
             .collect();
-        for (solids, notes) in results {
-            copper.islands.extend(solids);
+        for (island, notes) in results {
+            copper.islands.extend(island);
             warnings.extend(notes);
         }
     }
@@ -171,7 +191,6 @@ struct Layout<'a> {
     clip: Option<Clip<'a>>,
     board: &'a Board<'a>,
     frame: Frame,
-    physical: &'a Physical,
     connectivity: Connectivity,
     /// Copper layers that are exported.
     mask: u64,
@@ -250,18 +269,18 @@ impl Flash {
     }
 }
 
-/// A pad's copper on every exported layer, plus its plating tube. The
+/// A pad's copper on every exported layer, plus its plating barrel. The
 /// pad's outline on each layer goes to `cutters` so the layer's tracks and
 /// zones are cut away under it instead of overlapping it.
-fn pad_solids(
+fn pad_pieces(
     layout: &Layout,
     pad: &Pad,
     drills: &Knockouts,
-    out: &mut Vec<Prism>,
+    out: &mut Vec<Piece>,
     cutters: &mut Vec<(u32, PadCutter)>,
     warnings: &mut Vec<String>,
 ) {
-    let (board, frame, physical) = (layout.board, layout.frame, layout.physical);
+    let (board, frame) = (layout.board, layout.frame);
     let (connectivity, last) = (&layout.connectivity, layout.last);
     let layers = pad.layers & layout.mask;
     if layers == 0 {
@@ -296,7 +315,15 @@ fn pad_solids(
         if layers & (1 << layer) == 0 || !flash.on(layer, last, connectivity) {
             continue;
         }
-        let (z0, z1) = physical.copper_z[layer as usize];
+        let mut push = |solid| {
+            out.push(Piece {
+                top: layer,
+                bottom: layer,
+                net: pad.net,
+                barrel: false,
+                solid,
+            })
+        };
         cutters.extend(pad_cutter(&outline).into_iter().map(|contour| {
             let points = contour
                 .cmds
@@ -309,7 +336,14 @@ fn pad_solids(
                 })
                 .map(|k| Vec2::new(k.p0.x, k.p0.y))
                 .collect();
-            (layer, PadCutter { points, contour })
+            (
+                layer,
+                PadCutter {
+                    net: pad.net,
+                    points,
+                    contour,
+                },
+            )
         }));
         // Other drills through the pad (an unplated hole beside it, a via
         // in it) take their bite too.
@@ -319,9 +353,7 @@ fn pad_solids(
             all.extend(hole.iter());
             match subtract(&outline_loop, &all) {
                 Some(solids) => {
-                    for solid in solids {
-                        out.push(Prism { z0, z1, solid });
-                    }
+                    solids.into_iter().for_each(&mut push);
                     continue;
                 }
                 None => warnings.push(format!(
@@ -340,9 +372,7 @@ fn pad_solids(
                 // The drill crosses the pad edge: cut it in 2D.
                 match subtract(&outline_loop, &[h]) {
                     Some(solids) => {
-                        for solid in solids {
-                            out.push(Prism { z0, z1, solid });
-                        }
+                        solids.into_iter().for_each(&mut push);
                         continue;
                     }
                     None => Solid {
@@ -358,22 +388,22 @@ fn pad_solids(
                 round: Vec::new(),
             },
         };
-        out.push(Prism { z0, z1, solid });
+        push(solid);
     }
 
     if pad.kind == PadKind::ThroughHole
         && let Some((a, b, r)) = drill
         && layers & 1 != 0
-        && layers & (1 << last) != 0
-        && let Some(t) = tube(
-            a,
-            b,
-            r,
-            physical.copper_z[last as usize].0,
-            physical.copper_z[0].1,
-        )
+        && pad.span & layout.mask & (1 << last) != 0
+        && let Some(solid) = barrel(a, b, r)
     {
-        out.push(t);
+        out.push(Piece {
+            top: 0,
+            bottom: last,
+            net: pad.net,
+            barrel: true,
+            solid,
+        });
     }
 }
 
@@ -413,22 +443,18 @@ pub(crate) fn pad_drill(pad: &Pad, frame: Frame) -> (Vec2, Vec2, f64) {
     )
 }
 
-/// A plated barrel: a tube of wall `PLATING` inside the drill.
-fn tube(a: Vec2, b: Vec2, r: f64, z0: f64, z1: f64) -> Option<Prism> {
+/// A plated barrel's section: a ring of wall `PLATING` inside the drill.
+fn barrel(a: Vec2, b: Vec2, r: f64) -> Option<Solid> {
     let inner = r - PLATING;
-    if inner <= 1e-6 || z1 - z0 <= 1e-9 {
+    if inner <= 1e-6 {
         return None;
     }
     let mut outer = Loop::stadium(a, b, r);
     outer.reverse();
-    Some(Prism {
-        z0,
-        z1,
-        solid: Solid {
-            outer,
-            holes: vec![Loop::stadium(a, b, inner)],
-            round: Vec::new(),
-        },
+    Some(Solid {
+        outer,
+        holes: vec![Loop::stadium(a, b, inner)],
+        round: Vec::new(),
     })
 }
 
@@ -975,6 +1001,8 @@ struct Knockouts {
     drills: Vec<Drill>,
     /// Pad cutters per copper layer.
     pads: Vec<Vec<PadCutter>>,
+    /// Whether pads of the copper's own net are cut too.
+    same_net: bool,
 }
 
 struct Drill {
@@ -990,12 +1018,13 @@ struct Drill {
 
 /// A pad's grown outline, and its vertices for the overlap test.
 struct PadCutter {
+    net: u32,
     points: Vec<Vec2>,
     contour: ContourBuf,
 }
 
 impl Knockouts {
-    fn drills(board: &Board, frame: Frame, last: u32) -> Self {
+    fn drills(board: &Board, frame: Frame, last: u32, same_net: bool) -> Self {
         let mut drills = Vec::with_capacity(board.holes.len() + board.vias.len());
         let mut push = |a: Vec2, b: Vec2, r: f64, top: u32, bottom: u32| {
             let l = Loop::stadium(a, b, r);
@@ -1021,6 +1050,7 @@ impl Knockouts {
         Self {
             drills,
             pads: (0..=last).map(|_| Vec::new()).collect(),
+            same_net,
         }
     }
 
@@ -1054,8 +1084,15 @@ impl Knockouts {
         hits
     }
 
-    /// Everything on `layer` that overlaps the copper made of `rings`.
-    fn cutters(&self, layer: u32, rings: &[Vec<Vec2>], index: &[IndexedRing]) -> Vec<ContourBuf> {
+    /// Everything on `layer` that overlaps the copper of `net` made of
+    /// `rings`.
+    fn cutters(
+        &self,
+        layer: u32,
+        net: u32,
+        rings: &[Vec<Vec2>],
+        index: &[IndexedRing],
+    ) -> Vec<ContourBuf> {
         let lo = index
             .iter()
             .fold(Vec2::splat(f64::INFINITY), |m, r| m.min(r.lo));
@@ -1093,6 +1130,9 @@ impl Knockouts {
         // ends inside it or crosses its edge. A pad sitting in its
         // clearance hole passes neither.
         for p in &self.pads[layer as usize] {
+            if !self.same_net && p.net == net {
+                continue;
+            }
             let b = &p.contour.bbox;
             let (plo, phi) = (Vec2::new(b.min.x, b.min.y), Vec2::new(b.max.x, b.max.y));
             if plo.x > hi.x || lo.x > phi.x || plo.y > hi.y || lo.y > phi.y {
@@ -1134,12 +1174,8 @@ fn segment_distance(p: Vec2, a: Vec2, b: Vec2) -> f64 {
     p.distance(a + d * t)
 }
 
-fn island_solids(
-    layout: &Layout,
-    group: &Group,
-    knockouts: &Knockouts,
-) -> (Vec<Prism>, Vec<String>) {
-    let (board, frame, physical) = (layout.board, layout.frame, layout.physical);
+fn island(layout: &Layout, group: &Group, knockouts: &Knockouts) -> (Option<Island>, Vec<String>) {
+    let (board, frame) = (layout.board, layout.frame);
     let (connectivity, last) = (&layout.connectivity, layout.last);
     let mut warnings = Vec::new();
     let mut contours =
@@ -1188,7 +1224,7 @@ fn island_solids(
         contours.push(contour(&orient(edges, true)));
     }
     if contours.is_empty() {
-        return (Vec::new(), warnings);
+        return (None, warnings);
     }
     let resolution = resolution();
     let region = match ContourSet::from_contours(&contours, FillRule::NonZero, resolution) {
@@ -1198,12 +1234,12 @@ fn island_solids(
                 "copper on layer {} net {}: {err}",
                 board.copper_layers[group.layer as usize], group.net
             ));
-            return (Vec::new(), warnings);
+            return (None, warnings);
         }
     };
     let rings = polygons_of(&region);
     let index: Vec<IndexedRing> = rings.iter().map(|r| IndexedRing::new(r)).collect();
-    let holes = knockouts.cutters(group.layer, &rings, &index);
+    let holes = knockouts.cutters(group.layer, group.net, &rings, &index);
     let region = if holes.is_empty() {
         region
     } else {
@@ -1231,20 +1267,12 @@ fn island_solids(
         }
         None => region,
     };
-    let (z0, z1) = physical.copper_z[group.layer as usize];
-    let solids = loops_of(&region)
-        .into_iter()
-        .map(|(outer, holes)| Prism {
-            z0,
-            z1,
-            solid: Solid {
-                outer,
-                holes,
-                round: Vec::new(),
-            },
-        })
-        .collect();
-    (solids, warnings)
+    let island = Island {
+        layer: group.layer,
+        net: group.net,
+        region,
+    };
+    (Some(island), warnings)
 }
 
 fn region_bbox(region: &ContourSet) -> (Vec2, Vec2) {
@@ -1268,37 +1296,44 @@ fn or_unclipped(
     })
 }
 
-fn clip_prism(clip: &Clip, prism: Prism) -> Vec<Prism> {
-    let (lo, hi) = prism.solid.outer.bbox();
+fn clip_piece(clip: &Clip, piece: Piece) -> Vec<Piece> {
+    let (lo, hi) = piece.solid.outer.bbox();
     if !clip.needed((lo, hi)) && clip.edge.contains(hi) {
-        return vec![prism];
+        return vec![piece];
     }
-    let mut contours = vec![contour(&orient(prism.solid.outer.edges.clone(), true))];
-    contours.extend(
-        prism
-            .solid
-            .holes
-            .iter()
-            .map(|h| contour(&orient(h.edges.clone(), false))),
-    );
-    let Ok(region) = ContourSet::from_contours(&contours, FillRule::NonZero, resolution()) else {
-        return vec![prism];
+    let Ok(region) = ContourSet::from_contours(
+        &solid_contours(&piece.solid),
+        FillRule::NonZero,
+        resolution(),
+    ) else {
+        return vec![piece];
     };
     let Ok(clipped) = region.intersection(&clip.region) else {
-        return vec![prism];
+        return vec![piece];
     };
-    let (z0, z1) = (prism.z0, prism.z1);
     loops_of(&clipped)
         .into_iter()
-        .map(|(outer, holes)| Prism {
-            z0,
-            z1,
+        .map(|(outer, holes)| Piece {
             solid: Solid {
                 outer,
                 holes,
                 round: Vec::new(),
             },
+            ..piece
         })
+        .collect()
+}
+
+/// A solid's section as contours: the outer counter-clockwise, the holes
+/// clockwise, so solids gathered under one non-zero fill are unioned.
+pub(crate) fn solid_contours(solid: &Solid) -> Vec<ContourBuf> {
+    std::iter::once(contour(&orient(solid.outer.edges.clone(), true)))
+        .chain(
+            solid
+                .holes
+                .iter()
+                .map(|h| contour(&orient(h.edges.clone(), false))),
+        )
         .collect()
 }
 

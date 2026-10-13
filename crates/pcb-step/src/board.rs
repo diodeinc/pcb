@@ -22,7 +22,7 @@ pub struct Board<'a> {
     pub(crate) cap_vias: bool,
     pub(crate) footprints: Vec<Footprint<'a>>,
     pub(crate) models: Vec<ModelRef<'a>>,
-    pub(crate) holes: Vec<Hole>,
+    pub(crate) holes: Vec<Hole<'a>>,
     pub(crate) vias: Vec<Via>,
     pub(crate) edges: Vec<RawEdge>,
     pub(crate) embedded: Vec<Embedded<'a>>,
@@ -274,13 +274,17 @@ impl ModelRef<'_> {
 
 /// A drill: a circle, or a stadium of radius `r` swept from `a` to `b`.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub(crate) struct Hole {
+pub(crate) struct Hole<'a> {
     pub(crate) a: Vec2,
     pub(crate) b: Vec2,
     pub(crate) r: f64,
     pub(crate) machining: Machining,
     /// Net of the plated pad drilled by it; 0 for an unplated hole.
     pub(crate) net: u32,
+    pub(crate) plated: bool,
+    /// Index of the footprint, and number of the pad, drilled.
+    pub(crate) footprint: u32,
+    pub(crate) pin: &'a str,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -314,6 +318,8 @@ pub(crate) struct Pad {
     pub(crate) offset: Vec2,
     /// Copper layers the pad is on, one bit per copper layer index.
     pub(crate) layers: u64,
+    /// Copper layers of the whole pad, every padstack shape included.
+    pub(crate) span: u64,
     pub(crate) kind: PadKind,
     pub(crate) net: u32,
     pub(crate) has_hole: bool,
@@ -330,6 +336,8 @@ pub(crate) struct Pad {
     /// Its own or its footprint's; the board's applies otherwise.
     pub(crate) paste_margin: Option<f64>,
     pub(crate) paste_ratio: Option<f64>,
+    /// Index of the pad's footprint.
+    pub(crate) footprint: u32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -855,37 +863,38 @@ impl<'a> Board<'a> {
                     p.skip()?;
                 }
                 "pad" => {
-                    let (hole, pad) = parse_pad(
+                    let (hole, pads, net_atom) = parse_pad(
                         p,
                         fp.rotation,
                         &self.copper_layers,
                         &mut self.primitives,
                         &mut self.primitive_points,
                     )?;
-                    let net = match &pad {
-                        Some((pad, net)) if scratch.copper && pad.kind != PadKind::NoPlate => {
-                            self.net_id(*net)
+                    let net = match pads.first() {
+                        Some(pad) if scratch.copper && pad.kind != PadKind::NoPlate => {
+                            self.net_id(net_atom)
                         }
                         _ => 0,
                     };
                     if let Some(mut hole) = hole {
                         hole.net = net;
+                        hole.footprint = self.footprints.len() as u32;
                         scratch.holes.push(hole);
                     }
-                    if let Some((pad, net)) = &pad {
-                        if let Some(net) = net.filter(|n| !n.is_empty() && *n != "0")
-                            && !fp.nets.contains(&net)
-                        {
-                            fp.nets.push(net);
-                        }
+                    if !pads.is_empty()
+                        && let Some(net) = net_atom.filter(|n| !n.is_empty() && *n != "0")
+                        && !fp.nets.contains(&net)
+                    {
+                        fp.nets.push(net);
+                    }
+                    for pad in &pads {
                         grow_extent(&mut fp.extent, pad, fp.rotation);
                     }
                     // Pads are copper, and also what opens the mask.
-                    if let Some((mut pad, _)) = pad
-                        && (scratch.copper || scratch.graphics)
-                    {
-                        pad.net = net;
-                        scratch.pads.push(pad);
+                    if scratch.copper || scratch.graphics {
+                        scratch
+                            .pads
+                            .extend(pads.into_iter().map(|pad| Pad { net, ..pad }));
                     }
                 }
                 "model" => {
@@ -980,6 +989,7 @@ impl<'a> Board<'a> {
                 mask_margin: pad.mask_margin.or(mask_margin),
                 paste_margin: pad.paste_margin.or(paste_margin),
                 paste_ratio: pad.paste_ratio.or(paste_ratio),
+                footprint: self.footprints.len() as u32,
                 ..pad.clone()
             });
         }
@@ -1209,6 +1219,12 @@ impl<'a> Board<'a> {
         layers
     }
 
+    /// The title block's fields and the project's `extra` variables, for
+    /// `${NAME}` in text.
+    pub(crate) fn text_variables(&self, extra: &[(String, String)]) -> Vec<(String, String)> {
+        self.title_block.iter().chain(extra).cloned().collect()
+    }
+
     pub(crate) fn physical(&self) -> Physical {
         let layers = self.physical_layers();
         let copper_count = layers.iter().filter(|l| l.copper).count();
@@ -1315,7 +1331,7 @@ impl<'a> Board<'a> {
 struct FootprintScratch<'a> {
     copper: bool,
     graphics: bool,
-    holes: Vec<Hole>,
+    holes: Vec<Hole<'a>>,
     edges: Vec<RawEdge>,
     pads: Vec<Pad>,
     shapes: Vec<Shape>,
@@ -1370,24 +1386,17 @@ fn mask_color(name: &str) -> Option<[f64; 3]> {
     Some(rgb.map(|c| c as f64 / 255.0))
 }
 
-/// One pad: its drill (footprint-local, following
-/// `PAD::GetEffectiveHoleShape`: centred on the pad position, a slot along
-/// the pad's stored absolute orientation) and its copper.
-fn parse_pad<'a>(
-    p: &mut Parser<'a>,
-    footprint_rotation: f64,
-    copper_layers: &[&str],
-    primitives: &mut Vec<Primitive>,
-    primitive_points: &mut Vec<Vec2>,
-) -> Result<ParsedPad<'a>, Error> {
-    p.atom()?; // number
-    let kind = match p.atom()? {
-        Some("thru_hole") => PadKind::ThroughHole,
-        Some("np_thru_hole") => PadKind::NoPlate,
-        Some("connect") => PadKind::Connect,
-        _ => PadKind::Smd,
-    };
-    let mut shape = match p.atom()? {
+/// A pad's copper shape: the pad's own, or one padstack layer's.
+#[derive(Clone)]
+struct PadGeometry {
+    shape: PadShape,
+    size: Vec2,
+    offset: Vec2,
+    primitives: std::ops::Range<u32>,
+}
+
+fn pad_shape(name: Option<&str>) -> PadShape {
+    match name {
         Some("circle") => PadShape::Circle,
         Some("oval") => PadShape::Oval,
         Some("trapezoid") => PadShape::Trapezoid { delta: Vec2::ZERO },
@@ -1400,11 +1409,108 @@ fn parse_pad<'a>(
             anchor_circle: false,
         },
         _ => PadShape::Rect,
+    }
+}
+
+/// Parse one field of a pad's copper shape, at the pad or in a padstack
+/// layer, through its closing paren. False, with nothing consumed, when
+/// `name` is not one.
+fn parse_shape_field(
+    p: &mut Parser<'_>,
+    name: &str,
+    g: &mut PadGeometry,
+    primitives: &mut Vec<Primitive>,
+    primitive_points: &mut Vec<Vec2>,
+) -> Result<bool, Error> {
+    let shape = &mut g.shape;
+    match name {
+        "shape" => {
+            let new = pad_shape(p.atom()?);
+            if std::mem::discriminant(&new) != std::mem::discriminant(shape) {
+                *shape = new;
+            }
+        }
+        "size" => g.size = p.xy("pad size")?,
+        "offset" => g.offset = p.xy("pad offset")?,
+        "rect_delta" => {
+            if let PadShape::Trapezoid { delta } = shape {
+                *delta = p.xy("rect_delta")?;
+            }
+        }
+        "roundrect_rratio" => {
+            if let PadShape::RoundRect { round_ratio, .. } = shape {
+                *round_ratio = p.f64("roundrect_rratio")?;
+            }
+        }
+        "chamfer_ratio" => {
+            if let PadShape::RoundRect { chamfer_ratio, .. } = shape {
+                *chamfer_ratio = p.f64("chamfer_ratio")?;
+            }
+        }
+        "chamfer" => {
+            if let PadShape::RoundRect { chamfer, .. } = shape {
+                while let Some(corner) = p.atom()? {
+                    match corner {
+                        "top_left" => chamfer[0] = true,
+                        "top_right" => chamfer[1] = true,
+                        "bottom_left" => chamfer[2] = true,
+                        "bottom_right" => chamfer[3] = true,
+                        _ => {}
+                    }
+                }
+            }
+        }
+        "options" => {
+            while let Some(field) = p.open()? {
+                if field == "anchor"
+                    && let PadShape::Custom { anchor_circle } = shape
+                {
+                    *anchor_circle = p.atom()? == Some("circle");
+                }
+                p.skip()?;
+            }
+            return Ok(true);
+        }
+        "primitives" => {
+            let first = primitives.len() as u32;
+            parse_primitives(p, primitives, primitive_points)?;
+            g.primitives = first..primitives.len() as u32;
+            return Ok(true);
+        }
+        _ => return Ok(false),
+    }
+    p.skip()?;
+    Ok(true)
+}
+
+/// One pad: its drill (footprint-local, following
+/// `PAD::GetEffectiveHoleShape`: centred on the pad position, a slot along
+/// the pad's stored absolute orientation) and its copper. A padstack with
+/// other shapes on some copper layers comes back as one pad per shape,
+/// each on its own layers and opening the mask and paste on its own side.
+fn parse_pad<'a>(
+    p: &mut Parser<'a>,
+    footprint_rotation: f64,
+    copper_layers: &[&str],
+    primitives: &mut Vec<Primitive>,
+    primitive_points: &mut Vec<Vec2>,
+) -> Result<ParsedPad<'a>, Error> {
+    let number = p.atom()?.unwrap_or("");
+    let kind = match p.atom()? {
+        Some("thru_hole") => PadKind::ThroughHole,
+        Some("np_thru_hole") => PadKind::NoPlate,
+        Some("connect") => PadKind::Connect,
+        _ => PadKind::Smd,
     };
+    let mut geometry = PadGeometry {
+        shape: pad_shape(p.atom()?),
+        size: Vec2::ZERO,
+        offset: Vec2::ZERO,
+        primitives: 0..0,
+    };
+    let mut stack: Vec<(u64, PadGeometry)> = Vec::new();
     let mut at = Vec2::ZERO;
     let mut rotation = 0.0;
-    let mut size = Vec2::ZERO;
-    let mut offset = Vec2::ZERO;
     let mut drill = Vec2::ZERO;
     let mut layers = 0u64;
     let mut net_atom = None;
@@ -1416,14 +1522,12 @@ fn parse_pad<'a>(
     let mut paste = [false; 2];
     let mut paste_margin = None;
     let mut paste_ratio = None;
-    let first_primitive = primitives.len() as u32;
     while let Some(name) = p.open()? {
         match name {
             "at" => {
                 at = p.xy("pad at")?;
                 rotation = p.f64_or(0.0)?;
             }
-            "size" => size = p.xy("pad size")?,
             "net" => net_atom = p.atom()?,
             "layers" => {
                 while let Some(layer) = p.atom()? {
@@ -1442,51 +1546,8 @@ fn parse_pad<'a>(
             "solder_mask_margin" => mask_margin = Some(p.f64("solder_mask_margin")?),
             "solder_paste_margin" => paste_margin = Some(p.f64("solder_paste_margin")?),
             "solder_paste_margin_ratio" => paste_ratio = Some(p.f64("solder_paste_margin_ratio")?),
-            "rect_delta" => {
-                if let PadShape::Trapezoid { delta } = &mut shape {
-                    *delta = p.xy("rect_delta")?;
-                }
-            }
-            "roundrect_rratio" => {
-                if let PadShape::RoundRect { round_ratio, .. } = &mut shape {
-                    *round_ratio = p.f64("roundrect_rratio")?;
-                }
-            }
-            "chamfer_ratio" => {
-                if let PadShape::RoundRect { chamfer_ratio, .. } = &mut shape {
-                    *chamfer_ratio = p.f64("chamfer_ratio")?;
-                }
-            }
-            "chamfer" => {
-                if let PadShape::RoundRect { chamfer, .. } = &mut shape {
-                    while let Some(corner) = p.atom()? {
-                        match corner {
-                            "top_left" => chamfer[0] = true,
-                            "top_right" => chamfer[1] = true,
-                            "bottom_left" => chamfer[2] = true,
-                            "bottom_right" => chamfer[3] = true,
-                            _ => {}
-                        }
-                    }
-                }
-            }
             "remove_unused_layers" => remove_unused = p.atom()? != Some("no"),
             "keep_end_layers" => keep_ends = p.atom()? != Some("no"),
-            "options" => {
-                while let Some(field) = p.open()? {
-                    if field == "anchor"
-                        && let PadShape::Custom { anchor_circle } = &mut shape
-                    {
-                        *anchor_circle = p.atom()? == Some("circle");
-                    }
-                    p.skip()?;
-                }
-                continue;
-            }
-            "primitives" => {
-                parse_primitives(p, primitives, primitive_points)?;
-                continue;
-            }
             "drill" => {
                 match p.atom()? {
                     Some("oval") => {
@@ -1501,14 +1562,44 @@ fn parse_pad<'a>(
                 }
                 while let Some(field) = p.open()? {
                     if field == "offset" {
-                        offset = p.xy("drill offset")?;
+                        geometry.offset = p.xy("drill offset")?;
                     }
                     p.skip()?;
                 }
                 continue;
             }
+            // `(mode front_inner_back)` names `Inner` and `B.Cu`; `(mode
+            // custom)` names copper layers. Either way the pad's own shape
+            // is the front's, and stands wherever no layer is named.
+            "padstack" => {
+                let last = copper_layers.len().saturating_sub(1).min(63);
+                let inner = copper_layer_mask("*.Cu", copper_layers) & !1 & !(1u64 << last);
+                while let Some(field) = p.open()? {
+                    if field != "layer" {
+                        p.skip()?;
+                        continue;
+                    }
+                    let layer = p.atom()?.unwrap_or("");
+                    let on = match layer {
+                        "Inner" => inner,
+                        _ => copper_layer_mask(layer, copper_layers),
+                    };
+                    let mut own = geometry.clone();
+                    while let Some(field) = p.open()? {
+                        if !parse_shape_field(p, field, &mut own, primitives, primitive_points)? {
+                            p.skip()?;
+                        }
+                    }
+                    if on != 0 {
+                        stack.push((on, own));
+                    }
+                }
+                continue;
+            }
             _ => {
-                if parse_machining(p, name, copper_layers, &mut machining)? {
+                if parse_shape_field(p, name, &mut geometry, primitives, primitive_points)?
+                    || parse_machining(p, name, copper_layers, &mut machining)?
+                {
                     continue;
                 }
             }
@@ -1532,31 +1623,62 @@ fn parse_pad<'a>(
             r,
             machining,
             net: 0,
+            plated: kind != PadKind::NoPlate,
+            footprint: 0,
+            pin: number,
         }
     });
     // A pad on the mask or paste layers alone still opens them.
     let has_aperture = mask.contains(&true) || paste.contains(&true);
-    let pad = ((layers != 0 || has_aperture) && size.x > 0.0 && size.y > 0.0).then_some(Pad {
+    let pad = Pad {
         at,
         rotation,
-        shape,
-        size,
-        offset,
+        shape: geometry.shape,
+        size: geometry.size,
+        offset: geometry.offset,
         layers,
+        span: layers,
         kind,
         net: 0,
         has_hole,
         drill,
         remove_unused,
         keep_ends,
-        primitives: first_primitive..primitives.len() as u32,
+        primitives: geometry.primitives.clone(),
         mask,
         mask_margin,
         paste,
         paste_margin,
         paste_ratio,
-    });
-    Ok((hole, pad.map(|pad| (pad, net_atom))))
+        footprint: 0,
+    };
+    let pads = if (layers == 0 && !has_aperture) || pad.size.x <= 0.0 || pad.size.y <= 0.0 {
+        Vec::new()
+    } else if stack.is_empty() {
+        vec![pad]
+    } else {
+        // One pad per shape, each opening the mask and paste of the outer
+        // layer it is on.
+        let last = 1u64 << copper_layers.len().saturating_sub(1).min(63);
+        let opens = |on: u64, side: [bool; 2]| [side[0] && on & 1 != 0, side[1] && on & last != 0];
+        let own = !stack.iter().fold(0, |all, (on, _)| all | on);
+        std::iter::once((own, geometry))
+            .chain(stack)
+            .map(|(on, g)| (on & layers, g))
+            .filter(|(on, g)| *on != 0 && g.size.x > 0.0 && g.size.y > 0.0)
+            .map(|(on, g)| Pad {
+                shape: g.shape,
+                size: g.size,
+                offset: g.offset,
+                primitives: g.primitives,
+                layers: on,
+                mask: opens(on, mask),
+                paste: opens(on, paste),
+                ..pad.clone()
+            })
+            .collect()
+    };
+    Ok((hole, pads, net_atom))
 }
 
 /// Copper layers named by one `(layers ...)` entry: a layer name, `*.Cu`
@@ -1646,8 +1768,8 @@ fn parse_primitives(
     Ok(())
 }
 
-/// A pad's drill, and its copper with the net atom still to intern.
-type ParsedPad<'a> = (Option<Hole>, Option<(Pad, Option<&'a str>)>);
+/// A pad's drill, its copper, and its net atom still to intern.
+type ParsedPad<'a> = (Option<Hole<'a>>, Vec<Pad>, Option<&'a str>);
 
 fn parse_yes_no(atom: Option<&str>) -> Option<bool> {
     match atom {
