@@ -360,14 +360,18 @@ fn compute_import_footprint_path_property_patches(
             .get(anchor)
             .cloned()
             .unwrap_or_default();
-        // Extraction has already joined source footprints by reference/native
-        // path and rejected conflicting identities. Use its PCB reference for
-        // the patch target, even when it differs from the schematic reference.
-        let pcb_refdes = layout
+        // Extraction has already joined source footprints by native path or
+        // reference. Use the matched PCB reference for the patch target, even when
+        // it differs from the schematic reference. Layouts filled from libraries
+        // have no PCB footprint; their schematic reference may be another
+        // footprint's stale PCB reference, so they target nothing.
+        let Some(pcb_refdes) = layout
             .properties
             .get("Reference")
             .map(|value| KiCadRefDes::from(value.clone()))
-            .unwrap_or_else(|| refdes.clone());
+        else {
+            continue;
+        };
         if prefix.is_empty() {
             desired_by_refdes.insert(pcb_refdes, format!("{instance_name}.{component_name}"));
         } else {
@@ -3207,5 +3211,64 @@ mod tests {
                 .zen_text
                 .contains("footprint = \"Missing:Footprint\"")
         );
+    }
+
+    #[test]
+    fn library_filled_layout_does_not_steal_a_stale_pcb_reference_hook() -> Result<()> {
+        // Source footprint R2 joined schematic R1 by native path; schematic R2 has no
+        // board footprint and was filled from a library, so only R1 targets it.
+        let pcb_text = r#"(kicad_pcb
+  (footprint "Small" (path "/a")
+    (property "Reference" "R2")
+  )
+)
+"#;
+        let layout = |properties| ImportLayoutComponent {
+            fpid: Some("Small".to_string()),
+            unresolved_footprint: None,
+            uuid: None,
+            layer: None,
+            at: None,
+            sheetname: None,
+            sheetfile: None,
+            attrs: Vec::new(),
+            properties,
+            pads: BTreeMap::new(),
+            footprint_geometry: ImportFootprintGeometry::LibraryFile("(footprint)".to_string()),
+        };
+        let (r1, r2) = (make_anchor("a"), make_anchor("b"));
+        let mut matched = make_component("R1", BTreeMap::new());
+        matched.layout = Some(layout(BTreeMap::from([(
+            "Reference".to_string(),
+            "R2".to_string(),
+        )])));
+        let mut filled = make_component("R2", BTreeMap::new());
+        filled.layout = Some(layout(BTreeMap::new()));
+        let components = BTreeMap::from([(r1.clone(), matched), (r2.clone(), filled)]);
+        let generated = GeneratedComponents {
+            module_decls: Vec::new(),
+            anchor_to_module_ident: BTreeMap::new(),
+            anchor_to_component_name: BTreeMap::from([
+                (r1, "Small".to_string()),
+                (r2, "Small".to_string()),
+            ]),
+            module_io_pins: BTreeMap::new(),
+            module_skip_defaults: BTreeMap::new(),
+            expected_pins_by_anchor: BTreeMap::new(),
+        };
+        let patches = compute_import_footprint_path_property_patches(
+            &pcb_sexpr::parse(pcb_text)?,
+            pcb_text,
+            &components,
+            &BTreeMap::new(),
+            &generated,
+            &GeneratedSheetModules::default(),
+        )?;
+        let mut out = Vec::new();
+        patches.write_to(pcb_text, &mut out)?;
+        let out = String::from_utf8(out)?;
+        assert!(out.contains(r#"(property "Path" "R1.Small""#), "{out}");
+        assert!(!out.contains("R2.Small"), "{out}");
+        Ok(())
     }
 }
