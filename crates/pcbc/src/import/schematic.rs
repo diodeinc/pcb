@@ -39,6 +39,7 @@ pub(super) fn bind_imported_schematic(
         })
         .collect::<Result<BTreeMap<_, _>>>()?;
     let mut bindings = BTreeMap::new();
+    let mut bound_slots = BTreeSet::new();
     for component in ir
         .components
         .values()
@@ -63,6 +64,14 @@ pub(super) fn bind_imported_schematic(
                 .unit_file(&component.netlist.refdes, key)?;
             let slot = SymbolSlotKey::new(path.clone(), u32::try_from(unit.unit.unwrap_or(1))?)
                 .context("Imported symbol has an invalid unit")?;
+            ensure!(
+                bound_slots.insert(slot.clone()),
+                "{} places unit {} of {} more than once; re-annotate it in KiCad so each unit is placed once \
+                 (`kicad-cli sch upgrade` of a pre-KiCad 7 schematic can reset every unit to 1)",
+                file.display(),
+                slot.unit(),
+                component.netlist.refdes.as_str()
+            );
             ensure!(
                 bindings
                     .insert((file.to_path_buf(), key.symbol_uuid.clone()), slot)

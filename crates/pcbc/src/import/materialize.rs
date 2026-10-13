@@ -36,8 +36,13 @@ pub(super) fn materialize_board(
     for relative in &schematic_files {
         let destination = layout_dir.join(relative);
         fs::create_dir_all(destination.parent().context("Schematic has no parent")?)?;
-        fs::copy(staged_root.join(relative), &destination)
-            .with_context(|| format!("Failed to copy schematic {}", relative.display()))?;
+        let source = fs::read_to_string(staged_root.join(relative))
+            .with_context(|| format!("Failed to read schematic {}", relative.display()))?;
+        // Persist the UUIDs KiCad loads, so the live schematic matches the extracted one.
+        let source = pcb_kicad_sch::kicad::with_unique_ids(&source)
+            .with_context(|| format!("Failed to parse schematic {}", relative.display()))?;
+        fs::write(&destination, source.as_bytes())
+            .with_context(|| format!("Failed to write schematic {}", relative.display()))?;
     }
     make_sheet_file_ids_unique(&layout_dir, &selected.kicad_sch, &schematic_files)?;
     // Without a source board, forced imports retain eda/. Its matching board still needs

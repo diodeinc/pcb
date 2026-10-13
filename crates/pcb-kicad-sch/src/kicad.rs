@@ -1,9 +1,10 @@
-use std::collections::BTreeMap;
+use std::borrow::Cow;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use anyhow::{Context, Result, anyhow, bail};
 use pcb_sexpr::{
-    Sexpr, SexprKind,
+    PatchSet, Sexpr, SexprKind, Span,
     formatter::{FormatMode, format_tree},
     kicad::symbol::private_offset,
     parse,
@@ -132,9 +133,62 @@ pub fn parse_kicad_sch_page(file_name: Option<&str>, content: &str) -> Result<Sc
             "unsupported KiCad schematic version {version}; expected KiCad 9 version 20250114 or KiCad 10 version {KICAD_SCH_VERSION}"
         ),
     }
+    make_ids_unique(&mut root);
     // Normalization rewrites descendants only; the root is still the checked list.
     let root = SexprList::from_sexpr(&root).expect("kicad_sch root is a list");
     parse_kicad_sch_root(file_name, root)
+}
+
+/// `content` with duplicate UUIDs replaced as KiCad replaces them on load.
+pub fn with_unique_ids(content: &str) -> Result<Cow<'_, str>> {
+    let mut root =
+        parse(content).map_err(|err| anyhow!("failed to parse KiCad schematic: {err}"))?;
+    let changes = make_ids_unique(&mut root);
+    if changes.is_empty() {
+        return Ok(Cow::Borrowed(content));
+    }
+    let mut patches = PatchSet::new();
+    for (span, id) in changes {
+        patches.replace_string(span, &id);
+    }
+    let mut output = Vec::new();
+    patches.write_to(content, &mut output)?;
+    Ok(Cow::Owned(String::from_utf8(output)?))
+}
+
+/// KiCad's schematic parser increments each UUID already seen earlier in the
+/// same file until it is unused (`KIID::Increment`), so copy-pasted items load,
+/// netlist, and update the PCB with distinct, deterministic IDs. Applies the
+/// same rule and returns the source span and new value of each changed UUID.
+fn make_ids_unique(root: &mut Sexpr) -> Vec<(Span, String)> {
+    fn visit(node: &mut Sexpr, seen: &mut BTreeSet<uuid::Uuid>, changes: &mut Vec<(Span, String)>) {
+        let SexprKind::List(items) = &mut node.kind else {
+            return;
+        };
+        if list_tag(items) == Some("uuid") {
+            if let Some(value) = items.get_mut(1)
+                && let Some(original) = value
+                    .as_atom()
+                    .and_then(|id| uuid::Uuid::parse_str(id).ok())
+            {
+                let mut id = original;
+                while !seen.insert(id) {
+                    id = uuid::Uuid::from_u128(id.as_u128().wrapping_add(1));
+                }
+                if id != original {
+                    changes.push((value.span, id.to_string()));
+                    value.kind = SexprKind::String(id.to_string());
+                }
+            }
+            return;
+        }
+        for child in items {
+            visit(child, seen, changes);
+        }
+    }
+    let mut changes = Vec::new();
+    visit(root, &mut BTreeSet::new(), &mut changes);
+    changes
 }
 
 /// KiCad changed exact `~` field values and library pin names/numbers from
@@ -2438,6 +2492,44 @@ mod tests {
         };
         assert_eq!(junction.id, "junction-1");
         assert_eq!(junction.at, Point::new(20.0, 20.0));
+    }
+
+    #[test]
+    fn duplicate_ids_increment_like_kicad() {
+        let symbol = &SAMPLE
+            [SAMPLE.find("  (symbol\n").unwrap()..SAMPLE.find("  (sheet_instances").unwrap()];
+        let source = SAMPLE
+            .replacen(symbol, &format!("{symbol}{symbol}"), 1)
+            .replace("sym-1", "2a9674a1-79f5-440b-979f-7638894d2fa2")
+            .replace("wire-1", "2a9674a1-79f5-440b-979f-7638894d2fa3");
+        let ids = |source: &str| {
+            parse_kicad_sch_page(None, source)
+                .unwrap()
+                .items
+                .iter()
+                .filter_map(|item| match item {
+                    SchItem::Symbol(symbol) => Some(symbol.id.clone()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        let expected = [
+            "2a9674a1-79f5-440b-979f-7638894d2fa2",
+            "2a9674a1-79f5-440b-979f-7638894d2fa4",
+        ];
+        assert_eq!(ids(&source), expected);
+        let unique = with_unique_ids(&source).unwrap();
+        assert_eq!(ids(&unique), expected);
+        assert!(matches!(
+            with_unique_ids(&unique).unwrap(),
+            Cow::Borrowed(_)
+        ));
+
+        let mut page = parse_kicad_sch_page(None, &source).unwrap();
+        assert_eq!(crate::patch_page_source(&source, &page).unwrap(), None);
+        page.items.retain(|item| !matches!(item, SchItem::Wire(_)));
+        let patched = crate::patch_page_source(&source, &page).unwrap().unwrap();
+        assert_eq!(parse_kicad_sch_page(None, &patched).unwrap(), page);
     }
 
     #[test]
