@@ -24,7 +24,8 @@ pub fn substitute_text_variables<'a>(
 ) -> String {
     let mut text = value.to_string();
     for _ in 0..PASSES {
-        if !text.contains("${") {
+        // As KiCad does, `@{` alone still runs a pass, which turns `\@{` into `@{`.
+        if !text.contains("${") && !text.contains("@{") {
             break;
         }
         let next = expand(&text, &mut resolve, 0);
@@ -138,6 +139,7 @@ mod tests {
             substitute_text_variables(r"\${A} ${A}", resolve),
             "${A} alpha"
         );
+        assert_eq!(substitute_text_variables(r"\@{ROW}", resolve), "@{ROW}");
         assert_eq!(substitute_text_variables("${LOOP}", self_ref), "${LOOP}");
     }
 }
