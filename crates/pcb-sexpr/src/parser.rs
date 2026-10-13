@@ -4,7 +4,7 @@
 //! the scanner keeps the nodes of open lists on one stack and hands each list
 //! its children as a slice of that stack when the list closes.
 
-use crate::{ParseError, formatter};
+use crate::ParseError;
 
 /// Makes nodes for [`scan`]. Offsets are byte offsets into the source.
 pub(crate) trait Sink<'s> {
@@ -187,13 +187,18 @@ pub(crate) fn parse_number(atom: &str) -> Option<(Number, bool)> {
     if count == 0 {
         return parse_number_slow(atom);
     }
-    // The rules of `formatter::is_canonical_number`.
+    // A number is canonical if `i64::to_string` or `formatter::format_float`
+    // gives back its text. Only the fast path can see one.
     let leading_zero = digits[0] == b'0';
     let (number, canonical) = match int_len {
-        None if mantissa <= i64::MAX as u64 => {
+        // `i64::MIN` has no positive counterpart, hence the wrapping negation.
+        None if mantissa <= i64::MAX as u64 + u64::from(negative) => {
             let int = mantissa as i64;
             let canonical = !(leading_zero && (count > 1 || negative));
-            (Number::Int(if negative { -int } else { int }), canonical)
+            (
+                Number::Int(if negative { int.wrapping_neg() } else { int }),
+                canonical,
+            )
         }
         // With both the mantissa and the power of ten exact in f64, a single
         // division rounds correctly (Clinger's fast path).
@@ -215,14 +220,11 @@ pub(crate) fn parse_number(atom: &str) -> Option<(Number, bool)> {
         }
         _ => return parse_number_slow(atom),
     };
-    debug_assert_eq!(
-        canonical,
-        formatter::is_canonical_number(matches!(number, Number::Int(_)), atom),
-        "{atom}"
-    );
     Some((number, canonical))
 }
 
+/// Numbers with a sign, exponent, more than 19 digits or a name such as
+/// `inf`. None of them formats back to its text.
 fn parse_number_slow(atom: &str) -> Option<(Number, bool)> {
     // Rule out most symbols before the slower standard parsers.
     let unsigned = atom.strip_prefix(['+', '-']).unwrap_or(atom);
@@ -237,6 +239,5 @@ fn parse_number_slow(atom: &str) -> Option<(Number, bool)> {
     } else {
         Number::F64(atom.parse().ok()?)
     };
-    let canonical = formatter::is_canonical_number(matches!(number, Number::Int(_)), atom);
-    Some((number, canonical))
+    Some((number, false))
 }

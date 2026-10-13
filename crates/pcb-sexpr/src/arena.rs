@@ -20,7 +20,7 @@ pub struct Doc<'s> {
     /// The top-level nodes are `nodes[roots..]`.
     roots: usize,
     /// Text of strings with escapes. Nodes point into it, so it must outlive them.
-    _unescaped: String,
+    _unescaped: Vec<String>,
 }
 
 impl<'s> Doc<'s> {
@@ -46,7 +46,7 @@ impl<'s> Doc<'s> {
         let lists = memchr::memchr_iter(b'(', source.as_bytes()).count();
         let mut arena = Arena {
             nodes: Vec::with_capacity(lists * 9 / 2),
-            unescaped: String::new(),
+            unescaped: Vec::new(),
         };
         let mut roots = parser::scan(&source, &mut arena, first_only)?;
         if roots.is_empty() {
@@ -114,15 +114,12 @@ enum Tag {
     /// source text, and the value is parsed from it on access.
     RawInt,
     RawF64,
-    /// During the parse: a string whose text is at `data.index` in the unescaped buffer.
-    Unescaped,
 }
 
 #[derive(Clone, Copy)]
 union Data {
     ptr: *const u8,
-    /// During the parse, before pointers are fixed: the first child of a list,
-    /// or the offset of a string's unescaped text.
+    /// During the parse, before pointers are fixed: the first child of a list.
     index: usize,
     int: i64,
     float: f64,
@@ -153,7 +150,6 @@ impl Node {
             Tag::F64 => NodeKind::F64(unsafe { self.data.float }),
             Tag::RawInt => NodeKind::Int(self.text().parse().unwrap_or_default()),
             Tag::RawF64 => NodeKind::F64(self.text().parse().unwrap_or_default()),
-            Tag::Unescaped => unreachable!(),
         }
     }
 
@@ -161,7 +157,7 @@ impl Node {
     fn text(&self) -> &str {
         debug_assert!(!matches!(self.tag, Tag::List | Tag::Int | Tag::F64));
         // SAFETY: the parser sets `ptr` and `len` to UTF-8 text in the
-        // document's source or unescaped buffer, which outlive `&self`.
+        // document's source or unescaped strings, which outlive `&self`.
         unsafe {
             let bytes = std::slice::from_raw_parts(self.data.ptr, self.len as usize);
             std::str::from_utf8_unchecked(bytes)
@@ -220,7 +216,6 @@ impl Node {
             Tag::F64 => Some(Cow::Owned(formatter::format_float(unsafe {
                 self.data.float
             }))),
-            Tag::Unescaped => unreachable!(),
         }
     }
 
@@ -234,27 +229,19 @@ impl Node {
 
     /// Copy this node into an owned [`Sexpr`] tree.
     pub fn to_sexpr(&self) -> Sexpr {
-        let kind = match self.tag {
-            Tag::List => SexprKind::List(self.children().iter().map(Node::to_sexpr).collect()),
-            Tag::Symbol => SexprKind::Symbol(self.text().to_owned()),
-            Tag::String => SexprKind::String(self.text().to_owned()),
-            Tag::Int => SexprKind::Int(unsafe { self.data.int }),
-            Tag::F64 => SexprKind::F64(unsafe { self.data.float }),
-            Tag::RawInt | Tag::RawF64 => {
-                let kind = match self.kind() {
-                    NodeKind::Int(n) => SexprKind::Int(n),
-                    NodeKind::F64(f) => SexprKind::F64(f),
-                    _ => unreachable!(),
-                };
-                return Sexpr {
-                    kind,
-                    span: self.span(),
-                    raw_atom: Some(self.text().into()),
-                };
-            }
-            Tag::Unescaped => unreachable!(),
+        let kind = match self.kind() {
+            NodeKind::List(items) => SexprKind::List(items.iter().map(Node::to_sexpr).collect()),
+            NodeKind::Symbol(s) => SexprKind::Symbol(s.to_owned()),
+            NodeKind::String(s) => SexprKind::String(s.to_owned()),
+            NodeKind::Int(n) => SexprKind::Int(n),
+            NodeKind::F64(f) => SexprKind::F64(f),
         };
-        Sexpr::with_span(kind, self.span())
+        let raw = matches!(self.tag, Tag::RawInt | Tag::RawF64);
+        Sexpr {
+            kind,
+            span: self.span(),
+            raw_atom: raw.then(|| self.text().into()),
+        }
     }
 }
 
@@ -277,7 +264,7 @@ impl PartialEq for Node {
 struct Arena {
     /// Finished nodes; each list's children are adjacent.
     nodes: Vec<Node>,
-    unescaped: String,
+    unescaped: Vec<String>,
 }
 
 impl Arena {
@@ -291,25 +278,15 @@ impl Arena {
         }
     }
 
-    /// Turn list child indexes and unescaped text offsets into pointers, now
-    /// that `nodes` and `unescaped` no longer grow.
+    /// Turn list child indexes into pointers, now that `nodes` no longer grows.
     fn fix_pointers(&mut self) {
         let base = self.nodes.as_mut_ptr();
-        let unescaped = self.unescaped.as_ptr();
         for i in 0..self.nodes.len() {
-            // SAFETY: `i` is in bounds, list indexes are at most `nodes.len()`,
-            // and string offsets are within `unescaped`.
+            // SAFETY: `i` is in bounds, and list indexes are at most `nodes.len()`.
             unsafe {
                 let node = base.add(i);
-                match (*node).tag {
-                    Tag::List => {
-                        (*node).data.ptr = base.add((*node).data.index).cast::<u8>().cast_const()
-                    }
-                    Tag::Unescaped => {
-                        (*node).tag = Tag::String;
-                        (*node).data.ptr = unescaped.add((*node).data.index);
-                    }
-                    _ => {}
+                if (*node).tag == Tag::List {
+                    (*node).data.ptr = base.add((*node).data.index).cast::<u8>().cast_const();
                 }
             }
         }
@@ -341,14 +318,17 @@ impl<'s> Sink<'s> for Arena {
     }
 
     fn string(&mut self, start: u32, end: u32, text: &str, escaped: bool) -> Node {
-        let mut node = Self::text(start, text, Tag::String);
-        node.end = end;
-        if escaped {
-            node.tag = Tag::Unescaped;
-            node.data.index = self.unescaped.len();
-            self.unescaped.push_str(text);
+        let text = if escaped {
+            // A `String` keeps its heap text in place when the `Vec` grows.
+            self.unescaped.push(text.to_owned());
+            self.unescaped.last().unwrap()
+        } else {
+            text
+        };
+        Node {
+            end,
+            ..Self::text(start, text, Tag::String)
         }
-        node
     }
 
     fn list(&mut self, start: u32, end: u32, pending: &mut Vec<Node>, first: usize) -> Node {
