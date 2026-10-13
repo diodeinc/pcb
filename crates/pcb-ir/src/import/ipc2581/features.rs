@@ -881,6 +881,117 @@ pub(super) fn extract_fiducial(
     Ok(Some(feature))
 }
 
+/// One fiducial a Step places on a layer: a filled circle.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct StepFiducial {
+    pub kind: FiducialKind,
+    /// The circle's centre in the Step's frame, after the fiducial's Xform.
+    pub center: Point,
+    pub diameter: f64,
+    /// The Set's own polarity, else the layer's.
+    pub polarity: GeometryPolarity,
+}
+
+/// Every fiducial `step` places on `layer`, read strictly: unlike layer
+/// extraction, which warns about and drops what it cannot draw, a fiducial
+/// that is not a filled circle of positive diameter is an error.
+pub fn extract_step_fiducials(
+    ipc: &Ipc2581,
+    step: &Step,
+    layer: &Layer,
+) -> Result<Vec<StepFiducial>> {
+    let context = ExtractContext::new(ipc.interner(), ipc.content(), Resolution::default());
+    let layer_polarity = map_polarity(layer.polarity.unwrap_or(Polarity::Positive));
+    let mut fiducials = Vec::new();
+    for layer_feature in step
+        .layer_features
+        .iter()
+        .filter(|feature| feature.layer_ref == layer.name)
+    {
+        for (set_index, set) in layer_feature.sets.iter().enumerate() {
+            let polarity = set.polarity.map(map_polarity).unwrap_or(layer_polarity);
+            let set_features = set.features.slice(&layer_feature.features);
+            for (feature_index, set_feature) in set_features.iter().enumerate() {
+                let SetFeature::Fiducial(fiducial) = set_feature else {
+                    continue;
+                };
+                let fiducial = step_fiducial(&context, fiducial, polarity).with_context(|| {
+                    format!(
+                        "fiducial at feature {feature_index} of set {set_index} on layer '{}' of Step '{}'",
+                        ipc.resolve(layer.name),
+                        ipc.resolve(step.name)
+                    )
+                })?;
+                fiducials.push(fiducial);
+            }
+        }
+    }
+    Ok(fiducials)
+}
+
+fn step_fiducial(
+    context: &ExtractContext<'_>,
+    fiducial: &ipc2581::types::ecad::Fiducial,
+    polarity: GeometryPolarity,
+) -> Result<StepFiducial> {
+    let primitive = match &fiducial.shape {
+        ipc2581::types::ecad::FiducialShape::Primitive(primitive) => primitive,
+        ipc2581::types::ecad::FiducialShape::StandardPrimitiveRef(id) => context
+            .standard_primitives
+            .get(id)
+            .copied()
+            .with_context(|| {
+                format!(
+                    "standard primitive '{}' is missing",
+                    context.strings.resolve(*id)
+                )
+            })?,
+    };
+    let StandardPrimitive::Circle(circle) = primitive else {
+        bail!("its shape is not a circle");
+    };
+    // `primitive_fill_property`, except that a FillDesc it cannot find is an
+    // error rather than a solid fill.
+    let style = primitive_style(primitive);
+    let fill = match (style.fill_property, style.fill_desc_ref) {
+        (Some(fill), _) => Some(fill),
+        (None, Some(reference)) => Some(
+            context
+                .fill_descs
+                .get(&reference)
+                .with_context(|| {
+                    format!(
+                        "FillDesc '{}' is missing",
+                        context.strings.resolve(reference)
+                    )
+                })?
+                .fill_property,
+        ),
+        (None, None) => None,
+    };
+    if let Some(fill) = fill.filter(|fill| *fill != FillProperty::Fill) {
+        bail!("its circle is {}, not filled", fill.as_str());
+    }
+
+    let placement = ipc_placement(
+        Point::new(fiducial.location.x, fiducial.location.y),
+        fiducial.xform,
+    );
+    let diameter = circle.shape.diameter * placement.xform.scale;
+    if !(diameter.is_finite() && diameter > 0.0) {
+        bail!("its circle's diameter {diameter} is not positive");
+    }
+    if !placement.center.is_finite() {
+        bail!("its location is not finite");
+    }
+    Ok(StepFiducial {
+        kind: map_fiducial_kind(fiducial.kind),
+        center: placement.center,
+        diameter,
+        polarity,
+    })
+}
+
 pub(super) fn map_fiducial_kind(kind: ipc2581::types::ecad::FiducialKind) -> FiducialKind {
     match kind {
         ipc2581::types::ecad::FiducialKind::BadBoardMark => FiducialKind::BadBoard,

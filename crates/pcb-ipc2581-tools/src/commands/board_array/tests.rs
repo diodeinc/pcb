@@ -1405,6 +1405,42 @@ fn board_cell_fiducials_follow_the_longer_board_side_with_room_for_them() {
 }
 
 #[test]
+fn board_cell_repeat_places_the_board_by_its_datum() {
+    let margin = BoardMarginMm::new(1.0, 2.0, 3.0, 4.0);
+    for datum in [r#"x="0" y="0""#, r#"x="3" y="-1""#] {
+        let input =
+            board_fixture_mm().replace(r#"<Datum x="0" y="0"/>"#, &format!("<Datum {datum}/>"));
+        let xml = create_board_array_xml(&input, &options(1, 1, margin, BoardMarginMm::all(30.0)))
+            .unwrap();
+        let layout = geometry::extract_layout(&Ipc2581::parse(&xml).unwrap()).unwrap();
+
+        // The (-2, -3) board corner lands inside its rail and left/bottom margins.
+        let board = layout
+            .layout
+            .instances
+            .iter()
+            .find(|instance| {
+                layout.layout.steps[instance.child_step as usize].kind == LayoutStepKind::Board
+            })
+            .unwrap();
+        assert_point_close(board.bbox.min, Point::new(34.0, 33.0));
+        let read_back = pcb_ir::dialects::ipc::simple_board_array_layout(&layout)
+            .and_then(|array| array.board_margin)
+            .unwrap();
+        assert_eq!(
+            (
+                read_back.top,
+                read_back.right,
+                read_back.bottom,
+                read_back.left
+            ),
+            (1.0, 2.0, 3.0, 4.0),
+            "Datum {datum}"
+        );
+    }
+}
+
+#[test]
 fn writes_generated_board_array_values_in_cad_header_units() {
     let xml = create_board_array_xml(
         &board_fixture_with_mask_bbox_mm(1.0, 1.0).replace("MILLIMETER", "INCH"),

@@ -259,6 +259,97 @@ fn a_fiducial_flashes_only_the_circle_it_is() {
 }
 
 #[test]
+fn step_fiducials_are_placed_filled_circles_or_an_error() {
+    let fiducials = |layer_polarity: &str, sets: &str| {
+        let ipc = parse(
+            "board",
+            &format!(
+                r#"{}<DictionaryFillDesc units="MILLIMETER"><EntryFillDesc id="hollow"><FillDesc fillProperty="HOLLOW"/></EntryFillDesc></DictionaryFillDesc>"#,
+                standard_entry("fid", r#"<Circle diameter="1"/>"#)
+            ),
+            &format!(
+                r#"<Layer name="TOP" layerFunction="SIGNAL" side="TOP" polarity="{layer_polarity}"/>
+                   <Step name="board" type="BOARD"><LayerFeature layerRef="TOP">{sets}</LayerFeature></Step>"#
+            ),
+        );
+        let cad = &ipc.ecad().unwrap().cad_data;
+        extract_step_fiducials(&ipc, &cad.steps[0], &cad.layers[0])
+            .map_err(|error| format!("{error:#}"))
+    };
+    let set = |polarity: &str, fiducial: &str| format!("<Set{polarity}>{fiducial}</Set>");
+
+    // Rotation turns the offset (1, 2) to (-2, 1) before the mirror flips X,
+    // and the scale doubles it: mirroring first would land at (6, 18).
+    let placed = fiducials(
+        "NEGATIVE",
+        &[
+            set(
+                "",
+                r#"<GlobalFiducial><Xform rotation="90" mirror="true" xOffset="1" yOffset="2" scale="2"/>
+                   <Location x="10" y="20"/><StandardPrimitiveRef id="fid"/></GlobalFiducial>"#,
+            ),
+            set(
+                r#" polarity="POSITIVE""#,
+                r#"<LocalFiducial><Location x="3" y="4"/><Circle diameter="1.5"><FillDesc fillProperty="FILL"/></Circle></LocalFiducial>"#,
+            ),
+        ]
+        .concat(),
+    )
+    .unwrap();
+    assert_eq!(
+        placed,
+        [
+            StepFiducial {
+                kind: FiducialKind::Global,
+                center: Point::new(14.0, 22.0),
+                diameter: 2.0,
+                polarity: GeometryPolarity::Clear,
+            },
+            StepFiducial {
+                kind: FiducialKind::Local,
+                center: Point::new(3.0, 4.0),
+                diameter: 1.5,
+                polarity: GeometryPolarity::Dark,
+            },
+        ]
+    );
+
+    for (circle, expected) in [
+        (
+            r#"<Circle diameter="1"><FillDesc fillProperty="VOID"/></Circle>"#,
+            "is VOID, not filled",
+        ),
+        (
+            r#"<Circle diameter="1"><FillDescRef id="hollow"/></Circle>"#,
+            "is HOLLOW, not filled",
+        ),
+        (
+            r#"<Circle diameter="1"><FillDescRef id="nowhere"/></Circle>"#,
+            "FillDesc 'nowhere' is missing",
+        ),
+        (
+            r#"<StandardPrimitiveRef id="nowhere"/>"#,
+            "standard primitive 'nowhere' is missing",
+        ),
+        (r#"<Circle diameter="0"/>"#, "diameter 0 is not positive"),
+        (r#"<RectCenter width="1" height="1"/>"#, "not a circle"),
+    ] {
+        let error = fiducials(
+            "POSITIVE",
+            &set(
+                "",
+                &format!(r#"<GlobalFiducial><Location x="0" y="0"/>{circle}</GlobalFiducial>"#),
+            ),
+        )
+        .unwrap_err();
+        assert!(
+            error.contains("feature 0 of set 0 on layer 'TOP'") && error.contains(expected),
+            "{circle}: {error}"
+        );
+    }
+}
+
+#[test]
 fn a_fiducial_a_slot_cuts_images_cut() {
     let ipc = shape_fixture(
         r#"<GlobalFiducial><Location x="5" y="5"/><Circle diameter="2"/></GlobalFiducial>"#,
@@ -998,6 +1089,44 @@ fn a_board_cell_placed_once_is_a_simple_array_whatever_pitch_it_states() {
 
     assert_eq!(cell_array(r#"dx="0" dy="0""#), Some(2));
     assert_eq!(cell_array(r#"dx="10" dy="5""#), Some(2));
+}
+
+#[test]
+fn board_cell_margins_follow_where_the_board_datum_places_the_board() {
+    // A 30 mm board in a 40 mm cell. The repeat places the board's Datum.
+    let margins = |datum: (u32, u32), repeat: (u32, u32)| {
+        let ipc = parse(
+            "array",
+            "",
+            &format!(
+                r#"{TOP}
+      <Step name="board" type="BOARD"><Datum x="{}" y="{}"/>{board}</Step>
+      <Step name="cell" type="PALLET">{cell}
+        <StepRepeat stepRef="board" x="{}" y="{}" nx="1" ny="1" dx="0" dy="0"/>
+      </Step>
+      <Step name="array" type="PALLET">{array}
+        <StepRepeat stepRef="cell" x="5" y="5" nx="2" ny="1" dx="40" dy="0"/>
+      </Step>"#,
+                datum.0,
+                datum.1,
+                repeat.0,
+                repeat.1,
+                board = profile(30, 30),
+                cell = profile(40, 40),
+                array = profile(90, 50),
+            ),
+        );
+        let margins = simple_board_array_layout(&extract_layout(&ipc).unwrap())
+            .and_then(|array| array.board_margin)
+            .expect("a simple board-cell array");
+        (margins.left, margins.right, margins.bottom, margins.top)
+    };
+
+    assert_eq!(margins((0, 0), (5, 5)), (5.0, 5.0, 5.0, 5.0));
+    // Datum (0, 2) at y = 5 puts the board's bottom edge at y = 3.
+    assert_eq!(margins((0, 2), (5, 5)), (5.0, 5.0, 3.0, 7.0));
+    // Datum (10, 0) at x = 15 is the same board as Datum (0, 0) at x = 5.
+    assert_eq!(margins((10, 0), (15, 5)), (5.0, 5.0, 5.0, 5.0));
 }
 
 const PAD_PADSTACK: &str = r#"<PadStackDef name="padstack">
