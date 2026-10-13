@@ -30,8 +30,11 @@ mod symbol;
 pub mod analysis;
 mod compose;
 
-pub use field_autoplace::Bounds;
-pub use identity::{SymbolSlotKey, canonical_component_path, deterministic_uuid, root_page_id};
+pub use field_autoplace::{Bounds, autoplace_symbol_fields};
+pub use identity::{
+    SymbolSlotKey, canonical_component_path, deterministic_uuid, normalize_schematic_path,
+    root_page_id,
+};
 pub use kicad::parse_kicad_sch_page;
 pub use model::{
     FieldHorizontalJustify, FieldJustify, FieldVerticalJustify, Graphic, GraphicKind, GraphicText,
