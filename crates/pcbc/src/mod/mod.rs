@@ -23,7 +23,8 @@ use std::path::{Path, PathBuf};
 
 use self::request::resolve_direct_dependency_request;
 use self::target::{AddTarget, discover_add_targets, discover_package_target};
-use self::writeback::{ManifestEdit, plan_package_manifest};
+pub(crate) use self::writeback::ManifestEdit;
+use self::writeback::plan_package_manifest;
 
 type DirectOverrides = BTreeMap<String, DependencySpec>;
 
@@ -411,20 +412,17 @@ fn print_frozen_resolution(
     }
 }
 
-pub(crate) fn sync_targets(
+/// The manifest edits that syncing `targets` would make, without writing them.
+/// Fails if syncing would also change vendor/.
+pub(crate) fn plan_manifest_edits(
     workspace: &WorkspaceInfo,
     targets: &[AddTarget],
-    verbose: bool,
-    prune_vendor: bool,
-) -> Result<()> {
-    run_resolution(
-        workspace,
-        targets,
-        verbose,
-        None,
-        prune_vendor,
-        SyncMode::Write,
-    )
+) -> Result<Vec<ManifestEdit>> {
+    let (manifest_edits, vendor_plan) = plan_sync(workspace, targets, None, false)?;
+    if !vendor_plan.is_empty() {
+        bail!("vendor/ is not synced; run `pcb sync` and commit the changes");
+    }
+    Ok(manifest_edits)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -441,6 +439,20 @@ fn run_resolution(
     prune_vendor: bool,
     mode: SyncMode,
 ) -> Result<()> {
+    let (manifest_edits, vendor_plan) =
+        plan_sync(workspace, targets, direct_overrides, prune_vendor)?;
+    match mode {
+        SyncMode::Write => apply_sync_plan(workspace, manifest_edits, vendor_plan, verbose),
+        SyncMode::Check => report_sync_drift(workspace, &manifest_edits, &vendor_plan),
+    }
+}
+
+fn plan_sync(
+    workspace: &WorkspaceInfo,
+    targets: &[AddTarget],
+    direct_overrides: Option<(&str, &DirectOverrides)>,
+    prune_vendor: bool,
+) -> Result<(Vec<ManifestEdit>, VendorPlan)> {
     let mut resolver = PackageResolver::new(workspace.clone())?;
     let mut selected_remote = BTreeSet::new();
     let mut manifest_edits = Vec::new();
@@ -463,11 +475,7 @@ fn run_resolution(
             .map(|(dep_id, version)| (dep_id, version)),
     )?;
     let vendor_plan = plan_vendor_selected(workspace, &package_roots, prune_vendor)?;
-
-    match mode {
-        SyncMode::Write => apply_sync_plan(workspace, manifest_edits, vendor_plan, verbose),
-        SyncMode::Check => report_sync_drift(workspace, &manifest_edits, &vendor_plan),
-    }
+    Ok((manifest_edits, vendor_plan))
 }
 
 fn apply_sync_plan(

@@ -21,8 +21,8 @@ use std::fmt;
 use std::path::Path;
 
 use crate::file_walker::{collect_zen_files, require_zen_file};
-use crate::pcb_mod::sync_targets;
 use crate::pcb_mod::target::add_target_for_package;
+use crate::pcb_mod::{ManifestEdit, plan_manifest_edits};
 use crate::release;
 
 /// Version bump type for publishing
@@ -747,66 +747,29 @@ fn collect_unpublishable_manifest_entries(manifest_path: &Path, manifest: &PcbTo
 
 /// Publish dirty packages in the workspace
 fn publish_packages(start_path: &Path, args: &PublishArgs) -> Result<()> {
-    if !args.check && !args.force && std::env::var("CI").is_err() {
+    if args.check {
+        // A check reads local tags only, so it runs on a read-only checkout.
+        let (mut workspace, dirty_urls, _) = load_dirty_packages(start_path)?;
+        let all_tags = git::list_all_tags_vec(&workspace.root);
+        return print_publish_plan(&mut workspace, &dirty_urls, &all_tags, args.bump);
+    }
+
+    if !args.force && std::env::var("CI").is_err() {
         bail!(
             "Package publishing is only supported in CI.\nUse --force to publish manually (only if you know what you're doing)."
         );
     }
 
-    let file_provider = DefaultFileProvider::new();
-    let workspace_root = find_workspace_root(&file_provider, start_path)?;
-    let remote = if args.check {
-        resolve_fetch_remote(&workspace_root)?
-    } else {
-        resolve_remote(&workspace_root, args.force)?
-    };
-
-    if args.check {
-        git::fetch_tags_without_pruning(&workspace_root, &remote)?;
-    } else {
-        eprintln!("Syncing with {}...", remote.cyan());
-        git::fetch_tags(&workspace_root, &remote)?;
-        if !args.force {
-            git::fetch_branch(&workspace_root, &remote, "main")?;
-            preflight_checks(&workspace_root, &remote)?;
-        }
+    let workspace_root = find_workspace_root(&DefaultFileProvider::new(), start_path)?;
+    let remote = resolve_remote(&workspace_root, args.force)?;
+    eprintln!("Syncing with {}...", remote.cyan());
+    git::fetch_tags(&workspace_root, &remote)?;
+    if !args.force {
+        git::fetch_branch(&workspace_root, &remote, "main")?;
+        preflight_checks(&workspace_root, &remote)?;
     }
 
-    let mut workspace = get_workspace_info(&file_provider, start_path)?;
-    let mut tags = git::list_peeled_tags(&workspace.root);
-    if args.check {
-        // A real publish prunes local-only tags first; the check leaves them
-        // alone but measures against the remote's tags just the same.
-        let on_remote: HashSet<String> = git::list_remote_tags(&workspace.root, &remote)?
-            .into_iter()
-            .collect();
-        tags.retain(|tag| on_remote.contains(&tag.name));
-    }
-    let tag_names: Vec<String> = tags.iter().map(|tag| tag.name.clone()).collect();
-    let changed_paths = pcb_zen::workspace::enrich_git_metadata(&mut workspace, tags);
-
-    // Fail on workspace discovery errors (invalid pcb.toml files)
-    if !workspace.errors.is_empty() {
-        for err in &workspace.errors {
-            eprintln!("{}", err.error);
-        }
-        bail!("Found {} invalid pcb.toml file(s)", workspace.errors.len());
-    }
-
-    // Get dirty packages
-    let directly_dirty: HashSet<String> = workspace
-        .packages
-        .iter()
-        .filter(|(_, p)| p.dirty)
-        .map(|(url, _)| url.clone())
-        .collect();
-
-    // Expand to include packages that depend on dirty packages (transitively)
-    // These need to be published because their pcb.toml will be bumped
-    let dirty_urls = expand_dirty_set(&workspace, &directly_dirty);
-    if args.check {
-        return print_publish_plan(&workspace, &dirty_urls, &tag_names, args.bump);
-    }
+    let (mut workspace, dirty_urls, changed_paths) = load_dirty_packages(start_path)?;
 
     if !args.no_build {
         // Packages can read only their own files, declared dependencies and the workspace manifest.
@@ -837,6 +800,7 @@ fn publish_packages(start_path: &Path, args: &PublishArgs) -> Result<()> {
     // Show summary and confirm
     let all_tags_list = git::list_all_tags_vec(&workspace.root);
     print_publish_summary("Summary", &workspace, &bump_map, &all_tags_list);
+    let plans = plan_publish_waves(&mut workspace, &bump_map, &waves, &all_tags_list)?;
 
     // Skip confirmation if --no-push (local testing mode) or --yes
     if !args.no_push && !args.yes {
@@ -859,7 +823,7 @@ fn publish_packages(start_path: &Path, args: &PublishArgs) -> Result<()> {
             .ok_or_else(|| anyhow::anyhow!("Failed to get initial commit"))?,
     );
 
-    publish_package_waves(&mut workspace, &bump_map, &waves, &mut guard)?;
+    publish_package_waves(&workspace, &plans, &mut guard)?;
 
     if guard.tags.is_empty() {
         guard.disarm();
@@ -916,105 +880,147 @@ fn publish_packages(start_path: &Path, args: &PublishArgs) -> Result<()> {
     Ok(())
 }
 
+/// Loads the workspace with the dirty packages and their transitive dependants,
+/// which must also publish because their pcb.toml pins get bumped.
+fn load_dirty_packages(
+    start_path: &Path,
+) -> Result<(WorkspaceInfo, HashSet<String>, Vec<std::path::PathBuf>)> {
+    let mut workspace = get_workspace_info(&DefaultFileProvider::new(), start_path)?;
+    let tags = git::list_peeled_tags(&workspace.root);
+    let changed_paths = pcb_zen::workspace::enrich_git_metadata(&mut workspace, tags);
+
+    // Fail on workspace discovery errors (invalid pcb.toml files)
+    if !workspace.errors.is_empty() {
+        for err in &workspace.errors {
+            eprintln!("{}", err.error);
+        }
+        bail!("Found {} invalid pcb.toml file(s)", workspace.errors.len());
+    }
+
+    let directly_dirty: HashSet<String> = workspace
+        .packages
+        .iter()
+        .filter(|(_, p)| p.dirty)
+        .map(|(url, _)| url.clone())
+        .collect();
+    let dirty_urls = expand_dirty_set(&workspace, &directly_dirty);
+    Ok((workspace, dirty_urls, changed_paths))
+}
+
 fn print_publish_plan(
-    workspace: &WorkspaceInfo,
+    workspace: &mut WorkspaceInfo,
     dirty_urls: &HashSet<String>,
     all_tags: &[String],
     bump: Option<BumpType>,
 ) -> Result<()> {
     let waves = compute_publish_waves(workspace, dirty_urls)?;
     let bumps = planned_bumps(workspace, &waves, bump, all_tags);
-    let packages = waves
-        .into_iter()
-        .flat_map(|mut wave| {
-            wave.sort();
-            wave
-        })
-        .map(|url| {
-            let pkg = &workspace.packages[&url];
-            let (current, next) =
-                package_version_step(pkg, workspace.path(), all_tags, bumps[&url]);
-            serde_json::json!({
+    let plans = plan_publish_waves(workspace, &bumps, &waves, all_tags)?;
+
+    let mut packages = Vec::new();
+    let mut wave_reports = Vec::new();
+    for plan in &plans {
+        let manifests: serde_json::Map<_, _> = plan
+            .manifest_edits
+            .iter()
+            .map(|edit| {
+                let path = edit
+                    .path
+                    .strip_prefix(&workspace.root)
+                    .unwrap_or(&edit.path);
+                (
+                    path.to_string_lossy().into_owned(),
+                    edit.rendered.clone().into(),
+                )
+            })
+            .collect();
+        for (url, c) in &plan.candidates {
+            let pkg = &workspace.packages[url];
+            let current = current_package_version(pkg, workspace.path(), all_tags);
+            packages.push(serde_json::json!({
                 "path": pkg.rel_path.to_string_lossy(),
                 "current": current.map(|version| version.to_string()),
-                "version": next.to_string(),
-                "tag": compute_tag_name(pkg, &next, workspace),
-            })
-        })
-        .collect::<Vec<_>>();
-    println!("{}", serde_json::json!({ "packages": packages }));
+                "version": c.next_version.to_string(),
+                "tag": c.tag_name,
+                "message": format_tag_message(url, c),
+            }));
+        }
+        let tags: Vec<_> = plan.candidates.values().map(|c| &c.tag_name).collect();
+        wave_reports.push(serde_json::json!({ "manifests": manifests, "tags": tags }));
+    }
+    println!(
+        "{}",
+        serde_json::json!({ "packages": packages, "waves": wave_reports })
+    );
     Ok(())
 }
 
-fn publish_package_waves(
+/// One publish wave: an optional dependency-bump commit, then the wave's tags.
+struct WavePlan {
+    manifest_edits: Vec<ManifestEdit>,
+    candidates: BTreeMap<String, PublishCandidate>,
+}
+
+/// Plans every wave without writing to the working tree or Git.
+fn plan_publish_waves(
     workspace: &mut WorkspaceInfo,
     bump_map: &BTreeMap<String, ReleaseBump>,
     waves: &[Vec<String>],
-    guard: &mut PublishGuard,
-) -> Result<()> {
+    all_tags: &[String],
+) -> Result<Vec<WavePlan>> {
+    let mut plans = Vec::new();
     for wave_urls in waves {
         // Let `pcb sync` freeze this wave's manifests against the latest
-        // workspace versions, including the tags of previous waves.
-        if sync_dependency_wave(workspace, wave_urls, guard)? {
-            workspace.reload()?;
+        // workspace versions, including the versions planned for previous waves.
+        let targets: Vec<_> = wave_urls
+            .iter()
+            .map(|url| add_target_for_package(&workspace.root, url, &workspace.packages[url]))
+            .collect();
+        let manifest_edits = plan_manifest_edits(workspace, &targets)?;
+        for target in &targets {
+            if let Some(edit) = manifest_edits
+                .iter()
+                .find(|edit| edit.path == target.pcb_toml_path)
+            {
+                workspace
+                    .packages
+                    .get_mut(&target.package_url)
+                    .unwrap()
+                    .config = PcbToml::parse_with_path(&edit.rendered, &edit.path)?;
+            }
         }
 
-        publish_wave(workspace, bump_map, wave_urls, &mut guard.tags)?;
+        // Each package is in one wave, so earlier waves' tags never change its next version.
+        let candidates = build_candidates(workspace, bump_map, wave_urls, all_tags);
+        for (url, c) in &candidates {
+            workspace.packages.get_mut(url).unwrap().version = Some(c.next_version.to_string());
+        }
+        plans.push(WavePlan {
+            manifest_edits,
+            candidates,
+        });
     }
-
-    Ok(())
+    Ok(plans)
 }
 
-fn sync_dependency_wave(
+fn publish_package_waves(
     workspace: &WorkspaceInfo,
-    package_urls: &[String],
+    plans: &[WavePlan],
     guard: &mut PublishGuard,
-) -> Result<bool> {
-    let targets: Vec<_> = package_urls
-        .iter()
-        .filter_map(|url| {
-            workspace
-                .packages
-                .get(url)
-                .map(|pkg| add_target_for_package(&workspace.root, url, pkg))
-        })
-        .collect();
-    if targets.is_empty() {
-        return Ok(false);
-    }
-
-    let had_commits = guard.has_commits;
-    guard.has_commits = true;
-    sync_targets(workspace, &targets, false, false)?;
-    if !git::has_uncommitted_changes(&workspace.root)? {
-        guard.has_commits = had_commits;
-        return Ok(false);
-    }
-
-    git::commit_with_trailers(&workspace.root, DEPENDENCY_BUMP_TITLE)?;
-    Ok(true)
-}
-
-/// Publish a single wave of packages.
-fn publish_wave(
-    workspace: &mut WorkspaceInfo,
-    bump_map: &BTreeMap<String, ReleaseBump>,
-    package_urls: &[String],
-    created_tags: &mut Vec<String>,
 ) -> Result<()> {
-    let all_tags = git::list_all_tags_vec(&workspace.root);
-
-    // Build candidates with fresh tags after any wave-boundary sync commit.
-    let candidates = build_candidates(workspace, bump_map, package_urls, &all_tags);
-
-    for (url, c) in &candidates {
-        git::create_tag(&workspace.root, &c.tag_name, &format_tag_message(url, c))?;
-        created_tags.push(c.tag_name.clone());
-        if let Some(pkg) = workspace.packages.get_mut(url) {
-            pkg.version = Some(c.next_version.to_string());
+    for plan in plans {
+        if !plan.manifest_edits.is_empty() {
+            guard.has_commits = true;
+            for edit in &plan.manifest_edits {
+                edit.apply()?;
+            }
+            git::commit_with_trailers(&workspace.root, DEPENDENCY_BUMP_TITLE)?;
+        }
+        for (url, c) in &plan.candidates {
+            git::create_tag(&workspace.root, &c.tag_name, &format_tag_message(url, c))?;
+            guard.tags.push(c.tag_name.clone());
         }
     }
-
     Ok(())
 }
 
@@ -1863,10 +1869,12 @@ P1 = io(Net)
         let waves = compute_publish_waves(&workspace, &dirty_urls).unwrap();
         let bump_map = uniform_bump_map(&waves, ReleaseBump::Minor);
         let head_before_publish = git::rev_parse(&workspace.root, "HEAD").unwrap();
+        let all_tags = git::list_all_tags_vec(&workspace.root);
+        let plans = plan_publish_waves(&mut workspace, &bump_map, &waves, &all_tags).unwrap();
 
         {
             let mut guard = PublishGuard::new(&workspace.root, head_before_publish.clone());
-            publish_package_waves(&mut workspace, &bump_map, &waves, &mut guard).unwrap();
+            publish_package_waves(&workspace, &plans, &mut guard).unwrap();
 
             assert_eq!(guard.tags, vec!["modules/Dep/v1.3.0", "modules/App/v1.3.0"]);
             assert!(guard.has_commits);

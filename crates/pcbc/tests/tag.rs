@@ -84,24 +84,25 @@ fn test_publish_board_with_patches() {
 #[test]
 fn test_publish_check_reports_package_versions() {
     let mut sb = Sandbox::new();
-    sb.write("pcb.toml", PCB_TOML)
-        .write("modules/Foo/pcb.toml", "")
-        .write("modules/Foo/Foo.zen", "P1 = io(Net)\n")
-        .init_git()
-        .commit("feat: add Foo")
-        .tag("modules/Foo/v0.2.0")
-        .write("modules/Foo/Foo.zen", "P1 = io(Net)\nP2 = io(Net)\n")
-        .write("modules/Bar/pcb.toml", "")
-        .write("modules/Bar/Bar.zen", "P1 = io(Net)\n")
-        .commit("feat: add Bar, extend Foo");
-    sb.cmd("git", ["push", "-q", "origin", "main", "--tags"])
-        .run()
-        .unwrap();
-    // A local-only tag is pruned by a real publish, so the plan ignores it.
-    sb.cmd("git", ["tag", "modules/Foo/v5.0.0", "HEAD"])
-        .run()
-        .unwrap();
-
+    sb.write(
+        "pcb.toml",
+        "[workspace]\npcb-version = \"0.4\"\nrepository = \"github.com/acme/registry\"\n",
+    )
+    .write("modules/Foo/pcb.toml", "")
+    .write("modules/Foo/Foo.zen", "P1 = io(Net)\n")
+    .init_git()
+    .commit("feat: add Foo")
+    .tag("modules/Foo/v0.2.0")
+    .write("modules/Foo/Foo.zen", "P1 = io(Net)\nP2 = io(Net)\n")
+    .write(
+        "modules/Bar/pcb.toml",
+        "[dependencies]\n\"github.com/acme/registry/modules/Foo\" = \"0.2.0\"\n",
+    )
+    .write(
+        "modules/Bar/Bar.zen",
+        "Foo = Module(\"github.com/acme/registry/modules/Foo/Foo.zen\")\nP1 = io(Net)\n",
+    )
+    .commit("feat: add Bar, extend Foo");
     let output = sb
         .run("pcbc", ["publish", "--check"])
         .stdout_capture()
@@ -109,15 +110,30 @@ fn test_publish_check_reports_package_versions() {
         .run()
         .unwrap();
     let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    // Bar's bump commit pins the Foo version that the first wave tags.
     assert_eq!(
         report,
-        serde_json::json!({ "packages": [
-            { "path": "modules/Bar", "current": null, "version": "0.1.0", "tag": "modules/Bar/v0.1.0" },
-            { "path": "modules/Foo", "current": "0.2.0", "version": "0.2.1", "tag": "modules/Foo/v0.2.1" },
-        ]})
+        serde_json::json!({
+            "packages": [
+                {
+                    "path": "modules/Foo", "current": "0.2.0", "version": "0.2.1", "tag": "modules/Foo/v0.2.1",
+                    "message": "github.com/acme/registry/modules/Foo v0.2.1",
+                },
+                {
+                    "path": "modules/Bar", "current": null, "version": "0.1.0", "tag": "modules/Bar/v0.1.0",
+                    "message": "github.com/acme/registry/modules/Bar v0.1.0",
+                },
+            ],
+            "waves": [
+                { "manifests": {}, "tags": ["modules/Foo/v0.2.1"] },
+                {
+                    "manifests": {
+                        "modules/Bar/pcb.toml": "[dependencies]\n\"github.com/acme/registry/modules/Foo\" = \"0.2.1\"\n",
+                    },
+                    "tags": ["modules/Bar/v0.1.0"],
+                },
+            ],
+        })
     );
-    assert_eq!(
-        sb.cmd("git", ["tag"]).read().unwrap(),
-        "modules/Foo/v0.2.0\nmodules/Foo/v5.0.0"
-    );
+    assert_eq!(sb.cmd("git", ["tag"]).read().unwrap(), "modules/Foo/v0.2.0");
 }

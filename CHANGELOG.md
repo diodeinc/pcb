@@ -12,6 +12,12 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 - `pcb ipc2581 edit provenance` records a production run's parties, BOM header, history attributes, and configuration properties in the IPC-2581 file; board arrays keep them and `pcb ipc2581 info --format json` reports them under `provenance`.
 - The IPC-2581 parser keeps every Enterprise, Person, and Role attribute, HistoryRecord `lifecyclePhase`, `externalConfigurationEntryPoint` and ChangeRecs, and `Property@name`.
+- `pcb publish --check` adds each package's tag message and lists each publish wave with its bumped `pcb.toml` contents and its tags, so a caller can create the publish commits and tags itself.
+
+### Changed
+
+- `pcb publish --check` reads local tags and makes no Git writes; fetch tags before running it.
+- `pcb publish` fails instead of vendoring packages when `vendor/` is not synced.
 
 ## [0.4.77] - 2026-10-13
 
