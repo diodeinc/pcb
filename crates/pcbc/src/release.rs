@@ -1,9 +1,6 @@
 use anyhow::{Context, Result};
 use clap::ValueEnum;
 use log::{debug, warn};
-use pcb_ipc2581_tools::manufacturing::{ManufacturingExportOptions, export_manufacturing_package};
-use pcb_ir::dialects::ipc::ArtworkScope;
-use pcb_ir::geom::{GeometryAccuracy, Resolution};
 use pcb_kicad::{KiCadCliBuilder, ensure_board_compatible_with_installed_kicad};
 use pcb_layout::utils as layout_utils;
 use pcb_ui::{Colorize, Spinner, Style, StyledText};
@@ -31,7 +28,6 @@ use pcb_zen::git;
 #[value(rename_all = "lowercase")]
 pub enum ArtifactType {
     Drc,
-    Gerbers,
     Ipc2581,
 }
 
@@ -1055,7 +1051,7 @@ fn add_directory_to_zip<W: std::io::Write + std::io::Seek>(
     Ok(())
 }
 
-/// Export IPC once, then derive the board's manufacturing package from it.
+/// Export the board's IPC-2581 manufacturing file.
 fn generate_manufacturing(
     info: &ReleaseInfo,
     excluded: &[ArtifactType],
@@ -1064,42 +1060,14 @@ fn generate_manufacturing(
     let Some(kicad_pcb_path) = info.staged_pcb_path() else {
         return Ok(());
     };
-    let gerbers = !excluded.contains(&ArtifactType::Gerbers);
-    let ipc2581 = !excluded.contains(&ArtifactType::Ipc2581);
-    if gerbers || ipc2581 {
-        let manufacturing_dir = info.staging_dir.join("manufacturing");
-        fs::create_dir_all(&manufacturing_dir)?;
-        // IPC is also an intermediate when its published artifact is excluded.
-        let temporary = tempfile::tempdir()?;
-        let ipc2581_path = temporary.path().join("ipc2581.xml");
-        execute_task(info, "Generating IPC-2581 file", start_time, |_, _| {
-            export_ipc2581(&kicad_pcb_path, &ipc2581_path)
-        })?;
-        if gerbers {
-            execute_task(
-                info,
-                "Generating Gerber and drill files",
-                start_time,
-                |_, _| {
-                    export_manufacturing_package(
-                        &ipc2581_path,
-                        &manufacturing_dir.join("gerbers.zip"),
-                        &ManufacturingExportOptions {
-                            view: ArtworkScope::Board,
-                            include_auxiliary_layers: true,
-                            relief_debug_dir: None,
-                        },
-                        Resolution::default().with_accuracy(GeometryAccuracy::micrometres(1)),
-                    )?;
-                    Ok(())
-                },
-            )?;
-        }
-        if ipc2581 {
-            fs::copy(&ipc2581_path, manufacturing_dir.join("ipc2581.xml"))?;
-        }
+    if excluded.contains(&ArtifactType::Ipc2581) {
+        return Ok(());
     }
-    Ok(())
+    let manufacturing_dir = info.staging_dir.join("manufacturing");
+    fs::create_dir_all(&manufacturing_dir)?;
+    execute_task(info, "Generating IPC-2581 file", start_time, |_, _| {
+        export_ipc2581(&kicad_pcb_path, &manufacturing_dir.join("ipc2581.xml"))
+    })
 }
 
 pub(crate) fn export_ipc2581(kicad_pcb_path: &Path, ipc2581_path: &Path) -> Result<()> {

@@ -11,6 +11,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ### Changed
 
 - `pcb publish --check` builds the packages it would publish, unless `--no-build` is given.
+- `pcb publish` no longer generates Gerbers.
 
 ## [0.4.79] - 2026-10-13
 

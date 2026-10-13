@@ -19,7 +19,6 @@ const defaults = {
 
 const excludedArtifacts = [
   'drc',
-  'gerbers',
   'ipc2581',
 ]
 
