@@ -750,10 +750,13 @@ pub(crate) fn observed_reconcilable_connectivity(
             .flat_map(|group| group.names)
             .collect::<BTreeSet<_>>();
         kept.extend(netlist.nets.values().map(|net| net.name.clone()));
-        observed
-            .graph
-            .groups
-            .retain(|group| !pinless(group) || group.names.iter().any(|name| kept.contains(name)));
+        observed.graph.groups.retain_mut(|group| {
+            if !pinless(group) {
+                return true;
+            }
+            group.names.retain(|name| kept.contains(name));
+            !group.names.is_empty()
+        });
     }
     Ok(observed)
 }
@@ -1416,6 +1419,8 @@ mod tests {
             SchItem::Label(Label::new("a", "N1", Point::new(0.0, 0.0))),
             SchItem::Label(Label::new("b", "N2", Point::new(0.0, 0.0))),
             SchItem::Label(Label::new("c", "EXTRA", Point::new(10.0, 0.0))),
+            // A netlist name on the same pinless island does not keep EXTRA.
+            SchItem::Label(Label::new("d", "N1", Point::new(10.0, 0.0))),
         ]);
 
         let analysis = inspect_schematic(&document_with_pages(vec![page]), &netlist)
