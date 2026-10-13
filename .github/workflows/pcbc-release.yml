@@ -120,11 +120,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          which clang lld-link llvm-lib || true
-          if ! command -v lld-link >/dev/null || ! command -v clang-cl >/dev/null; then
-            sudo apt-get update
-            sudo apt-get install -y clang lld llvm
-          fi
+          # The MSVC STL headers require clang >= 19.
+          sudo apt-get update
+          sudo apt-get install -y clang-19 lld-19 llvm-19
+          echo "/usr/lib/llvm-19/bin" >> "$GITHUB_PATH"
           python3 -m venv "$RUNNER_TEMP/xw"
           "$RUNNER_TEMP/xw/bin/pip" install -q cargo-xwin
           echo "$RUNNER_TEMP/xw/bin" >> "$GITHUB_PATH"
