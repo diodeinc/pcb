@@ -327,14 +327,13 @@ fn list_span(list: &[Sexpr]) -> Option<Span> {
 
 fn collect_data_payload(data_list: &[Sexpr]) -> Option<String> {
     let raw = collect_child_atom_text(data_list, 1)?;
-    Some(
-        raw.trim()
-            .trim_start_matches('|')
-            .trim_end_matches('|')
-            .chars()
-            .filter(|ch| !ch.is_whitespace())
-            .collect(),
-    )
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return Some(String::new());
+    }
+    // KiCad reads the payload between `|` delimiters and fails without them.
+    let payload = raw.strip_prefix('|')?.strip_suffix('|')?;
+    Some(payload.chars().filter(|ch| !ch.is_whitespace()).collect())
 }
 
 fn collect_child_atom_text(list: &[Sexpr], start: usize) -> Option<String> {
@@ -400,6 +399,14 @@ mod tests {
         let err = validate_footprint_source(&footprint_with_data(&data, "00")).unwrap_err();
         assert!(err.to_string().contains("checksum mismatch"));
         assert!(err.to_string().contains("stored 00"));
+    }
+
+    #[test]
+    fn unterminated_data_fails() {
+        let (data, checksum) = embedded_payload(b"step model bytes");
+        let source = footprint_with_data(&data, &checksum).replace("|)", ")");
+        let err = validate_footprint_source(&source).unwrap_err();
+        assert!(err.to_string().contains("invalid data payload"));
     }
 
     #[test]
