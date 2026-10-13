@@ -68,6 +68,7 @@ jobs:
             echo "No changes to commit (version already set)"
           else
             git commit -m "Release $VERSION"
+            git pull --rebase origin main
             git push origin main
           fi
           git tag "$VERSION"
