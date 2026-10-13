@@ -94,7 +94,7 @@ pub fn source_effective_netlist(schematic: &Schematic) -> Result<EffectiveNetlis
                 .entry(file)
                 .or_insert_with_key(|file| {
                     let text = std::fs::read_to_string(file).ok()?;
-                    Some(pcb_sexpr::kicad::footprint::pad_numbers(&text))
+                    Some(pcb_sexpr::kicad::footprint::all_pad_numbers(&text))
                 })
                 .clone()
         }) {
@@ -545,6 +545,65 @@ mod tests {
         }
         n.rebuild_nets();
         n
+    }
+
+    #[test]
+    fn source_expects_only_pads_the_footprint_defines() -> anyhow::Result<()> {
+        use pcb_sch::{Instance, InstanceRef, ModuleRef, Net};
+
+        let dir = tempfile::tempdir()?;
+        let footprint = dir.path().join("Shielded.kicad_mod");
+        std::fs::write(
+            &footprint,
+            r#"(footprint "Shielded"
+              (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu"))
+              (pad "MH" np_thru_hole circle (at 2 0) (size 1 1) (drill 1) (layers "*.Cu")))"#,
+        )?;
+        let module = ModuleRef::new("/test.zen", "<root>");
+        let instance = |path: &[&str]| {
+            InstanceRef::new(module.clone(), path.iter().map(|s| s.to_string()).collect())
+        };
+        let mut schematic = Schematic::new();
+        let mut component = Instance::component(module.clone());
+        component.attributes.insert(
+            "footprint".into(),
+            AttributeValue::String(footprint.to_string_lossy().into_owned()),
+        );
+        schematic.add_instance(instance(&["J1"]), component);
+        // The symbol pin `S1` has no pad, as KiCad allows; `MH` is a non-plated hole.
+        let mut ports = Vec::new();
+        for (port, pad) in [("P", "1"), ("SHIELD", "S1"), ("MOUNT", "MH")] {
+            let mut instance_value = Instance::new(module.clone(), InstanceKind::Port);
+            instance_value.attributes.insert(
+                "pads".into(),
+                AttributeValue::Array(vec![AttributeValue::String(pad.to_string())]),
+            );
+            let port_ref = instance(&["J1", port]);
+            schematic.add_instance(port_ref.clone(), instance_value);
+            ports.push(port_ref);
+        }
+        schematic.nets.insert(
+            "GND".to_string(),
+            Net {
+                kind: "Net".to_string(),
+                id: 1,
+                name: "GND".to_string(),
+                ports,
+                properties: Default::default(),
+            },
+        );
+
+        let effective = source_effective_netlist(&schematic)?;
+
+        assert_eq!(
+            effective.footprints["J1"].pads,
+            BTreeSet::from(["1".to_string(), "MH".to_string()])
+        );
+        assert_eq!(
+            effective.nets["GND"],
+            BTreeSet::from([port("J1", "1"), port("J1", "MH")])
+        );
+        Ok(())
     }
 
     #[test]

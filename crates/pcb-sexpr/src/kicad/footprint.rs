@@ -93,6 +93,16 @@ pub fn validate_footprint_source(source: &str) -> Result<(), FootprintValidation
 /// Scans the text instead of parsing it: embedded 3D models make footprints
 /// megabytes of base64 around a handful of pads.
 pub fn pad_numbers(source: &str) -> BTreeSet<String> {
+    scan_pad_numbers(source, false)
+}
+
+/// Numbers of every pad of a footprint, non-plated holes included, as a
+/// board lists the pads of a placed footprint.
+pub fn all_pad_numbers(source: &str) -> BTreeSet<String> {
+    scan_pad_numbers(source, true)
+}
+
+fn scan_pad_numbers(source: &str, non_plated: bool) -> BTreeSet<String> {
     let mut depth = 0usize;
     crate::scan::parens(source)
         .filter_map(|(offset, opening)| {
@@ -108,7 +118,7 @@ pub fn pad_numbers(source: &str) -> BTreeSet<String> {
             }
             let (number, rest) = first_atom(pad)?;
             let (kind, _) = first_atom(rest)?;
-            (kind != "np_thru_hole").then_some(number)
+            (non_plated || kind != "np_thru_hole").then_some(number)
         })
         .collect()
 }
@@ -371,6 +381,10 @@ mod tests {
         assert_eq!(
             pad_numbers(source).into_iter().collect::<Vec<_>>(),
             ["", "2", "A1"]
+        );
+        assert_eq!(
+            all_pad_numbers(source).into_iter().collect::<Vec<_>>(),
+            ["", "2", "3", "A1"]
         );
     }
 
