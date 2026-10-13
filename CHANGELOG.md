@@ -18,6 +18,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 - `pcb publish --check` reads local tags only and makes no Git writes.
 - `pcb publish` fails when `vendor/` is not synced.
+- The DFM report database documents its tables and columns in SQL comments that `sqlite3 report.dfm .schema` shows: units, coordinate frames, and the keys of its JSON columns.
 
 ## [0.4.77] - 2026-10-13
 
