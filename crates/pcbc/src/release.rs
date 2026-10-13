@@ -33,7 +33,6 @@ pub enum ArtifactType {
     Drc,
     Gerbers,
     Ipc2581,
-    Vrml,
 }
 
 /// All information gathered during the release preparation phase
@@ -1100,11 +1099,6 @@ fn generate_manufacturing(
             fs::copy(&ipc2581_path, manufacturing_dir.join("ipc2581.xml"))?;
         }
     }
-    if !excluded.contains(&ArtifactType::Vrml) {
-        execute_task(info, "Generating VRML model", start_time, |info, _| {
-            generate_vrml_model(info)
-        })?;
-    }
     Ok(())
 }
 
@@ -1124,47 +1118,6 @@ pub(crate) fn export_ipc2581(kicad_pcb_path: &Path, ipc2581_path: &Path) -> Resu
         .arg(kicad_pcb_path.to_string_lossy())
         .run()
         .context("Failed to generate IPC-2581 file")?;
-
-    Ok(())
-}
-
-/// Generate VRML model
-fn generate_vrml_model(info: &ReleaseInfo) -> Result<()> {
-    let models_dir = info.staging_dir.join("3d");
-    fs::create_dir_all(&models_dir)?;
-
-    let kicad_pcb_path = info
-        .staged_pcb_path()
-        .context("No layout directory for VRML model generation")?;
-
-    // Create a temp file to capture and discard verbose KiCad output
-    let devnull = tempfile::tempfile()?;
-
-    // Generate VRML model - KiCad CLI has platform-specific exit code issues
-    let wrl_path = models_dir.join("model.wrl");
-    let wrl_result = KiCadCliBuilder::new()
-        .command("pcb")
-        .subcommand("export")
-        .subcommand("vrml")
-        .arg("--output")
-        .arg(wrl_path.to_string_lossy())
-        .arg("--units")
-        .arg("mm")
-        .arg("--no-dnp")
-        // FIXME: kicad-imported projects have unspecified footprints, so allow these temporarily
-        // .arg("--no-unspecified")
-        .arg(kicad_pcb_path.to_string_lossy())
-        .log_file(devnull)
-        .suppress_error_output(true)
-        .run();
-
-    if let Err(e) = wrl_result {
-        if wrl_path.exists() {
-            warn!("KiCad CLI reported error but VRML file was created: {e}");
-        } else {
-            return Err(e).context("Failed to generate VRML model");
-        }
-    }
 
     Ok(())
 }

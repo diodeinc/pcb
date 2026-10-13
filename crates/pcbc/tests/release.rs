@@ -145,8 +145,6 @@ fn source_only_args(board_zen: &str) -> Vec<&str> {
         "gerbers",
         "--exclude",
         "ipc2581",
-        "--exclude",
-        "vrml",
     ]
 }
 
@@ -632,7 +630,6 @@ fn test_publish_board_full() {
         .hash_globs(["*.kicad_mod", "**/diodeinc/stdlib/*.zen", "**/netlist.json"])
         .ignore_globs([
             "layout/*",
-            "3d/*",
             "manufacturing/*.xml",
             "manufacturing/*.html",
             "**/vendor/**",
@@ -726,8 +723,6 @@ fn test_publish_board_full() {
             "-S",
             "layout",
             "--no-push",
-            "--exclude",
-            "vrml",
         ];
         for artifact in &excluded {
             args.extend(["--exclude", artifact]);
