@@ -49,6 +49,7 @@ pcb-native-dialog = { path = "crates/pcb-native-dialog" }
 pcb-ipc2581-tools = { path = "crates/pcb-ipc2581-tools", default-features = false }
 pcb-step = { path = "crates/pcb-step" }
 pcb-gltf = { path = "crates/pcb-gltf" }
+rectify = { path = "crates/rectify" }
 
 anyhow = "1.0"
 anstream = "1.0"

@@ -58,7 +58,7 @@ contacts outside their expected targets, or an implausible support plane.
 
 ## Developer commands
 
-The `pcb-rectify` binary also provides `solve`, `patch`, `audit`, and `bench` for
+`pcb rectify` also provides `solve`, `patch`, `audit`, and `bench` for
 solver development. These commands are hidden from the normal
 `pcb rectify --help` output. Set `RUST_LOG=warn` or a narrower filter to enable
 diagnostic logging.
@@ -71,11 +71,11 @@ starting transform before solving, so the benchmark measures geometry-based
 inference rather than preservation of the existing value.
 
 ```bash
-pcb-rectify bench path/to/components
-pcb-rectify bench path/to/components --mode strict
-pcb-rectify bench path/to/components --kind smd
-pcb-rectify bench path/to/components --initial-transform-seed 2
-pcb-rectify bench path/to/components --jsonl
+pcb rectify bench path/to/components
+pcb rectify bench path/to/components --mode strict
+pcb rectify bench path/to/components --kind smd
+pcb rectify bench path/to/components --initial-transform-seed 2
+pcb rectify bench path/to/components --jsonl
 ```
 
 Use `--use-stored-initial-transform` only when comparing against the older

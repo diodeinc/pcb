@@ -160,7 +160,6 @@ jobs:
             export CFLAGS="-Du_int8_t=uint8_t -Du_int16_t=uint16_t -Du_int32_t=uint32_t -Du_int64_t=uint64_t"
           fi
           cargo build --profile dist -p pcbc --bin pcbc --target "$TARGET"
-          cargo build --profile dist -p rectify --bin pcb-rectify --target "$TARGET"
 
       - name: Prepare artifacts
         shell: bash
@@ -169,7 +168,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p artifacts
-          for bin in pcbc pcb-rectify; do
+          for bin in pcbc; do
             exe="$bin"
             artifact="$bin-$TARGET"
             if [[ "$TARGET" == *windows* ]]; then

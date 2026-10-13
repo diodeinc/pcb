@@ -14,8 +14,6 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-const BUNDLED_EXTERNAL_COMMANDS: &[&str] = &["rectify"];
-
 mod apply;
 mod bom;
 mod build;
@@ -193,6 +191,9 @@ enum Commands {
     /// Export a KiCad board to glTF (GLB) without kicad-cli
     Gltf(gltf::GltfArgs),
 
+    /// Check footprint <-> 3d model alignment in .kicad_mod file
+    Rectify(rectify::RectifyArgs),
+
     /// External subcommands are forwarded to pcb-<command>
     #[command(external_subcommand)]
     External(Vec<OsString>),
@@ -219,6 +220,9 @@ fn run() -> anyhow::Result<()> {
     // Must happen before tracing subscriber to avoid conflicts
     let env = if cli.debug {
         Env::default().default_filter_or("debug")
+    } else if matches!(cli.command, Commands::Rectify(_)) {
+        // foxtrot's STEP parser logs errors that are not actionable for rectify.
+        Env::default().default_filter_or("off")
     } else {
         Env::default().default_filter_or("error")
     };
@@ -269,6 +273,7 @@ fn run() -> anyhow::Result<()> {
         Commands::Gerber(args) => gerber::execute(args, resolution),
         Commands::Step(args) => step::execute(args),
         Commands::Gltf(args) => gltf::execute(args),
+        Commands::Rectify(args) => rectify::execute(args),
         Commands::External(args) => execute_external(args),
     }
 }
@@ -283,11 +288,7 @@ fn execute_external(args: Vec<OsString>) -> anyhow::Result<()> {
     let external_args = &args[1..];
     let candidates = external_command_candidates(&command);
 
-    // First-party sidecars belong to the selected pcbc toolchain, so prefer the
-    // sibling binary over an unrelated executable on PATH. Third-party
-    // extensions retain PATH-first behavior.
-    let sibling_first = BUNDLED_EXTERNAL_COMMANDS.contains(&command.as_ref());
-    for program in external_command_programs(&candidates, sibling_first) {
+    for program in external_command_programs(&candidates) {
         if try_external_program(&program, external_args)? {
             return Ok(());
         }
@@ -302,32 +303,17 @@ fn execute_external(args: Vec<OsString>) -> anyhow::Result<()> {
 }
 
 fn external_command_candidates(command: &str) -> Vec<String> {
-    // Both first-party bundled sidecars (e.g. `pcb-rectify`) and third-party
-    // extensions follow the `pcb-<command>` naming convention. Bundled sidecars
-    // are installed next to `pcbc` in the toolchain dir and found by the sibling
-    // search; extensions are found on PATH.
+    // Extensions follow the `pcb-<command>` naming convention and are found on
+    // PATH or next to `pcbc`.
     vec![format!("pcb-{command}")]
 }
 
-fn external_command_programs(candidates: &[String], sibling_first: bool) -> Vec<PathBuf> {
+fn external_command_programs(candidates: &[String]) -> Vec<PathBuf> {
+    let path_commands = candidates.iter().map(PathBuf::from);
     let siblings = candidates
         .iter()
-        .filter_map(|candidate| sibling_external_command(candidate))
-        .collect();
-    let path_commands = candidates.iter().map(PathBuf::from).collect();
-    order_external_programs(siblings, path_commands, sibling_first)
-}
-
-fn order_external_programs(
-    siblings: Vec<PathBuf>,
-    path_commands: Vec<PathBuf>,
-    sibling_first: bool,
-) -> Vec<PathBuf> {
-    if sibling_first {
-        siblings.into_iter().chain(path_commands).collect()
-    } else {
-        path_commands.into_iter().chain(siblings).collect()
-    }
+        .filter_map(|candidate| sibling_external_command(candidate));
+    path_commands.chain(siblings).collect()
 }
 
 fn try_external_program(program: &Path, args: &[OsString]) -> anyhow::Result<bool> {
@@ -409,26 +395,5 @@ mod tests {
                 Cli::try_parse_from(["pcb", "--accuracy-um", value, "ipc", "info", "board.xml"]);
             assert!(result.is_err(), "accepted {value}");
         }
-    }
-
-    #[test]
-    fn external_command_order_preserves_bundle_and_extension_precedence() {
-        let bundled = PathBuf::from("/toolchain/pcb-rectify");
-        let path_rectify = PathBuf::from("pcb-rectify");
-        assert_eq!(
-            order_external_programs(vec![bundled.clone()], vec![path_rectify.clone()], true),
-            vec![bundled, path_rectify]
-        );
-
-        let bundled_extension = PathBuf::from("/toolchain/pcb-vendor-extension");
-        let path_extension = PathBuf::from("pcb-vendor-extension");
-        assert_eq!(
-            order_external_programs(
-                vec![bundled_extension.clone()],
-                vec![path_extension.clone()],
-                false
-            ),
-            vec![path_extension, bundled_extension]
-        );
     }
 }

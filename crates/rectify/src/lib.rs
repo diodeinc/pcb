@@ -8,7 +8,7 @@ extern crate anstream;
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
-use clap::{Args as ClapArgs, Parser, Subcommand, ValueEnum};
+use clap::{Args as ClapArgs, Subcommand, ValueEnum};
 
 mod audit;
 mod bench;
@@ -21,14 +21,8 @@ mod progress;
 mod raster;
 mod solver;
 
-#[derive(Parser, Debug)]
-#[command(
-    name = "pcb-rectify",
-    bin_name = "pcb rectify",
-    about = "Check footprint <-> 3d model alignment in .kicad_mod file",
-    version
-)]
-struct Cli {
+#[derive(ClapArgs, Debug)]
+pub struct RectifyArgs {
     #[command(subcommand)]
     command: Command,
 }
@@ -211,17 +205,8 @@ enum Command {
     },
 }
 
-fn main() -> Result<()> {
-    // Default to silent: foxtrot's STEP parser can emit noisy diagnostics that
-    // are not actionable here. Users can opt in with RUST_LOG=warn or a
-    // narrower filter.
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("off"))
-        .format_timestamp(None)
-        .try_init()
-        .ok();
-
-    let cli = Cli::parse();
-    match cli.command {
+pub fn execute(args: RectifyArgs) -> Result<()> {
+    match args.command {
         Command::Check(args) => run_check(args),
         Command::Fix(args) => run_fix(args),
         Command::Patch {
