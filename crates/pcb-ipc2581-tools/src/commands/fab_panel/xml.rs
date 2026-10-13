@@ -217,6 +217,8 @@ pub(super) fn render_fab_panel_xml(
         &mut writer,
         &jiff::Timestamp::now().to_string(),
         "Created fabrication panel",
+        None,
+        &[],
     );
     write_ecad(
         &mut writer,

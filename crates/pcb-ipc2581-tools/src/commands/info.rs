@@ -726,6 +726,8 @@ pub fn info_json(
         }
     }
 
+    info["provenance"] = serde_json::to_value(accessor.provenance())?;
+
     // Board dimensions
     if let Some(dimensions) = layout
         .as_ref()

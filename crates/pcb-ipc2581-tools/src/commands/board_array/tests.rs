@@ -440,6 +440,47 @@ fn generated_board_array_xml_validates_with_existing_history_and_callouts() {
 }
 
 #[test]
+fn board_arrays_carry_the_recorded_provenance() {
+    let input = schema_valid_board_fixture_mm().replace(
+        "  <Ecad",
+        r#"  <Bom name="bom">
+    <BomHeader assembly="board" revision="1"/>
+    <BomItem OEMDesignNumberRef="r" quantity="1" category="ELECTRICAL">
+      <Characteristics category="ELECTRICAL"/>
+    </BomItem>
+  </Bom>
+  <Ecad"#,
+    );
+    let provenance = serde_json::from_str(include_str!("../testdata/provenance.json")).unwrap();
+    let board = crate::commands::provenance_edit::set_provenance(&input, &provenance).unwrap();
+    let recorded = |xml: &str| {
+        let mut provenance = IpcAccessor::new(&Ipc2581::parse(xml).unwrap()).provenance();
+        provenance
+            .changes
+            .retain(|change| change.change == "Provenance updated");
+        provenance
+    };
+    let expected = recorded(&board);
+    assert_eq!(expected.specs[0].name, "Diode_Provenance");
+    assert_eq!(expected.bom.as_ref().unwrap().assembly, "rover-main");
+
+    for separation in [Separation::VScore, Separation::MouseBite] {
+        let panel = create_board_array(
+            &board,
+            &options(2, 2, BoardMarginMm::all(5.0), BoardMarginMm::all(20.0)),
+            false,
+            separation,
+            Resolution::default(),
+        )
+        .unwrap()
+        .xml;
+        assert!(panel.contains("Created board array"));
+        assert_eq!(recorded(&panel), expected, "{separation:?}");
+        crate::ipc2581::validate(&panel).unwrap();
+    }
+}
+
+#[test]
 fn auto_create_projects_board_to_the_smallest_or_the_requested_sheet() {
     let attribute = |name: &str, kind: &str, value: &str| {
         format!(

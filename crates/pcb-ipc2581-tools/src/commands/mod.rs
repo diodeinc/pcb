@@ -16,6 +16,7 @@ pub mod ict;
 pub mod info;
 pub mod outline;
 pub mod population_edit;
+pub mod provenance_edit;
 #[cfg(feature = "cli")]
 pub mod render;
 pub mod unused_via_lands;

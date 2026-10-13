@@ -57,6 +57,21 @@ pub enum Ipc2581Error {
 
 pub type Result<T> = std::result::Result<T, Ipc2581Error>;
 
+/// The enumeration values of a named simple type of the vendored IPC-2581C
+/// schema, such as `roleFunctionType`. Empty when it has none.
+pub fn schema_enumeration(simple_type: &str) -> Vec<&'static str> {
+    let Some(start) = IPC_2581C_XSD.find(&format!("<xsd:simpleType name=\"{simple_type}\">"))
+    else {
+        return Vec::new();
+    };
+    let body = &IPC_2581C_XSD[start..];
+    let body = &body[..body.find("</xsd:simpleType>").unwrap_or(body.len())];
+    body.split("<xsd:enumeration value=\"")
+        .skip(1)
+        .filter_map(|rest| rest.split('"').next())
+        .collect()
+}
+
 /// Validate IPC-2581 XML against the vendored IPC-2581C XML Schema.
 pub fn validate(xml: &str) -> Result<()> {
     let validator = IPC_2581C_VALIDATOR

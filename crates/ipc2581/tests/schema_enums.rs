@@ -1,17 +1,10 @@
 use ipc2581::Ipc2581Error;
 
-const XSD: &str = include_str!("../IPC-2581C.xsd");
-
 /// The enumeration values of a named simple type in the vendored schema.
 fn schema_values(simple_type: &str) -> Vec<&'static str> {
-    let start = XSD
-        .find(&format!("<xsd:simpleType name=\"{simple_type}\">"))
-        .unwrap_or_else(|| panic!("{simple_type} is in the schema"));
-    let body = &XSD[start..start + XSD[start..].find("</xsd:simpleType>").unwrap()];
-    body.split("<xsd:enumeration value=\"")
-        .skip(1)
-        .map(|rest| &rest[..rest.find('"').unwrap()])
-        .collect()
+    let values = ipc2581::schema_enumeration(simple_type);
+    assert!(!values.is_empty(), "{simple_type} is in the schema");
+    values
 }
 
 /// Every token of `simple_type` parses and is written back unchanged.

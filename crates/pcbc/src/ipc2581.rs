@@ -285,6 +285,18 @@ enum EditCommands {
         #[arg(short, long, value_hint = clap::ValueHint::FilePath)]
         output: PathBuf,
     },
+    /// Record a production run's parties, BOM header, history and configuration properties
+    Provenance {
+        /// IPC-2581 XML file to edit
+        #[arg(value_hint = clap::ValueHint::FilePath)]
+        file: PathBuf,
+        /// JSON file with the provenance to record
+        #[arg(short, long, value_hint = clap::ValueHint::FilePath)]
+        provenance: PathBuf,
+        /// Output IPC-2581 XML file
+        #[arg(short, long, value_hint = clap::ValueHint::FilePath)]
+        output: PathBuf,
+    },
 }
 
 #[derive(Subcommand)]
@@ -587,6 +599,11 @@ pub fn execute(args: Ipc2581Args, resolution: Resolution) -> anyhow::Result<()> 
                 &population.populate,
                 &output,
             ),
+            EditCommands::Provenance {
+                file,
+                provenance,
+                output,
+            } => commands::provenance_edit::execute(&file, &provenance, &output),
         },
         Commands::BoardArray { command } => match command {
             BoardArrayCommands::Create {

@@ -60,6 +60,8 @@ pub enum SpecItemKind {
 
 #[derive(Debug, Clone)]
 pub struct SpecProperty {
+    pub name: Option<Symbol>,
+    pub comment: Option<Symbol>,
     pub value: Option<f64>,
     pub text: Option<Symbol>,
     pub unit: Option<Symbol>,
