@@ -32,7 +32,7 @@ pub fn append_file_revision(original_xml: &str, comment: &str) -> Result<String>
 /// against the same parsed document in a single splice pass.
 pub fn file_revision_edits(doc: &Doc, comment: &str) -> Result<Vec<Edit>> {
     let (person_ref, edits) = ensure_history_person(doc, doc.root()?)?;
-    revision_edits(doc, comment, &person_ref, None, &[], edits)
+    revision_edits(doc, comment, &person_ref, false, &[], edits)
 }
 
 /// [`file_revision_edits`] attributed to the existing Person `person_ref`,
@@ -44,24 +44,18 @@ pub fn file_revision_edits_by(
     person_ref: &str,
     attrs: &[(&str, &str)],
 ) -> Result<Vec<Edit>> {
-    revision_edits(
-        doc,
-        comment,
-        person_ref,
-        Some(person_ref),
-        attrs,
-        Vec::new(),
-    )
+    revision_edits(doc, comment, person_ref, true, attrs, Vec::new())
 }
 
 fn revision_edits(
     doc: &Doc,
     comment: &str,
     person_ref: &str,
-    author: Option<&str>,
+    attribute_new_history: bool,
     attrs: &[(&str, &str)],
     mut edits: Vec<Edit>,
 ) -> Result<Vec<Edit>> {
+    let author = attribute_new_history.then_some(person_ref);
     let now = jiff::Timestamp::now().to_string();
     let root = doc.root()?;
 

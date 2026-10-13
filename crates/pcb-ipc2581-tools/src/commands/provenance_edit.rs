@@ -48,37 +48,6 @@ const KINDS: [(&str, &str, &str); 3] = [
     ("Person", "name", "UNKNOWN"),
 ];
 
-/// The attributes of each kind of [`KINDS`] the input sets.
-const MODELLED: [&[&str]; 3] = [
-    &["id", "roleFunction", "description", "authority"],
-    &[
-        "id",
-        "name",
-        "code",
-        "codeType",
-        "address1",
-        "address2",
-        "city",
-        "stateProvince",
-        "country",
-        "postalCode",
-        "phone",
-        "fax",
-        "email",
-        "url",
-    ],
-    &[
-        "name",
-        "enterpriseRef",
-        "title",
-        "email",
-        "phone",
-        "fax",
-        "mailstop",
-        "roleRef",
-    ],
-];
-
 /// `xml` with the provenance of `input` recorded.
 pub fn set_provenance(xml: &str, input: &ProvenanceInput) -> Result<String> {
     let entries = header_entries(input)?;
@@ -89,11 +58,11 @@ pub fn set_provenance(xml: &str, input: &ProvenanceInput) -> Result<String> {
     let content = doc
         .child(root, "Content")
         .context("IPC-2581 has no Content")?;
-    let header = doc.child(root, "LogisticHeader");
+    let header = doc
+        .child(root, "LogisticHeader")
+        .context("IPC-2581 has no LogisticHeader")?;
     let existing = |kind: &str| -> Vec<Node> {
-        header
-            .map(|header| doc.children(header))
-            .unwrap_or_default()
+        doc.children(header)
             .into_iter()
             .filter(|&child| doc.name(child) == kind)
             .collect()
@@ -111,72 +80,36 @@ pub fn set_provenance(xml: &str, input: &ProvenanceInput) -> Result<String> {
         _ => bail!("More than one OWNER role: {}", owners.join(", ")),
     };
 
-    let removed = unreferenced_placeholders(&doc, &entries, owner.is_some());
+    let removed = unreferenced_placeholders(&doc, header, &entries, owner.is_some());
     let mut edits = Vec::new();
-    let mut header_xml = XmlWriter::new();
-    for (kind_index, &(kind, key, _)) in KINDS.iter().enumerate() {
+    for &(kind, key, _) in &KINDS {
         let nodes = existing(kind);
-        let mut new = XmlWriter::new();
-        let mut kept = 0;
-        for (name, attrs) in entries.iter().filter(|(name, _)| *name == kind) {
-            let id = &attrs[0].1;
-            match nodes.iter().find(|&&node| doc.attr(node, key) == Some(id)) {
-                Some(&node) => {
-                    // Attributes the input does not model, such as publicKey, stay.
-                    let modelled = MODELLED[kind_index];
-                    let kept_attrs = doc.attrs(node).filter(|(k, _)| !modelled.contains(k));
-                    let mut writer = XmlWriter::new();
-                    writer.empty_element_with(
-                        name,
-                        attrs
-                            .iter()
-                            .map(|(k, v)| (*k, v.as_str()))
-                            .chain(kept_attrs),
-                    );
-                    edits.push(doc.replace(node, writer.into_string()));
-                }
-                None => new.empty_element_with(name, attrs.iter().map(|(k, v)| (*k, v.as_str()))),
-            }
-            kept += 1;
-        }
         for &node in &nodes {
-            if removed.contains(&node) {
+            if let Some(attrs) = upsert_of(&doc, node, &entries) {
+                // publicKey is the one attribute the input does not set.
+                let public_key = doc.attr(node, "publicKey").map(|key| ("publicKey", key));
+                edits.push(doc.replace(node, entry_xml(kind, attrs, public_key)));
+            } else if removed.contains(&node) {
                 edits.push(doc.delete(node));
-            } else if !entries
-                .iter()
-                .any(|(name, attrs)| *name == kind && doc.attr(node, key) == Some(&attrs[0].1))
-            {
-                kept += 1;
             }
         }
-        if kept == 0 {
-            bail!("LogisticHeader needs at least one {kind}");
-        }
-
-        let new = new.into_string();
-        if new.is_empty() {
-            continue;
-        }
-        let Some(header) = header else {
-            header_xml.raw(&new);
-            continue;
-        };
-        // New entries follow the last of their kind, or precede the next kind.
-        let later = KINDS[kind_index + 1..]
+        let new: String = entries
             .iter()
-            .find_map(|&(later, _, _)| existing(later).first().copied());
-        edits.push(match (nodes.last(), later) {
-            (Some(&last), _) => doc.insert_after(last, new),
-            (None, Some(next)) => doc.insert_before(next, new),
-            (None, None) => doc.append_inside(header, new),
-        });
-    }
-    if header.is_none() {
-        let mut writer = XmlWriter::new();
-        writer.start_element("LogisticHeader", &[]);
-        writer.raw(&header_xml.into_string());
-        writer.end_element("LogisticHeader");
-        edits.push(doc.insert_after(content, writer.into_string()));
+            .filter(|(name, attrs)| {
+                *name == kind
+                    && !nodes
+                        .iter()
+                        .any(|&node| doc.attr(node, key) == Some(&attrs[0].1))
+            })
+            .map(|(_, attrs)| entry_xml(kind, attrs, None))
+            .collect();
+        if !new.is_empty() {
+            // New entries follow the last of their kind, keeping schema order.
+            let last = nodes
+                .last()
+                .with_context(|| format!("LogisticHeader has no {kind}"))?;
+            edits.push(doc.insert_after(*last, new));
+        }
     }
 
     let person_known = entries
@@ -306,6 +239,25 @@ fn header_entries(input: &ProvenanceInput) -> Result<Vec<(&'static str, Attrs)>>
 
 type Attrs = Vec<(&'static str, String)>;
 
+/// The input entry an existing LogisticHeader entry is upserted with.
+fn upsert_of<'e>(doc: &Doc, node: Node, entries: &'e [(&'static str, Attrs)]) -> Option<&'e Attrs> {
+    let &(kind, key, _) = KINDS.iter().find(|kind| kind.0 == doc.name(node))?;
+    let id = doc.attr(node, key)?;
+    entries
+        .iter()
+        .find(|(name, attrs)| *name == kind && attrs[0].1 == id)
+        .map(|(_, attrs)| attrs)
+}
+
+fn entry_xml(kind: &str, attrs: &Attrs, extra: Option<(&str, &str)>) -> String {
+    let mut writer = XmlWriter::new();
+    writer.empty_element_with(
+        kind,
+        attrs.iter().map(|(k, v)| (*k, v.as_str())).chain(extra),
+    );
+    writer.into_string()
+}
+
 fn attrs<const N: usize>(attrs: [(&'static str, Option<&String>); N]) -> Attrs {
     attrs
         .into_iter()
@@ -321,16 +273,10 @@ fn attrs<const N: usize>(attrs: [(&'static str, Option<&String>); N]) -> Attrs {
 /// characteristic naming an enterprise.
 fn unreferenced_placeholders(
     doc: &Doc,
+    header: Node,
     entries: &[(&'static str, Attrs)],
     content_role_replaced: bool,
 ) -> Vec<Node> {
-    let Some(header) = doc
-        .root()
-        .ok()
-        .and_then(|root| doc.child(root, "LogisticHeader"))
-    else {
-        return Vec::new();
-    };
     let mut removed: Vec<Node> = doc
         .children(header)
         .into_iter()
@@ -339,22 +285,11 @@ fn unreferenced_placeholders(
                 doc.name(node) == kind
                     && doc.attr(node, key) == Some(placeholder)
                     && entries.iter().any(|(name, _)| *name == kind)
-                    && !entries
-                        .iter()
-                        .any(|(name, attrs)| *name == kind && attrs[0].1 == placeholder)
+                    && upsert_of(doc, node, entries).is_none()
             })
         })
         .collect();
 
-    // An upserted entry refers to its party's role and enterprise instead.
-    let upserted = |node: Node| {
-        KINDS.iter().any(|&(kind, key, _)| {
-            doc.name(node) == kind
-                && entries
-                    .iter()
-                    .any(|(name, attrs)| *name == kind && doc.attr(node, key) == Some(&attrs[0].1))
-        })
-    };
     // (referring element, kind referred to, attribute holding the reference)
     let references = [
         ("Person", "Role", "roleRef"),
@@ -379,7 +314,9 @@ fn unreferenced_placeholders(
                     .flat_map(|&(from, _, attr)| {
                         doc.find_all(from).into_iter().map(move |node| (node, attr))
                     })
-                    .filter(|&(node, _)| !removed.contains(&node) && !upserted(node))
+                    .filter(|&(node, _)| !removed.contains(&node))
+                    // An upserted entry refers to its party's role and enterprise instead.
+                    .filter(|&(node, _)| upsert_of(doc, node, entries).is_none())
                     .filter(|&(node, _)| !(content_role_replaced && doc.name(node) == "Content"))
                     .filter(|&(node, _)| {
                         doc.name(node) != "Textual"
