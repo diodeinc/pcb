@@ -38,9 +38,14 @@ impl<'s> Doc<'s> {
     }
 
     fn build(source: Cow<'s, str>, first_only: bool) -> Result<Self, ParseError> {
+        if u32::try_from(source.len()).is_err() {
+            return Err(ParseError::InputTooLarge);
+        }
+        // KiCad files have about four nodes per list. Count lists, not bytes:
+        // one embedded model can be megabytes of a single atom.
+        let lists = memchr::memchr_iter(b'(', source.as_bytes()).count();
         let mut arena = Arena {
-            // KiCad files have about one node per 14 bytes.
-            nodes: Vec::with_capacity(source.len() / 12),
+            nodes: Vec::with_capacity(lists * 9 / 2),
             unescaped: String::new(),
         };
         let mut roots = parser::scan(&source, &mut arena, first_only)?;
