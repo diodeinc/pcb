@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Removed
+
+- `pcb publish` no longer exports a VRML model (`3d/model.wrl`), and `--exclude vrml` is gone.
+
 ## [0.4.78] - 2026-10-13
 
 ### Added

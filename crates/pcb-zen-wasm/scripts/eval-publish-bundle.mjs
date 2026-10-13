@@ -21,7 +21,6 @@ const excludedArtifacts = [
   'drc',
   'gerbers',
   'ipc2581',
-  'vrml',
 ]
 
 function usage() {
