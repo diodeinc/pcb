@@ -7,7 +7,7 @@ use glam::Vec3;
 use pcb_step::scene::{Model, Scene};
 use pcb_step::{Board, ModelError, ModelFormat, Options, Report, content_hash};
 use rayon::prelude::*;
-use triangulate::colored_mesh::{ColoredSubmesh, tessellate_step_bytes};
+use triangulate::colored_mesh::{ColoredSubmesh, SurfaceMaterial, tessellate_step_bytes};
 
 use crate::mesh::Primitive;
 use crate::wrl;
@@ -16,12 +16,26 @@ use crate::wrl;
 /// millimetres: the tolerance models are tessellated to.
 const SIMPLIFY_ERROR: f32 = 0.01;
 
-/// A tessellated model: one simplified, optimized primitive per colour, in
+/// A tessellated model: one simplified, optimized primitive per material, in
 /// model millimetres.
 pub(crate) struct Mesh {
     pub(crate) name: String,
-    /// sRGB colour and its triangles, by colour.
-    pub(crate) primitives: Vec<([f32; 4], Primitive)>,
+    pub(crate) primitives: Vec<(ModelMaterial, Primitive)>,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct ModelMaterial {
+    pub(crate) color: [f32; 4],
+    pub(crate) surface: SurfaceMaterial,
+}
+
+impl ModelMaterial {
+    pub(crate) fn color(color: [f32; 4]) -> Self {
+        Self {
+            color,
+            surface: SurfaceMaterial::default(),
+        }
+    }
 }
 
 pub(crate) struct Models {
@@ -129,14 +143,18 @@ fn tessellate_one(payload: &Payload, simplify_error: f32) -> Tessellated {
     let primitives = match payload.format {
         ModelFormat::Wrl => wrl::parse(&payload.bytes).map(|parsed| {
             notes.extend(parsed.notes.iter().map(|n| format!("model {key}: {n}")));
-            parsed.primitives
+            parsed
+                .primitives
+                .into_iter()
+                .map(|(color, p)| (ModelMaterial::color(color), p))
+                .collect()
         }),
         ModelFormat::Step => step_primitives(&payload.bytes, key, &mut notes),
     };
     let mesh = primitives
         .map_err(ModelError::Failed)
         .and_then(|primitives| {
-            let mut primitives: Vec<([f32; 4], Primitive)> = primitives
+            let primitives: Vec<(ModelMaterial, Primitive)> = primitives
                 .into_par_iter()
                 .map(|(color, mut primitive)| {
                     primitive.simplify(simplify_error);
@@ -149,7 +167,6 @@ fn tessellate_one(payload: &Payload, simplify_error: f32) -> Tessellated {
             if primitives.is_empty() {
                 return Err(ModelError::Empty);
             }
-            primitives.sort_by(|a, b| a.0.map(f32::to_bits).cmp(&b.0.map(f32::to_bits)));
             Ok(Mesh {
                 name: payload.model.name().to_owned(),
                 primitives,
@@ -162,7 +179,7 @@ fn step_primitives(
     bytes: &[u8],
     key: &str,
     notes: &mut Vec<String>,
-) -> Result<Vec<([f32; 4], Primitive)>, String> {
+) -> Result<Vec<(ModelMaterial, Primitive)>, String> {
     let (tessellated, stats) = tessellate_step_bytes(bytes)?;
     if !stats.failures.is_empty() {
         notes.push(format!(
@@ -178,6 +195,7 @@ fn step_primitives(
         .map(|s| {
             let ColoredSubmesh {
                 color,
+                material,
                 positions,
                 mut normals,
                 indices,
@@ -188,7 +206,13 @@ fn step_primitives(
                 normals,
                 indices,
             };
-            (color, primitive)
+            (
+                ModelMaterial {
+                    color,
+                    surface: material,
+                },
+                primitive,
+            )
         })
         .collect();
     if primitives.is_empty() && !stats.failures.is_empty() {

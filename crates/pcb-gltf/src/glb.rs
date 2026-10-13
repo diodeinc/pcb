@@ -1,6 +1,6 @@
 //! glTF 2.0 binary container, written small and cheap to draw: one mesh for
 //! the board with a primitive per layer, and one mesh per distinct model
-//! with a primitive per colour, drawn once for all its footprints with
+//! with a primitive per material, drawn once for all its footprints with
 //! `EXT_mesh_gpu_instancing`. Positions are snapped to a 16-bit grid per mesh
 //! and normals to 8 bits (`KHR_mesh_quantization`), and every vertex and index
 //! buffer is compressed with `EXT_meshopt_compression`. A root node converts
@@ -23,7 +23,7 @@ use rayon::prelude::*;
 use serde_json::{Value, json};
 
 use crate::mesh::Primitive;
-use crate::models::Models;
+use crate::models::{ModelMaterial, Models};
 
 const ARRAY_BUFFER: u32 = 34962;
 const ELEMENT_ARRAY_BUFFER: u32 = 34963;
@@ -35,6 +35,7 @@ const UNSIGNED_INT: u32 = 5125;
 const QUANTIZATION: &str = "KHR_mesh_quantization";
 const MESHOPT: &str = "EXT_meshopt_compression";
 const INSTANCING: &str = "EXT_mesh_gpu_instancing";
+const SPECULAR: &str = "KHR_materials_specular";
 
 #[derive(Clone, Copy, PartialEq)]
 struct Material {
@@ -43,6 +44,7 @@ struct Material {
     metallic: f32,
     roughness: f32,
     double_sided: bool,
+    specular: Option<([f32; 3], f32)>,
 }
 
 impl Material {
@@ -59,6 +61,12 @@ impl Material {
         }
         if self.double_sided {
             material["doubleSided"] = json!(true);
+        }
+        if let Some((color, strength)) = self.specular {
+            material["extensions"] = json!({ SPECULAR: {
+                "specularColorFactor": color,
+                "specularFactor": strength,
+            }});
         }
         material
     }
@@ -96,18 +104,39 @@ fn layer_material(layer: &Layer, copper: [f64; 3]) -> Material {
         metallic,
         roughness,
         double_sided: false,
+        specular: None,
     }
 }
 
-/// Model materials: STEP colours are sRGB. Models may have open shells, so
-/// both sides are drawn.
-fn model_material(srgba: [f32; 4]) -> Material {
-    let [r, g, b, a] = srgba;
+/// Model colours use the exporter's sRGB convention. Models may have open
+/// shells, so both sides are drawn.
+fn model_material(model: ModelMaterial) -> Material {
+    let [r, g, b, a] = model.color;
+    let surface = model.surface;
+    let [r, g, b] = [r, g, b].map(|c| srgb_to_linear(c) * surface.diffuse_strength.unwrap_or(1.0));
+    let specular =
+        (surface.specular_color.is_some() || surface.specular_strength.is_some()).then(|| {
+            (
+                // The extension multiplies by dielectric F0=0.04. Its color
+                // factor may exceed 1; strength must remain in [0, 1].
+                surface
+                    .specular_color
+                    .unwrap_or([1.0; 3])
+                    .map(|c| srgb_to_linear(c) / 0.04),
+                surface.specular_strength.unwrap_or(1.0),
+            )
+        });
     Material {
-        color: [srgb_to_linear(r), srgb_to_linear(g), srgb_to_linear(b), a],
+        color: [r, g, b, a],
         metallic: 0.0,
-        roughness: 0.5,
+        // Approximate Phong n with Blinn exponent 4n, then map the NDF
+        // parameter to glTF perceptual roughness (alpha = roughness²).
+        roughness: surface
+            .shininess
+            .map(|n| (2.0 / (4.0 * f64::from(n) + 2.0)).powf(0.25) as f32)
+            .unwrap_or(0.5),
         double_sided: true,
+        specular,
     }
 }
 
@@ -523,7 +552,7 @@ pub(crate) fn write(
         let cube = Primitive::unit_cube();
         let grid = Grid::of([&cube]);
         let encoded = encode(&cube, grid, false);
-        let primitive = gltf.primitive(&encoded, model_material(PROXY_COLOR));
+        let primitive = gltf.primitive(&encoded, model_material(ModelMaterial::color(PROXY_COLOR)));
         meshes.push(json!({ "name": "proxy", "primitives": [primitive] }));
         let placements: Vec<Placement> = scene
             .proxies
@@ -561,11 +590,15 @@ pub(crate) fn write(
         "extras": { "pcb": manifest },
     });
 
-    let extensions = [MESHOPT, QUANTIZATION, INSTANCING];
+    let required = [MESHOPT, QUANTIZATION, INSTANCING];
+    let mut extensions = required.to_vec();
+    if gltf.materials.iter().any(|m| m.specular.is_some()) {
+        extensions.push(SPECULAR);
+    }
     let document = json!({
         "asset": { "version": "2.0", "generator": "pcb-gltf" },
         "extensionsUsed": extensions,
-        "extensionsRequired": extensions,
+        "extensionsRequired": required,
         "scene": 0,
         "scenes": [{ "name": name, "nodes": [0] }],
         "nodes": nodes,

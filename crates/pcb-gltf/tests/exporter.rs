@@ -165,6 +165,104 @@ fn near(a: f64, b: f64, tolerance: f64) {
 }
 
 #[test]
+fn authored_step_materials_survive_export_and_instancing() {
+    let text = board(&format!(
+        "{}{}{}",
+        footprint("U1", "10 10", "", &model("kicad-embed://styles.step", "")),
+        footprint(
+            "U2",
+            "20 10",
+            "BACK",
+            &model("kicad-embed://styles.step", "")
+        ),
+        embedded(
+            "styles.step",
+            include_bytes!("fixtures/authored-materials.step")
+        ),
+    ));
+    let run = export(&text, &Options::default()).unwrap();
+    assert_eq!(run.report.failed_models, 0, "{:?}", run.report.warnings);
+    assert!(run.report.warnings.is_empty(), "{:?}", run.report.warnings);
+    let json = &run.stats["json"];
+    let mesh = json["meshes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|m| m["name"] == "styles")
+        .unwrap();
+    let primitives = mesh["primitives"].as_array().unwrap();
+    assert_eq!(primitives.len(), 6);
+    let materials: Vec<_> = primitives
+        .iter()
+        .map(|p| &json["materials"][p["material"].as_u64().unwrap() as usize])
+        .collect();
+    // Each row names a distinct face material: linear RGB, alpha, roughness, specular strength.
+    for (gray, alpha, roughness, strength) in [
+        (0.2158605, 1.0, 0.5, None),
+        (0.0539651, 0.35, 0.5, None),
+        (0.2158605, 0.0, 0.5, None),
+        (0.2158605, 1.0, 1.0, Some(0.0)),
+        (0.2158605, 1.0, 0.5, Some(0.35)),
+        (0.2158605, 1.0, 0.25, Some(0.35)),
+    ] {
+        let m = materials
+            .iter()
+            .find(|m| {
+                let pbr = &m["pbrMetallicRoughness"];
+                (pbr["baseColorFactor"][3].as_f64().unwrap() - alpha).abs() < 1e-6
+                    && pbr["roughnessFactor"] == roughness
+                    && m["extensions"].get("KHR_materials_specular").is_some() == strength.is_some()
+            })
+            .expect("missing authored face material");
+        let pbr = &m["pbrMetallicRoughness"];
+        for c in pbr["baseColorFactor"].as_array().unwrap().iter().take(3) {
+            near(c.as_f64().unwrap(), gray, 1e-6);
+        }
+        assert_eq!(pbr["metallicFactor"], 0.0);
+        assert_eq!(m["doubleSided"], true);
+        if alpha < 1.0 {
+            assert_eq!(m["alphaMode"], "BLEND");
+        } else {
+            assert!(m.get("alphaMode").is_none());
+        }
+        if let Some(strength) = strength {
+            let specular = &m["extensions"]["KHR_materials_specular"];
+            let color = &specular["specularColorFactor"];
+            near(color[0].as_f64().unwrap(), 25.0, 1e-6);
+            near(color[1].as_f64().unwrap(), 5.3510285, 1e-6);
+            near(color[2].as_f64().unwrap(), 0.0, 1e-6);
+            near(specular["specularFactor"].as_f64().unwrap(), strength, 1e-6);
+        }
+    }
+    assert!(
+        json["extensionsUsed"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|e| e == "KHR_materials_specular")
+    );
+    assert!(
+        !json["extensionsRequired"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|e| e == "KHR_materials_specular")
+    );
+    let node = json["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|n| n["name"] == "styles")
+        .unwrap();
+    assert_eq!(
+        node["extras"]["references"],
+        serde_json::json!(["U1", "U2"])
+    );
+    near(run.extent("U1")[0], 2.0, 0.01);
+    assert_eq!(run.stats, export(&text, &Options::default()).unwrap().stats);
+}
+
+#[test]
 fn non_uniform_scale_follows_rotation_and_the_bottom_side() {
     // Scale applies before the model's rotation, so the turn swaps x and y.
     let m = scaled("kicad-embed://b.step", "3 1 0.5", "0 0 90", "0 0 0");

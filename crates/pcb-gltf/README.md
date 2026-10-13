@@ -31,7 +31,7 @@ comes from `pcb-step`'s scene, and every STEP model is tessellated with
   faces resting on the body and copper inside it. Every layer but the body
   is flat, so it is written without normals and loaders shade it flat.
 - **Models**: one mesh per distinct model payload, with a primitive per
-  colour, drawn for every footprint that uses it with
+  material, drawn for every footprint that uses it with
   `EXT_mesh_gpu_instancing`; the node's `extras.references` lists the
   footprints in instance order. Models are tessellated within 0.01 mm in
   model units, the largest first, in parallel, then simplified within another
@@ -52,6 +52,42 @@ comes from `pcb-step`'s scene, and every STEP model is tessellated with
   node. The origin options move it as they move the STEP output.
 
 The output is deterministic.
+
+## STEP appearance
+
+STEP surface styles supply appearance, not a metal/plastic classification.
+Materials with the same RGB but different opacity, diffuse strength, specular
+properties or shininess remain separate through tessellation and optimization. Payload
+deduplication hashes the complete model bytes, including its styles.
+
+- Foxtrot supplies authored surface RGB and optional diffuse reflectance.
+  RGB is interpreted as sRGB, converted to linear and multiplied by diffuse
+  reflectance (one when absent) to produce `baseColorFactor`.
+  This is the exporter's existing convention; STEP `COLOUR_RGB` does not
+  declare a color space. The same convention applies to specular color.
+- Opacity is `1 - transparency`, without gamma conversion. Opacity below
+  one selects `alphaMode: BLEND`. This is surface transparency, not inferred
+  glass transmission, refraction or volume absorption.
+- Authored specular color and strength use
+  [`KHR_materials_specular`](https://github.com/KhronosGroup/glTF/tree/main/extensions/2.0/Khronos/KHR_materials_specular).
+  The approximation treats `strength × linear(specular color)` as normal-incidence
+  reflectance (F0). A missing color uses white; a missing strength uses one.
+  `specularFactor` holds strength and `specularColorFactor` holds linear color
+  divided by 0.04, cancelling glTF's default dielectric F0. The extension
+  permits color factors above one, but strength must stay in [0, 1]. It is
+  listed in `extensionsUsed`, not `extensionsRequired`: readers without it
+  retain base color, opacity and roughness but lose the authored specular response.
+- The raw Phong exponent `n` maps to perceptual roughness as
+  `(2 / (4*n + 2))^(1/4)`. This first approximates Phong with a Blinn exponent
+  of [`4*n`](https://learnopengl.com/Advanced-Lighting/Advanced-Lighting), then uses the
+  [NDF parameterization](https://graphicrants.blogspot.com/2013/08/specular-brdf-reference.html)
+  `alpha = roughness²`. Phong and GGX have different lobes and energy models:
+  this preserves shininess ordering, not an exact match to a CAD renderer.
+- Missing shininess retains roughness 0.5. Missing both specular fields
+  omits the extension and retains glTF's neutral dielectric response.
+  Metallic remains zero; ambient coefficients and shading-method presets
+  are not mapped. Color-only STEP, VRML, proxies and board-layer defaults
+  are otherwise unchanged. Open shells remain double-sided.
 
 ## Finding models
 
