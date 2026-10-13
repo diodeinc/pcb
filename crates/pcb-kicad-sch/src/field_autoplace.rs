@@ -18,10 +18,9 @@ const HPADDING_MM: f64 = 0.635;
 const VPADDING_MM: f64 = 0.381;
 const ESTIMATED_TEXT_WIDTH_EM: f64 = 1.0;
 
-pub(crate) fn autoplace_symbol_fields(
-    symbol: &mut Symbol,
-    definition: &SymbolDefinition,
-) -> Result<bool> {
+/// Place a symbol's visible fields beside its body as KiCad does, when the
+/// symbol is marked `fields_autoplaced`. Returns whether any field moved.
+pub fn autoplace_symbol_fields(symbol: &mut Symbol, definition: &SymbolDefinition) -> Result<bool> {
     if !symbol.fields_autoplaced {
         return Ok(false);
     }
