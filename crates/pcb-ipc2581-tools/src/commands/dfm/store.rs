@@ -1,11 +1,9 @@
 //! The DFM report as a single SQLite database. Every distinct layer, subject,
 //! role, note and shape is stored once and referenced by id; coordinates are
 //! integer nanometres. A finding's or site's short lists are JSON arrays in
-//! its own row, readable with SQLite's JSON functions:
-//!
-//! - `layers`, `subjects`: ids into those tables
-//! - `witnesses`: `[role id, x, y]`
-//! - `evidence`: `[role id, shape id]`
+//! its own row, readable with SQLite's JSON functions. Comments inside each
+//! `CREATE` statement document its columns: SQLite keeps them, so readers see
+//! them in `.schema`.
 //!
 //! Findings say what is wrong and where; their sites hold the geometry. The
 //! scene is the checked material they are drawn over: each layer's shapes,
@@ -30,68 +28,97 @@ const APPLICATION_ID: i32 = 0x4446_4d52;
 
 // Plain SQL and `json_extract`, which readers back to SQLite 3.9 parse.
 const SCHEMA: &str = "
-CREATE TABLE report (key TEXT PRIMARY KEY, value TEXT NOT NULL) WITHOUT ROWID;
+CREATE TABLE report ( -- report-level metadata; see key 'coordinate_system'
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL -- JSON; key 'frames' lists the Steps that frame columns index
+) WITHOUT ROWID;
 CREATE TABLE rules (
     id INTEGER PRIMARY KEY, rule_id TEXT NOT NULL UNIQUE, title TEXT NOT NULL,
     finding_title TEXT NOT NULL, severity TEXT NOT NULL, tier TEXT NOT NULL,
-    status TEXT NOT NULL, comparison TEXT NOT NULL, limit_value REAL NOT NULL,
+    status TEXT NOT NULL, -- pass, warning, fail, not_applicable or incomplete
+    comparison TEXT NOT NULL, -- minimum or maximum
+    limit_value REAL NOT NULL, -- in limit_unit: mm, layers, diagnostics or ratio
     limit_unit TEXT NOT NULL, limit_pdk_value TEXT NOT NULL, subject TEXT NOT NULL,
     quantity TEXT NOT NULL, method TEXT NOT NULL, checked INTEGER NOT NULL,
-    finding_count INTEGER NOT NULL, skip_reason TEXT, assumptions TEXT NOT NULL,
-    view TEXT NOT NULL
+    finding_count INTEGER NOT NULL, skip_reason TEXT,
+    assumptions TEXT NOT NULL, view TEXT NOT NULL -- JSON
 );
--- Measurements below a limit by less than their own uncertainty.
-CREATE TABLE unresolved (
-    rule INTEGER NOT NULL REFERENCES rules, frame INTEGER NOT NULL,
+CREATE TABLE unresolved ( -- measurements below a limit by less than their uncertainty
+    rule INTEGER NOT NULL REFERENCES rules,
+    frame INTEGER NOT NULL, -- index into report 'frames'
     actual_mm REAL NOT NULL, uncertainty_mm REAL NOT NULL,
-    x INTEGER NOT NULL, y INTEGER NOT NULL, layers TEXT NOT NULL
+    x INTEGER NOT NULL, y INTEGER NOT NULL, -- nm
+    layers TEXT NOT NULL -- JSON array of layer names
 );
-CREATE TABLE layers (id INTEGER PRIMARY KEY, name TEXT NOT NULL, function TEXT NOT NULL, side TEXT);
-CREATE TABLE roles (id INTEGER PRIMARY KEY, name TEXT NOT NULL);
+CREATE TABLE layers (
+    id INTEGER PRIMARY KEY, name TEXT NOT NULL,
+    function TEXT NOT NULL, -- IPC-2581 layer function
+    side TEXT -- top, inner or bottom
+);
+CREATE TABLE roles (
+    id INTEGER PRIMARY KEY, name TEXT NOT NULL -- witness and evidence roles
+);
 CREATE TABLE notes (id INTEGER PRIMARY KEY, text TEXT NOT NULL);
 CREATE TABLE subjects (
     id INTEGER PRIMARY KEY, role TEXT NOT NULL, kind TEXT NOT NULL, name TEXT,
     reference_designator TEXT, pin TEXT, net TEXT, padstack_ref TEXT,
-    locator TEXT, drill_span TEXT
+    locator TEXT, drill_span TEXT -- JSON
 );
--- `kind` is circle, segment, bounds, path (open), region (closed rings,
--- filled nonzero, outlines drawn round to any `width_mm`) or stroke
--- (round-capped paths of `width_mm`). `paths` holds zigzag LEB128 varints:
--- the path count, each path's point count, then every point's x and y as a
--- delta from the last.
-CREATE TABLE shapes (
-    id INTEGER PRIMARY KEY, kind TEXT NOT NULL,
-    center_x INTEGER, center_y INTEGER, diameter REAL,
+CREATE TABLE shapes ( -- evidence and scene geometry; x/y in nm, in the finding's or draw's frame
+    id INTEGER PRIMARY KEY,
+    -- circle, segment, bounds, path (open), region (closed rings, filled
+    -- nonzero, outlines drawn round to any width_mm) or stroke (round-capped
+    -- paths of width_mm)
+    kind TEXT NOT NULL,
+    center_x INTEGER, center_y INTEGER, diameter REAL, -- diameter in mm
     start_x INTEGER, start_y INTEGER, end_x INTEGER, end_y INTEGER,
     min_x INTEGER, min_y INTEGER, max_x INTEGER, max_y INTEGER,
-    paths BLOB, width_mm REAL
+    -- zigzag LEB128 varints: path count, each path's point count, then every
+    -- point's x and y in nm as a delta from the previous (the first from 0)
+    paths BLOB,
+    width_mm REAL
 );
-CREATE TABLE findings (
+CREATE TABLE findings ( -- one per violation; its sites hold the geometry
     id INTEGER PRIMARY KEY, finding_id TEXT NOT NULL UNIQUE,
-    rule INTEGER NOT NULL REFERENCES rules, frame INTEGER NOT NULL,
-    measurement TEXT NOT NULL, message TEXT NOT NULL, x INTEGER, y INTEGER,
+    rule INTEGER NOT NULL REFERENCES rules,
+    frame INTEGER NOT NULL, -- index into report 'frames'; x/y are in its Step
+    -- JSON: actual_mm, required_mm, margin_mm (in mm); or actual_count,
+    -- required_count, margin_count; or actual_ratio, maximum_ratio,
+    -- margin_ratio. A margin >= 0 satisfies the limit.
+    measurement TEXT NOT NULL,
+    message TEXT NOT NULL,
+    -- integer nm, x right and y up; null when not spatial
+    x INTEGER, y INTEGER,
     min_x INTEGER, min_y INTEGER, max_x INTEGER, max_y INTEGER,
-    layers TEXT NOT NULL, subjects TEXT NOT NULL
+    layers TEXT NOT NULL, subjects TEXT NOT NULL -- JSON arrays of ids
 );
 CREATE INDEX findings_rule ON findings (rule);
-CREATE TABLE sites (
+CREATE TABLE sites ( -- failing regions or layers of a finding
     finding INTEGER NOT NULL REFERENCES findings, position INTEGER NOT NULL,
-    site_id TEXT NOT NULL, measurement TEXT NOT NULL, measurement_kind TEXT NOT NULL,
+    site_id TEXT NOT NULL,
+    measurement TEXT NOT NULL, -- JSON, as findings.measurement
+    measurement_kind TEXT NOT NULL,
     uncertainty_mm REAL NOT NULL,
+    -- nm, in the finding's frame
     min_x INTEGER NOT NULL, min_y INTEGER NOT NULL, max_x INTEGER NOT NULL, max_y INTEGER NOT NULL,
     note INTEGER REFERENCES notes,
-    layers TEXT NOT NULL, subjects TEXT NOT NULL, witnesses TEXT NOT NULL, evidence TEXT NOT NULL,
+    layers TEXT NOT NULL, subjects TEXT NOT NULL, -- JSON arrays of ids
+    witnesses TEXT NOT NULL, -- JSON array of [role id, x nm, y nm]
+    evidence TEXT NOT NULL, -- JSON array of [role id, shape id]
     PRIMARY KEY (finding, position)
 ) WITHOUT ROWID;
-CREATE TABLE scene (
+CREATE TABLE scene ( -- checked material, one row per drawn layer pass
     id INTEGER PRIMARY KEY, label TEXT NOT NULL, feature TEXT NOT NULL, layer TEXT,
     color TEXT NOT NULL
 );
-CREATE TABLE draws (
-    pass INTEGER NOT NULL REFERENCES scene, frame INTEGER NOT NULL,
+CREATE TABLE draws ( -- shapes a scene pass draws, in the frame of the Step that paints them
+    pass INTEGER NOT NULL REFERENCES scene,
+    frame INTEGER NOT NULL, -- index into report 'frames'
     shape INTEGER NOT NULL REFERENCES shapes, PRIMARY KEY (pass, frame, shape)
 ) WITHOUT ROWID;
 CREATE VIEW finding_summary AS
+-- actual, limit_value and margin are in unit. x_mm/y_mm are the finding's
+-- point in its frame, x right and y up: KiCad y is -y_mm.
 SELECT
     f.id, f.finding_id, r.rule_id, r.severity, r.finding_title AS title, f.message,
     coalesce(json_extract(f.measurement, '$.actual_mm'), json_extract(f.measurement, '$.actual_count'),
