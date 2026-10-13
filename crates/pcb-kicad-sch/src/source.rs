@@ -14,6 +14,8 @@ use crate::{SchItem, SchPage, SymbolLibrary, parse_kicad_sch_page};
 /// actual edit to a KiCad 9 page rewrites it as KiCad 10, rather than mixing
 /// modern nodes with legacy version-dependent string and body-style semantics.
 pub fn patch_page_source(source: &str, desired_page: &SchPage) -> Result<Option<String>> {
+    // Index the UUIDs KiCad and `parse_kicad_sch_page` load, not raw duplicates.
+    let source = &*crate::kicad::with_unique_ids(source)?;
     let desired_source = desired_page.to_kicad_sch();
     let source_root = pcb_sexpr::parse(source).context("failed to parse source schematic")?;
     if header(&source_root, "generator").and_then(Sexpr::as_atom) == Some(crate::kicad::GENERATOR) {

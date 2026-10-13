@@ -2524,6 +2524,12 @@ mod tests {
             with_unique_ids(&unique).unwrap(),
             Cow::Borrowed(_)
         ));
+
+        let mut page = parse_kicad_sch_page(None, &source).unwrap();
+        assert_eq!(crate::patch_page_source(&source, &page).unwrap(), None);
+        page.items.retain(|item| !matches!(item, SchItem::Wire(_)));
+        let patched = crate::patch_page_source(&source, &page).unwrap().unwrap();
+        assert_eq!(parse_kicad_sch_page(None, &patched).unwrap(), page);
     }
 
     #[test]
