@@ -21,14 +21,16 @@ pub(super) fn validate_generated_zen(
         .context("Failed to resolve the board while validating generated Zener")?;
     let mut has_errors = false;
     let mut has_warnings = false;
-    // KiCad accepts symbol pins without a footprint pad; import warns about them instead.
     let suppress = vec![
         "bom.unspecified".to_string(),
         "bom.underspecified".to_string(),
-        "symbol.pin.no_pad".to_string(),
     ];
-    let passes: Vec<Box<dyn pcb_zen_core::DiagnosticsPass>> =
-        vec![Box::new(pcb_zen_core::SuppressPass::new(suppress))];
+    // Generated components accept findings KiCad tolerates with `# suppress:` comments, which
+    // `pcb build` honors too.
+    let passes: Vec<Box<dyn pcb_zen_core::DiagnosticsPass>> = vec![
+        Box::new(pcb_zen_core::SuppressPass::new(suppress)),
+        Box::new(pcb_zen_core::CommentSuppressPass::new()),
+    ];
     let result = eval_state.build(
         &board.board_zen,
         SmallMap::new(),

@@ -127,7 +127,8 @@ fn aggregate_severity_key(severity: EvalSeverity) -> Option<u8> {
 /// - End-of-line: `code()  # suppress: pattern` (suppresses that line only)
 /// - Standalone: `# suppress: pattern` on its own line (suppresses next line)
 ///
-/// Checks all spans in the diagnostic tree (primary span and call stack) for matching patterns.
+/// Checks all spans in the diagnostic tree (primary span, related locations and call stack) for
+/// matching patterns.
 pub struct CommentSuppressPass {
     source_cache: std::cell::RefCell<SourceCache>,
 }
@@ -192,6 +193,13 @@ fn should_suppress_diagnostic(diagnostic: &Diagnostic, cache: &mut SourceCache) 
         if let Some(span) = &diag.span
             && check_span_for_suppression(diag, cache, &diag.path, span.begin.line)
         {
+            return true;
+        }
+
+        // Check related locations, such as the component that uses a checked symbol
+        if diag.related.iter().any(|related| {
+            check_span_for_suppression(diag, cache, &related.path, related.span.begin.line)
+        }) {
             return true;
         }
 
@@ -443,6 +451,47 @@ mod tests {
 
         // The diagnostic should be suppressed
         assert!(diagnostics.diagnostics[0].suppressed);
+    }
+
+    #[test]
+    fn test_comment_suppress_pass_checks_related_locations() {
+        let dir = tempfile::tempdir().unwrap();
+        let zen = dir.path().join("part.zen");
+        std::fs::write(&zen, "# suppress: symbol.pin.no_pad\nComponent(\n)\n").unwrap();
+        let pos = |line| starlark::codemap::ResolvedPos { line, column: 0 };
+        let related = |line| crate::DiagnosticReference {
+            path: zen.to_string_lossy().to_string(),
+            span: starlark::codemap::ResolvedSpan {
+                begin: pos(line),
+                end: pos(line),
+            },
+            message: "Component using this symbol".to_string(),
+        };
+        // The finding points into a symbol file, which cannot carry comments.
+        let finding = || {
+            Diagnostic::categorized(
+                "part.kicad_sym",
+                "pin \"S1\" has no pad",
+                "symbol.pin.no_pad",
+                EvalSeverity::Error,
+            )
+        };
+
+        let mut diagnostics = Diagnostics {
+            diagnostics: vec![
+                finding().with_related(related(1)),
+                finding().with_related(related(2)),
+                finding(),
+            ],
+        };
+        CommentSuppressPass::new().apply(&mut diagnostics);
+
+        let suppressed = diagnostics
+            .diagnostics
+            .iter()
+            .map(|diagnostic| diagnostic.suppressed)
+            .collect::<Vec<_>>();
+        assert_eq!(suppressed, [true, false, false]);
     }
 
     #[test]

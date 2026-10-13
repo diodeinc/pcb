@@ -9,7 +9,9 @@ use pcb_eda::kicad::symbol_library::KicadSymbolLibrary;
 use starlark::{codemap::CodeMap, errors::EvalSeverity, values::ValueLike};
 use tracing::{info_span, instrument};
 
-use crate::{Diagnostic, FileProvider, STDLIB_MODULE_PATH, resolution::ResolutionResult};
+use crate::{
+    Diagnostic, DiagnosticReference, FileProvider, STDLIB_MODULE_PATH, resolution::ResolutionResult,
+};
 
 use super::component::FrozenComponentValue;
 use super::footprint::{resolve_file_backed_footprint, resolved_span};
@@ -159,7 +161,17 @@ pub(crate) fn check_symbols(
         for issue in check_symbol(&library.library, name, footprint_pads) {
             let file = library.sources[issue.source].0.clone();
             if reported.insert((file, issue.span.start, issue.message.clone())) {
-                diagnostics.push(library.diagnostic(&issue, true));
+                let mut diagnostic = library.diagnostic(&issue, true);
+                // The component that pairs the symbol with its footprint, where a
+                // `# suppress:` comment can accept the finding for that component.
+                if let Some(span) = component.declaration_span() {
+                    diagnostic = diagnostic.with_related(DiagnosticReference {
+                        path: component.source_path().to_string(),
+                        span,
+                        message: "Component using this symbol".to_string(),
+                    });
+                }
+                diagnostics.push(diagnostic);
             }
         }
     }

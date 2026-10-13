@@ -2132,6 +2132,8 @@ struct ImportComponentPinBinding {
 struct PhysicalPinPlan {
     bindings: Vec<ImportComponentPinBinding>,
     io_pins: BTreeMap<String, BTreeSet<KiCadPinNumber>>,
+    /// Symbol pins the footprint has no pad for; KiCad keeps them off the board.
+    padless_pins: BTreeSet<KiCadPinNumber>,
 }
 
 fn sanitize_pin_number_suffix(raw: &str) -> String {
@@ -2361,6 +2363,7 @@ fn build_physical_pin_plan(
         });
     }
 
+    let mut padless_pins = BTreeSet::new();
     // Every source endpoint for every instance in the package must refer to a physical pin in
     // the representative symbol. This catches unit or library divergence before files are written.
     for anchor in instances {
@@ -2418,11 +2421,16 @@ fn build_physical_pin_plan(
                     layout.fpid.as_deref().unwrap_or("<unknown>"),
                     described.join(", ")
                 );
+                padless_pins.extend(missing_pins);
             }
         }
     }
 
-    Ok(PhysicalPinPlan { bindings, io_pins })
+    Ok(PhysicalPinPlan {
+        bindings,
+        io_pins,
+        padless_pins,
+    })
 }
 
 #[derive(Debug, Clone)]
@@ -2467,11 +2475,39 @@ fn render_component_zen(
         properties,
     )
     .context("Failed to generate component .zen")?;
+    let zen_text = accept_padless_pins(zen_text, &pin_plan.padless_pins)?;
 
     Ok(RenderedComponentZen {
         filename: format!("{component_name}.zen"),
         zen_text,
     })
+}
+
+/// Accept, for this component only, the `symbol.pin.no_pad` finding KiCad tolerates.
+fn accept_padless_pins(
+    zen_text: String,
+    padless_pins: &BTreeSet<KiCadPinNumber>,
+) -> Result<String> {
+    if padless_pins.is_empty() {
+        return Ok(zen_text);
+    }
+    let pins = padless_pins
+        .iter()
+        .map(KiCadPinNumber::as_str)
+        .collect::<Vec<_>>()
+        .join(", ");
+    let at = zen_text
+        .find("\nComponent(")
+        .context("Generated component .zen has no Component() call")?
+        + 1;
+    let mut text = zen_text;
+    text.insert_str(
+        at,
+        &format!(
+            "# As in KiCad, symbol pins {pins} have no footprint pad and stay off the board.\n# suppress: symbol.pin.no_pad\n"
+        ),
+    );
+    Ok(text)
 }
 
 fn build_imported_instance_calls_for_instances(
@@ -3129,6 +3165,24 @@ mod tests {
             .map(|binding| binding.pad_number.as_str())
             .collect::<Vec<_>>();
         assert_eq!(pads, ["1", "2"]);
+        assert_eq!(
+            plan.padless_pins,
+            BTreeSet::from([KiCadPinNumber::from("2".to_string())])
+        );
+
+        let rendered = render_component_zen(
+            "U1",
+            &symbol,
+            "U1.kicad_sym",
+            ImportPartFlags::default(),
+            &plan,
+            None,
+            &BTreeMap::new(),
+        )
+        .unwrap();
+        assert!(rendered.zen_text.contains(
+            "# As in KiCad, symbol pins 2 have no footprint pad and stay off the board.\n# suppress: symbol.pin.no_pad\nComponent("
+        ));
     }
 
     #[test]
@@ -3179,6 +3233,7 @@ mod tests {
                 "D_POS_3".to_string(),
                 BTreeSet::from([KiCadPinNumber::from("3".to_string())]),
             )]),
+            padless_pins: BTreeSet::new(),
         };
         let rendered = render_component_zen(
             "USB_DEVICE__VARIANT",
@@ -3212,6 +3267,7 @@ mod tests {
             &PhysicalPinPlan {
                 bindings: Vec::new(),
                 io_pins: BTreeMap::new(),
+                padless_pins: BTreeSet::new(),
             },
             Some("Missing:Footprint"),
             &BTreeMap::new(),
