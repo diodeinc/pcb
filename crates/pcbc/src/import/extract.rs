@@ -515,29 +515,29 @@ fn extract_kicad_layout_data(
     // Netlist extraction already rejects duplicate references. A retained PCB's
     // UUID paths are Zener sync hooks, not source schematic anchors; references
     // let us reuse its geometry without replacing schematic-derived identity.
-    // Source project PCBs can additionally join by native unit path when their
-    // reference is stale. Never interpret retained sync hooks as native paths.
+    // Never interpret retained sync hooks as native paths. Source project PCBs
+    // join by native unit path first, as KiCad's Update PCB does, so references
+    // left stale by re-annotation cannot claim a component another path owns.
     let anchors_by_refdes = netlist_components
         .iter()
         .map(|(key, component)| (component.netlist.refdes.as_str().to_owned(), key.clone()))
         .collect::<BTreeMap<_, _>>();
+    let native_anchor = |fp: &sexpr_board::FootprintInfo| {
+        native_unit_anchors
+            .and_then(|anchors| anchors.get(&KiCadUuidPathKey::from_pcb_path(&fp.path).ok()?))
+    };
+    let path_claimed = footprints
+        .iter()
+        .filter_map(native_anchor)
+        .collect::<BTreeSet<_>>();
 
     for fp in footprints {
         let by_reference = fp
             .properties
             .get("Reference")
-            .and_then(|refdes| anchors_by_refdes.get(refdes));
-        let by_native_path = native_unit_anchors
-            .and_then(|anchors| anchors.get(&KiCadUuidPathKey::from_pcb_path(&fp.path).ok()?));
-        if let (Some(reference), Some(native_path)) = (by_reference, by_native_path) {
-            anyhow::ensure!(
-                reference == native_path,
-                "PCB footprint reference {} conflicts with native schematic path {}",
-                fp.properties["Reference"],
-                fp.path
-            );
-        }
-        let Some(key) = by_reference.or(by_native_path) else {
+            .and_then(|refdes| anchors_by_refdes.get(refdes))
+            .filter(|key| !path_claimed.contains(key));
+        let Some(key) = native_anchor(&fp).or(by_reference) else {
             // Ignore footprints we can't join against netlist-derived component identities.
             continue;
         };
@@ -1237,8 +1237,8 @@ mod tests {
     }
 
     #[test]
-    fn layout_import_rejects_conflicting_native_identity_but_ignores_retained_sync_paths()
-    -> Result<()> {
+    fn layout_import_prefers_native_paths_but_ignores_retained_sync_paths() -> Result<()> {
+        // Re-annotated without Update PCB: references are swapped relative to the schematic.
         let board = r#"(kicad_pcb
             (version 20260206) (generator "pcbnew")
             (footprint "Small" (path "/a") (property "Reference" "R2")
@@ -1255,14 +1255,17 @@ mod tests {
         fs::write(&path, board)?;
         let pcb_anchors = parse_kicad_pcb_refdes_to_anchor_key(board)?;
         let mut source = parse_kicad_sexpr_netlist(netlist, &pcb_anchors)?;
-        let error =
-            extract_kicad_layout_data(&path, Some(&source.unit_to_anchor), &mut source.components)
-                .expect_err("source paths and swapped references must not exchange geometry");
-        assert!(
-            error
-                .to_string()
-                .contains("conflicts with native schematic path")
-        );
+        extract_kicad_layout_data(&path, Some(&source.unit_to_anchor), &mut source.components)?;
+        // Source footprints follow their native path, as in KiCad, keeping the stale
+        // PCB reference that generated sync hooks target.
+        for (native_path, expected, pcb_refdes) in [("/a", "Small", "R2"), ("/b", "Large", "R1")] {
+            let layout = source.components[&KiCadUuidPathKey::from_pcb_path(native_path)?]
+                .layout
+                .as_ref()
+                .unwrap();
+            assert_eq!(layout.fpid.as_deref(), Some(expected));
+            assert_eq!(layout.properties["Reference"], pcb_refdes);
+        }
 
         // Retained board paths are sync hooks, not native identities. Even a
         // coincidental source-path match must not override the reference join.
