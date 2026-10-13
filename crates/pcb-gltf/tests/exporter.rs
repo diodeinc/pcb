@@ -166,72 +166,6 @@ fn near(a: f64, b: f64, tolerance: f64) {
 
 #[test]
 fn authored_step_materials_survive_export_and_instancing() {
-    let step = String::from_utf8(block_step()).unwrap();
-    let faces: Vec<_> = step
-        .lines()
-        .filter(|line| line.contains("ADVANCED_FACE("))
-        .map(|line| line.split('=').next().unwrap().trim())
-        .collect();
-    assert_eq!(faces.len(), 6);
-    let mut styled = step.clone();
-    let mut styles = String::from(
-        "#900000=COLOUR_RGB('',0.5,0.5,0.5);\n\
-         #900001=COLOUR_RGB('',1.,0.5,0.);\n\
-         #900002=SURFACE_STYLE_TRANSPARENT(0.65);\n\
-         #900003=SURFACE_STYLE_TRANSPARENT(1.);\n\
-         #900004=SURFACE_STYLE_REFLECTANCE_AMBIENT_DIFFUSE_SPECULAR(0.,1.,0.,0.,#900001);\n\
-         #900005=SURFACE_STYLE_REFLECTANCE_AMBIENT_DIFFUSE_SPECULAR(0.,1.,0.35,7.5,#900001);\n\
-         #900006=SURFACE_STYLE_REFLECTANCE_AMBIENT_DIFFUSE_SPECULAR(0.,1.,0.35,127.5,#900001);\n\
-         #900007=SURFACE_STYLE_REFLECTANCE_AMBIENT_DIFFUSE(0.,0.25);\n",
-    );
-    for (i, face) in faces.iter().enumerate() {
-        let id = 900010 + i * 10;
-        // Each face has the same fill and rendering RGB. A fill must not
-        // hide rendering properties, nor may RGB-only grouping merge faces.
-        if i == 0 {
-            styles.push_str(&format!(
-                "#{id}=SURFACE_STYLE_RENDERING(.NORMAL_SHADING.,#900000);\n"
-            ));
-        } else {
-            styles.push_str(&format!(
-                "#{id}=SURFACE_STYLE_RENDERING_WITH_PROPERTIES(.NORMAL_SHADING.,#900000,(#{}{}));\n",
-                900001 + i,
-                if i == 1 { ",#900007" } else { "" },
-            ));
-        }
-        styles.push_str(&format!(
-            "#{}=FILL_AREA_STYLE_COLOUR('',#900000);\n\
-             #{}=FILL_AREA_STYLE('',(#{}));\n\
-             #{}=SURFACE_STYLE_FILL_AREA(#{});\n\
-             #{}=SURFACE_SIDE_STYLE('',(#{},#{id}));\n\
-             #{}=SURFACE_STYLE_USAGE(.BOTH.,#{});\n\
-             #{}=PRESENTATION_STYLE_ASSIGNMENT((#{}));\n\
-             #{}=STYLED_ITEM('',(#{}),{face});\n",
-            id + 1,
-            id + 2,
-            id + 1,
-            id + 3,
-            id + 2,
-            id + 4,
-            id + 3,
-            id + 5,
-            id + 4,
-            id + 6,
-            id + 5,
-            id + 7,
-            id + 6,
-        ));
-    }
-    let presentation = step
-        .lines()
-        .find(|line| line.contains("MECHANICAL_DESIGN_GEOMETRIC_PRESENTATION_REPRESENTATION("))
-        .unwrap();
-    let items = (0..6)
-        .map(|i| format!("#{},", 900017 + i * 10))
-        .collect::<String>();
-    let at = styled.find(presentation).unwrap() + presentation.find("(#").unwrap() + 1;
-    styled.insert_str(at, &items);
-    styled.insert_str(styled.rfind("ENDSEC;").unwrap(), &styles);
     let text = board(&format!(
         "{}{}{}",
         footprint("U1", "10 10", "", &model("kicad-embed://styles.step", "")),
@@ -241,7 +175,10 @@ fn authored_step_materials_survive_export_and_instancing() {
             "BACK",
             &model("kicad-embed://styles.step", "")
         ),
-        embedded("styles.step", styled.as_bytes()),
+        embedded(
+            "styles.step",
+            include_bytes!("fixtures/authored-materials.step")
+        ),
     ));
     let run = export(&text, &Options::default()).unwrap();
     assert_eq!(run.report.failed_models, 0, "{:?}", run.report.warnings);
@@ -259,23 +196,27 @@ fn authored_step_materials_survive_export_and_instancing() {
         .iter()
         .map(|p| &json["materials"][p["material"].as_u64().unwrap() as usize])
         .collect();
-    let distinct: std::collections::HashSet<_> = primitives
-        .iter()
-        .map(|p| p["material"].as_u64().unwrap())
-        .collect();
-    assert_eq!(distinct.len(), 6);
-    let mut alphas = Vec::new();
-    let mut roughnesses = Vec::new();
-    for m in materials {
+    // Each row names a distinct face material: linear RGB, alpha, roughness, specular strength.
+    for (gray, alpha, roughness, strength) in [
+        (0.2158605, 1.0, 0.5, None),
+        (0.0539651, 0.35, 0.5, None),
+        (0.2158605, 0.0, 0.5, None),
+        (0.2158605, 1.0, 1.0, Some(0.0)),
+        (0.2158605, 1.0, 0.5, Some(0.35)),
+        (0.2158605, 1.0, 0.25, Some(0.35)),
+    ] {
+        let m = materials
+            .iter()
+            .find(|m| {
+                let pbr = &m["pbrMetallicRoughness"];
+                (pbr["baseColorFactor"][3].as_f64().unwrap() - alpha).abs() < 1e-6
+                    && pbr["roughnessFactor"] == roughness
+                    && m["extensions"].get("KHR_materials_specular").is_some() == strength.is_some()
+            })
+            .expect("missing authored face material");
         let pbr = &m["pbrMetallicRoughness"];
-        let alpha = pbr["baseColorFactor"][3].as_f64().unwrap();
-        let diffuse = if alpha > 0.0 && alpha < 1.0 {
-            0.25
-        } else {
-            1.0
-        };
         for c in pbr["baseColorFactor"].as_array().unwrap().iter().take(3) {
-            near(c.as_f64().unwrap(), 0.2158605 * diffuse, 1e-6);
+            near(c.as_f64().unwrap(), gray, 1e-6);
         }
         assert_eq!(pbr["metallicFactor"], 0.0);
         assert_eq!(m["doubleSided"], true);
@@ -284,29 +225,15 @@ fn authored_step_materials_survive_export_and_instancing() {
         } else {
             assert!(m.get("alphaMode").is_none());
         }
-        alphas.push(alpha);
-        let roughness = pbr["roughnessFactor"].as_f64().unwrap();
-        if let Some(specular) = m["extensions"].get("KHR_materials_specular") {
+        if let Some(strength) = strength {
+            let specular = &m["extensions"]["KHR_materials_specular"];
             let color = &specular["specularColorFactor"];
             near(color[0].as_f64().unwrap(), 25.0, 1e-6);
             near(color[1].as_f64().unwrap(), 5.3510285, 1e-6);
             near(color[2].as_f64().unwrap(), 0.0, 1e-6);
-            near(
-                specular["specularFactor"].as_f64().unwrap(),
-                if roughness == 1.0 { 0.0 } else { 0.35 },
-                1e-6,
-            );
-            roughnesses.push(roughness);
-        } else {
-            assert_eq!(roughness, 0.5);
+            near(specular["specularFactor"].as_f64().unwrap(), strength, 1e-6);
         }
     }
-    alphas.sort_by(f64::total_cmp);
-    for (actual, expected) in alphas.into_iter().zip([0., 0.35, 1., 1., 1., 1.]) {
-        near(actual, expected, 1e-6);
-    }
-    roughnesses.sort_by(f64::total_cmp);
-    assert_eq!(roughnesses, [0.25, 0.5, 1.0]);
     assert!(
         json["extensionsUsed"]
             .as_array()

@@ -154,7 +154,7 @@ fn tessellate_one(payload: &Payload, simplify_error: f32) -> Tessellated {
     let mesh = primitives
         .map_err(ModelError::Failed)
         .and_then(|primitives| {
-            let mut primitives: Vec<(ModelMaterial, Primitive)> = primitives
+            let primitives: Vec<(ModelMaterial, Primitive)> = primitives
                 .into_par_iter()
                 .map(|(color, mut primitive)| {
                     primitive.simplify(simplify_error);
@@ -167,16 +167,6 @@ fn tessellate_one(payload: &Payload, simplify_error: f32) -> Tessellated {
             if primitives.is_empty() {
                 return Err(ModelError::Empty);
             }
-            primitives.sort_by_key(|(m, _)| {
-                (
-                    m.color.map(f32::to_bits),
-                    m.surface.opacity.map(f32::to_bits),
-                    m.surface.diffuse_strength.map(f32::to_bits),
-                    m.surface.specular_color.map(|c| c.map(f32::to_bits)),
-                    m.surface.specular_strength.map(f32::to_bits),
-                    m.surface.shininess.map(f32::to_bits),
-                )
-            });
             Ok(Mesh {
                 name: payload.model.name().to_owned(),
                 primitives,
