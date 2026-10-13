@@ -34,6 +34,11 @@ on:
         required: false
         type: boolean
         default: false
+      cross_windows:
+        description: 'Cross-compile x86_64-pc-windows-msvc on Linux x64 with cargo-xwin'
+        required: false
+        type: boolean
+        default: false
       big_runners:
         description: 'Use 32 vCPU Linux/Windows and 12 vCPU macOS runners'
         required: false
@@ -68,7 +73,7 @@ jobs:
           - target: x86_64-unknown-linux-musl
             runner: ${{ inputs.big_runners && 'blacksmith-32vcpu-ubuntu-2404' || 'blacksmith-16vcpu-ubuntu-2404' }}
           - target: x86_64-pc-windows-msvc
-            runner: ${{ inputs.big_runners && 'blacksmith-32vcpu-windows-2025' || 'blacksmith-16vcpu-windows-2025' }}
+            runner: ${{ inputs.cross_windows && (inputs.big_runners && 'blacksmith-32vcpu-ubuntu-2404' || 'blacksmith-16vcpu-ubuntu-2404') || (inputs.big_runners && 'blacksmith-32vcpu-windows-2025' || 'blacksmith-16vcpu-windows-2025') }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 40
     env:
@@ -76,6 +81,7 @@ jobs:
       CARGO_PROFILE_DIST_CODEGEN_UNITS: ${{ inputs.codegen_units }}
       SINGLE_CARGO: ${{ inputs.single_cargo }}
       CROSS: ${{ inputs.cross_arm && contains(matrix.target, 'aarch64-unknown-linux') }}
+      XWIN: ${{ inputs.cross_windows && contains(matrix.target, 'windows') }}
     steps:
       - name: Enable Windows long paths
         if: runner.os == 'Windows'
@@ -109,6 +115,20 @@ jobs:
           "$RUNNER_TEMP/zb/bin/pip" install -q ziglang cargo-zigbuild
           echo "$RUNNER_TEMP/zb/bin" >> "$GITHUB_PATH"
 
+      - name: Install cargo-xwin
+        if: env.XWIN == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          which clang lld-link llvm-lib || true
+          if ! command -v lld-link >/dev/null || ! command -v clang-cl >/dev/null; then
+            sudo apt-get update
+            sudo apt-get install -y clang lld llvm
+          fi
+          python3 -m venv "$RUNNER_TEMP/xw"
+          "$RUNNER_TEMP/xw/bin/pip" install -q cargo-xwin
+          echo "$RUNNER_TEMP/xw/bin" >> "$GITHUB_PATH"
+
       - name: Install zstd
         shell: bash
         run: |
@@ -136,7 +156,9 @@ jobs:
         run: |
           set -euo pipefail
           cargo_cmd=(cargo build)
-          if [[ "$CROSS" == "true" ]]; then
+          if [[ "$XWIN" == "true" ]]; then
+            cargo_cmd=(cargo xwin build)
+          elif [[ "$CROSS" == "true" ]]; then
             cargo_cmd=(cargo zigbuild)
             if [[ "$TARGET" == *linux-musl ]]; then
               export CFLAGS="-Du_int8_t=uint8_t -Du_int16_t=uint16_t -Du_int32_t=uint32_t -Du_int64_t=uint64_t"
