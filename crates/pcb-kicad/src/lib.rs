@@ -4,10 +4,9 @@ pub mod footprint;
 
 use anyhow::{Context, Result, anyhow};
 use pcb_command_runner::CommandRunner;
-use pcb_sexpr::Sexpr;
 use std::collections::HashMap;
 use std::fs::File;
-use std::io::{Read, Write};
+use std::io::Write;
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use tempfile::{NamedTempFile, TempDir};
@@ -155,109 +154,15 @@ fn read_board_kicad_major_version(pcb_path: &Path) -> Result<Option<u32>> {
         return Ok(None);
     }
 
-    let file = File::open(pcb_path)
+    let source = std::fs::read_to_string(pcb_path)
         .with_context(|| format!("Failed to read PCB file: {}", pcb_path.display()))?;
-    // Read only as far as the header, in growing chunks.
-    let mut bytes = Vec::new();
-    let mut chunk = 64 * 1024;
-    loop {
-        let read = (&file)
-            .take(chunk)
-            .read_to_end(&mut bytes)
-            .with_context(|| format!("Failed to read PCB file: {}", pcb_path.display()))?;
-        let at_end = read < chunk as usize;
-        chunk *= 2;
-        // Only the header matters, so stop at invalid UTF-8 after it.
-        let (text, invalid) = match std::str::from_utf8(&bytes) {
-            Ok(text) => (text, false),
-            Err(err) => (
-                std::str::from_utf8(&bytes[..err.valid_up_to()]).expect("valid UTF-8 prefix"),
-                err.error_len().is_some(),
-            ),
-        };
-        if let Some(list) = generator_version_list(text) {
-            let list = pcb_sexpr::parse(&text[list])
-                .with_context(|| format!("Failed to parse PCB file: {}", pcb_path.display()))?;
-            let items = list.as_list().unwrap_or_default();
-            return Ok(items.get(1).and_then(Sexpr::as_str).and_then(version_major));
-        }
-        if invalid {
-            anyhow::bail!("PCB file is not UTF-8: {}", pcb_path.display());
-        }
-        if at_end {
-            // Report a malformed file as the parser would.
-            pcb_sexpr::Doc::parse_all(text)
-                .with_context(|| format!("Failed to parse PCB file: {}", pcb_path.display()))?;
-            return Ok(None);
-        }
-    }
-}
-
-/// The byte range of the first complete `(generator_version ...)` list in
-/// `text`, read with the parser's rules for strings and `;` comments.
-fn generator_version_list(text: &str) -> Option<std::ops::Range<usize>> {
-    let bytes = text.as_bytes();
-    let is_delimiter = |b: u8| b.is_ascii_whitespace() || b == b'(' || b == b')';
-    let mut depth = 0usize;
-    // The `(` of the list whose head is next, and of the version list.
-    let mut head_of = None;
-    let mut found: Option<(usize, usize)> = None;
-    let mut pos = 0;
-    while let Some(&b) = bytes.get(pos) {
-        match b {
-            b if b.is_ascii_whitespace() => {
-                pos += 1;
-                continue;
-            }
-            b';' => {
-                pos += bytes[pos..].iter().position(|&b| b == b'\n')?;
-                continue;
-            }
-            b'(' => {
-                head_of = Some(pos);
-                depth += 1;
-                pos += 1;
-                continue;
-            }
-            b')' => {
-                if let Some((start, list_depth)) = found
-                    && depth == list_depth
-                {
-                    return Some(start..pos + 1);
-                }
-                depth = depth.checked_sub(1)?;
-                pos += 1;
-            }
-            b'"' => {
-                pos += 1;
-                loop {
-                    pos += bytes
-                        .get(pos..)?
-                        .iter()
-                        .position(|&b| b == b'"' || b == b'\\')?;
-                    if bytes[pos] == b'"' {
-                        break;
-                    }
-                    pos += 2;
-                }
-                pos += 1;
-            }
-            _ => {
-                let start = pos;
-                while bytes.get(pos).is_some_and(|&b| !is_delimiter(b)) {
-                    pos += 1;
-                }
-                if let Some(open) = head_of
-                    && found.is_none()
-                    && &text[start..pos] == "generator_version"
-                {
-                    found = Some((open, depth));
-                }
-            }
-        }
-        head_of = None;
-    }
-    None
+    let doc = pcb_sexpr::Doc::parse(source)
+        .with_context(|| format!("Failed to parse PCB file: {}", pcb_path.display()))?;
+    Ok(doc
+        .root()
+        .find_list("generator_version")
+        .and_then(|items| items.get(1)?.as_str())
+        .and_then(version_major))
 }
 
 fn installed_kicad_major_version() -> Result<Option<u32>> {
@@ -746,38 +651,21 @@ mod tests {
     fn read_board_kicad_major_version_reads_the_header() {
         let temp = tempdir().expect("tempdir");
         let pcb_path = temp.path().join("layout.kicad_pcb");
-        let read = |pcb: &[u8]| {
+        let read = |pcb: &str| {
             fs::write(&pcb_path, pcb).expect("write pcb");
             read_board_kicad_major_version(&pcb_path).map_err(|e| format!("{e:#}"))
         };
-        let late = format!(
-            "(kicad_pcb (embedded \"{}\") (generator_version \"11.0\"))",
-            "x".repeat(200_000)
-        );
         for (pcb, expected) in [
+            ("(kicad_pcb (generator_version \"10.0\"))", Some(10)),
+            ("(kicad_pcb ( generator_version \"1\\0.0\"))", Some(10)),
             (
-                &b"(kicad_pcb\n\t(generator_version \"10.0\")\n\xff\xfe"[..],
+                "; (generator_version \"9.0\")\n(kicad_pcb (generator_version \"10.0\"))",
                 Some(10),
             ),
-            (b"(kicad_pcb ( generator_version \"10.0\"))", Some(10)),
-            (b"(kicad_pcb (generator_version \"1\\0.0\"))", Some(10)),
-            (
-                b"(kicad_pcb\n ; (generator_version \"9.0\")\n (generator_version \"10.0\"))",
-                Some(10),
-            ),
-            (
-                b"(kicad_pcb (generator \"(generator_version \\\"9\\\")\"))",
-                None,
-            ),
-            (late.as_bytes(), Some(11)),
+            ("(kicad_pcb (generator \"pcbnew\"))", None),
         ] {
-            assert_eq!(read(pcb), Ok(expected), "{}", String::from_utf8_lossy(pcb));
+            assert_eq!(read(pcb), Ok(expected), "{pcb}");
         }
-        for pcb in [
-            &b"(kicad_pcb (generator_version \"10.0\""[..],
-            b"(kicad_pcb \xff (generator_version \"10.0\"))",
-        ] {
-            assert!(read(pcb).is_err(), "{}", String::from_utf8_lossy(pcb));
-        }
+        assert!(read("(kicad_pcb (generator_version \"10.0\"").is_err());
     }
 }

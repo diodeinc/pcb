@@ -701,21 +701,23 @@ mod tests {
         assert_eq!(roots[1].as_sym(), Some("tail"));
 
         // A `Doc` holds the same nodes, spans and number text.
-        let input = format!("{input} (at 1.27 -5 (\"a\\\"b\" \"c\")) \"x\\ty\"");
-        let doc = Doc::parse_all(input.as_str()).unwrap();
-        let tree: Vec<_> = doc.roots().iter().map(Node::to_sexpr).collect();
+        let input = format!("(root {input} (at 1.27 -5 (\"a\\\"b\" \"c\")) \"x\\ty\")");
+        let doc = Doc::parse(input.as_str()).unwrap();
         assert_eq!(
-            format!("{tree:?}"),
-            format!("{:?}", parse_all(&input).unwrap())
+            format!("{:?}", doc.root().to_sexpr()),
+            format!("{:?}", parse(&input).unwrap())
         );
-        let items = doc.root().as_list().unwrap();
+        let [_, first, _, at, last] = doc.root().as_list().unwrap() else {
+            panic!("expected five items");
+        };
+        let items = first.as_list().unwrap();
         assert_eq!(items[1].atom_text().as_deref(), Some("+001"));
         assert_eq!(items[1].as_int(), Some(1));
         assert_eq!(items[5].as_str(), Some("🔥\n\r\t\\\"é"));
-        let at = doc.roots()[2].as_list().unwrap();
+        let at = at.as_list().unwrap();
         assert_eq!(at[1].kind(), NodeKind::F64(1.27));
         assert_eq!(at[3].as_list().unwrap()[1].as_str(), Some("c"));
-        assert_eq!(doc.roots()[3].as_str(), Some("x\ty"));
+        assert_eq!(last.as_str(), Some("x\ty"));
         let span = at[3].span();
         assert_eq!(&input[span.start..span.end], "(\"a\\\"b\" \"c\")");
 
@@ -726,7 +728,7 @@ mod tests {
             (")", ParseError::UnexpectedChar(')', '(')),
         ] {
             assert_eq!(parse(input).unwrap_err(), error);
-            assert_eq!(Doc::parse_all(input).unwrap_err(), error);
+            assert_eq!(Doc::parse(input).unwrap_err(), error);
         }
     }
 
