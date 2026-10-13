@@ -94,7 +94,6 @@ install_local() {
 
   mkdir -p "$local_target_dir/lib"
   install -m 755 "$target_dir/release/pcbc" "$local_target_dir/pcbc"
-  rm -f "$local_target_dir/pcb-rectify"
   rm -f "$install_dir/pcbc"
   rm -rf "$stdlib_dir"
   cp -R "$source_dir/lib/std" "$stdlib_dir"
