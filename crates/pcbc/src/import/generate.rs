@@ -527,8 +527,11 @@ fn infer_copper_layers_from_layers_section(pcb_text: &str) -> Result<usize> {
     let root_items = root
         .as_list()
         .ok_or_else(|| anyhow::anyhow!("Expected KiCad PCB root to be a list"))?;
-    let layers = find_child_list(root_items, "layers")
-        .ok_or_else(|| anyhow::anyhow!("KiCad PCB missing (layers ...) section"))?;
+    // KiCad writes a header-only board when it creates a project and loads a board without a
+    // layers section as its default two-copper-layer board.
+    let Some(layers) = find_child_list(root_items, "layers") else {
+        return Ok(2);
+    };
 
     let mut copper_layer_names: BTreeSet<&str> = BTreeSet::new();
     for item in layers.iter().skip(1) {
@@ -623,12 +626,13 @@ mod stackup_tests {
     }
 
     #[test]
-    fn errors_when_layers_section_is_missing() {
-        let pcb_text = r#"(kicad_pcb (version 20241229) (generator "pcbnew"))"#;
-        let err = try_extract_stackup(pcb_text, Path::new("dummy.kicad_pcb"))
-            .unwrap_err()
-            .to_string();
-        assert!(err.contains("missing (layers"));
+    fn missing_layers_section_uses_kicad_default_two_layers() {
+        let pcb_text = r#"(kicad_pcb (version 20241229) (generator "pcbnew") (generator_version "9.0")
+)"#;
+        let (layers, stackup) =
+            try_extract_stackup(pcb_text, Path::new("dummy.kicad_pcb")).unwrap();
+        assert_eq!(layers, 2);
+        assert!(stackup.is_none());
     }
 }
 

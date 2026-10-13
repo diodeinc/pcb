@@ -375,9 +375,6 @@ pub enum StackupError {
     #[error("Failed to parse KiCad PCB file")]
     KicadParseError,
 
-    #[error("KiCad PCB file missing setup section")]
-    NoSetupSection,
-
     #[error("Missing thickness in layer definition")]
     MissingThickness,
 
@@ -804,10 +801,10 @@ impl Stackup {
         // First, parse the layers section to get copper roles
         let copper_roles = Self::parse_copper_roles_from_layers(&pcb_expr)?;
 
-        // Find the setup section
-        let setup = pcb_expr
-            .find_list("setup")
-            .ok_or(StackupError::NoSetupSection)?;
+        // KiCad writes a header-only board, without a setup section, when it creates a project.
+        let Some(setup) = pcb_expr.find_list("setup") else {
+            return Ok(None);
+        };
 
         // Find the stackup within setup
         let setup_expr = Sexpr::list(setup.to_vec());
