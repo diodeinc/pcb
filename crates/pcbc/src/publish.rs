@@ -139,8 +139,8 @@ impl fmt::Display for BumpStrategy {
 #[command(about = "Publish packages or board releases")]
 pub struct PublishArgs {
     /// Print, as JSON without publishing, a board's release preflight and version, or each
-    /// package's next version and tag (bumps are inferred unless --bump is given)
-    #[arg(long, conflicts_with_all = ["force", "no_push", "no_build"])]
+    /// package's next version and tag after building it (bumps are inferred unless --bump is given)
+    #[arg(long, conflicts_with_all = ["force", "no_push"])]
     pub check: bool,
 
     /// Skip preflight checks (uncommitted changes, branch, remote)
@@ -748,8 +748,11 @@ fn collect_unpublishable_manifest_entries(manifest_path: &Path, manifest: &PcbTo
 /// Publish dirty packages in the workspace
 fn publish_packages(start_path: &Path, args: &PublishArgs) -> Result<()> {
     if args.check {
-        // A check reads local tags only, so it runs on a read-only checkout.
-        let (mut workspace, dirty_urls, _) = load_dirty_packages(start_path)?;
+        let (mut workspace, dirty_urls, manifest_changed) = load_dirty_packages(start_path)?;
+        if !args.no_build {
+            let scope = (!manifest_changed).then_some(&dirty_urls);
+            build_workspace(&workspace, scope, &args.suppress)?;
+        }
         let all_tags = git::list_all_tags_vec(&workspace.root);
         return print_publish_plan(&mut workspace, &dirty_urls, &all_tags, args.bump);
     }
@@ -769,13 +772,9 @@ fn publish_packages(start_path: &Path, args: &PublishArgs) -> Result<()> {
         preflight_checks(&workspace_root, &remote)?;
     }
 
-    let (mut workspace, dirty_urls, changed_paths) = load_dirty_packages(start_path)?;
+    let (mut workspace, dirty_urls, manifest_changed) = load_dirty_packages(start_path)?;
 
     if !args.no_build {
-        // Packages can read only their own files, declared dependencies and the workspace manifest.
-        let manifest_changed = changed_paths
-            .iter()
-            .any(|path| path == Path::new("pcb.toml"));
         let scope = (!manifest_changed).then_some(&dirty_urls);
         build_workspace(&workspace, scope, &args.suppress)?;
     }
@@ -881,10 +880,9 @@ fn publish_packages(start_path: &Path, args: &PublishArgs) -> Result<()> {
 }
 
 /// Loads the workspace with the dirty packages and their transitive dependants,
-/// which must also publish because their pcb.toml pins get bumped.
-fn load_dirty_packages(
-    start_path: &Path,
-) -> Result<(WorkspaceInfo, HashSet<String>, Vec<std::path::PathBuf>)> {
+/// which must also publish because their pcb.toml pins get bumped, and whether
+/// the workspace pcb.toml changed.
+fn load_dirty_packages(start_path: &Path) -> Result<(WorkspaceInfo, HashSet<String>, bool)> {
     let mut workspace = get_workspace_info(&DefaultFileProvider::new(), start_path)?;
     let tags = git::list_peeled_tags(&workspace.root);
     let changed_paths = pcb_zen::workspace::enrich_git_metadata(&mut workspace, tags);
@@ -904,7 +902,10 @@ fn load_dirty_packages(
         .map(|(url, _)| url.clone())
         .collect();
     let dirty_urls = expand_dirty_set(&workspace, &directly_dirty);
-    Ok((workspace, dirty_urls, changed_paths))
+    let manifest_changed = changed_paths
+        .iter()
+        .any(|path| path == Path::new("pcb.toml"));
+    Ok((workspace, dirty_urls, manifest_changed))
 }
 
 fn print_publish_plan(
@@ -1057,8 +1058,8 @@ fn build_workspace(
     scope: Option<&HashSet<String>>,
     suppress: &[String],
 ) -> Result<()> {
-    println!();
-    println!("{}", "Building workspace...".cyan().bold());
+    eprintln!();
+    eprintln!("{}", "Building workspace...".cyan().bold());
 
     let all_zen_files = collect_zen_files(std::slice::from_ref(&workspace.root))?;
     if all_zen_files.is_empty() {
@@ -1091,7 +1092,7 @@ fn build_workspace(
                 .package_url_for_zen(zen_path)
                 .is_some_and(|url| urls.contains(&url))
         });
-        println!(
+        eprintln!(
             "{}",
             format!(
                 "Building {} of {total} files in the packages being published",

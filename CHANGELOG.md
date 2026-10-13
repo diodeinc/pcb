@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Changed
+
+- `pcb publish --check` builds the packages it would publish, unless `--no-build` is given.
+
 ## [0.4.79] - 2026-10-13
 
 ### Removed
