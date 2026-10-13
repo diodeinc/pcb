@@ -16,6 +16,7 @@ mod faces;
 mod font;
 mod geom;
 mod holes;
+mod image;
 pub mod manifest;
 mod models;
 mod outline;
@@ -37,6 +38,10 @@ use crate::step::{Part, Root, Writer};
 
 pub use board::Board;
 pub use coverage::{Coverage, ModelCoverage, Status};
+pub use image::{
+    BoardImage, ImageKind, ImageOptions, LayerImage, LayerRole, NetId, PhysicalLayer, Side,
+    board_image,
+};
 pub use models::{LoadedModel, MAX_EXTERNAL_BYTES, ModelError, ModelFormat, ModelResolver};
 pub use outline::OutlinePolicy;
 pub use scene::ProxyMode;

@@ -2009,3 +2009,144 @@ fn embedded_font_names_are_what_faces_resolve_against() {
             .is_empty()
     );
 }
+
+/// The image's region of `kind` on the stackup layer named `layer`, for
+/// `net` when it is copper.
+fn image_region<'a>(
+    image: &'a crate::BoardImage,
+    layer: &str,
+    kind: crate::ImageKind,
+    net: &str,
+) -> &'a pcb_ir::geom::ContourSet {
+    let found: Vec<_> = image
+        .layers
+        .iter()
+        .filter(|l| {
+            image.stackup[l.layer].name == layer
+                && l.kind == kind
+                && image.nets[l.net as usize] == net
+        })
+        .collect();
+    assert_eq!(found.len(), 1, "{kind:?} on {layer} net {net:?}");
+    &found[0].region
+}
+
+#[test]
+fn image_unions_overlapping_pads_whatever_their_winding() {
+    use crate::ImageKind::{Copper, MaskOpening};
+    // A 4.8 mm through-hole pad and a custom pad whose 3 mm square covers
+    // one quadrant of it, as a mounting hole with a corner pad has. The
+    // square is listed in each winding, so one of them runs against the
+    // round pad: under a plain non-zero union the overlap cancels.
+    let footprint = |at: &str, square: &str| {
+        format!(
+            r#"(footprint "Lib:MH" (layer "F.Cu") (at {at}) (property "Reference" "MH1")
+  (pad "1" thru_hole circle (at 0 0) (size 4.8 4.8) (drill 2.9) (layers "*.Cu" "*.Mask") (net "GND"))
+  (pad "1" smd custom (at 0 0) (size 0.000001 0.000001) (layers "F.Cu" "F.Mask") (net "GND")
+    (options (clearance outline) (anchor circle))
+    (primitives (gr_poly (pts {square}) (width 0) (fill yes)))))
+"#
+        )
+    };
+    let body = format!(
+        "{}{}{}(segment (start 25 15) (end 28 15) (width 0.5) (layer \"F.Cu\") (net \"VCC\"))\n",
+        rect_outline(0.0, 0.0, 30.0, 20.0),
+        footprint("8 10", "(xy 0 0) (xy 3 0) (xy 3 3) (xy 0 3)"),
+        footprint("20 10", "(xy 0 0) (xy 0 3) (xy 3 3) (xy 3 0)"),
+    );
+    let text = parse(&body);
+    let board = Board::parse(text.as_bytes()).unwrap();
+    let image = crate::board_image(&board, &crate::ImageOptions::default()).unwrap();
+    assert!(image.warnings.is_empty(), "{:?}", image.warnings);
+
+    let r = 2.4;
+    let pads = PI * r * r * 0.75 + 9.0;
+    let drill = PI * 1.45 * 1.45;
+    // Each footprint's copper is its two pads less the drill: one outer
+    // and the drill as its only hole.
+    let copper = image_region(&image, "F.Cu", Copper, "GND");
+    assert!(
+        (copper.area() - 2.0 * (pads - drill)).abs() < 0.05,
+        "{}",
+        copper.area()
+    );
+    assert_eq!(copper.ring_count(), 4);
+    let mask = image_region(&image, "F.Mask", MaskOpening, "");
+    assert!((mask.area() - 2.0 * pads).abs() < 0.05, "{}", mask.area());
+    assert_eq!(mask.ring_count(), 2);
+    // Another net's copper is a region of its own.
+    let vcc = image_region(&image, "F.Cu", Copper, "VCC");
+    assert!((vcc.area() - (3.0 * 0.5 + PI * 0.25 * 0.25)).abs() < 0.01);
+}
+
+#[test]
+fn image_takes_padstack_shapes_per_layer() {
+    use crate::ImageKind::{Copper, MaskOpening};
+    use pcb_ir::dialects::nc;
+    let body = format!(
+        r#"{}(footprint "Lib:MH" (layer "F.Cu") (at 10 10) (property "Reference" "MH1")
+  (pad "1" thru_hole circle (at 0 0) (size 4.8 4.8) (drill 2.9) (layers "*.Cu" "*.Mask") (remove_unused_layers no) (net "GND")
+    (padstack (mode front_inner_back)
+      (layer "Inner" (shape circle) (size 3.31 3.31) (zone_connect -1))
+      (layer "B.Cu" (shape circle) (size 4 4) (zone_connect -1)))))
+"#,
+        rect_outline(0.0, 0.0, 30.0, 20.0)
+    );
+    let text = parse(&body);
+    let board = Board::parse(text.as_bytes()).unwrap();
+    let options = crate::ImageOptions {
+        inner_copper: true,
+        ..Default::default()
+    };
+    let image = crate::board_image(&board, &options).unwrap();
+    assert!(image.warnings.is_empty(), "{:?}", image.warnings);
+    let names: Vec<&str> = image.stackup.iter().map(|l| l.name.as_str()).collect();
+    assert_eq!(
+        names,
+        [
+            "B.SilkS", "B.Paste", "B.Mask", "B.Cu", "Body", "In2.Cu", "In1.Cu", "F.Cu", "F.Mask",
+            "F.Paste", "F.SilkS"
+        ]
+    );
+    assert!(image.stackup.windows(2).all(|w| w[0].z0 <= w[1].z0));
+
+    let ring = |d: f64| PI * (d * d - 2.9 * 2.9) / 4.0;
+    for (layer, diameter) in [
+        ("F.Cu", 4.8),
+        ("In1.Cu", 3.31),
+        ("In2.Cu", 3.31),
+        ("B.Cu", 4.0),
+    ] {
+        let copper = image_region(&image, layer, Copper, "GND");
+        assert!(
+            (copper.area() - ring(diameter)).abs() < 0.02,
+            "{layer}: {}",
+            copper.area()
+        );
+    }
+    // Each side's mask opens over that side's shape.
+    for (layer, diameter) in [("F.Mask", 4.8), ("B.Mask", 4.0)] {
+        let mask = image_region(&image, layer, MaskOpening, "");
+        assert!(
+            (mask.area() - PI * diameter * diameter / 4.0).abs() < 0.02,
+            "{layer}"
+        );
+    }
+    // One drill, plated, through the board, at the pad in y-up millimetres.
+    let [drill] = &image.drills.objects[..] else {
+        panic!("{:?}", image.drills.objects);
+    };
+    assert_eq!(
+        drill.geometry,
+        nc::Geometry::Drill {
+            at: pcb_ir::geom::Point { x: 10.0, y: -10.0 },
+            diameter: 2.9
+        }
+    );
+    assert_eq!(drill.plating, nc::Plating::Plated);
+    assert_eq!(drill.span, nc::DrillSpan::ThroughBoard);
+    let name = |s: Option<pcb_intern::Symbol>| s.map(|s| image.names.resolve(s));
+    assert_eq!(name(drill.net), Some("GND"));
+    assert_eq!(name(drill.component), Some("MH1"));
+    assert_eq!(name(drill.pin), Some("1"));
+}
