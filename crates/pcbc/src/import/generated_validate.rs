@@ -35,10 +35,15 @@ pub(super) fn validate_generated_zen(
         &mut has_errors,
         &mut has_warnings,
     );
-    let diagnostic_summary = result
+    // Errors first so the summary names the failure rather than unrelated warnings.
+    let mut unsuppressed = result
         .diagnostics
         .iter()
         .filter(|diagnostic| !diagnostic.suppressed)
+        .collect::<Vec<_>>();
+    unsuppressed.sort_by_key(|diagnostic| !diagnostic.is_error());
+    let diagnostic_summary = unsuppressed
+        .into_iter()
         .take(5)
         .map(|diagnostic| diagnostic.innermost().body.as_str())
         .collect::<Vec<_>>()
