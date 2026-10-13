@@ -127,8 +127,7 @@ fn aggregate_severity_key(severity: EvalSeverity) -> Option<u8> {
 /// - End-of-line: `code()  # suppress: pattern` (suppresses that line only)
 /// - Standalone: `# suppress: pattern` on its own line (suppresses next line)
 ///
-/// Checks all spans in the diagnostic tree (primary span, related locations and call stack) for
-/// matching patterns.
+/// Checks all spans in the diagnostic tree (primary span and call stack) for matching patterns.
 pub struct CommentSuppressPass {
     source_cache: std::cell::RefCell<SourceCache>,
 }
@@ -196,13 +195,6 @@ fn should_suppress_diagnostic(diagnostic: &Diagnostic, cache: &mut SourceCache) 
             return true;
         }
 
-        // Check related locations, such as the component that uses a checked symbol
-        if diag.related.iter().any(|related| {
-            check_span_for_suppression(diag, cache, &related.path, related.span.begin.line)
-        }) {
-            return true;
-        }
-
         // Check call stack frames
         if let Some(call_stack) = &diag.call_stack {
             for frame in &call_stack.frames {
@@ -229,43 +221,42 @@ fn check_span_for_suppression(
     path: &str,
     line: usize,
 ) -> bool {
-    // Check current line
-    if has_matching_suppression(diag, cache, path, line) {
-        return true;
-    }
-
-    // Check previous line (only if it's a standalone comment)
-    line > 0
-        && is_standalone_suppress_comment(cache, path, line - 1)
-        && has_matching_suppression(diag, cache, path, line - 1)
+    let current = cache.get_line(path, line).map(str::to_owned);
+    let previous = line
+        .checked_sub(1)
+        .and_then(|previous| cache.get_line(path, previous));
+    lines_suppress(diag, current.as_deref(), previous)
 }
 
-/// Check if a line has suppression patterns that match the diagnostic
-fn has_matching_suppression(
-    diag: &Diagnostic,
-    cache: &mut SourceCache,
-    path: &str,
-    line: usize,
-) -> bool {
-    extract_suppress_patterns(cache, path, line)
-        .is_some_and(|patterns| patterns.iter().any(|p| matches_pattern(diag, p)))
+/// Whether a `# suppress:` comment on line `line` (0-based) of `source`, or a standalone one on
+/// the line above it, matches `diagnostic`.
+pub(crate) fn source_suppresses(diagnostic: &Diagnostic, source: &str, line: usize) -> bool {
+    let mut lines = source.lines();
+    let previous = line.checked_sub(1).and_then(|previous| lines.nth(previous));
+    let current = lines.next();
+    lines_suppress(diagnostic, current, previous)
+}
+
+/// Check a line, and the line above it when that is a standalone comment, for suppression
+/// patterns that match the diagnostic
+fn lines_suppress(diag: &Diagnostic, line: Option<&str>, previous: Option<&str>) -> bool {
+    let matches = |line: &str| {
+        extract_suppress_patterns(line)
+            .is_some_and(|patterns| patterns.iter().any(|p| matches_pattern(diag, p)))
+    };
+    line.is_some_and(matches)
+        || previous
+            .is_some_and(|previous| is_standalone_suppress_comment(previous) && matches(previous))
 }
 
 /// Check if a line contains only a standalone suppress comment (no code before the comment)
-fn is_standalone_suppress_comment(cache: &mut SourceCache, path: &str, line_number: usize) -> bool {
-    cache.get_line(path, line_number).is_some_and(|line| {
-        let trimmed = line.trim_start();
-        trimmed.starts_with('#') && trimmed.to_lowercase().contains("suppress:")
-    })
+fn is_standalone_suppress_comment(line: &str) -> bool {
+    let trimmed = line.trim_start();
+    trimmed.starts_with('#') && trimmed.to_lowercase().contains("suppress:")
 }
 
 /// Extract suppression patterns from a source line
-fn extract_suppress_patterns(
-    cache: &mut SourceCache,
-    path: &str,
-    line_number: usize,
-) -> Option<Vec<String>> {
-    let line = cache.get_line(path, line_number)?;
+fn extract_suppress_patterns(line: &str) -> Option<Vec<String>> {
     let line_lower = line.to_lowercase();
 
     // Find "suppress:" marker (with or without space after #)
@@ -454,44 +445,51 @@ mod tests {
     }
 
     #[test]
-    fn test_comment_suppress_pass_checks_related_locations() {
+    fn test_source_suppresses_checks_line_and_standalone_comment_above() {
+        let source = "# suppress: symbol.pin.no_pad\nComponent(\n)  # suppress: other\n";
+        let finding = Diagnostic::categorized(
+            "part.kicad_sym",
+            "pin \"S1\" has no pad",
+            "symbol.pin.no_pad",
+            EvalSeverity::Error,
+        );
+
+        assert!(source_suppresses(&finding, source, 0));
+        assert!(source_suppresses(&finding, source, 1));
+        assert!(!source_suppresses(&finding, source, 2));
+        assert!(!source_suppresses(&finding, source, 9));
+    }
+
+    #[test]
+    fn test_comment_suppress_pass_ignores_related_locations() {
         let dir = tempfile::tempdir().unwrap();
-        let zen = dir.path().join("part.zen");
-        std::fs::write(&zen, "# suppress: symbol.pin.no_pad\nComponent(\n)\n").unwrap();
-        let pos = |line| starlark::codemap::ResolvedPos { line, column: 0 };
-        let related = |line| crate::DiagnosticReference {
-            path: zen.to_string_lossy().to_string(),
-            span: starlark::codemap::ResolvedSpan {
-                begin: pos(line),
-                end: pos(line),
-            },
-            message: "Component using this symbol".to_string(),
+        let zen = dir.path().join("board.zen");
+        std::fs::write(&zen, "x = 1  # suppress: binding.rebind\nx = 2\n").unwrap();
+        let path = zen.to_string_lossy().to_string();
+        let span = |line| starlark::codemap::ResolvedSpan {
+            begin: starlark::codemap::ResolvedPos { line, column: 0 },
+            end: starlark::codemap::ResolvedPos { line, column: 0 },
         };
-        // The finding points into a symbol file, which cannot carry comments.
-        let finding = || {
-            Diagnostic::categorized(
-                "part.kicad_sym",
-                "pin \"S1\" has no pad",
-                "symbol.pin.no_pad",
-                EvalSeverity::Error,
-            )
-        };
+        // The warning is about the rebinding; the earlier binding is only context.
+        let warning = Diagnostic::categorized(
+            &path,
+            "Rebinding 'x' in the same scope",
+            "binding.rebind",
+            EvalSeverity::Warning,
+        )
+        .with_span(Some(span(1)))
+        .with_related(crate::DiagnosticReference {
+            path: path.clone(),
+            span: span(0),
+            message: "Previous binding is here".to_string(),
+        });
 
         let mut diagnostics = Diagnostics {
-            diagnostics: vec![
-                finding().with_related(related(1)),
-                finding().with_related(related(2)),
-                finding(),
-            ],
+            diagnostics: vec![warning],
         };
         CommentSuppressPass::new().apply(&mut diagnostics);
 
-        let suppressed = diagnostics
-            .diagnostics
-            .iter()
-            .map(|diagnostic| diagnostic.suppressed)
-            .collect::<Vec<_>>();
-        assert_eq!(suppressed, [true, false, false]);
+        assert!(!diagnostics.diagnostics[0].suppressed);
     }
 
     #[test]

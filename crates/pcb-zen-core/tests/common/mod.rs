@@ -85,7 +85,7 @@ Net = builtin.net_type(\"Net\", symbol=Symbol, voltage=field(Voltage | None, def
 
 /// Prepend `ZEN_TEST_PREAMBLE` to a `.zen` source string, matching the
 /// existing indentation so that `dedent` still works correctly.
-fn prepend_preamble(content: &str) -> String {
+pub fn prepend_preamble(content: &str) -> String {
     // Find the indentation of the first non-empty line
     let indent = content
         .lines()

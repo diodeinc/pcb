@@ -485,6 +485,102 @@ Component(
 }
 
 #[test]
+fn component_suppress_comment_accepts_symbol_findings_for_that_component_only() {
+    let symbol = r#"(kicad_symbol_lib
+  (version 20251024)
+  (symbol "Shielded"
+    (property "Reference" "J")
+    (property "Value" "Shielded")
+    (symbol "Shielded_1_1"
+      (pin passive line (at 0 0 0) (length 2.54) (name "P") (number "1"))
+      (pin passive line (at 0 -2.54 0) (length 2.54) (name "SHIELD") (number "S1"))
+    )
+  )
+)"#;
+    let footprint = r#"(footprint "one_pad" (layer "F.Cu") (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu")))"#;
+    let part = |suppress: &str| {
+        format!(
+            r#"
+P = io(Net)
+SHIELD = io(Net)
+
+{suppress}
+Component(
+    name = "J",
+    footprint = File("one_pad.kicad_mod"),
+    symbol = Symbol(library = "shielded.kicad_sym"),
+    pins = {{"P": P, "SHIELD": SHIELD}},
+)
+"#
+        )
+    };
+    // Both modules pair the same symbol and footprint; only the first accepts the padless pin.
+    let files = vec![
+        ("shielded.kicad_sym".to_string(), symbol.to_string()),
+        ("one_pad.kicad_mod".to_string(), footprint.to_string()),
+        (
+            "accepted.zen".to_string(),
+            part("# suppress: symbol.pin.no_pad"),
+        ),
+        ("plain.zen".to_string(), part("")),
+        (
+            "test.zen".to_string(),
+            r#"
+Accepted = Module("accepted.zen")
+Plain = Module("plain.zen")
+Accepted(name = "J1", P = Net("P1"), SHIELD = Net("S1"))
+Plain(name = "J2", P = Net("P2"), SHIELD = Net("S2"))
+"#
+            .to_string(),
+        ),
+    ];
+    let result = common::eval_zen(files.clone());
+    assert!(result.is_success(), "eval failed: {:?}", result.diagnostics);
+
+    // Read back what was evaluated, so `Component()` lines match their spans.
+    let mut files: std::collections::HashMap<_, _> = files
+        .into_iter()
+        .map(|(path, content)| {
+            let content = if path.ends_with(".zen") {
+                common::prepend_preamble(&content)
+            } else {
+                content
+            };
+            (path, content)
+        })
+        .collect();
+    files.extend(common::stdlib_test_files());
+    let provider = common::InMemoryFileProvider::new(files);
+    let mut found: Vec<_> = result
+        .output
+        .expect("expected eval output")
+        .check_symbols(&provider)
+        .into_iter()
+        .filter(|diagnostic| {
+            pcb_zen_core::diagnostics::diagnostic_kind(diagnostic).as_deref()
+                == Some("symbol.pin.no_pad")
+        })
+        .map(|diagnostic| {
+            let component = diagnostic.related[0]
+                .path
+                .rsplit('/')
+                .next()
+                .unwrap()
+                .to_string();
+            (component, diagnostic.suppressed)
+        })
+        .collect();
+    found.sort();
+    assert_eq!(
+        found,
+        [
+            ("accepted.zen".to_string(), true),
+            ("plain.zen".to_string(), false),
+        ]
+    );
+}
+
+#[test]
 fn component_modifier_part_without_datasheet_clears_stale_part_datasheet() {
     let component = eval_single_root_component(
         r#"

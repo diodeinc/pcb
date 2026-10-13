@@ -17,6 +17,7 @@ use super::component::FrozenComponentValue;
 use super::footprint::{resolve_file_backed_footprint, resolved_span};
 use super::module::{FrozenModuleValue, ModulePath};
 use super::symbol::{SymbolValue, loaded_symbol_library};
+use crate::passes::source_suppresses;
 
 /// A symbol library some component loaded from, with what it takes to turn
 /// its issues into diagnostics.
@@ -77,7 +78,17 @@ fn symbols<'a>(
             return None;
         }
         // Instances of one component repeat; resolving paths is the costly part.
-        let fresh = seen.insert((uri, name, component.footprint(), component.source_path()));
+        // Each `Component()` call is its own use: it can suppress findings for itself.
+        let call = component
+            .declaration_span()
+            .map(|span| (span.begin.line, span.begin.column));
+        let fresh = seen.insert((
+            uri,
+            name,
+            component.footprint(),
+            component.source_path(),
+            call,
+        ));
         let path = fresh.then(|| resolution.resolve_package_uri(uri).ok())??;
         Some((component, path, name, resolution.is_workspace_uri(uri)))
     })
@@ -124,6 +135,7 @@ pub(crate) fn check_symbols(
     let mut reported = HashSet::new();
     let mut libraries: HashMap<PathBuf, Option<Library>> = HashMap::new();
     let mut pads: HashMap<PathBuf, Option<BTreeSet<String>>> = HashMap::new();
+    let mut sources: HashMap<PathBuf, Option<String>> = HashMap::new();
 
     for (component, path, name, workspace) in symbols(module_tree, resolution) {
         // The library is the one the symbol was loaded from, already parsed.
@@ -159,18 +171,30 @@ pub(crate) fn check_symbols(
         });
 
         for issue in check_symbol(&library.library, name, footprint_pads) {
+            let mut diagnostic = library.diagnostic(&issue, true);
+            // The symbol file cannot hold comments, so a `# suppress:` comment at the
+            // `Component()` call accepts the finding for that component only.
+            if let Some(span) = component.declaration_span() {
+                let path = component.source_path();
+                diagnostic.suppressed = sources
+                    .entry(PathBuf::from(path))
+                    .or_insert_with_key(|path| file_provider.read_file(path).ok())
+                    .as_deref()
+                    .is_some_and(|source| source_suppresses(&diagnostic, source, span.begin.line));
+                diagnostic = diagnostic.with_related(DiagnosticReference {
+                    path: path.to_string(),
+                    span,
+                    message: "Component using this symbol".to_string(),
+                });
+            }
             let file = library.sources[issue.source].0.clone();
-            if reported.insert((file, issue.span.start, issue.message.clone())) {
-                let mut diagnostic = library.diagnostic(&issue, true);
-                // The component that pairs the symbol with its footprint, where a
-                // `# suppress:` comment can accept the finding for that component.
-                if let Some(span) = component.declaration_span() {
-                    diagnostic = diagnostic.with_related(DiagnosticReference {
-                        path: component.source_path().to_string(),
-                        span,
-                        message: "Component using this symbol".to_string(),
-                    });
-                }
+            let key = (
+                file,
+                issue.span.start,
+                issue.message.clone(),
+                diagnostic.suppressed,
+            );
+            if reported.insert(key) {
                 diagnostics.push(diagnostic);
             }
         }
