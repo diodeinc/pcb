@@ -207,7 +207,6 @@ debug = 0
 
 [profile.dist]
 inherits = "release"
-lto = "fat"           # Maximum link-time optimization
-codegen-units = 1     # Better optimization
+lto = "thin"          # Parallel LTO; fat LTO with one codegen unit made release builds ~3x slower.
 strip = "symbols"     # Strip symbols from published binaries
 panic = "abort"       # Published binaries should not carry unwinding machinery.
