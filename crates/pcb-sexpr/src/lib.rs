@@ -1,7 +1,7 @@
 //! A simple S-expression parser that preserves the exact format of atoms
 //! and tracks source spans for each node.
 //!
-//! [`Doc::parse`] reads a file into a flat array of nodes, and is the fastest
+//! [`Arena::parse`] reads a file into nodes in a bump arena, and is the fastest
 //! way to read one. [`parse`] makes an owned [`Sexpr`] tree to build or edit.
 //!
 //! # Tree Traversal and Patching
@@ -12,6 +12,8 @@
 //! - [`Sexpr::walk`] - Depth-first traversal with ancestor context
 //! - [`Sexpr::walk_strings`] - Walk only string literals
 //! - [`PatchSet`] - Collect patches and write directly to any `std::io::Write`
+
+#![forbid(unsafe_code)]
 
 mod arena;
 pub mod board;
@@ -24,7 +26,7 @@ pub mod scan;
 use std::borrow::Cow;
 use std::fmt;
 
-pub use arena::{Doc, Node, NodeKind};
+pub use arena::{Arena, Node, NodeKind};
 
 /// Find a direct child list `(name ...)` within a list of [`Sexpr`] nodes.
 pub fn find_child_list<'a>(items: &'a [Sexpr], name: &str) -> Option<&'a [Sexpr]> {
@@ -503,7 +505,7 @@ impl From<bool> for Sexpr {
 
 /// Parse the first S-expression of a string into an owned tree.
 ///
-/// To only read the result, [`Doc::parse`] is faster.
+/// To only read the result, [`Arena::parse`] is faster.
 pub fn parse(input: &str) -> Result<Sexpr, ParseError> {
     parser::scan(input, &mut Tree, true)?
         .pop()
@@ -544,9 +546,12 @@ impl<'s> parser::Sink<'s> for Tree {
         }
     }
 
-    fn string(&mut self, start: u32, end: u32, text: &str, _escaped: bool) -> Sexpr {
+    fn string(&mut self, start: u32, end: u32, text: &'s str, unescaped: Option<&str>) -> Sexpr {
         let span = Span::new(start as usize, end as usize);
-        Sexpr::with_span(SexprKind::String(text.to_owned()), span)
+        Sexpr::with_span(
+            SexprKind::String(unescaped.unwrap_or(text).to_owned()),
+            span,
+        )
     }
 
     fn list(&mut self, start: u32, end: u32, pending: &mut Vec<Sexpr>, first: usize) -> Sexpr {
@@ -700,14 +705,15 @@ mod tests {
         assert_eq!(items[5].as_str(), Some("🔥\n\r\t\\\"é"));
         assert_eq!(roots[1].as_sym(), Some("tail"));
 
-        // A `Doc` holds the same nodes, spans and number text.
+        // An `Arena` holds the same nodes, spans and number text.
         let input = format!("(root {input} (at 1.27 -5 (\"a\\\"b\" \"c\")) \"x\\ty\")");
-        let doc = Doc::parse(input.as_str()).unwrap();
+        let arena = Arena::new();
+        let root = arena.parse(&input).unwrap();
         assert_eq!(
-            format!("{:?}", doc.root().to_sexpr()),
+            format!("{:?}", root.to_sexpr()),
             format!("{:?}", parse(&input).unwrap())
         );
-        let [_, first, _, at, last] = doc.root().as_list().unwrap() else {
+        let [_, first, _, at, last] = root.as_list().unwrap() else {
             panic!("expected five items");
         };
         let items = first.as_list().unwrap();
@@ -728,7 +734,7 @@ mod tests {
             (")", ParseError::UnexpectedChar(')', '(')),
         ] {
             assert_eq!(parse(input).unwrap_err(), error);
-            assert_eq!(Doc::parse(input).unwrap_err(), error);
+            assert_eq!(Arena::new().parse(input).unwrap_err(), error);
         }
     }
 
@@ -785,8 +791,9 @@ mod tests {
                 "{lexeme}"
             );
             assert_eq!(node.to_string(), *lexeme);
-            let doc = Doc::parse(lexeme.as_str()).unwrap();
-            assert_eq!(doc.root().atom_text().as_deref(), Some(lexeme.as_str()));
+            let arena = Arena::new();
+            let node = arena.parse(lexeme).unwrap();
+            assert_eq!(node.atom_text().as_deref(), Some(lexeme.as_str()));
         }
         // KiCad's usual numbers need no copy of their text.
         let node = parse("(at 1.27 -0.5 90)").unwrap();

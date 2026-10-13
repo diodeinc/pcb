@@ -1,4 +1,4 @@
-//! The S-expression scanner shared by [`crate::Doc`] and [`crate::Sexpr`].
+//! The S-expression scanner shared by [`crate::Arena`] and [`crate::Sexpr`].
 //!
 //! It reads the source by byte without recursion. A [`Sink`] makes the nodes;
 //! the scanner keeps the nodes of open lists on one stack and hands each list
@@ -12,9 +12,14 @@ pub(crate) trait Sink<'s> {
     fn symbol(&mut self, start: u32, text: &'s str) -> Self::Node;
     /// `canonical` tells whether formatting the number reproduces `text`.
     fn number(&mut self, start: u32, text: &'s str, number: Number, canonical: bool) -> Self::Node;
-    /// `text` is the unescaped string; it is a slice of the source when
-    /// `escaped` is false.
-    fn string(&mut self, start: u32, end: u32, text: &str, escaped: bool) -> Self::Node;
+    /// `text` is the source between the quotes; `unescaped` is set if it has escapes.
+    fn string(
+        &mut self,
+        start: u32,
+        end: u32,
+        text: &'s str,
+        unescaped: Option<&str>,
+    ) -> Self::Node;
     /// Make a list from the children `pending[first..]`, removing them.
     fn list(
         &mut self,
@@ -65,9 +70,10 @@ pub(crate) fn scan<'s, S: Sink<'s>>(
                 sink.list(start, pos as u32, &mut pending, first)
             }
             b'"' => {
-                let (text, escaped);
-                (pos, text, escaped) = string(source, pos + 1, &mut unescaped)?;
-                sink.string(start, pos as u32, text, escaped)
+                let escaped;
+                (pos, escaped) = string(source, pos + 1, &mut unescaped)?;
+                let text = &source[start as usize + 1..pos - 1];
+                sink.string(start, pos as u32, text, escaped.then_some(&unescaped))
             }
             _ => {
                 let len = bytes[pos..]
@@ -107,12 +113,8 @@ fn skip_whitespace(bytes: &[u8], mut pos: usize) -> usize {
 }
 
 /// Read the string whose text starts at `pos`. Returns the offset past the
-/// closing quote, the text, and whether it had escapes (and so is in `buffer`).
-fn string<'a>(
-    source: &'a str,
-    mut pos: usize,
-    buffer: &'a mut String,
-) -> Result<(usize, &'a str, bool), ParseError> {
+/// closing quote, and whether the text had escapes, unescaped into `buffer`.
+fn string(source: &str, mut pos: usize, buffer: &mut String) -> Result<(usize, bool), ParseError> {
     let bytes = source.as_bytes();
     let run = |pos: usize| {
         memchr::memchr2(b'"', b'\\', &bytes[pos..]).ok_or(ParseError::UnterminatedString)
@@ -120,7 +122,7 @@ fn string<'a>(
     let start = pos;
     pos += run(pos)?;
     if bytes[pos] == b'"' {
-        return Ok((pos + 1, &source[start..pos], false));
+        return Ok((pos + 1, false));
     }
     buffer.clear();
     buffer.push_str(&source[start..pos]);
@@ -141,7 +143,7 @@ fn string<'a>(
         buffer.push_str(&source[pos..pos + len]);
         pos += len;
     }
-    Ok((pos + 1, buffer, true))
+    Ok((pos + 1, true))
 }
 
 /// Delimiters are ASCII, so scanning bytes never splits a UTF-8 character.

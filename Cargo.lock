@@ -3995,6 +3995,7 @@ name = "pcb-sexpr"
 version = "0.4.76"
 dependencies = [
  "base64 0.23.1",
+ "bumpalo",
  "hex",
  "log",
  "memchr",

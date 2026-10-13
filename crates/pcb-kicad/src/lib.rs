@@ -156,10 +156,11 @@ fn read_board_kicad_major_version(pcb_path: &Path) -> Result<Option<u32>> {
 
     let source = std::fs::read_to_string(pcb_path)
         .with_context(|| format!("Failed to read PCB file: {}", pcb_path.display()))?;
-    let doc = pcb_sexpr::Doc::parse(source)
+    let arena = pcb_sexpr::Arena::new();
+    let root = arena
+        .parse(&source)
         .with_context(|| format!("Failed to parse PCB file: {}", pcb_path.display()))?;
-    Ok(doc
-        .root()
+    Ok(root
         .find_list("generator_version")
         .and_then(|items| items.get(1)?.as_str())
         .and_then(version_major))

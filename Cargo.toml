@@ -91,6 +91,7 @@ insta = { version = "1.49", features = ["yaml", "filters", "json"] }
 assert_cmd = "2.2"
 assert_fs = "1.1"
 base64 = "0.23.1"
+bumpalo = "3.20"
 console_error_panic_hook = "0.1"
 console_log = "1.1.0"
 crossterm = "0.29"
