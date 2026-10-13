@@ -2049,7 +2049,7 @@ fn image_unions_overlapping_pads_whatever_their_winding() {
         )
     };
     let body = format!(
-        "{}{}{}(segment (start 25 15) (end 28 15) (width 0.5) (layer \"F.Cu\") (net \"VCC\"))\n",
+        "{}{}{}(segment (start 28 15) (end 32 15) (width 0.5) (layer \"F.Cu\") (net \"VCC\"))\n",
         rect_outline(0.0, 0.0, 30.0, 20.0),
         footprint("8 10", "(xy 0 0) (xy 3 0) (xy 3 3) (xy 0 3)"),
         footprint("20 10", "(xy 0 0) (xy 0 3) (xy 3 3) (xy 3 0)"),
@@ -2074,9 +2074,9 @@ fn image_unions_overlapping_pads_whatever_their_winding() {
     let mask = image_region(&image, "F.Mask", MaskOpening, "");
     assert!((mask.area() - 2.0 * pads).abs() < 0.05, "{}", mask.area());
     assert_eq!(mask.ring_count(), 2);
-    // Another net's copper is a region of its own.
+    // Another net's copper is a region of its own, cut at the board edge.
     let vcc = image_region(&image, "F.Cu", Copper, "VCC");
-    assert!((vcc.area() - (3.0 * 0.5 + PI * 0.25 * 0.25)).abs() < 0.01);
+    assert!((vcc.area() - (2.0 * 0.5 + PI * 0.25 * 0.25 / 2.0)).abs() < 0.01);
 }
 
 #[test]

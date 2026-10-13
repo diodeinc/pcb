@@ -218,7 +218,15 @@ pub fn board_image(board: &Board, options: &ImageOptions) -> Result<BoardImage, 
         inner: options.inner_copper,
         separate_pads: false,
     };
-    let copper = copper::build(board, frame, &physical, copper_options, None, &mut warnings);
+    // Copper off the board is not made, so it is cut at the edge.
+    let copper = copper::build(
+        board,
+        frame,
+        &physical,
+        copper_options,
+        Some(&edge),
+        &mut warnings,
+    );
     // Each layer and net: its islands, unioned with its pads.
     let mut nets: BTreeMap<(u32, u32), (Option<ContourSet>, Vec<ContourBuf>)> = BTreeMap::new();
     for island in copper.islands {

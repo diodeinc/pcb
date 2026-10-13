@@ -881,12 +881,13 @@ impl<'a> Board<'a> {
                         hole.footprint = self.footprints.len() as u32;
                         scratch.holes.push(hole);
                     }
-                    if let Some(pad) = pads.first() {
-                        if let Some(net) = net_atom.filter(|n| !n.is_empty() && *n != "0")
-                            && !fp.nets.contains(&net)
-                        {
-                            fp.nets.push(net);
-                        }
+                    if !pads.is_empty()
+                        && let Some(net) = net_atom.filter(|n| !n.is_empty() && *n != "0")
+                        && !fp.nets.contains(&net)
+                    {
+                        fp.nets.push(net);
+                    }
+                    for pad in &pads {
                         grow_extent(&mut fp.extent, pad, fp.rotation);
                     }
                     // Pads are copper, and also what opens the mask.
