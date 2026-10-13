@@ -934,12 +934,18 @@ fn preserves_non_naming_power_symbols() {
 fn reconciliation_removes_only_an_unmatched_net_symbol() {
     let (netlist, document) = net_symbol_fixture();
     let mut with_stray = document.clone();
+    // A pinless net symbol creates no net, so attach this one to a generated net.
+    let signal_at = with_stray.pages[0]
+        .items
+        .iter()
+        .find_map(|item| match item {
+            SchItem::Label(label) if label.text == "SIGNAL" => Some(label.at),
+            _ => None,
+        })
+        .unwrap();
     let mut stray = net_symbol(&with_stray, "GROUND").clone();
     stray.id = "00000000-0000-0000-0000-000000000099".to_string();
-    stray.at.x += 100.0;
-    for field in stray.fields.values_mut() {
-        field.at.x += 100.0;
-    }
+    move_symbol(&mut stray, signal_at);
     stray.fields.get_mut("Value").unwrap().value = "STRAY".to_string();
     with_stray.pages[0].items.push(SchItem::Symbol(stray));
 
@@ -953,6 +959,30 @@ fn reconciliation_removes_only_an_unmatched_net_symbol() {
         .apply(Some(&with_stray))
         .unwrap();
     assert_eq!(repaired, document);
+}
+
+#[test]
+fn pinless_net_symbol_is_kept_like_kicad_omits_its_net() {
+    let (netlist, document) = net_symbol_fixture();
+    let mut with_stray = document.clone();
+    let mut stray = net_symbol(&with_stray, "GROUND").clone();
+    stray.id = "00000000-0000-0000-0000-000000000099".to_string();
+    let at = Point::new(stray.at.x + 100.0, stray.at.y);
+    move_symbol(&mut stray, at);
+    stray.fields.get_mut("Value").unwrap().value = "+12V".to_string();
+    with_stray.pages[0].items.push(SchItem::Symbol(stray));
+
+    let inspection = inspect_schematic(&with_stray, &netlist).unwrap();
+    assert!(
+        inspection.analysis.is_equivalent(),
+        "{:?}",
+        inspection.analysis.issues()
+    );
+    let repaired = plan_reconciliation(Some(&with_stray), &netlist, "NetSymbols.kicad_sch")
+        .unwrap()
+        .apply(Some(&with_stray))
+        .unwrap();
+    assert_eq!(repaired, with_stray);
 }
 
 #[test]

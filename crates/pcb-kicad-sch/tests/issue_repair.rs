@@ -743,12 +743,21 @@ fn disconnect_first_named_island(document: &mut SchDocument) {
 }
 
 fn add_unexpected_net(document: &mut SchDocument) {
+    // A pinless label creates no net, so attach this one to a generated net.
+    let anchor = document.pages[0]
+        .items
+        .iter()
+        .find_map(|item| match item {
+            SchItem::Label(label) => Some(label.at),
+            _ => None,
+        })
+        .expect("generated net label");
     document.pages[0]
         .items
         .push(SchItem::Label(pcb_kicad_sch::Label::new(
             "unexpected-net",
             "EXTRA",
-            Point::new(100.0, 100.0),
+            anchor,
         )));
 }
 
@@ -1235,6 +1244,52 @@ fn stacked_distinct_no_connects_share_one_marker_and_preserve_conflicts() {
             .issues
             .iter()
             .any(|issue| matches!(issue.issue, SchematicIssue::UnexpectedConnection { .. }))
+    );
+}
+
+#[test]
+fn label_on_only_a_hidden_pin_is_an_unexpected_net() {
+    let mut netlist = common::compile_fixture("multi_pad_nc", "root.zen");
+    let mut not_connected = netlist.nets.remove("LEFT").unwrap();
+    not_connected.kind = "NotConnected".to_string();
+    not_connected.name.clear();
+    netlist.nets.insert(String::new(), not_connected);
+    let mut document = plan_reconciliation(None, &netlist, "multi_pad_nc.kicad_sch")
+        .unwrap()
+        .apply(None)
+        .unwrap();
+    let (page_index, hidden) = document
+        .pages
+        .iter()
+        .enumerate()
+        .find_map(|(page_index, page)| {
+            page.items.iter().find_map(|item| match item {
+                SchItem::Symbol(symbol) if symbol.field_value("Path") == Some("U1.MULTI_PAD") => {
+                    let pins = page.library.definitions[&symbol.lib_id]
+                        .placed_pins(symbol)
+                        .unwrap();
+                    let hidden = pins.iter().find(|pin| pin.name == "A" && pin.hidden)?;
+                    Some((page_index, hidden.point))
+                }
+                _ => None,
+            })
+        })
+        .unwrap();
+    // The visible-pin graph sees a pinless label, but KiCad connects the hidden pin to it.
+    document.pages[page_index]
+        .items
+        .push(SchItem::Label(pcb_kicad_sch::Label::new(
+            "wrong", "WRONG", hidden,
+        )));
+
+    let inspection = inspect_schematic(&document, &netlist).unwrap();
+    assert!(
+        inspection.issues.iter().any(|issue| matches!(
+            &issue.issue,
+            SchematicIssue::UnexpectedNet { net_name, .. } if net_name == "WRONG"
+        )),
+        "{:?}",
+        inspection.analysis.issues()
     );
 }
 

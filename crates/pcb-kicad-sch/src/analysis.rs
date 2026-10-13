@@ -738,6 +738,26 @@ pub(crate) fn observed_reconcilable_connectivity(
         .graph
         .groups
         .retain(|group| !is_open_not_connected_group(group, islands, &not_connected));
+    // Like KiCad's netlist, drop names that reach no pins (hidden ones
+    // included) and no netlist net, e.g. leftover labels or power symbols.
+    let pinless = |group: &ConnectionGroup| group.terminals.is_empty() && !group.names.is_empty();
+    if observed.graph.groups.iter().any(pinless) {
+        let mut kept = reduce_with_provenance(document, PinVisibility::IncludeHidden)?
+            .graph
+            .groups
+            .into_iter()
+            .filter(|group| !group.terminals.is_empty())
+            .flat_map(|group| group.names)
+            .collect::<BTreeSet<_>>();
+        kept.extend(netlist.nets.values().map(|net| net.name.clone()));
+        observed.graph.groups.retain_mut(|group| {
+            if !pinless(group) {
+                return true;
+            }
+            group.names.retain(|name| kept.contains(name));
+            !group.names.is_empty()
+        });
+    }
     Ok(observed)
 }
 
@@ -1392,13 +1412,15 @@ mod tests {
     }
 
     #[test]
-    fn reports_shorts_and_unexpected_nets() {
+    fn reports_shorts_but_not_pinless_label_nets() {
         let netlist = netlist_with_nets(&["N1", "N2"]);
         let mut page = SchPage::new("page");
         page.items.extend([
             SchItem::Label(Label::new("a", "N1", Point::new(0.0, 0.0))),
             SchItem::Label(Label::new("b", "N2", Point::new(0.0, 0.0))),
             SchItem::Label(Label::new("c", "EXTRA", Point::new(10.0, 0.0))),
+            // A netlist name on the same pinless island does not keep EXTRA.
+            SchItem::Label(Label::new("d", "N1", Point::new(10.0, 0.0))),
         ]);
 
         let analysis = inspect_schematic(&document_with_pages(vec![page]), &netlist)
@@ -1411,7 +1433,8 @@ mod tests {
                 .iter()
                 .any(|issue| matches!(issue, SchematicIssue::Shorted { .. }))
         );
-        assert!(analysis.issues().iter().any(
+        // KiCad's netlist omits a net without pins, so a leftover label is not unexpected.
+        assert!(!analysis.issues().iter().any(
             |issue| matches!(issue, SchematicIssue::UnexpectedNet { net_name, .. } if net_name == "EXTRA")
         ));
     }
