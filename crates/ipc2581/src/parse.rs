@@ -791,15 +791,34 @@ impl<'a> Parser<'a> {
                 "Role" => header.roles.push(Role {
                     id: self.required_attr(&child, "id", "Role")?,
                     role_function: self.required_attr(&child, "roleFunction", "Role")?,
+                    description: self.optional_attr(&child, "description"),
+                    authority: self.optional_attr(&child, "authority"),
                 }),
                 "Enterprise" => header.enterprises.push(Enterprise {
                     id: self.required_attr(&child, "id", "Enterprise")?,
                     code: self.required_attr(&child, "code", "Enterprise")?,
                     name: self.optional_attr(&child, "name"),
+                    code_type: self.optional_attr(&child, "codeType"),
+                    address1: self.optional_attr(&child, "address1"),
+                    address2: self.optional_attr(&child, "address2"),
+                    city: self.optional_attr(&child, "city"),
+                    state_province: self.optional_attr(&child, "stateProvince"),
+                    country: self.optional_attr(&child, "country"),
+                    postal_code: self.optional_attr(&child, "postalCode"),
+                    phone: self.optional_attr(&child, "phone"),
+                    fax: self.optional_attr(&child, "fax"),
+                    email: self.optional_attr(&child, "email"),
+                    url: self.optional_attr(&child, "url"),
                 }),
                 "Person" => header.persons.push(Person {
                     name: self.required_attr(&child, "name", "Person")?,
+                    enterprise_ref: self.required_attr(&child, "enterpriseRef", "Person")?,
+                    role_ref: self.required_attr(&child, "roleRef", "Person")?,
+                    title: self.optional_attr(&child, "title"),
                     email: self.optional_attr(&child, "email"),
+                    phone: self.optional_attr(&child, "phone"),
+                    fax: self.optional_attr(&child, "fax"),
+                    mailstop: self.optional_attr(&child, "mailstop"),
                 }),
                 _ => {}
             }
@@ -824,6 +843,9 @@ impl<'a> Parser<'a> {
             origination: self.required_attr(node, "origination", "HistoryRecord")?,
             software: self.optional_attr(node, "software"),
             last_change: self.required_attr(node, "lastChange", "HistoryRecord")?,
+            lifecycle_phase: self.optional_attr(node, "lifecyclePhase"),
+            external_configuration_entry_point: self
+                .optional_attr(node, "externalConfigurationEntryPoint"),
             // The schema allows one FileRevision, but pcb up to 0.4.11 appended
             // one per save. The first is the file's own; saving again turns the
             // rest into ChangeRec entries.
@@ -831,6 +853,28 @@ impl<'a> Parser<'a> {
                 .child(node, "FileRevision")
                 .map(|child| self.parse_file_revision(&child))
                 .transpose()?,
+            change_recs: self
+                .children_named(node, "ChangeRec")
+                .map(|child| self.parse_change_rec(&child))
+                .collect::<Result<_>>()?,
+        })
+    }
+
+    fn parse_change_rec(&mut self, node: &Node) -> Result<metadata::ChangeRec> {
+        Ok(metadata::ChangeRec {
+            datetime: self.required_attr(node, "datetime", "ChangeRec")?,
+            person_ref: self.required_attr(node, "personRef", "ChangeRec")?,
+            application: self.required_attr(node, "application", "ChangeRec")?,
+            change: self.required_attr(node, "change", "ChangeRec")?,
+            approvals: self
+                .children_named(node, "Approval")
+                .map(|child| {
+                    Ok(metadata::Approval {
+                        datetime: self.required_attr(&child, "datetime", "Approval")?,
+                        person_ref: self.required_attr(&child, "personRef", "Approval")?,
+                    })
+                })
+                .collect::<Result<_>>()?,
         })
     }
 
@@ -1140,6 +1184,8 @@ impl<'a> Parser<'a> {
 
     fn parse_spec_property(&mut self, node: &Node) -> Result<SpecProperty> {
         Ok(SpecProperty {
+            name: self.optional_attr(node, "name"),
+            comment: self.optional_attr(node, "comment"),
             value: self.opt_num(node, "value")?,
             text: self.optional_attr(node, "text"),
             unit: self.optional_attr(node, "unit"),

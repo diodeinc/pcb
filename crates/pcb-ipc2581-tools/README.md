@@ -19,6 +19,7 @@ alias provides the same commands.
 | `fab-panel create` | Tile assembly panels into a supported fabrication panel size. |
 | `edit bom` | Add approved alternatives to BOM entries. |
 | `edit population` | Change which BOM designators are populated. |
+| `edit provenance` | Record a production run's parties, BOM header, history, and configuration properties. |
 
 Run `pcb ipc2581 <command> --help` for arguments and output options.
 
@@ -33,6 +34,25 @@ path when the source document must remain unchanged.
 population it was authored with; a designator outside the BOM is an error. The
 assembly report, `cpl --exclude-dnp`, and board arrays of the edited file follow
 the population. An unchanged population leaves the file byte-for-byte intact.
+
+`edit provenance --provenance <json>` records where a production run came from,
+so the file describes itself. The JSON
+([example](src/commands/testdata/provenance.json)) sets:
+
+- `parties`: LogisticHeader Roles, Enterprises, and Persons, upserted by Role
+  `id`, Enterprise `id`, and Person `name`. A Person takes its party's Role and
+  Enterprise. The OWNER role becomes `Content@roleRef`. KiCad's placeholders
+  (`Role id="Owner"`, `Enterprise id="UNKNOWN"`, `Person name="UNKNOWN"`) are
+  removed unless something still refers to them.
+- `bom`: `assembly` and `revision` of every `BomHeader`.
+- `history`: `lifecyclePhase` and `externalConfigurationEntryPoint` of the
+  HistoryRecord.
+- `spec`: a named CadHeader Spec of `General type="CONFIGURATION"` properties,
+  `text` for strings and `value` for numbers. It replaces a Spec of that name.
+- `changedBy`: the Person the history ChangeRec is attributed to.
+
+Board arrays of the edited file keep the provenance. `info --format json`
+reports it under `provenance`.
 
 Use `view --mode fabrication` to create an IPC-2581C fabrication projection.
 The projection removes BOM/AVL, package, placement, assembly, solder-paste,

@@ -1,0 +1,41 @@
+{
+  "parties": [
+    {
+      "role": { "id": "diode-owner", "roleFunction": "OWNER", "description": "Design owner" },
+      "enterprise": {
+        "id": "acme",
+        "code": "acme",
+        "name": "Acme Robotics",
+        "address1": "1 Main St",
+        "city": "Boston",
+        "stateProvince": "MA",
+        "country": "US",
+        "postalCode": "02110",
+        "email": "hw@acme.example",
+        "url": "https://acme.example"
+      },
+      "persons": [{ "name": "Ada Lovelace", "title": "Hardware Lead", "email": "ada@acme.example" }]
+    },
+    {
+      "role": { "id": "diode-sender", "roleFunction": "SENDER", "authority": "Diode" },
+      "enterprise": { "id": "diode", "code": "NONE", "name": "Diode Computers, Inc." },
+      "persons": [{ "name": "Diode", "email": "support@diode.computer" }]
+    }
+  ],
+  "bom": { "assembly": "rover-main", "revision": "1.4.0" },
+  "history": {
+    "lifecyclePhase": "PRODUCTION",
+    "externalConfigurationEntryPoint": "https://app.diode.computer/runs/run_42"
+  },
+  "spec": {
+    "name": "Diode_Provenance",
+    "properties": {
+      "runId": "run_42",
+      "orderNumber": "ORD-1001",
+      "releaseVersion": "1.4.0",
+      "commitSha": "0123abcd",
+      "quantity": 25
+    }
+  },
+  "changedBy": "Diode"
+}

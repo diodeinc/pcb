@@ -10,6 +10,7 @@ mod components;
 mod drills;
 mod layers;
 mod metadata;
+mod provenance;
 mod stackup;
 
 // Re-export types
@@ -22,6 +23,10 @@ pub use components::ComponentStats;
 pub use drills::{DrillHoleType, DrillSize, DrillStats, DrillTypeDistribution, drill_stats};
 pub use layers::{LayerStats, NetStats};
 pub use metadata::{FileMetadata, SoftwareInfo};
+pub use provenance::{
+    ApprovalInfo, BomHeaderInfo, ChangeInfo, ConfigurationSpec, EnterpriseInfo, HistoryInfo,
+    PersonDetails, PersonInfo, PropertyValue, Provenance, RoleInfo,
+};
 pub use stackup::{
     ColorInfo, ImpedanceControlInfo, MaterialInfo, StackupDetails, StackupLayerInfo,
     StackupLayerType, SurfaceFinishCategory, SurfaceFinishInfo,

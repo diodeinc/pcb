@@ -8,6 +8,11 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added
+
+- `pcb ipc2581 edit provenance` records a production run's parties, BOM header, history attributes, and configuration properties in the IPC-2581 file; board arrays keep them and `pcb ipc2581 info --format json` reports them under `provenance`.
+- The IPC-2581 parser keeps every Enterprise, Person, and Role attribute, HistoryRecord `lifecyclePhase`, `externalConfigurationEntryPoint` and ChangeRecs, and `Property@name`.
+
 ## [0.4.77] - 2026-10-13
 
 ### Added
