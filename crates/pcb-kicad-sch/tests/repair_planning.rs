@@ -3,7 +3,7 @@ mod common;
 use std::collections::BTreeSet;
 
 use pcb_kicad_sch::{
-    NetDriverKind, Point, SchDocument, SchItem, Wire,
+    NetDriverKind, Point, SchDocument, SchItem, SymbolField, Wire,
     analysis::{SchematicIssue, SchematicIssueKey, inspect_schematic},
     connectivity::ConnectivityItemRef,
     plan_connectivity_repair,
@@ -44,6 +44,52 @@ fn read_only_projection_matches_editable_reconciliation() {
         let (unchanged, reused) = reconcile_read_only(&projected, &netlist).unwrap();
         assert_eq!(unchanged, projected);
         assert_eq!(reused, inspect_schematic(&unchanged, &netlist).unwrap());
+    }
+}
+
+#[test]
+fn filling_an_empty_visible_datasheet_keeps_it_hidden() {
+    let mut netlist = common::compile_fixture("analysis", "simple.zen");
+    let mut document = plan_reconciliation(None, &netlist, "root.kicad_sch")
+        .unwrap()
+        .apply(None)
+        .unwrap();
+    // KiCad leaves an empty Datasheet visible; it draws nothing until filled.
+    let mut empty_datasheets = 0;
+    for page in &mut document.pages {
+        for item in &mut page.items {
+            if let SchItem::Symbol(symbol) = item {
+                let mut field = SymbolField::new("Datasheet", "", symbol.at);
+                field.hidden = false;
+                symbol.fields.insert(field.name.clone(), field);
+                empty_datasheets += 1;
+            }
+        }
+    }
+    assert!(empty_datasheets > 0);
+    for instance in netlist.instances.values_mut() {
+        if instance.kind == pcb_sch::InstanceKind::Component {
+            instance.add_attribute(
+                "datasheet",
+                pcb_sch::AttributeValue::String("https://example.com/part.pdf".into()),
+            );
+        }
+    }
+
+    let (projected, _) = reconcile_read_only(&document, &netlist).unwrap();
+    let datasheets = projected
+        .pages
+        .iter()
+        .flat_map(|page| &page.items)
+        .filter_map(|item| match item {
+            SchItem::Symbol(symbol) => symbol.fields.get("Datasheet"),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(datasheets.len(), empty_datasheets);
+    for field in datasheets {
+        assert_eq!(field.value, "https://example.com/part.pdf");
+        assert!(field.hidden);
     }
 }
 
