@@ -564,8 +564,19 @@ fn build_board_array_spec(
         array_width_mm: array_width,
         array_height_mm: array_height,
     };
-    let board_repeat_x = board_margin.left - root.bbox.min.x;
-    let board_repeat_y = board_margin.bottom - root.bbox.min.y;
+    // How far the board's own coordinates move into its cell. The cell's
+    // StepRepeat places the board's Datum, so it is offset by the Datum too.
+    let board_offset_x = board_margin.left - root.bbox.min.x;
+    let board_offset_y = board_margin.bottom - root.bbox.min.y;
+    let board_datum = ecad
+        .cad_data
+        .steps
+        .iter()
+        .find(|step| step.name == root.source_step_ref)
+        .and_then(|step| step.datum)
+        .unwrap_or(ipc2581::types::ecad::Datum { x: 0.0, y: 0.0 });
+    let board_repeat_x = board_offset_x + board_datum.x;
+    let board_repeat_y = board_offset_y + board_datum.y;
 
     let board_name = ipc.resolve(root.source_step_ref).to_string();
     let existing_step_names = ecad
@@ -618,8 +629,8 @@ fn build_board_array_spec(
                 .flat_map(|row| {
                     (0..columns).map(move |column| {
                         pcb_ir::geom::Point::new(
-                            edge_rail.left + board_repeat_x + f64::from(column) * pitch_x,
-                            edge_rail.bottom + board_repeat_y + f64::from(row) * pitch_y,
+                            edge_rail.left + board_offset_x + f64::from(column) * pitch_x,
+                            edge_rail.bottom + board_offset_y + f64::from(row) * pitch_y,
                         )
                     })
                 })

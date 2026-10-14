@@ -270,8 +270,17 @@ fn simple_board_cell_array(
         return None;
     }
 
-    let board_left = board_repeat.x + board_step.bbox.min.x - board_cell_step.bbox.min.x;
-    let board_bottom = board_repeat.y + board_step.bbox.min.y - board_cell_step.bbox.min.y;
+    // Where the board really sits in the cell: its repeat places the board's
+    // Datum, not its origin, so read the placement back from the instances.
+    let board_instance = layout_repeat_instances(doc, board_repeat).next()?;
+    let cell_to_root = doc.layout.instances[first_cell_instance as usize].transform;
+    let board_to_root = doc.layout.instances[board_instance as usize].transform;
+    let board_min = cell_to_root
+        .inverse()?
+        .concat(board_to_root)
+        .transform_point(board_step.bbox.min);
+    let board_left = board_min.x - board_cell_step.bbox.min.x;
+    let board_bottom = board_min.y - board_cell_step.bbox.min.y;
     let board_margin = simple_board_margin_from_cell(
         board_left,
         board_bottom,

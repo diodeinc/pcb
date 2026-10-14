@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Fixed
+
+- `board-array create` and board-array analysis honor a board's non-zero Datum.
+
 ## [0.4.81] - 2026-10-13
 
 ### Changed
