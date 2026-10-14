@@ -99,48 +99,43 @@ impl ContourSet {
         }
 
         let prepared = self.prepare_query();
-        let depth = |point: Point| prepared.signed_distance(point).map(|distance| -distance.mm);
         let precision = precision_mm.max(tol::EPSILON_MM);
-        if self.bbox.is_empty() {
-            return None;
-        }
-        let cell = |center: Point, half: f64| {
-            Some(Cell {
-                center,
-                half,
-                depth: depth(center)?,
-            })
+        // An empty region has no boundary and an infinitely shallow root.
+        let cell = |center: Point, half: f64| Cell {
+            center,
+            half,
+            depth: prepared
+                .signed_distance(center)
+                .map_or(f64::NEG_INFINITY, |distance| -distance.mm),
         };
         let root = cell(
             self.bbox.center(),
             self.bbox.width().max(self.bbox.height()) / 2.0,
-        )?;
-        let mut best = Cell { half: 0.0, ..root };
+        );
+        let mut best = (root.center, root.depth);
         let mut cells = std::collections::BinaryHeap::from([root]);
         // Only a filled point can be the answer, so a negative best never
         // ends the search: it ends once no cell can beat zero by more than
         // the precision either.
         while let Some(next) = cells.pop() {
-            if next.depth > best.depth {
-                best = Cell { half: 0.0, ..next };
+            if next.depth > best.1 {
+                best = (next.center, next.depth);
             }
-            if next.bound() - best.depth.max(0.0) <= precision {
+            if next.bound() - best.1.max(0.0) <= precision {
                 break;
             }
             let half = next.half / 2.0;
             for (dx, dy) in [(-1.0, -1.0), (1.0, -1.0), (-1.0, 1.0), (1.0, 1.0)] {
-                cells.push(cell(next.center + Point::new(dx, dy) * half, half)?);
+                cells.push(cell(next.center + Point::new(dx, dy) * half, half));
             }
         }
-        (best.depth > 0.0).then(|| {
-            let nearest = prepared
-                .signed_distance(best.center)
-                .expect("the deepest point was measured");
-            Distance {
-                mm: best.depth,
+        prepared
+            .signed_distance(best.0)
+            .filter(|nearest| nearest.mm < 0.0)
+            .map(|nearest| Distance {
+                mm: -nearest.mm,
                 ..nearest
-            }
-        })
+            })
     }
 }
 

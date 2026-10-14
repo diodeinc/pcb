@@ -1143,6 +1143,44 @@ fn disk_union_area_bounds_contain_analytic_areas() {
 }
 
 #[test]
+fn disk_union_area_bounds_hold_for_the_region_source() {
+    // Strips cross one disk many times, so most of what the bounds must
+    // allow for is where the source may lie off the region's edges.
+    let uncertainty = 0.004;
+    let strips = |grow: f64| {
+        (-9..=9).map(move |k| (k as f64 * 0.1 - 0.025 - grow, k as f64 * 0.1 + 0.025 + grow))
+    };
+    let mut region = ContourSet::union_all(
+        res(0.0),
+        strips(0.0).map(|(left, right)| block(left, -2.0, right, 2.0)),
+    )
+    .unwrap();
+    region.uncertainty_mm = uncertainty;
+    // Unit disk area between two verticals.
+    let primitive = |x: f64| {
+        let x = x.clamp(-1.0, 1.0);
+        x * (1.0 - x * x).sqrt() + x.asin()
+    };
+    let area = region.disk_union_area(&[(Point::ZERO, 1.0)]).unwrap();
+    for grow in [-uncertainty, 0.0, uncertainty] {
+        let covered = strips(grow)
+            .map(|(left, right)| primitive(right) - primitive(left))
+            .sum::<f64>();
+        let spill = std::f64::consts::PI - covered;
+        assert!(
+            area.covered.lower <= covered && covered <= area.covered.upper,
+            "{grow}: {covered} outside {:?}",
+            area.covered
+        );
+        assert!(
+            area.spill.lower <= spill && spill <= area.spill.upper,
+            "{grow}: {spill} outside {:?}",
+            area.spill
+        );
+    }
+}
+
+#[test]
 fn inradius_brackets_the_deepest_disk() {
     // A square frame is deepest at its corners, where the outer walls and
     // the hole's corner are equidistant.

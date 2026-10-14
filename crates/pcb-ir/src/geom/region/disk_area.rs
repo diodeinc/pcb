@@ -1,7 +1,7 @@
 //! Certified areas of a union of disks measured against a region.
 
 use super::{ContourSet, Ring};
-use crate::geom::{AccuracyError, Point};
+use crate::geom::{AccuracyError, FillRule, Point};
 use std::f64::consts::PI;
 
 /// Polygon sides past which one disk is being measured to an absurd budget.
@@ -36,48 +36,40 @@ impl ContourSet {
     /// wide around every edge the operations read, so the exact areas lie
     /// within the bounds. Each interval is about `2 × budget × perimeter` wide.
     ///
-    /// The region's polygons are what is measured: approximation they carry
-    /// relative to their own source is not part of the bounds.
+    /// The bounds are about the region's source: its `uncertainty_mm` is
+    /// charged along its edges, so a region prepared at its full budget has
+    /// no room left for the overlay and fails like any other boolean.
     pub fn disk_union_area(&self, disks: &[(Point, f64)]) -> Result<DiskUnionArea, AccuracyError> {
+        if disks
+            .iter()
+            .any(|(center, radius)| !center.is_finite() || !(*radius >= 0.0 && radius.is_finite()))
+        {
+            return Err(AccuracyError::InvalidGeometry("invalid disk"));
+        }
         let max_error = self.budget().max_error_mm();
         let strict = self.resolution.strict();
-        let mut inner = Vec::with_capacity(disks.len());
-        let mut outer = Vec::with_capacity(disks.len());
-        for &(center, radius) in disks {
-            if !center.is_finite() || !radius.is_finite() || radius < 0.0 {
-                return Err(AccuracyError::InvalidGeometry("invalid disk"));
-            }
-            if radius == 0.0 {
-                continue;
-            }
-            let (inscribed, circumscribed) = disk_polygons(center, radius, max_error)?;
-            inner.push(ContourSet::from_regularized(vec![inscribed], strict, 0.0));
-            outer.push(ContourSet::from_regularized(
-                vec![circumscribed],
-                strict,
-                0.0,
-            ));
-        }
-        let region = ContourSet {
-            uncertainty_mm: 0.0,
-            ..self.clone()
+        // Counter-clockwise polygons union under the nonzero rule. The exact
+        // boundary of each result lies on the polygons and the region's
+        // source, within the result's uncertainty of the polygons and the
+        // region, so a band that wide around them covers whatever the source
+        // or rounding moved or erased, even a ring too thin to survive.
+        let measure = |circumscribed: bool| {
+            let polygons = disks
+                .iter()
+                .map(|&(center, radius)| disk_polygon(center, radius, max_error, circumscribed))
+                .collect::<Result<Vec<_>, _>>()?;
+            let union = ContourSet::from_rings(polygons.clone(), FillRule::NonZero, strict)?;
+            let near = self.reaching(union.bbox);
+            let read = || polygons.iter().map(Vec::as_slice).chain(near.rings());
+            let area =
+                |result: ContourSet| (result.area(), rounding_area(read(), result.uncertainty_mm));
+            Ok::<_, AccuracyError>([
+                area(union.intersection(self)?),
+                area(union.difference(self)?),
+            ])
         };
-        // The exact boundary of every result lies on the disk polygons, their
-        // computed union, and the region, so a band around all of those
-        // covers whatever rounding moved or erased, even a ring too thin
-        // to survive in the result.
-        let measure = |polygons: Vec<ContourSet>| {
-            let mut boundary = polygons.iter().map(Boundary::of).sum::<Boundary>();
-            let union = ContourSet::union_all(strict, polygons)?;
-            boundary = boundary + Boundary::of(&union) + Boundary::of(&region.reaching(union.bbox));
-            let area = |result: ContourSet| (result.area(), boundary.band(result.uncertainty_mm));
-            Ok::<_, AccuracyError>((
-                area(union.intersection(&region)?),
-                area(union.difference(&region)?),
-            ))
-        };
-        let (inner_covered, inner_spill) = measure(inner)?;
-        let (outer_covered, outer_spill) = measure(outer)?;
+        let [inner_covered, inner_spill] = measure(false)?;
+        let [outer_covered, outer_spill] = measure(true)?;
         let bounds =
             |(inside, inside_error): (f64, f64), (outside, outside_error): (f64, f64)| AreaBounds {
                 lower: (inside - inside_error).max(0.0),
@@ -90,13 +82,14 @@ impl ContourSet {
     }
 }
 
-/// Counter-clockwise polygons inscribed in and circumscribed about a disk,
-/// each within `max_error` of its circle.
-fn disk_polygons(
+/// A counter-clockwise polygon inscribed in or circumscribed about a disk,
+/// within `max_error` of its circle.
+fn disk_polygon(
     center: Point,
     radius: f64,
     max_error: f64,
-) -> Result<(Ring, Ring), AccuracyError> {
+    circumscribed: bool,
+) -> Result<Ring, AccuracyError> {
     // Rounding in placing a vertex, kept out of both polygons.
     let slack = 8.0 * f64::EPSILON * (center.x.abs() + center.y.abs() + radius);
     // The circumscribed polygon strays farther from the circle than the
@@ -108,72 +101,36 @@ fn disk_polygons(
         return Err(AccuracyError::SubdivisionLimit);
     }
     let half_step = PI / sides;
-    let polygon = |vertex_radius: f64| {
-        (0..sides as usize)
-            .map(|index| {
-                let (sin, cos) = (2.0 * half_step * index as f64).sin_cos();
-                [
-                    center.x + vertex_radius * cos,
-                    center.y + vertex_radius * sin,
-                ]
-            })
-            .collect()
+    let vertex_radius = if circumscribed {
+        (radius + slack) / half_step.cos() * (1.0 + 4.0 * f64::EPSILON)
+    } else {
+        (radius - slack).max(0.0)
     };
-    Ok((
-        polygon((radius - slack).max(0.0)),
-        polygon((radius + slack) / half_step.cos() * (1.0 + 4.0 * f64::EPSILON)),
-    ))
+    Ok((0..sides as usize)
+        .map(|index| {
+            let (sin, cos) = (2.0 * half_step * index as f64).sin_cos();
+            [
+                center.x + vertex_radius * cos,
+                center.y + vertex_radius * sin,
+            ]
+        })
+        .collect())
 }
 
-/// What the area of a band around some polygon edges depends on.
-#[derive(Default)]
-struct Boundary {
-    length: f64,
-    edges: f64,
-    /// The shoelace sum's own rounding, charged per vertex.
-    shoelace: f64,
-}
-
-impl Boundary {
-    fn of(region: &ContourSet) -> Self {
-        region
-            .bounded_rings()
-            .map(|(ring, bounds)| {
-                let extent = bounds.width().max(bounds.height());
-                let edges = ring.len() as f64;
-                Self {
-                    length: super::edges_of(ring)
-                        .map(|(start, end)| start.distance_to(end))
-                        .sum(),
-                    edges,
-                    shoelace: edges * 8.0 * f64::EPSILON * extent * extent,
-                }
-            })
-            .sum()
-    }
-
-    /// The area within `delta` of these edges, each a stadium.
-    fn band(&self, delta: f64) -> f64 {
-        2.0 * delta * (self.length + 2.0 * delta * self.edges)
-            + PI * delta * delta * self.edges
-            + self.shoelace
-    }
-}
-
-impl std::ops::Add for Boundary {
-    type Output = Self;
-
-    fn add(self, other: Self) -> Self {
-        Self {
-            length: self.length + other.length,
-            edges: self.edges + other.edges,
-            shoelace: self.shoelace + other.shoelace,
-        }
-    }
-}
-
-impl std::iter::Sum for Boundary {
-    fn sum<I: Iterator<Item = Self>>(iter: I) -> Self {
-        iter.fold(Self::default(), std::ops::Add::add)
-    }
+/// The area within `delta` of every edge of `rings`, each edge a stadium,
+/// plus the shoelace sum's own rounding per vertex.
+fn rounding_area<'a>(rings: impl Iterator<Item = &'a [[f64; 2]]>, delta: f64) -> f64 {
+    rings
+        .map(|ring| {
+            let bounds = super::rings_bbox(&[ring.to_vec()]);
+            let extent = bounds.width().max(bounds.height());
+            super::edges_of(ring)
+                .map(|(start, end)| {
+                    2.0 * delta * (start.distance_to(end) + 2.0 * delta)
+                        + PI * delta * delta
+                        + 8.0 * f64::EPSILON * extent * extent
+                })
+                .sum::<f64>()
+        })
+        .sum()
 }
