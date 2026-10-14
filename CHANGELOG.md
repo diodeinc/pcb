@@ -8,6 +8,8 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+## [0.4.82] - 2026-10-14
+
 ### Added
 
 - `pcb gltf export --synthesize-outline` reads a standalone `.kicad_mod` footprint.
@@ -2395,7 +2397,8 @@ Tvs(package="DO-214AA", direction="Unidirectional", reverse_standoff_voltage="24
 - Error on invalid type passed to `io()`
 - Format the auto-generated component .zen files
 
-[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.4.81...HEAD
+[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.4.82...HEAD
+[0.4.82]: https://github.com/diodeinc/pcb/compare/v0.4.81...v0.4.82
 [0.4.81]: https://github.com/diodeinc/pcb/compare/v0.4.80...v0.4.81
 [0.4.80]: https://github.com/diodeinc/pcb/compare/v0.4.79...v0.4.80
 [0.4.79]: https://github.com/diodeinc/pcb/compare/v0.4.78...v0.4.79
