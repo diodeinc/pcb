@@ -247,6 +247,8 @@ pub struct PhysicalView {
 /// [`ImportedDesign::assembly_view`] derives it.
 #[derive(Debug, Clone, Default)]
 pub struct AssemblyView {
+    /// The [`PhysicalView::source_lands`] that termination land IDs resolve to.
+    pub source_lands: Vec<PhysicalLand>,
     pub terminations: Vec<PhysicalTermination>,
     pub paste_islands: Vec<PasteIsland>,
     /// The paste of each side and board as disjoint regions, in island order.
@@ -398,8 +400,8 @@ impl ImportedDesign {
         })
     }
 
-    /// Derive the terminations, paste islands, and drilled openings of
-    /// [`Self::physical_view`], with the same termination associations, for
+    /// Derive the terminations, their source lands, paste islands, and drilled
+    /// openings of [`Self::physical_view`], with the same termination associations, for
     /// component assembly. No soldermask or hole-protection layer is
     /// materialized, and openings are not linked to source lands.
     pub fn assembly_view(
@@ -430,6 +432,7 @@ impl ImportedDesign {
         let mut holes = self.derive_physical_holes(scope, &[], &all, resolution)?;
         self.attach_hole_terminations(&lands, &terminations, &mut holes)?;
         Ok(AssemblyView {
+            source_lands,
             terminations,
             paste_islands,
             paste_regions,
@@ -1898,10 +1901,38 @@ mod tests {
                 termination_basis: hole.termination_basis,
             })
             .collect::<Vec<_>>();
-        let expected = format!("{:?}", (&full.terminations, &full.paste_islands, &holes));
+        let termination_lands = full
+            .terminations
+            .iter()
+            .flat_map(|termination| &termination.lands)
+            .collect::<HashSet<_>>();
+        let source_lands = full
+            .source_lands
+            .iter()
+            .filter(|land| termination_lands.contains(&land.id))
+            .collect::<Vec<_>>();
+        assert!(!source_lands.is_empty());
+        let expected = format!(
+            "{:?}",
+            (
+                &source_lands,
+                &full.terminations,
+                &full.paste_islands,
+                &holes
+            )
+        );
         let narrow = |imported: &ImportedDesign| {
             let view = imported.assembly_view(scope, resolution).unwrap();
-            format!("{:?}", (view.terminations, view.paste_islands, view.holes))
+            let source_lands = view.source_lands.iter().collect::<Vec<_>>();
+            format!(
+                "{:?}",
+                (
+                    source_lands,
+                    view.terminations,
+                    view.paste_islands,
+                    view.holes
+                )
+            )
         };
         assert_eq!(narrow(&imported), expected);
 
