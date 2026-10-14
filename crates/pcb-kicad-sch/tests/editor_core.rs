@@ -655,10 +655,22 @@ fn generated_hierarchy_connects_sheet_ports_without_label_bridges() {
         if document.root_page_ids.contains(&page.id) {
             assert!(labels.clone().all(|label| label.kind == LabelKind::Local));
         } else {
+            // MID crosses into each sheet through its one sheet pin; SOURCE
+            // and SINK never leave their sheet and are named there.
             assert!(
                 labels
                     .clone()
-                    .all(|label| matches!(label.kind, LabelKind::Hierarchical { .. })),
+                    .all(|label| !matches!(label.kind, LabelKind::Global { .. })),
+                "page={} labels={:#?}",
+                page.id,
+                labels.clone().collect::<Vec<_>>()
+            );
+            assert_eq!(
+                labels
+                    .clone()
+                    .filter(|label| matches!(label.kind, LabelKind::Hierarchical { .. }))
+                    .count(),
+                1,
                 "page={} labels={:#?}",
                 page.id,
                 labels.clone().collect::<Vec<_>>()
@@ -666,6 +678,120 @@ fn generated_hierarchy_connects_sheet_ports_without_label_bridges() {
         }
         assert!(labels.count() > 0);
     }
+}
+
+fn root_and_sheets() -> (Schematic, SchDocument) {
+    let netlist = common::compile_fixture("hierarchy", "root_and_sheets.zen");
+    let document = plan_reconciliation(None, &netlist, "RootAndSheets.kicad_sch")
+        .unwrap()
+        .apply(None)
+        .unwrap();
+    (netlist, document)
+}
+
+fn page_labels(page: &SchPage) -> Vec<&Label> {
+    page.items
+        .iter()
+        .filter_map(|item| match item {
+            SchItem::Label(label) => Some(label),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn a_net_crossing_into_linked_sheets_uses_only_the_sheet_pins() {
+    let (netlist, document) = root_and_sheets();
+    const SHARED: &str = "SHARED_SIGNAL_WITH_A_LONG_NAME";
+
+    for page in &document.pages {
+        let labels = page_labels(page);
+        assert!(
+            labels
+                .iter()
+                .all(|label| !matches!(label.kind, LabelKind::Global { .. })),
+            "page={} labels={labels:#?}",
+            page.id
+        );
+        if document.root_page_ids.contains(&page.id) {
+            // R1's pin and the two sheet pins share one local name.
+            assert_eq!(
+                labels
+                    .iter()
+                    .filter(|label| label.text == SHARED && label.kind == LabelKind::Local)
+                    .count(),
+                3,
+                "{labels:#?}"
+            );
+        } else {
+            assert_eq!(
+                labels
+                    .iter()
+                    .filter(|label| matches!(label.kind, LabelKind::Hierarchical { .. }))
+                    .map(|label| label.text.as_str())
+                    .collect::<Vec<_>>(),
+                ["INPUT"],
+                "page={} labels={labels:#?}",
+                page.id
+            );
+            assert!(labels.iter().all(|label| label.text != SHARED));
+        }
+    }
+    let inspection = inspect_schematic(&document, &netlist).unwrap();
+    assert!(
+        inspection.analysis.is_equivalent(),
+        "{:#?}",
+        inspection.analysis
+    );
+}
+
+#[test]
+fn a_net_that_stays_in_its_linked_sheet_gets_no_sheet_pin() {
+    let (netlist, document) = root_and_sheets();
+    let root = &document.pages[0];
+    for sheet in root.items.iter().filter_map(|item| match item {
+        SchItem::Sheet(sheet) => Some(sheet),
+        _ => None,
+    }) {
+        assert_eq!(
+            sheet
+                .pins
+                .iter()
+                .map(|pin| pin.name.as_str())
+                .collect::<Vec<_>>(),
+            ["INPUT"],
+            "{}",
+            sheet.file_name()
+        );
+    }
+    let root_labels = page_labels(root);
+    assert!(
+        root_labels
+            .iter()
+            .all(|label| !label.text.starts_with("SHEET_")),
+        "{root_labels:#?}"
+    );
+    for (file_name, net_name) in [
+        ("FILTER_A.kicad_sch", "SHEET_A_ONLY"),
+        ("FILTER_B.kicad_sch", "SHEET_B_ONLY"),
+    ] {
+        let page = document
+            .pages
+            .iter()
+            .find(|page| page.file_name.as_deref() == Some(file_name))
+            .unwrap();
+        assert!(
+            page_labels(page)
+                .iter()
+                .any(|label| { label.text == net_name && label.kind == LabelKind::Local })
+        );
+    }
+    assert!(
+        inspect_schematic(&document, &netlist)
+            .unwrap()
+            .analysis
+            .is_equivalent()
+    );
 }
 
 #[test]

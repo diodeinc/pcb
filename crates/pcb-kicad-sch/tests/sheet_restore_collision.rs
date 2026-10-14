@@ -8,9 +8,11 @@ use pcb_kicad_sch::{
     reconcile::{plan_reconciliation, plan_repairs},
 };
 
+const SHARED: &str = "SHARED_SIGNAL_WITH_A_LONG_NAME";
+
 #[test]
 fn restoring_a_sheet_repairs_connectivity_introduced_at_its_pin() {
-    let netlist = common::compile_fixture("hierarchy", "root.zen");
+    let netlist = common::compile_fixture("hierarchy", "root_and_sheets.zen");
     let mut document = plan_reconciliation(None, &netlist, "root.kicad_sch")
         .unwrap()
         .apply(None)
@@ -21,7 +23,7 @@ fn restoring_a_sheet_repairs_connectivity_introduced_at_its_pin() {
         .iter_mut()
         .find(|page| page.file_name.as_deref() == Some("root.kicad_sch"))
         .expect("fixture has a root page");
-    let source_pin = root
+    let shared_pin = root
         .items
         .iter_mut()
         .find_map(|item| match item {
@@ -36,33 +38,33 @@ fn restoring_a_sheet_repairs_connectivity_introduced_at_its_pin() {
             _ => None,
         })
         .expect("FILTER_A has an INPUT sheet pin");
-    let sink = root
+    let root_only = root
         .items
         .iter()
         .find_map(|item| match item {
-            SchItem::Label(label) if label.text == "SINK" => Some(label.at),
+            SchItem::Label(label) if label.text == "ROOT_ONLY" => Some(label.at),
             _ => None,
         })
-        .expect("fixture drives SINK on the root page");
+        .expect("fixture drives ROOT_ONLY on the root page");
 
     // Model user wiring added while the restored sheet was absent. Without
-    // its pin, this merely extends SINK; placing the sheet makes the wire
-    // incorrectly join FILTER_A.INPUT (SOURCE) to SINK.
+    // its pin, this merely extends ROOT_ONLY; placing the sheet makes the
+    // wire incorrectly join FILTER_A.INPUT (the shared net) to ROOT_ONLY.
     root.items.retain(|item| {
-        !matches!(item, SchItem::Label(label) if label.text == "SOURCE" && label.at == source_pin)
+        !matches!(item, SchItem::Label(label) if label.text == SHARED && label.at == shared_pin)
     });
-    let elbow = Point::new(sink.x + 25.4, source_pin.y);
+    let elbow = Point::new(root_only.x + 25.4, shared_pin.y);
     root.items.extend([
         SchItem::Wire(Wire {
             id: "wire-at-unplaced-sheet-pin".to_string(),
-            a: source_pin,
+            a: shared_pin,
             b: elbow,
             unsupported: Vec::new(),
         }),
         SchItem::Wire(Wire {
-            id: "wire-from-sheet-pin-to-sink".to_string(),
+            id: "wire-from-sheet-pin-to-root-only".to_string(),
             a: elbow,
-            b: sink,
+            b: root_only,
             unsupported: Vec::new(),
         }),
     ]);

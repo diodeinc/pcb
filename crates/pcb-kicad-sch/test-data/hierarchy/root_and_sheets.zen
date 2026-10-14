@@ -1,0 +1,15 @@
+"""Linked sheets beside root terminals: one net crosses into both sheets, and each sheet has a net of its own."""
+
+Project(name="RootAndSheets", path="kicad", layout=False)
+
+Resistor = Module("@stdlib/generics/Resistor.zen")
+Filter = Module("filter.zen")
+
+SHARED = Net("SHARED_SIGNAL_WITH_A_LONG_NAME")
+ROOT_ONLY = Net("ROOT_ONLY")
+SHEET_A_ONLY = Net("SHEET_A_ONLY")
+SHEET_B_ONLY = Net("SHEET_B_ONLY")
+
+Resistor(name="R1", value="1kohms", package="0402", P1=SHARED, P2=ROOT_ONLY)
+Filter(name="FILTER_A", resistance="1kohms", INPUT=SHARED, OUTPUT=SHEET_A_ONLY)
+Filter(name="FILTER_B", resistance="2kohms", INPUT=SHARED, OUTPUT=SHEET_B_ONLY)

@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Fixed
+
+- `pcb apply schematic` connects a net that crosses into a `Project()` module sheet through its sheet pin and hierarchical label alone, without extra global labels. A module port whose net stays inside the module gets no sheet pin, a net exposed under several port names crosses the sheet once, and generated sheets leave room for their pin labels.
+
 ## [0.4.82] - 2026-10-14
 
 ### Added
