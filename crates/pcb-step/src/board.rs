@@ -110,6 +110,8 @@ pub(crate) struct Shape {
     pub(crate) width: f64,
     pub(crate) style: LineStyle,
     pub(crate) filled: bool,
+    /// Drawn by a DNP footprint.
+    pub(crate) dnp: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -184,6 +186,8 @@ pub(crate) struct Text {
     /// rewrapped.
     pub(crate) column: Option<f64>,
     pub(crate) knockout: Knockout,
+    /// Drawn by a DNP footprint.
+    pub(crate) dnp: bool,
 }
 
 /// Whether a text is drawn as glyphs or cut out of a filled hull.
@@ -970,7 +974,11 @@ impl<'a> Board<'a> {
                     points: (points.0 + base, points.1 + base),
                 },
             };
-            self.shapes.push(Shape { kind, ..*shape });
+            self.shapes.push(Shape {
+                kind,
+                dnp: fp.dnp,
+                ..*shape
+            });
         }
         for text in &scratch.texts {
             let content = text
@@ -985,6 +993,7 @@ impl<'a> Board<'a> {
                 text: content,
                 at: place(text.at),
                 knockout,
+                dnp: fp.dnp,
                 ..text.clone()
             });
         }
@@ -2067,6 +2076,7 @@ fn parse_graphic<'a>(
             width,
             style,
             filled,
+            dnp: false,
         });
     }
     if !on_edge {
@@ -2172,6 +2182,7 @@ fn parse_text<'a>(
         } else {
             Knockout::No
         },
+        dnp: false,
     }))
 }
 
@@ -2396,6 +2407,7 @@ fn parse_text_box<'a>(
         } else {
             Knockout::No
         },
+        dnp: false,
     });
     if border && width > 0.0 {
         shapes.push(Shape {
@@ -2404,6 +2416,7 @@ fn parse_text_box<'a>(
             width,
             style: LineStyle::Solid,
             filled: false,
+            dnp: false,
         });
     }
     Ok(())
