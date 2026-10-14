@@ -2298,3 +2298,35 @@ fn synthesized_outline_holds_zone_fills() {
         .collect();
     assert_eq!(copper, ["B.Cu", "F.Cu"]);
 }
+
+#[test]
+fn synthesized_outline_holds_drawn_text() {
+    use crate::ImageKind::Silkscreen;
+    // No Edge.Cuts: a short track, and a centred label far wider than
+    // anything else on the board. Its silkscreen comes out whole, as it
+    // does inside an outline that clears it.
+    let items = r#"(segment (start 0 0) (end 1 0) (width 0.25) (layer "F.Cu") (net "SIG"))
+(gr_text "A VERY LONG SILKSCREEN LABEL THAT EXTENDS FAR" (at 0 5) (layer "F.SilkS")
+  (effects (font (size 1.5 1.5) (thickness 0.3))))
+"#;
+    let silk = |body: &str, outline| {
+        let text = parse(body);
+        let board = Board::parse(text.as_bytes()).unwrap();
+        let options = crate::ImageOptions {
+            outline,
+            ..Default::default()
+        };
+        let image = crate::board_image(&board, &options).unwrap();
+        let region = image_region(&image, "F.SilkS", Silkscreen, "");
+        (region.bbox(), region.area())
+    };
+    let (bbox, area) = silk(items, crate::OutlinePolicy::Synthesize);
+    let (whole_bbox, whole_area) = silk(
+        &format!("{}{items}", rect_outline(-100.0, -100.0, 100.0, 100.0)),
+        crate::OutlinePolicy::Strict,
+    );
+    assert!(whole_bbox.width() > 40.0, "{whole_bbox:?}");
+    assert!((area - whole_area).abs() < 1e-6, "{area} != {whole_area}");
+    assert!((bbox.min.x - whole_bbox.min.x).abs() < 1e-6, "{bbox:?}");
+    assert!((bbox.max.x - whole_bbox.max.x).abs() < 1e-6, "{bbox:?}");
+}

@@ -209,13 +209,16 @@ impl Scene {
             inner: options.inner_copper,
             separate_pads: true,
         };
+        let variables = board.text_variables(&options.text_variables);
+        let fonts = Fonts::load(board, warnings);
         let mut solids = Vec::new();
         if options.board_body
             || options.silkscreen
             || options.soldermask
             || (options.visual && copper_options.any())
         {
-            (solids, synthetic_outline) = outline_solids(board, frame, options.outline, warnings)?;
+            (solids, synthetic_outline) =
+                outline_solids(board, frame, options.outline, &fonts, &variables, warnings)?;
         }
         if options.board_body {
             layers.push(body(
@@ -288,8 +291,6 @@ impl Scene {
                 }
             }
         }
-        let variables = board.text_variables(&options.text_variables);
-        let fonts = Fonts::load(board, warnings);
         if options.visual {
             for (front, islands) in faces::paste(board, frame, &fonts, true, &variables, warnings) {
                 layers.push(Layer {

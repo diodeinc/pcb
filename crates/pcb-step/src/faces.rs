@@ -167,13 +167,14 @@ fn overlaps((alo, ahi): (Vec2, Vec2), (blo, bhi): (Vec2, Vec2)) -> bool {
     alo.x <= bhi.x && blo.x <= ahi.x && alo.y <= bhi.y && blo.y <= ahi.y
 }
 
-/// The graphics and text of `tech` as contours, one list per item.
+/// The graphics and text of `tech`, or of every layer, as contours, one
+/// list per item.
 #[allow(clippy::too_many_arguments)]
-fn drawn_items(
+pub(crate) fn drawn_items(
     board: &Board,
     frame: Frame,
     fonts: &Fonts,
-    tech: Tech,
+    tech: Option<Tech>,
     variables: &[(String, String)],
     warnings: &mut Vec<String>,
 ) -> Vec<Vec<ContourBuf>> {
@@ -184,13 +185,13 @@ fn drawn_items(
     let items: Vec<Item> = board
         .shapes
         .iter()
-        .filter(|s| s.layer == tech)
+        .filter(|s| tech.is_none_or(|t| s.layer == t))
         .map(Item::Shape)
         .chain(
             board
                 .texts
                 .iter()
-                .filter(|t| t.layer == tech)
+                .filter(|t| tech.is_none_or(|tech| t.layer == tech))
                 .map(Item::Text),
         )
         .collect();
@@ -712,7 +713,7 @@ fn silk_islands(
     warnings: &mut Vec<String>,
 ) -> Vec<Nested> {
     let what = format!("{} silkscreen", if tech.front() { "front" } else { "back" });
-    let items = drawn_items(board, frame, fonts, tech, variables, warnings);
+    let items = drawn_items(board, frame, fonts, Some(tech), variables, warnings);
     let islands = nest(union_rings(items, &what, warnings));
     let boxes: Vec<(Vec2, Vec2)> = islands.iter().map(|i| ring_bbox(&i.outer)).collect();
     let outline = boxes
@@ -839,7 +840,14 @@ fn mask_openings(
             }
         }
     }
-    openings.extend(drawn_items(board, frame, fonts, tech, variables, warnings));
+    openings.extend(drawn_items(
+        board,
+        frame,
+        fonts,
+        Some(tech),
+        variables,
+        warnings,
+    ));
     openings.extend(
         pierce_edges(board, frame, tech)
             .iter()
@@ -908,7 +916,14 @@ pub(crate) fn paste(
         } else {
             Tech::BackPaste
         };
-        openings.extend(drawn_items(board, frame, fonts, tech, variables, warnings));
+        openings.extend(drawn_items(
+            board,
+            frame,
+            fonts,
+            Some(tech),
+            variables,
+            warnings,
+        ));
         if openings.is_empty() {
             continue;
         }
