@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Changed
+
+- `pcb-step` decodes embedded files with pure-Rust zstd, so it builds for WebAssembly without clang.
+
 ### Fixed
 
 - `board-array create` and board-array analysis honor a board's non-zero Datum.

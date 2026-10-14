@@ -4061,6 +4061,7 @@ dependencies = [
  "pcb-sexpr",
  "rayon",
  "rustybuzz",
+ "ruzstd",
  "serde",
  "serde_json",
  "zstd",

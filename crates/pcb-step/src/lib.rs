@@ -660,14 +660,17 @@ fn glob_match(pattern: &str, text: &str) -> bool {
 /// Decode KiCad's embedded payload: base64 text (whitespace allowed) of a
 /// zstd frame.
 pub(crate) fn decode_embedded(text: &[u8]) -> Result<Vec<u8>, Error> {
+    use std::io::Read;
     let compressed = base64_decode(text)?;
-    match zstd::zstd_safe::get_frame_content_size(&compressed) {
-        Ok(Some(size)) if size > 0 => zstd::bulk::decompress(&compressed, size as usize)
-            .map_err(|e| Error::Zstd(e.to_string())),
-        _ => {
-            zstd::stream::decode_all(compressed.as_slice()).map_err(|e| Error::Zstd(e.to_string()))
-        }
-    }
+    let zstd_error = |err: &dyn std::fmt::Display| Error::Zstd(err.to_string());
+    let mut decoder = ruzstd::decoding::StreamingDecoder::new(compressed.as_slice())
+        .map_err(|e| zstd_error(&e))?;
+    let mut out = Vec::new();
+    // The header's content size, when present, saves regrowing the buffer;
+    // it is untrusted, so an unsatisfiable size only skips the reservation.
+    let _ = out.try_reserve_exact(decoder.decoder.content_size() as usize);
+    decoder.read_to_end(&mut out).map_err(|e| zstd_error(&e))?;
+    Ok(out)
 }
 
 fn base64_decode(text: &[u8]) -> Result<Vec<u8>, Error> {

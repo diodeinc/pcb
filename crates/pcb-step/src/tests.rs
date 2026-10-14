@@ -502,6 +502,43 @@ fn embed_as(name: &str, kind: &str, data: &[u8]) -> String {
     format!(r#"(embedded_files (file (name "{name}") (type {kind}) (data |{text}|)))"#)
 }
 
+#[test]
+fn embedded_payloads_decode_with_and_without_content_size() {
+    use base64::Engine;
+    use std::io::Write;
+    // Several MiB of half-compressible bytes span many zstd blocks and a
+    // window smaller than the file, like a large STEP model.
+    let mut state = 1u32;
+    let data: Vec<u8> = (0..5_000_000)
+        .map(|i| {
+            state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            if i % 2 == 0 {
+                b'A' + (i % 7) as u8
+            } else {
+                (state >> 24) as u8
+            }
+        })
+        .collect();
+    // A streaming encoder that is not told the input size writes no
+    // content size in the frame header.
+    let mut encoder = zstd::Encoder::new(Vec::new(), 3).unwrap();
+    encoder.write_all(&data).unwrap();
+    let streamed = encoder.finish().unwrap();
+    assert!(matches!(
+        zstd::zstd_safe::get_frame_content_size(&streamed),
+        Ok(None)
+    ));
+    for compressed in [zstd::bulk::compress(&data, 3).unwrap(), streamed] {
+        let text = base64::engine::general_purpose::STANDARD.encode(compressed);
+        let wrapped = text.as_bytes().chunks(76).collect::<Vec<_>>().join(&b'\n');
+        assert!(crate::decode_embedded(&wrapped).unwrap() == data);
+    }
+    assert!(matches!(
+        crate::decode_embedded(b"bm90IHpzdGQ="),
+        Err(crate::Error::Zstd(_))
+    ));
+}
+
 /// A donor STEP file: our own export of a 2x2 board, which has product
 /// structure and one solid.
 fn donor_step() -> Vec<u8> {
