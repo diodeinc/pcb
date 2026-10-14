@@ -36,6 +36,7 @@ fn roots([c, b, a]: Polynomial) -> Vec<f64> {
 
 /// The same polynomials supply both cell cuts and open-cell membership.
 struct SegmentClearance {
+    bounds: BBox,
     projection: Polynomial,
     length: f64,
     endpoints: [Polynomial; 2],
@@ -43,7 +44,10 @@ struct SegmentClearance {
 }
 
 impl SegmentClearance {
-    fn contains(&self, t: f64) -> bool {
+    fn contains(&self, t: f64, disk_bounds: BBox) -> bool {
+        if !self.bounds.intersects(disk_bounds) {
+            return true;
+        }
         let projection = value(self.projection, t);
         if projection <= 0.0 {
             value(self.endpoints[0], t) >= 0.0
@@ -471,13 +475,34 @@ impl WidthAxis {
     }
 
     fn in_region_narrowed(
-        self,
+        mut self,
         region: &PreparedRegion,
         error: f64,
         cut_sources: Vec<(Point, Point)>,
         constraints: Vec<Polynomial>,
         clearance_bounds: BBox,
     ) -> Vec<Self> {
+        // Small residues already reject centers cheaply. On large ones, any
+        // point on a source wall must lie outside a valid disk. Guard these
+        // necessary constraints beyond singleton slack, retaining every
+        // original wall cut and final predicate after narrowing the search.
+        if region.segments.len() >= cut_sources.len() {
+            let radius = self
+                .radius_at(self.range.0)
+                .max(self.radius_at(self.range.1));
+            // Converting positional slack to squared clearance costs 2rε.
+            // Leave additional rounding headroom so a new hull endpoint
+            // cannot itself establish a tolerated singleton.
+            let guard = 8.0 * error * radius.max(1.0);
+            for &(a, b) in &cut_sources {
+                let mut clearance = self.point_clearance(a.midpoint(b));
+                clearance[0] += guard;
+                let Some(range) = Self::sublevel_hull(clearance, false, self.range) else {
+                    return Vec::new();
+                };
+                self.range = range;
+            }
+        }
         let mut cuts = constraints
             .iter()
             .flat_map(|&polynomial| roots(polynomial))
@@ -534,6 +559,7 @@ impl WidthAxis {
             cuts.extend(line.iter().copied().flat_map(roots));
             if local {
                 clearance.push(SegmentClearance {
+                    bounds: BBox::spanning(a, b),
                     projection,
                     length,
                     endpoints,
@@ -541,9 +567,11 @@ impl WidthAxis {
                 });
             }
         }
+        // Small residue boundaries reject centers cheaply. For large residues,
+        // let a nearby wall reject the disk before paying for containment.
+        let inside_first = region.segments.len() < nearby.len();
         self.clip(cuts, |t, isolated| {
             let center = self.at(t);
-            let radius = self.radius_at(t);
             // Exactly on an edge counts as inside whatever the winding rule
             // makes of it; rounding keeps such a point within `error` of the
             // edge's bounds.
@@ -556,6 +584,11 @@ impl WidthAxis {
                                 && dot(center - a, center - b) <= 0.0
                         })
             };
+            if inside_first && !inside() {
+                return false;
+            }
+            let radius = self.radius_at(t);
+            let disk_bounds = BBox::from_point(center).expand(radius + error);
             if isolated {
                 let vectors = self
                     .contacts
@@ -566,15 +599,16 @@ impl WidthAxis {
                         < -error * (vectors[0].length() + vectors[1].length())
                     && nearby
                         .iter()
+                        .filter(|&&(a, b)| BBox::spanning(a, b).intersects(disk_bounds))
                         .all(|&(a, b)| dist::point_segment(center, a, b).0 >= radius - error)
-                    && inside()
+                    && (inside_first || inside())
             } else {
                 // Tolerant point checks must never certify an open interval:
                 // its membership is constant only for these exact root predicates.
                 radius > 0.0
                     && constraints.iter().all(|&p| value(p, t) >= 0.0)
-                    && clearance.iter().all(|wall| wall.contains(t))
-                    && inside()
+                    && clearance.iter().all(|wall| wall.contains(t, disk_bounds))
+                    && (inside_first || inside())
             }
         })
     }
