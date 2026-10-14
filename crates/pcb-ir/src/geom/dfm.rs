@@ -11,7 +11,9 @@ use std::collections::BTreeMap;
 use crate::geom::bbox::BBox;
 use crate::geom::grid::CellGrid;
 use crate::geom::point::Point;
-use crate::geom::region::{ContourSet, PreparedRegion, TwoSidedResidualComponent, gap_reach_mm};
+use crate::geom::region::{
+    ContourSet, PreparedRegion, TwoSidedResidualComponent, WidthAxis, gap_reach_mm,
+};
 use crate::geom::tol;
 
 pub use crate::geom::dist::Distance;
@@ -762,20 +764,55 @@ pub fn thin_gaps_reach_mm(min_gap_mm: f64, resolution: Resolution) -> f64 {
 pub fn min_width_disk(region: &ContourSet) -> Result<Option<WidthDisk>, AccuracyError> {
     // No inscribed disk can be wider than the smaller bounding-box span.
     // Leave room for both boundary uncertainties and the preparation budget
-    // so every measurable disk survives pieces' strict radius clip.
+    // so every measurable disk survives the strict radius clip.
     let maximum_width = region.bbox.width().min(region.bbox.height())
         + 2.0 * (region.uncertainty_mm + region.budget().max_error_mm());
-    Ok(pieces(
-        region.material_width_components(maximum_width)?,
-        maximum_width,
-    )
-    .into_iter()
-    .map(|piece| piece.disk)
-    .min_by(|left, right| left.width.mm.total_cmp(&right.width.mm)))
+    let components = region.material_width_components(maximum_width)?;
+    Ok(components
+        .iter()
+        .flat_map(|component| measured_axes(component, maximum_width))
+        .map(|(_, disk)| disk)
+        .min_by(|left, right| left.width.mm.total_cmp(&right.width.mm)))
 }
 
 fn bits(point: Point) -> [u64; 2] {
     [point.x.to_bits(), point.y.to_bits()]
+}
+
+/// Clip validated axes to measurable radii and measure their minimum disks.
+fn measured_axes(
+    component: &TwoSidedResidualComponent,
+    minimum_mm: f64,
+) -> impl Iterator<Item = (WidthAxis, WidthDisk)> + '_ {
+    let minimum_radius = component.boundary_uncertainty_mm.next_up();
+    let maximum_radius = ((minimum_mm - 2.0 * component.boundary_uncertainty_mm) / 2.0).next_down();
+    component
+        .axis
+        .iter()
+        .flat_map(move |axis| {
+            if maximum_radius < minimum_radius {
+                Vec::new()
+            } else {
+                axis.clipped_radius(minimum_radius, maximum_radius)
+            }
+        })
+        .map(move |axis| {
+            let (center, radius_mm, first, second) = axis.minimum();
+            let width = Distance::with_uncertainty(
+                2.0 * radius_mm,
+                first,
+                second,
+                2.0 * component.boundary_uncertainty_mm,
+            );
+            (
+                axis,
+                WidthDisk {
+                    center,
+                    radius_mm,
+                    width,
+                },
+            )
+        })
 }
 
 /// Measure the retained analytic bisectors and their opposing source contacts.
@@ -786,38 +823,14 @@ fn pieces(components: Vec<TwoSidedResidualComponent>, minimum_mm: f64) -> Vec<Th
     let mut pieces = components
         .into_iter()
         .filter_map(|component| {
-            let narrow_axis = component
-                .axis
-                .iter()
-                .flat_map(|axis| {
-                    let reach = (minimum_mm - 2.0 * component.boundary_uncertainty_mm) / 2.0;
-                    let minimum_radius = component.boundary_uncertainty_mm.next_up();
-                    let maximum_radius = reach.next_down();
-                    if maximum_radius < minimum_radius {
-                        return Vec::new();
-                    }
-                    axis.clipped_radius(minimum_radius, maximum_radius)
-                        .into_iter()
-                        .map(|axis| {
-                            let (center, radius_mm, first, second) = axis.minimum();
-                            let width = Distance::with_uncertainty(
-                                2.0 * radius_mm,
-                                first,
-                                second,
-                                2.0 * component.boundary_uncertainty_mm,
-                            );
-                            (
-                                axis.endpoints(),
-                                WidthDisk {
-                                    center,
-                                    radius_mm,
-                                    width,
-                                },
-                                axis.walls(),
-                                axis.polyline(component.region.budget().max_error_mm()),
-                            )
-                        })
-                        .collect::<Vec<_>>()
+            let narrow_axis = measured_axes(&component, minimum_mm)
+                .map(|(axis, disk)| {
+                    (
+                        axis.endpoints(),
+                        disk,
+                        axis.walls(),
+                        axis.polyline(component.region.budget().max_error_mm()),
+                    )
                 })
                 .collect::<Vec<_>>();
             let lines = narrow_axis
