@@ -8,6 +8,14 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added
+
+- `pcb-ir` `ContourSet::area_bounds` bounds the area of the source a region was prepared from, using its recorded uncertainty. Combined with the existing booleans, it bounds the paste area that a set of flattened disks covers or spills.
+
+### Changed
+
+- `pcb-ir` erodes curved regions about 400 times faster: a 112-vertex rounded pad erodes in about 50 µs instead of 20–30 ms. Disk dilation at fine accuracy budgets, such as 0.5 mm at 0.25 µm, no longer fails the budget.
+
 ## [0.4.82] - 2026-10-14
 
 ### Added
