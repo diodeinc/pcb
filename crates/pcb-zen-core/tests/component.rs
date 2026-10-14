@@ -485,7 +485,7 @@ Component(
 }
 
 #[test]
-fn component_suppress_comment_accepts_symbol_findings_for_that_component_only() {
+fn component_suppress_comment_does_not_hide_a_finding_another_component_shares() {
     let symbol = r#"(kicad_symbol_lib
   (version 20251024)
   (symbol "Shielded"
@@ -551,7 +551,7 @@ Plain(name = "J2", P = Net("P2"), SHIELD = Net("S2"))
         .collect();
     files.extend(common::stdlib_test_files());
     let provider = common::InMemoryFileProvider::new(files);
-    let mut found: Vec<_> = result
+    let found: Vec<_> = result
         .output
         .expect("expected eval output")
         .check_symbols(&provider)
@@ -570,14 +570,8 @@ Plain(name = "J2", P = Net("P2"), SHIELD = Net("S2"))
             (component, diagnostic.suppressed)
         })
         .collect();
-    found.sort();
-    assert_eq!(
-        found,
-        [
-            ("accepted.zen".to_string(), true),
-            ("plain.zen".to_string(), false),
-        ]
-    );
+    // One finding, active, pointing at the component that does not accept it.
+    assert_eq!(found, [("plain.zen".to_string(), false)]);
 }
 
 #[test]

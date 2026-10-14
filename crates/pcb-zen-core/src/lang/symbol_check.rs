@@ -1,3 +1,4 @@
+use std::collections::hash_map::Entry;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -132,7 +133,9 @@ pub(crate) fn check_symbols(
 ) -> Vec<Diagnostic> {
     let mut diagnostics = Vec::new();
     // Symbols that extend one parent repeat the findings in its pins.
-    let mut reported = HashSet::new();
+    // Each finding is reported once, by index; it stays suppressed only while every
+    // component that shares the symbol suppresses it.
+    let mut reported: HashMap<(String, usize, String), usize> = HashMap::new();
     let mut libraries: HashMap<PathBuf, Option<Library>> = HashMap::new();
     let mut pads: HashMap<PathBuf, Option<BTreeSet<String>>> = HashMap::new();
     let mut sources: HashMap<PathBuf, Option<String>> = HashMap::new();
@@ -188,14 +191,16 @@ pub(crate) fn check_symbols(
                 });
             }
             let file = library.sources[issue.source].0.clone();
-            let key = (
-                file,
-                issue.span.start,
-                issue.message.clone(),
-                diagnostic.suppressed,
-            );
-            if reported.insert(key) {
-                diagnostics.push(diagnostic);
+            match reported.entry((file, issue.span.start, issue.message.clone())) {
+                Entry::Vacant(entry) => {
+                    entry.insert(diagnostics.len());
+                    diagnostics.push(diagnostic);
+                }
+                // An active use keeps the finding active, pointing at that component.
+                Entry::Occupied(entry) if !diagnostic.suppressed => {
+                    diagnostics[*entry.get()] = diagnostic;
+                }
+                Entry::Occupied(_) => {}
             }
         }
     }
