@@ -59,7 +59,18 @@ impl ContourSet {
         let join_angle = (2.0 * (remaining / (2.0 * offset.abs())).min(1.0).sqrt().asin())
             .clamp(0.01 * std::f64::consts::PI, std::f64::consts::FRAC_PI_4);
         let style = OutlineStyle::new(offset).line_join(OutlineLineJoin::Round(join_angle));
-        let rings = flatten_shapes(self.overlay_source().outline_as::<i64>(&style));
+        // A disk wider than the region's bounding box cannot fit anywhere.
+        // Retain the ordinary uncertainty accounting below; only avoid the
+        // offset backend's work constructing an already-proven empty erosion.
+        let erased = -offset
+            > self.bbox.width().min(self.bbox.height()) / 2.0
+                + self.uncertainty_mm
+                + accuracy.max_error_mm();
+        let rings = if erased {
+            Vec::new()
+        } else {
+            flatten_shapes(self.overlay_source().outline_as::<i64>(&style))
+        };
         // Only rounded corners incur chord error; inward corners intersect straight edges.
         // The backend keeps every chord's sweep at or below join_angle, so sizing each
         // chord as one of floor(sweep / join_angle) equal steps bounds its sag from above.

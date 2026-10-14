@@ -588,6 +588,9 @@ fn two_sided_residual_components(
     // Candidate axes use the source edges near the component, while
     // validation sees every (including short) source edge through
     // `complete_boundary`. A component without an axis has no width.
+    // Only disks below the acceptance threshold survive. Their contacts
+    // cannot be farther than half the minimum width from their centers;
+    // keep the original sites and clip predicates, but bound pair searches.
     let measure = |component: ContourSet| {
         let axis = component_axis(
             &boundary.segment_ids_meeting(component.bbox.expand(reach)),
@@ -595,7 +598,7 @@ fn two_sided_residual_components(
             &boundary,
             &component.prepare_query(),
             &complete_boundary,
-            reach,
+            reach.min(minimum_mm / 2.0),
             radius_cap,
             &contact_index,
         );
@@ -641,7 +644,8 @@ fn component_axis(
     // A component disk is no larger than its clearance to its nearest
     // source site. The farthest component vertex from that site is an exact
     // upper bound, so walls farther from the component cannot participate.
-    // A site with any vertex beyond the bound so far cannot lower it.
+    // The accepted disk radius also cannot exceed `reach`. Start there;
+    // a site with any vertex beyond the bound so far cannot lower it.
     let farthest_vertex_below = |bound: f64, site: &OrientedBoundarySegment| {
         component
             .segments
@@ -651,7 +655,7 @@ fn component_axis(
                 (distance < bound).then_some(farthest.max(distance))
             })
     };
-    let clearance_bound = sites.iter().fold(f64::INFINITY, |bound, &site| {
+    let clearance_bound = sites.iter().fold(reach, |bound, &site| {
         farthest_vertex_below(bound, &segments[site]).unwrap_or(bound)
     }) + error;
     let reachable = sites

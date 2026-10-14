@@ -199,7 +199,7 @@ impl VertexColumns {
 /// How far a vertex may sit from an edge it lies on: source tools round
 /// the vertex and the edge's ends to their grid, each by up to half a cell
 /// diagonal.
-const ON_EDGE_MM: f64 = std::f64::consts::SQRT_2 * tol::SOURCE_GRID_MM;
+pub(super) const ON_EDGE_MM: f64 = std::f64::consts::SQRT_2 * tol::SOURCE_GRID_MM;
 
 /// Resolve tagged rings one bounds-connected group at a time.
 ///
