@@ -21,7 +21,11 @@ impl Glb {
         anyhow::ensure!(&d[0..4] == b"glTF", "not a GLB");
         let json_len = u32::from_le_bytes(d[12..16].try_into()?) as usize;
         let json = serde_json::from_slice(&d[20..20 + json_len])?;
-        let bin = &d[20 + json_len + 8..];
+        let bin = if d.len() == 20 + json_len {
+            &[][..]
+        } else {
+            &d[20 + json_len + 8..]
+        };
         Ok(Glb {
             json,
             bin: bin.to_vec(),

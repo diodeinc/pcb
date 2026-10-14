@@ -362,7 +362,8 @@ pub(crate) fn outline_solids(
             if policy == OutlinePolicy::Synthesize =>
         {
             let Some(solids) = synthesize(board, frame, fonts, variables) else {
-                return Err(err);
+                // An empty starter board has nothing to surround or draw.
+                return Ok((Vec::new(), false));
             };
             warnings.push(format!(
                 "{err}; the board body is synthesized from the items on the board"
