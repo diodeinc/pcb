@@ -134,6 +134,10 @@ pub struct PhysicalTermination {
     pub side: Side,
     pub population: PopulationState,
     pub lands: Vec<LandId>,
+    /// The net its lands name: `Unresolved` when none names one, and
+    /// `Conflicting` lists the nets, in land order, when they disagree. A
+    /// land with no net names none and disagrees with nothing.
+    pub net: Association<Symbol>,
 }
 
 #[derive(Debug, Clone)]
@@ -536,7 +540,27 @@ impl ImportedDesign {
 
             let key = PhysicalTerminationKey::new(component, pin, padstack, land.at);
             if let Some(index) = by_identity.get(&key).copied() {
-                terminations[index].lands.push(land.id);
+                let termination = &mut terminations[index];
+                termination.lands.push(land.id);
+                if let Some(net) = land.net {
+                    termination.net =
+                        match std::mem::replace(&mut termination.net, Association::Unresolved) {
+                            Association::Unresolved => Association::Resolved(net),
+                            Association::Resolved(first) if first == net => {
+                                Association::Resolved(first)
+                            }
+                            Association::Resolved(first) => {
+                                Association::Conflicting(vec![first, net])
+                            }
+                            Association::Conflicting(mut nets)
+                            | Association::Ambiguous(mut nets) => {
+                                if !nets.contains(&net) {
+                                    nets.push(net);
+                                }
+                                Association::Conflicting(nets)
+                            }
+                        };
+                }
                 continue;
             }
 
@@ -563,6 +587,9 @@ impl ImportedDesign {
                 side,
                 population: definition.population,
                 lands: vec![land.id],
+                net: land
+                    .net
+                    .map_or(Association::Unresolved, Association::Resolved),
             });
         }
 
@@ -2461,6 +2488,50 @@ mod tests {
                 .iter()
                 .any(|association| matches!(association.land, Association::Resolved(_)))
         );
+    }
+
+    #[test]
+    fn termination_net_comes_from_its_lands_and_keeps_disagreement() {
+        // J1 pin 1 is one termination with a TOP and a BOTTOM land.
+        let top = r#"<Set net="N3"><Pad padstackDefRef="tht-padstack"><Location x="40" y="5"/><StandardPrimitiveRef id="land"/><PinRef componentRef="J1" pin="1"/></Pad></Set>
+        </LayerFeature>"#;
+        let bottom =
+            r#"<LayerFeature layerRef="BOTTOM"><Set net="N3"><Pad padstackDefRef="tht-padstack">"#;
+        let j1_net = |top_net: &str, bottom_net: &str| {
+            let xml = physical_fixture()
+                .replace(top, &top.replace(r#" net="N3""#, top_net))
+                .replace(bottom, &bottom.replace(r#" net="N3""#, bottom_net));
+            let imported = import(&xml);
+            let physical = imported
+                .physical_view(ArtworkScope::Board, Resolution::default())
+                .unwrap();
+            let j1 = physical
+                .terminations
+                .iter()
+                .find(|termination| termination.pin_type == PackagePinType::Through)
+                .unwrap();
+            assert_eq!(j1.lands.len(), 2);
+            let name = |net: &Symbol| imported.resolve(*net).to_owned();
+            match &j1.net {
+                Association::Resolved(net) => Association::Resolved(name(net)),
+                Association::Unresolved => Association::Unresolved,
+                Association::Ambiguous(nets) => {
+                    Association::Ambiguous(nets.iter().map(name).collect())
+                }
+                Association::Conflicting(nets) => {
+                    Association::Conflicting(nets.iter().map(name).collect())
+                }
+            }
+        };
+        let resolved = |net: &str| Association::Resolved(net.to_owned());
+
+        assert_eq!(j1_net(r#" net="N3""#, r#" net="N3""#), resolved("N3"));
+        assert_eq!(
+            j1_net(r#" net="N3""#, r#" net="N4""#),
+            Association::Conflicting(vec!["N3".to_owned(), "N4".to_owned()])
+        );
+        assert_eq!(j1_net("", r#" net="N3""#), resolved("N3"));
+        assert_eq!(j1_net("", ""), Association::Unresolved);
     }
 
     #[test]
