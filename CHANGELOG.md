@@ -10,7 +10,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Fixed
 
-- `board-array create` places a board whose Step has a non-zero Datum inside its requested margins, and board-array analysis reads the margins from where the Datum puts the board.
+- `board-array create` and board-array analysis honor a board's non-zero Datum.
 
 ## [0.4.81] - 2026-10-13
 
