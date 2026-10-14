@@ -122,7 +122,16 @@ pub fn board_image(board: &Board, options: &ImageOptions) -> Result<BoardImage, 
     let frame = Frame { origin: Vec2::ZERO };
     let physical = board.physical();
     let mut warnings = Vec::new();
-    let (solids, _) = outline_solids(board, frame, options.outline, &mut warnings)?;
+    let variables = board.text_variables(&options.text_variables);
+    let fonts = Fonts::load(board, &mut warnings);
+    let (solids, _) = outline_solids(
+        board,
+        frame,
+        options.outline,
+        &fonts,
+        &variables,
+        &mut warnings,
+    )?;
     let edge = BoardEdge::new(&solids);
     let outline = edge
         .region(&mut warnings)
@@ -270,8 +279,6 @@ pub fn board_image(board: &Board, options: &ImageOptions) -> Result<BoardImage, 
         warnings.extend(note);
     }
 
-    let variables = board.text_variables(&options.text_variables);
-    let fonts = Fonts::load(board, &mut warnings);
     let tech = faces::build(
         board,
         frame,
