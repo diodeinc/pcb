@@ -139,7 +139,9 @@ pub struct PasteIsland {
     /// The electrical termination this paste feeds. IPC component, pin,
     /// padstack, and location identity decides when it names a termination.
     /// Otherwise the island links to the one termination whose source lands
-    /// it overlaps; lands of no termination do not count.
+    /// it overlaps; lands of no termination do not count. When the paste
+    /// names a component, only that component's terminations count, and
+    /// overlapping only another component's is `Conflicting`.
     pub termination: Association<PhysicalTerminationId>,
     pub termination_basis: Option<AssociationBasis>,
 }
@@ -584,15 +586,29 @@ impl ImportedDesign {
                                     candidates.insert(termination);
                                 }
                             }
-                            let mut candidates = candidates.into_iter().collect::<Vec<_>>();
-                            match candidates.len() {
-                                0 => (Association::Unresolved, None),
-                                1 => (
-                                    Association::Resolved(candidates.remove(0)),
+                            // Paste naming a component links only to its own
+                            // terminations; lands of another one contradict it.
+                            let (mut own, others) =
+                                candidates
+                                    .into_iter()
+                                    .partition::<Vec<_>, _>(|termination| {
+                                        component.resolved().is_none_or(|component| {
+                                            terminations[termination.0 as usize].component
+                                                == *component
+                                        })
+                                    });
+                            match (own.len(), others.is_empty()) {
+                                (0, true) => (Association::Unresolved, None),
+                                (0, false) => (
+                                    Association::Conflicting(others),
+                                    Some(AssociationBasis::ExactGeometry),
+                                ),
+                                (1, _) => (
+                                    Association::Resolved(own.remove(0)),
                                     Some(AssociationBasis::ExactGeometry),
                                 ),
                                 _ => (
-                                    Association::Ambiguous(candidates),
+                                    Association::Ambiguous(own),
                                     Some(AssociationBasis::ExactGeometry),
                                 ),
                             }
@@ -2100,6 +2116,20 @@ mod tests {
                     u1_pin_at(Point::new(14.0, 5.0)),
                     u1_pin_at(Point::new(16.0, 5.0)),
                 ]),
+                Some(AssociationBasis::ExactGeometry)
+            )
+        );
+        // Paste named for U1 over U2's land contradicts its own component.
+        let u2_pin = physical
+            .terminations
+            .iter()
+            .find(|termination| termination.at == Point::new(25.0, 5.0))
+            .unwrap()
+            .id;
+        assert_eq!(
+            association(Point::new(25.0, 5.0)),
+            (
+                Association::Conflicting(vec![u2_pin]),
                 Some(AssociationBasis::ExactGeometry)
             )
         );
