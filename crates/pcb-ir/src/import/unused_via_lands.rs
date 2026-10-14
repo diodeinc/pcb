@@ -74,15 +74,14 @@ pub fn isolated_via_lands(
     let scope = ArtworkScope::ArrayFlattened;
     // Zero significance prevents small contacts from being discarded by area.
     let resolution = resolution.strict();
-    let physical = design.physical_view(scope, resolution)?;
-    let lands = physical
-        .source_lands
+    let (source_lands, holes) = design.source_lands_and_holes(scope, resolution)?;
+    let lands = source_lands
         .iter()
         .map(|land| (land.id, land))
         .collect::<HashMap<_, _>>();
     let mut eligible = HashMap::new();
     let mut claims = HashMap::<_, usize>::new();
-    for hole in &physical.holes {
+    for hole in &holes {
         for link in &hole.lands {
             match &link.land {
                 Association::Resolved(id) => *claims.entry(*id).or_default() += 1,
@@ -149,20 +148,12 @@ pub fn isolated_via_lands(
         }
     }
 
-    let holes_near = BBoxIndex::new(
-        physical
-            .holes
-            .iter()
-            .map(|hole| hole.image.bbox())
-            .collect(),
-    );
-    let hole_boundaries = physical
-        .holes
+    let holes_near = BBoxIndex::new(holes.iter().map(|hole| hole.image.bbox()).collect());
+    let hole_boundaries = holes
         .iter()
         .map(|hole| hole.image.prepare_query())
         .collect::<Vec<_>>();
-    let hole_error = physical
-        .holes
+    let hole_error = holes
         .iter()
         .map(|hole| hole.image.uncertainty_mm)
         .fold(0.0, f64::max);
@@ -204,7 +195,7 @@ pub fn isolated_via_lands(
                 // its own land here. Conservatively block on all other holes,
                 // even holes whose span or plating cannot establish contact.
                 && holes_near.query(image.bbox().expand(margin)).into_iter().all(|j| {
-                    let hole = &physical.holes[j];
+                    let hole = &holes[j];
                     hole.id == *own_hole || (!hole.image.is_empty()
                         && region_clearance_within(image, &boundaries[i], &hole.image, &hole_boundaries[j], margin)
                             .is_none_or(|gap| gap.mm > gap.uncertainty_mm + 1e-6))

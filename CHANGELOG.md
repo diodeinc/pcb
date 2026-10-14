@@ -14,6 +14,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Changed
 
+- Unused via land detection derives only source lands and drilled openings, so errors in paste, mask or hole-protection artwork no longer stop it, and it runs about 25% faster.
 - `pcb-step` decodes embedded files with pure-Rust zstd, so it builds for WebAssembly without clang.
 - `pcb-ir` links a paste island that IPC does not identify with a termination, such as an exposed-pad paste window, to the one termination whose lands it overlaps, and marks the link resolved, ambiguous, conflicting or unresolved with its basis. The IPC-2581 assembly report counts these links and lists their paste under the termination.
 
