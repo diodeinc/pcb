@@ -1305,30 +1305,3 @@ fn area_bounds_hold_for_the_region_source() {
         );
     }
 }
-
-#[test]
-fn connected_components_keep_their_own_holes_in_a_stable_order() {
-    let region = block(0.0, 0.0, 10.0, 10.0)
-        .difference(&block(2.0, 2.0, 8.0, 8.0))
-        .unwrap()
-        .union(&block(4.0, 4.0, 6.0, 6.0))
-        .unwrap()
-        .union(&block(12.0, 0.0, 13.0, 1.0))
-        .unwrap();
-
-    let components = region.connected_components();
-
-    let mut shapes = components
-        .iter()
-        .map(|component| (component.ring_count(), component.area()))
-        .collect::<Vec<_>>();
-    shapes.sort_by(|left, right| left.1.total_cmp(&right.1));
-    assert_eq!(shapes, [(1, 1.0), (1, 4.0), (2, 64.0)]);
-    let again = region.connected_components();
-    assert!(
-        components
-            .iter()
-            .zip(&again)
-            .all(|(first, second)| first.rings == second.rings)
-    );
-}

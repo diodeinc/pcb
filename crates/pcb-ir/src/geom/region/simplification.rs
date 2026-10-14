@@ -238,9 +238,10 @@ pub(super) const ON_EDGE_MM: f64 = std::f64::consts::SQRT_2 * tol::SOURCE_GRID_M
 /// happened to batch it.
 pub(super) fn resolve_groups<T>(
     rings: Vec<(Ring, T)>,
+    reach: f64,
     resolve: impl FnMut(Vec<(Ring, T)>) -> Vec<Ring>,
 ) -> Vec<Ring> {
-    bounds_connected_groups(rings, 0.0)
+    bounds_connected_groups(rings, reach)
         .into_iter()
         .flat_map(resolve)
         .collect()
@@ -265,7 +266,7 @@ pub(super) fn untagged<T>(group: Vec<(Ring, T)>) -> Vec<Ring> {
 ///
 /// `reach` widens every ring's bounds further, for operations that join
 /// rings that far apart.
-pub(super) fn bounds_connected_groups<T>(rings: Vec<(Ring, T)>, reach: f64) -> Vec<Vec<(Ring, T)>> {
+fn bounds_connected_groups<T>(rings: Vec<(Ring, T)>, reach: f64) -> Vec<Vec<(Ring, T)>> {
     struct Group {
         hull: BBox,
         root: usize,

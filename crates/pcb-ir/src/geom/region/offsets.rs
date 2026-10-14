@@ -1,6 +1,6 @@
 //! Disk offsets, opening, and closing within the region's budget.
 
-use super::simplification::{bounds_connected_groups, positive_winding};
+use super::simplification::{positive_winding, resolve_groups, untagged};
 use super::{ContourSet, PreparedRegion, Ring, decimate_rings_inward, edges_of, signed_area_of};
 use crate::geom::accuracy::numerical_error;
 use crate::geom::{AccuracyError, Point};
@@ -70,21 +70,19 @@ impl ContourSet {
             })
             .map(|(ring, _)| (ring.to_vec(), ()))
             .collect();
-        let mut rings = Vec::new();
         let mut added: f64 = 0.0;
-        for group in bounds_connected_groups(kept, offset.abs()) {
-            let group = group.into_iter().map(|(ring, _)| ring).collect::<Vec<_>>();
-            let (offset_rings, sag) = offset_group(
-                &group,
+        let rings = resolve_groups(kept, offset.abs(), |group| {
+            let (rings, sag) = offset_group(
+                &untagged(group),
                 offset,
                 join_angle,
                 remaining,
                 numeric,
                 self.resolution.tolerance_mm,
             );
-            rings.extend(offset_rings);
             added = added.max(sag);
-        }
+            rings
+        });
         // Decimating within `numeric` moves the boundary by less than the
         // rounding the overlay already charged.
         Self::from_regularized(
@@ -116,16 +114,13 @@ fn offset_group(
     tolerance: f64,
 ) -> (Vec<Ring>, f64) {
     let offset_rings = |direct: bool| {
-        let (raw, joins): (Vec<_>, Vec<_>) = rings
-            .iter()
-            .map(|ring| raw_offset(ring, offset, join_angle, direct))
-            .unzip();
-        let (sag, crossed) =
-            joins
-                .into_iter()
-                .fold((0.0, false), |(sag, crossed), (ring_sag, ring_crossed)| {
-                    (f64::max(sag, ring_sag), crossed || ring_crossed)
-                });
+        let (mut raw, mut sag, mut crossed) = (Vec::with_capacity(rings.len()), 0.0, false);
+        for ring in rings {
+            let (ring, ring_sag, ring_crossed) = raw_offset(ring, offset, join_angle, direct);
+            raw.push(ring);
+            sag = f64::max(sag, ring_sag);
+            crossed |= ring_crossed;
+        }
         (positive_winding(&raw), sag, crossed)
     };
     let (result, sag, crossed) = offset_rings(true);
@@ -154,9 +149,8 @@ fn offset_group(
 const SMOOTH_TURN: f64 = std::f64::consts::FRAC_PI_8;
 
 /// The raw offset curve of one ring, the sag of its round joins, and whether
-/// it crossed or directly joined any corner: every
-/// edge moved `offset` to its right, away from the material on its left,
-/// joined corner by corner.
+/// it crossed or directly joined any corner: every edge moved `offset` to its
+/// right, away from the material on its left, joined corner by corner.
 ///
 /// Where the offset edges part, a round join of chords within `join_angle`
 /// fills the gap. Where they overlap, they join through the corner, as the
@@ -167,12 +161,7 @@ const SMOOTH_TURN: f64 = std::f64::consts::FRAC_PI_8;
 /// cross each other near its centre once the offset nears its radius, and
 /// resolving those crossings costs the overlay a hundred times what crossing
 /// joins do.
-fn raw_offset(
-    ring: &[[f64; 2]],
-    offset: f64,
-    join_angle: f64,
-    direct: bool,
-) -> (Ring, (f64, bool)) {
+fn raw_offset(ring: &[[f64; 2]], offset: f64, join_angle: f64, direct: bool) -> (Ring, f64, bool) {
     let edges = edges_of(ring)
         .filter_map(|(start, end)| {
             let length = (end - start).length();
@@ -183,9 +172,9 @@ fn raw_offset(
     let mut sag: f64 = 0.0;
     let mut crossed = false;
     let mut push = |point: Point| raw.push([point.x, point.y]);
+    let right = |direction: Point| Point::new(direction.y, -direction.x) * offset;
     for (index, &(corner, direction, length)) in edges.iter().enumerate() {
         let (_, next, next_length) = edges[(index + 1) % edges.len()];
-        let right = |direction: Point| Point::new(direction.y, -direction.x) * offset;
         let (normal, next_normal) = (right(direction), right(next));
         let cross = direction.x * next.y - direction.y * next.x;
         let dot = direction.x * next.x + direction.y * next.y;
@@ -224,5 +213,5 @@ fn raw_offset(
             push(corner + next_normal);
         }
     }
-    (raw, (sag, crossed))
+    (raw, sag, crossed)
 }
