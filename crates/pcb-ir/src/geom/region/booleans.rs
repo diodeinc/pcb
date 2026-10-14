@@ -1,8 +1,8 @@
 //! Set operations and ordered dark/clear paint composition.
 
-use super::simplification::{overlay, resolve_groups, untagged};
-use super::{ContourSet, Ring, Shape, flatten_shapes, rings_bbox, simplify_shapes};
-use crate::geom::accuracy::numerical_error;
+use super::simplification::{ON_EDGE_MM, overlay, resolve_groups, untagged};
+use super::{ContourSet, PreparedRegion, Ring, Shape, flatten_shapes, rings_bbox, simplify_shapes};
+use crate::geom::accuracy::{lattice_per_mm, numerical_error};
 use crate::geom::{AccuracyError, BBox, FillRule, Polarity, Resolution};
 use i_overlay::core::fill_rule::FillRule as OverlayFillRule;
 use i_overlay::core::overlay_rule::OverlayRule;
@@ -110,6 +110,49 @@ impl ContourSet {
     /// Regularized intersection: `self ∩ clip`.
     pub fn intersection(&self, clip: &Self) -> Result<Self, AccuracyError> {
         self.boolean(clip, OverlayRule::Intersect)
+    }
+
+    /// Intersection using a prepared snapshot of `clip` to resolve subjects
+    /// wholly inside or outside it. `boundary` must be prepared from `clip`.
+    pub fn intersection_prepared(
+        &self,
+        clip: &Self,
+        boundary: &PreparedRegion,
+    ) -> Result<Self, AccuracyError> {
+        let numeric = numerical_error(self.bbox.union(clip.bbox));
+        if !self.is_empty()
+            && boundary
+                .segments_meeting(self.bbox.expand(ON_EDGE_MM + 2.0 * numeric))
+                .next()
+                .is_none()
+        {
+            // No boundary crosses the expanded box, so winding is constant
+            // throughout it. Charge exactly the normal boolean's uncertainty.
+            let rings = if boundary.winding(self.bbox.center()) == 0 {
+                Vec::new()
+            } else {
+                // A much larger clip can coarsen the overlay lattice enough
+                // to move or erase a contained subject. Only retain its rings
+                // verbatim when every coordinate survives that lattice.
+                let scale = lattice_per_mm(self.bbox.union(clip.bbox));
+                if !self
+                    .rings()
+                    .flatten()
+                    .flatten()
+                    .all(|&coordinate| (coordinate * scale).round() / scale == coordinate)
+                {
+                    return self.intersection(clip);
+                }
+                self.to_rings()
+            };
+            return Self::from_regularized(
+                rings,
+                self.resolution.meet(clip.resolution),
+                self.uncertainty_mm.max(clip.uncertainty_mm) + numeric,
+            )
+            .checked();
+        }
+        self.intersection(clip)
     }
 
     /// Every point of the result's boundary is a point of an operand's

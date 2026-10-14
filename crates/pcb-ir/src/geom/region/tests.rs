@@ -235,6 +235,20 @@ fn containment_observes_boundaries_and_holes() {
     assert!(region.contains_point(Point::new(2.0, 2.0)));
     assert!(region.contains_point(Point::new(0.0, 5.0)));
     assert!(!region.contains_point(Point::new(5.0, 5.0)));
+
+    let boundary = region.prepare_query();
+    for (subject, area) in [
+        (block(1.0, 1.0, 3.0, 2.0), 2.0),
+        (block(4.2, 4.3, 5.7, 5.6), 0.0),
+        (block(5.5, 4.5, 6.5, 5.5), 0.5),
+        (block(3.0, 3.0, 7.0, 7.0), 12.0),
+        (block(12.0, 1.0, 13.0, 3.0), 0.0),
+        (block(6.0, 4.5, 7.0, 5.5), 1.0),
+    ] {
+        let intersection = subject.intersection_prepared(&region, &boundary).unwrap();
+        assert!((intersection.area() - area).abs() < 1e-9);
+        assert!(!intersection.contains_point(Point::new(5.0, 5.0)));
+    }
 }
 
 type ExpectedSpan = ((f64, f64), (f64, f64));
@@ -399,6 +413,12 @@ fn erodes_outer_boundaries_and_expands_holes() {
         (area - 72.214601837).abs() <= 2e-2,
         "unexpected eroded area {area}"
     );
+
+    for (width, height) in [(6.0, 2.0), (2.0, 6.0)] {
+        let narrow = block(0.0, 0.0, width, height);
+        assert!((narrow.disk_erode(0.9).unwrap().area() - 0.84).abs() < 1e-9);
+        assert!(narrow.disk_erode(1.1).unwrap().is_empty());
+    }
 }
 
 #[test]
@@ -953,6 +973,17 @@ fn mixed_budget_booleans_fail_when_the_coarser_history_does_not_fit() {
         Err(AccuracyError::BudgetExceeded { .. })
     ));
 
+    let boundary = coarse.prepare_query();
+    for subject in [
+        ContourSet::rectangle(rect(-0.1, -0.1, 0.1, 0.1), fine_resolution),
+        ContourSet::rectangle(rect(10.0, 10.0, 11.0, 11.0), fine_resolution),
+    ] {
+        assert!(matches!(
+            subject.intersection_prepared(&coarse, &boundary),
+            Err(AccuracyError::BudgetExceeded { .. })
+        ));
+    }
+
     // The same operands fit the coarser budget, and the result keeps it
     // together with the coarse history.
     let loose = ContourSet::rectangle(rect(3.0, 0.0, 4.0, 1.0), coarse_resolution);
@@ -972,6 +1003,18 @@ fn polygon_preparation_checks_coordinate_rounding_against_the_budget() {
         Err(AccuracyError::BudgetExceeded { .. })
     ));
     assert!(ContourSet::from_rings(vec![far], FillRule::NonZero, res(0.0)).is_ok());
+
+    // Containment alone cannot bypass the clip's coarser overlay lattice.
+    let subject = ContourSet::rectangle(rect(1.0, 1.0, 1.000001, 1.000001), res(0.0));
+    let clip = ContourSet::rectangle(rect(0.0, 0.0, 1e9, 1e9), res(0.0));
+    assert!(!subject.is_empty());
+    assert!(subject.intersection(&clip).unwrap().is_empty());
+    assert!(
+        subject
+            .intersection_prepared(&clip, &clip.prepare_query())
+            .unwrap()
+            .is_empty()
+    );
 }
 
 #[test]
