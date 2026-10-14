@@ -2266,12 +2266,13 @@ fn image_resolves_numbered_nets_by_their_declarations() {
 #[test]
 fn synthesized_outline_holds_zone_fills() {
     use crate::ImageKind::Copper;
-    // No Edge.Cuts: a 6 x 6 mm fill and a short track beside it.
-    // The board also declares F.Cu alone.
+    // No Edge.Cuts: a 6 x 6 mm fill and a short track beside it. The
+    // board also declares F.Cu alone, and no nets, so `(net 0)` is no net.
     let text = r#"(kicad_pcb (version 20241229) (generator "pcbnew")
   (general (thickness 1.6))
   (layers (0 "F.Cu" signal))
   (segment (start 2 3) (end 3 3) (width 0.25) (layer "F.Cu") (net "SIG"))
+  (segment (start 2 4) (end 3 4) (width 0.25) (layer "F.Cu") (net 0))
   (zone (net "GND") (layer "F.Cu")
     (filled_polygon (layer "F.Cu") (pts (xy 0 0) (xy 6 0) (xy 6 -6) (xy 0 -6)))))
 "#;
@@ -2283,6 +2284,9 @@ fn synthesized_outline_holds_zone_fills() {
     let image = crate::board_image(&board, &options).unwrap();
     let fill = image_area(&image, "F.Cu", Copper, "GND");
     assert!((fill - 36.0).abs() < 1e-6, "{fill}");
+    let mut nets = image.nets.clone();
+    nets.sort();
+    assert_eq!(nets, ["", "GND", "SIG"]);
     let copper: Vec<&str> = image
         .stackup
         .iter()

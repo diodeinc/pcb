@@ -1191,10 +1191,10 @@ impl<'a> Board<'a> {
         }
     }
 
-    /// Id of the net named `name`; no name or an empty one is net 0.
+    /// Id of the net named `name`; no name, an empty one or `0` is net 0.
     fn net_id(&mut self, name: Option<&'a str>) -> u32 {
         match name {
-            None | Some("") => 0,
+            None | Some("" | "0") => 0,
             Some(name) => {
                 let next = self.nets.len() as u32 + 1;
                 *self.nets.entry(name).or_insert(next)
