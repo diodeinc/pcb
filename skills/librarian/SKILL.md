@@ -96,7 +96,6 @@ For otherwise equivalent MPNs, prefer automated-assembly packaging: tape/reel
 or cut tape, then tray, tube, and bulk. Prefer manufacturer pickup aids for
 non-flat parts; flag an unavoidable pickup limitation.
 
-Use `preferred-parts` when selecting generics, without weakening requirements.
 Express requirements through stdlib generic parameters; set `mpn` or
 `manufacturer` only when those parameters cannot represent the design. Use
 `pcb bom <entrypoint>.zen -f json` when checking changed part selection or

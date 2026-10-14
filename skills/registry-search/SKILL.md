@@ -10,9 +10,9 @@ candidate's source (`pcb list -m -json <module-url>@<version>` reports its
 `dir`) for its public API; do not infer IO or config names from a search result.
 
 Prefer a reusable module that matches the need, then a component with its
-support circuitry, then a primitive. Use `preferred-parts` when choosing a
-concrete MPN. Instantiate the chosen `.zen` entrypoint with `Module()` and
-follow `zener-language` for dependencies; do not hand-edit `pcb.toml`.
+support circuitry, then a primitive. Instantiate the chosen `.zen` entrypoint
+with `Module()` and follow `zener-language` for dependencies; do not hand-edit
+`pcb.toml`.
 
 Discover or clone other boards only when the user explicitly asks, and clone
 them outside the current checkout.
