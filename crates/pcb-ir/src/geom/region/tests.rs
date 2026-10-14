@@ -398,6 +398,81 @@ fn segment_spans_omit_degenerate_and_sub_tolerance_intervals() {
 }
 
 #[test]
+fn offsets_collapse_curves_to_their_analytic_shapes() {
+    use std::f64::consts::PI;
+    let resolution = Resolution::default().with_accuracy(GeometryAccuracy::new(0.00025).unwrap());
+    let prepare = |contours: &[ContourBuf], fill_rule| {
+        ContourSet::from_contours(contours, fill_rule, resolution).unwrap()
+    };
+    let assert_area = |region: ContourSet, expected: f64, perimeter: f64| {
+        let tolerance = region.uncertainty_mm * perimeter + 1e-9;
+        assert!(
+            (region.area() - expected).abs() <= tolerance,
+            "{} vs {expected} within {tolerance}",
+            region.area()
+        );
+    };
+    let pad = prepare(
+        &[shapes::rounded_rect(0.56, 0.62, 0.15, shapes::ALL_CORNERS).unwrap()],
+        FillRule::NonZero,
+    );
+    // Eroding by a corner's radius or more leaves the sharp inner rectangle.
+    for d in [0.15, 0.2] {
+        let (w, h) = (0.56 - 2.0 * d, 0.62 - 2.0 * d);
+        assert_area(pad.disk_erode(d).unwrap(), w * h, 2.0 * (w + h));
+    }
+    // A disk narrower than the erosion vanishes, and a hole narrower than
+    // the dilation fills.
+    let circle = prepare(&[shapes::circle(0.65).unwrap()], FillRule::NonZero);
+    assert!(circle.disk_erode(0.35).unwrap().is_empty());
+    let washer = prepare(
+        &[shapes::circle(2.0).unwrap(), shapes::circle(0.65).unwrap()],
+        FillRule::EvenOdd,
+    );
+    assert_area(
+        washer.disk_dilate(0.35).unwrap(),
+        PI * 1.35 * 1.35,
+        2.0 * PI * 1.35,
+    );
+    // A slotted washer's bore turns through more than half a circle, so the
+    // dilation that closes it must not leave its centre open.
+    let slot = shapes::rect(1.2, 0.25)
+        .unwrap()
+        .transformed(Affine2::translation(Point::new(0.6, 0.0)));
+    let closed = washer
+        .difference(&prepare(&[slot], FillRule::NonZero))
+        .unwrap()
+        .disk_dilate(0.5)
+        .unwrap();
+    assert_eq!(closed.ring_count(), 1);
+    assert!(closed.contains_point(Point::ZERO));
+}
+
+#[test]
+fn dilation_fills_a_reentrant_notch_to_the_disk_radius() {
+    // The notch walls turn 120 degrees at its tip, 30 degrees off vertical,
+    // so a point `t` above the tip on the bisector lies `t / 2` from both.
+    let w = 5.0 * 30f64.to_radians().tan();
+    let notched = ContourSet::from_rings(
+        vec![vec![
+            [0.0, 0.0],
+            [10.0, 0.0],
+            [10.0, 10.0],
+            [5.0 + w, 10.0],
+            [5.0, 5.0],
+            [5.0 - w, 10.0],
+            [0.0, 10.0],
+        ]],
+        FillRule::NonZero,
+        res(tol::REGION_MM),
+    )
+    .unwrap();
+    let dilated = notched.disk_dilate(1.0).unwrap();
+    assert!(dilated.contains_point(Point::new(5.0, 6.8)));
+    assert!(!dilated.contains_point(Point::new(5.0, 7.2)));
+}
+
+#[test]
 fn erodes_outer_boundaries_and_expands_holes() {
     let outer = block(0.0, 0.0, 10.0, 10.0);
     let hole = block(4.0, 4.0, 6.0, 6.0);
@@ -1109,4 +1184,124 @@ fn union_joins_a_fill_cut_along_an_edge_and_rounded_off_it() {
             .unwrap()
             .is_empty()
     );
+}
+
+/// Bounds on the area a union of disks covers of a region and spills
+/// outside it, the way jet measures paste dots.
+fn coverage(region: &ContourSet, disks: &[(Point, f64)]) -> [AreaBounds; 2] {
+    let circles = disks
+        .iter()
+        .map(|&(center, radius)| {
+            shapes::circle(2.0 * radius)
+                .unwrap()
+                .transformed(Affine2::translation(center))
+        })
+        .collect::<Vec<_>>();
+    let disks =
+        ContourSet::from_contours(&circles, FillRule::NonZero, region.resolution.strict()).unwrap();
+    [
+        disks.intersection(region).unwrap().area_bounds(),
+        disks.difference(region).unwrap().area_bounds(),
+    ]
+}
+
+#[test]
+fn area_bounds_of_disk_booleans_contain_analytic_areas() {
+    use std::f64::consts::PI;
+    let disk = |r: f64| PI * r * r;
+    // The part of a disk beyond a chord `h` from its center.
+    let segment = |r: f64, h: f64| r * r * (h / r).acos() - h * (r * r - h * h).sqrt();
+    // A slab with a hole, an island inside the hole, and a separate island.
+    let region = block(0.0, 0.0, 6.0, 4.0)
+        .difference(&block(3.0, 1.0, 5.0, 3.0))
+        .unwrap()
+        .union(&block(3.8, 1.8, 4.2, 2.2))
+        .unwrap()
+        .union(&block(8.0, 0.0, 9.0, 1.0))
+        .unwrap();
+    let r = 0.25;
+    let point = Point::new;
+    let disks = [
+        // Overlapping pair halved by the bottom edge.
+        (point(1.0, 0.0), r),
+        (point(1.3, 0.0), r),
+        // The same disk twice, wholly inside.
+        (point(1.0, 2.0), r),
+        (point(1.0, 2.0), r),
+        // Halved by the hole's edge, by the corner, and wholly outside.
+        (point(3.0, 2.0), r),
+        (point(6.0, 4.0), r),
+        (point(7.0, 2.0), r),
+        // Halved by the edge of the island inside the hole.
+        (point(4.2, 2.0), 0.15),
+        // Mostly above the separate island, reaching 0.15 into it.
+        (point(8.5, 1.1), r),
+    ];
+    let pair = 2.0 * disk(r) - 2.0 * segment(r, 0.15);
+    let covered =
+        pair / 2.0 + disk(r) + disk(r) / 2.0 + disk(r) / 4.0 + disk(0.15) / 2.0 + segment(r, 0.1);
+    let spill = pair / 2.0
+        + disk(r) / 2.0
+        + 3.0 * disk(r) / 4.0
+        + disk(r)
+        + disk(0.15) / 2.0
+        + (disk(r) - segment(r, 0.1));
+    let perimeter = 2.0 * PI * (7.0 * r + 0.15);
+
+    let mut widths = Vec::new();
+    for budget in [0.01, 1e-4] {
+        let region = region
+            .clone()
+            .rebudget(GeometryAccuracy::new(budget).unwrap())
+            .unwrap();
+        let area = coverage(&region, &disks);
+        for (bounds, exact) in [(area[0], covered), (area[1], spill)] {
+            assert!(
+                bounds.lower <= exact && exact <= bounds.upper,
+                "{exact} outside {bounds:?} at budget {budget}"
+            );
+            assert!(bounds.upper - bounds.lower <= 2.0 * budget * perimeter);
+            widths.push(bounds.upper - bounds.lower);
+        }
+    }
+    // A hundredfold finer budget narrows the intervals about a hundredfold.
+    assert!(widths[2] * 50.0 < widths[0] && widths[3] * 50.0 < widths[1]);
+}
+
+#[test]
+fn area_bounds_hold_for_the_region_source() {
+    // Strips cross one disk many times, so most of what the bounds must
+    // allow for is where the source may lie off the region's edges.
+    let uncertainty = 0.009;
+    let strips = |grow: f64| {
+        (-9..=9).map(move |k| (k as f64 * 0.1 - 0.025 - grow, k as f64 * 0.1 + 0.025 + grow))
+    };
+    let mut region = ContourSet::union_all(
+        res(0.0),
+        strips(0.0).map(|(left, right)| block(left, -2.0, right, 2.0)),
+    )
+    .unwrap();
+    region.uncertainty_mm = uncertainty;
+    // Unit disk area between two verticals.
+    let primitive = |x: f64| {
+        let x = x.clamp(-1.0, 1.0);
+        x * (1.0 - x * x).sqrt() + x.asin()
+    };
+    let area = coverage(&region, &[(Point::ZERO, 1.0)]);
+    for grow in [-uncertainty, 0.0, uncertainty] {
+        let covered = strips(grow)
+            .map(|(left, right)| primitive(right) - primitive(left))
+            .sum::<f64>();
+        let spill = std::f64::consts::PI - covered;
+        assert!(
+            area[0].lower <= covered && covered <= area[0].upper,
+            "{grow}: {covered} outside {:?}",
+            area[0]
+        );
+        assert!(
+            area[1].lower <= spill && spill <= area[1].upper,
+            "{grow}: {spill} outside {:?}",
+            area[1]
+        );
+    }
 }

@@ -29,7 +29,7 @@ pub fn simplify_shapes(rings: Vec<Ring>, fill_rule: FillRule) -> Vec<Shape> {
 }
 
 fn regularize(rings: Vec<Ring>, rule: OverlayFillRule) -> Vec<Shape> {
-    bounds_connected_groups(rings.into_iter().map(|ring| (ring, ())).collect())
+    bounds_connected_groups(rings.into_iter().map(|ring| (ring, ())).collect(), 0.0)
         .into_iter()
         .flat_map(|group| overlay(&untagged(group), &[], OverlayRule::Subject, rule))
         .collect()
@@ -42,14 +42,42 @@ pub(super) fn overlay(
     fill_rule: OverlayFillRule,
 ) -> Vec<Shape> {
     let bbox = rings_bbox(subject).union(rings_bbox(clip));
-    let scale = lattice_per_mm(bbox);
     let vertices = VertexColumns::new(&[subject, clip], bbox);
+    overlay_on_lattice(subject, clip, bbox, rule, fill_rule, |ring, emit| {
+        vertices.split(ring, emit)
+    })
+}
+
+/// The region a constructed curve winds positively around, on the lattice
+/// booleans use. Its edges are not split at vertices lying on them: that
+/// cancels seams where source fills were cut along each other, and a curve
+/// built from regularized rings has none.
+pub(super) fn positive_winding(rings: &[Ring]) -> Vec<Ring> {
+    flatten_shapes(overlay_on_lattice(
+        rings,
+        &[],
+        rings_bbox(rings),
+        OverlayRule::Subject,
+        OverlayFillRule::Positive,
+        |ring, emit| ring.iter().copied().for_each(emit),
+    ))
+}
+
+fn overlay_on_lattice(
+    subject: &[Ring],
+    clip: &[Ring],
+    bbox: BBox,
+    rule: OverlayRule,
+    fill_rule: OverlayFillRule,
+    vertices: impl Fn(&[[f64; 2]], &mut dyn FnMut([f64; 2])),
+) -> Vec<Shape> {
+    let scale = lattice_per_mm(bbox);
     let lattice = |rings: &[Ring]| {
         rings
             .iter()
             .map(|ring| {
                 let mut lattice = Vec::with_capacity(ring.len());
-                vertices.split(ring, |[x, y]| {
+                vertices(ring, &mut |[x, y]| {
                     lattice.push(IntPoint::new(
                         (x * scale).round() as i64,
                         (y * scale).round() as i64,
@@ -210,9 +238,10 @@ pub(super) const ON_EDGE_MM: f64 = std::f64::consts::SQRT_2 * tol::SOURCE_GRID_M
 /// happened to batch it.
 pub(super) fn resolve_groups<T>(
     rings: Vec<(Ring, T)>,
+    reach: f64,
     resolve: impl FnMut(Vec<(Ring, T)>) -> Vec<Ring>,
 ) -> Vec<Ring> {
-    bounds_connected_groups(rings)
+    bounds_connected_groups(rings, reach)
         .into_iter()
         .flat_map(resolve)
         .collect()
@@ -234,7 +263,10 @@ pub(super) fn untagged<T>(group: Vec<(Ring, T)>) -> Vec<Ring> {
 /// member pair joins; that costs only partitioning benefit, never
 /// correctness, and lets a layer of long features degenerate to the single
 /// overlay it needed before.
-fn bounds_connected_groups<T>(rings: Vec<(Ring, T)>) -> Vec<Vec<(Ring, T)>> {
+///
+/// `reach` widens every ring's bounds further, for operations that join
+/// rings that far apart.
+fn bounds_connected_groups<T>(rings: Vec<(Ring, T)>, reach: f64) -> Vec<Vec<(Ring, T)>> {
     struct Group {
         hull: BBox,
         root: usize,
@@ -243,8 +275,9 @@ fn bounds_connected_groups<T>(rings: Vec<(Ring, T)>) -> Vec<Vec<(Ring, T)>> {
         .iter()
         .map(|(ring, _)| rings_bbox(std::slice::from_ref(ring)))
         .collect::<Vec<_>>();
-    let slack =
-        numerical_error(bounds.iter().copied().fold(BBox::empty(), BBox::union)) + ON_EDGE_MM;
+    let slack = numerical_error(bounds.iter().copied().fold(BBox::empty(), BBox::union))
+        + ON_EDGE_MM
+        + reach;
     let mut order = bounds
         .into_iter()
         .map(|bbox| bbox.expand(slack))

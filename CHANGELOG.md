@@ -8,6 +8,14 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added
+
+- `pcb-ir` `ContourSet::area_bounds` bounds the area of the source a region was prepared from, using its recorded uncertainty. Combined with the existing booleans, it bounds the paste area that a set of flattened disks covers or spills.
+
+### Changed
+
+- `pcb-ir` erodes curved regions about 400 times faster: a 112-vertex rounded pad erodes in about 50 µs instead of 20–30 ms. Disk dilation at fine accuracy budgets, such as 0.5 mm at 0.25 µm, no longer fails the budget.
+
 ### Fixed
 
 - `pcb apply schematic` connects a net that crosses into a `Project()` module sheet through its sheet pin and hierarchical label alone, without extra global labels. A module port whose net stays inside the module gets no sheet pin, a net exposed under several port names crosses the sheet once, and generated sheets leave room for their pin labels. Existing generated sheets gain or lose pins as nets start or stop leaving their module.

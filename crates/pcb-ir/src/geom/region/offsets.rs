@@ -1,10 +1,9 @@
 //! Disk offsets, opening, and closing within the region's budget.
 
-use super::{ContourSet, decimate_rings_inward, edges_of, flatten_shapes};
-use crate::geom::AccuracyError;
+use super::simplification::{positive_winding, resolve_groups, untagged};
+use super::{ContourSet, PreparedRegion, Ring, decimate_rings_inward, edges_of, signed_area_of};
 use crate::geom::accuracy::numerical_error;
-use i_overlay::mesh::float::outline::offset::OutlineOffset;
-use i_overlay::mesh::float::style::{LineJoin as OutlineLineJoin, OutlineStyle};
+use crate::geom::{AccuracyError, Point};
 
 impl ContourSet {
     /// Morphological opening by a disk: `(self ⊖ D_radius) ⊕ D_radius`.
@@ -58,47 +57,34 @@ impl ContourSet {
         let remaining = accuracy.allowance(inherited)?;
         let join_angle = (2.0 * (remaining / (2.0 * offset.abs())).min(1.0).sqrt().asin())
             .clamp(0.01 * std::f64::consts::PI, std::f64::consts::FRAC_PI_4);
-        let style = OutlineStyle::new(offset).line_join(OutlineLineJoin::Round(join_angle));
-        // A disk wider than the region's bounding box cannot fit anywhere.
-        // Retain the ordinary uncertainty accounting below; only avoid the
-        // offset backend's work constructing an already-proven empty erosion.
-        let erased = -offset
-            > self.bbox.width().min(self.bbox.height()) / 2.0
-                + self.uncertainty_mm
-                + accuracy.max_error_mm();
-        let rings = if erased {
-            Vec::new()
-        } else {
-            flatten_shapes(self.overlay_source().outline_as::<i64>(&style))
-        };
-        // Only rounded corners incur chord error; inward corners intersect straight edges.
-        // The backend keeps every chord's sweep at or below join_angle, so sizing each
-        // chord as one of floor(sweep / join_angle) equal steps bounds its sag from above.
-        let added = self
-            .rings()
-            .flat_map(|ring| {
-                let directions = edges_of(ring)
-                    .filter_map(|(a, b)| {
-                        let d = b - a;
-                        (d.length() > 0.0).then(|| d / d.length())
-                    })
-                    .collect::<Vec<_>>();
-                directions
-                    .iter()
-                    .zip(directions.iter().cycle().skip(1))
-                    .take(directions.len())
-                    .filter(|(a, b)| (a.x * b.y - a.y * b.x) * offset > 0.0)
-                    .map(|(a, b)| {
-                        let sweep = (a.x * b.x + a.y * b.y).clamp(-1.0, 1.0).acos();
-                        let steps = (sweep / join_angle).floor().max(1.0);
-                        2.0 * offset.abs() * (sweep / steps / 4.0).sin().powi(2)
-                    })
-                    .collect::<Vec<_>>()
+        // A ring narrower than the disk on the side the offset shrinks
+        // vanishes: an outer ring under erosion, whose component erodes on
+        // its own, or a hole under dilation, which fills. Rings whose bounds
+        // stay farther apart than the offset cannot meet in it, so each group
+        // of the rest offsets, and if need be falls back, on its own.
+        let kept = self
+            .bounded_rings()
+            .filter(|(ring, bounds)| {
+                signed_area_of(ring) * offset > 0.0
+                    || bounds.width().min(bounds.height()) > 2.0 * offset.abs()
             })
-            .fold(0.0, f64::max);
-        // The backend resolves the offset contours against each other, so its
-        // outline is already regular, and decimating within `numeric` moves
-        // the boundary by less than the rounding that outline carries.
+            .map(|(ring, _)| (ring.to_vec(), ()))
+            .collect();
+        let mut added: f64 = 0.0;
+        let rings = resolve_groups(kept, offset.abs(), |group| {
+            let (rings, sag) = offset_group(
+                &untagged(group),
+                offset,
+                join_angle,
+                remaining,
+                numeric,
+                self.resolution.tolerance_mm,
+            );
+            added = added.max(sag);
+            rings
+        });
+        // Decimating within `numeric` moves the boundary by less than the
+        // rounding the overlay already charged.
         Self::from_regularized(
             decimate_rings_inward(rings.iter().map(Vec::as_slice), numeric),
             self.resolution,
@@ -106,4 +92,126 @@ impl ContourSet {
         )
         .checked()
     }
+}
+
+/// The offset of one group of rings and the error it carries beyond
+/// rounding. Every ring winds once around what it offsets to and collapsed
+/// pieces wind backwards, so positive winding is the offset region.
+///
+/// A crossing or direct join classifies a point differently from a path
+/// through its corner only within `offset` of the corner, where an erosion
+/// never reaches and a dilation always does. Distance to the boundary has no
+/// minimum inside a piece, so a misclassified piece has an edge that close:
+/// the shortfall bounds it like the joins' sag, and past the allowance the
+/// group joins through its corners instead. Rings below significance leave
+/// the result anyway.
+fn offset_group(
+    rings: &[Ring],
+    offset: f64,
+    join_angle: f64,
+    allowance: f64,
+    numeric: f64,
+    tolerance: f64,
+) -> (Vec<Ring>, f64) {
+    let offset_rings = |direct: bool| {
+        let (mut raw, mut sag, mut crossed) = (Vec::with_capacity(rings.len()), 0.0, false);
+        for ring in rings {
+            let (ring, ring_sag, ring_crossed) = raw_offset(ring, offset, join_angle, direct);
+            raw.push(ring);
+            sag = f64::max(sag, ring_sag);
+            crossed |= ring_crossed;
+        }
+        (positive_winding(&raw), sag, crossed)
+    };
+    let (result, sag, crossed) = offset_rings(true);
+    if !crossed {
+        return (result, sag);
+    }
+    let boundary =
+        PreparedRegion::from_segments(rings.iter().flat_map(|ring| edges_of(ring)).collect(), 0.0);
+    let shortfall = result
+        .iter()
+        .filter(|ring| signed_area_of(ring).abs() > tolerance * tolerance)
+        .flat_map(|ring| edges_of(ring))
+        .filter_map(|(start, end)| boundary.segment_nearest_within(start, end, offset.abs()))
+        .map(|nearest| offset.abs() - nearest.mm - 2.0 * numeric)
+        .fold(sag, f64::max);
+    if shortfall > allowance.max(sag) {
+        let (result, sag, _) = offset_rings(false);
+        (result, sag)
+    } else {
+        (result, shortfall)
+    }
+}
+
+/// The sharpest turn a flattened curve takes at one vertex, even at a coarse
+/// budget; sharper corners are polygon corners, few enough to join through.
+const SMOOTH_TURN: f64 = std::f64::consts::FRAC_PI_8;
+
+/// The raw offset curve of one ring, the sag of its round joins, and whether
+/// it crossed or directly joined any corner: every edge moved `offset` to its
+/// right, away from the material on its left, joined corner by corner.
+///
+/// Where the offset edges part, a round join of chords within `join_angle`
+/// fills the gap. Where they overlap, they join through the corner, as the
+/// backend this replaces did; with `direct`, a smooth turn of a flattened
+/// curve joins them where they cross, as the curve's own offset would, or
+/// straight across where they cross beyond either edge.
+/// Offset edges at full length through every corner of a flattened curve
+/// cross each other near its centre once the offset nears its radius, and
+/// resolving those crossings costs the overlay a hundred times what crossing
+/// joins do.
+fn raw_offset(ring: &[[f64; 2]], offset: f64, join_angle: f64, direct: bool) -> (Ring, f64, bool) {
+    let edges = edges_of(ring)
+        .filter_map(|(start, end)| {
+            let length = (end - start).length();
+            (length > 0.0).then(|| (end, (end - start) / length, length))
+        })
+        .collect::<Vec<_>>();
+    let mut raw = Vec::with_capacity(edges.len());
+    let mut sag: f64 = 0.0;
+    let mut crossed = false;
+    let mut push = |point: Point| raw.push([point.x, point.y]);
+    let right = |direction: Point| Point::new(direction.y, -direction.x) * offset;
+    for (index, &(corner, direction, length)) in edges.iter().enumerate() {
+        let (_, next, next_length) = edges[(index + 1) % edges.len()];
+        let (normal, next_normal) = (right(direction), right(next));
+        let cross = direction.x * next.y - direction.y * next.x;
+        let dot = direction.x * next.x + direction.y * next.y;
+        // A reversal parts the offset edges whichever way the offset goes.
+        let turn = if cross == 0.0 && dot < 0.0 {
+            std::f64::consts::PI.copysign(offset)
+        } else {
+            cross.atan2(dot)
+        };
+        if turn * offset > 0.0 {
+            let steps = (turn.abs() / join_angle).ceil();
+            sag = sag.max(2.0 * offset.abs() * (turn.abs() / steps / 4.0).sin().powi(2));
+            push(corner + normal);
+            for step in 1..steps as usize {
+                let (sin, cos) = (turn * step as f64 / steps).sin_cos();
+                push(
+                    corner
+                        + Point::new(
+                            normal.x * cos - normal.y * sin,
+                            normal.x * sin + normal.y * cos,
+                        ),
+                );
+            }
+            push(corner + next_normal);
+        } else if direct && turn.abs() <= SMOOTH_TURN {
+            crossed = true;
+            if offset.abs() * (turn / 2.0).tan().abs() <= length.min(next_length) {
+                push(corner + (normal + next_normal) / (1.0 + dot));
+            } else {
+                push(corner + normal);
+                push(corner + next_normal);
+            }
+        } else {
+            push(corner + normal);
+            push(corner);
+            push(corner + next_normal);
+        }
+    }
+    (raw, sag, crossed)
 }

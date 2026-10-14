@@ -18,7 +18,7 @@ use meshopt_rs::vertex::VertexEncodingVersion;
 use meshopt_rs::vertex::buffer::{encode_vertex_buffer, encode_vertex_buffer_bound};
 use meshopt_rs::vertex::filter::encode_filter_oct_8;
 use pcb_step::scene::{Layer, LayerKind, Scene};
-use pcb_step::{Board, Options};
+use pcb_step::{Board, Options, OutlinePolicy};
 use rayon::prelude::*;
 use serde_json::{Value, json};
 
@@ -574,15 +574,28 @@ pub(crate) fn write(
         children.push(nodes.len() - 1);
     }
 
+    let manifest = pcb_step::manifest::manifest(board, options, scene, &|coverage| {
+        drawn.get(&coverage).cloned()
+    });
     if children.is_empty() {
-        return Err(pcb_step::Error::NothingToExport.into());
+        ensure!(
+            options.outline == OutlinePolicy::Synthesize,
+            pcb_step::Error::NothingToExport
+        );
+        return write_glb(
+            json!({
+                "asset": { "version": "2.0", "generator": "pcb-gltf" },
+                "scene": 0,
+                "scenes": [{ "name": name, "nodes": [0] }],
+                "nodes": [{ "name": name, "extras": { "pcb": manifest } }],
+            }),
+            &[],
+            sink,
+        );
     }
 
     // Millimetres to metres, then z up to y up.
     let root = DMat4::from_rotation_x(-FRAC_PI_2) * DMat4::from_scale(DVec3::splat(0.001));
-    let manifest = pcb_step::manifest::manifest(board, options, scene, &|coverage| {
-        drawn.get(&coverage).cloned()
-    });
     nodes[0] = json!({
         "name": name,
         "matrix": matrix(root),
@@ -611,10 +624,14 @@ pub(crate) fn write(
             { "byteLength": gltf.decoded, "extensions": { MESHOPT: { "fallback": true } } },
         ],
     });
+    write_glb(document, &gltf.bin, sink)
+}
+
+fn write_glb(document: Value, bin: &[u8], sink: &mut dyn Write) -> Result<()> {
     let mut json = serde_json::to_vec(&document)?;
     json.resize(json.len().next_multiple_of(4), b' ');
 
-    let total = 12 + 8 + json.len() + 8 + gltf.bin.len();
+    let total = 12 + 8 + json.len() + if bin.is_empty() { 0 } else { 8 + bin.len() };
     ensure!(
         total <= u32::MAX as usize,
         "GLB would be {total} bytes, over the format's 4 GiB limit"
@@ -625,9 +642,11 @@ pub(crate) fn write(
     sink.write_all(&(json.len() as u32).to_le_bytes())?;
     sink.write_all(b"JSON")?;
     sink.write_all(&json)?;
-    sink.write_all(&(gltf.bin.len() as u32).to_le_bytes())?;
-    sink.write_all(b"BIN\0")?;
-    sink.write_all(&gltf.bin)?;
+    if !bin.is_empty() {
+        sink.write_all(&(bin.len() as u32).to_le_bytes())?;
+        sink.write_all(b"BIN\0")?;
+        sink.write_all(bin)?;
+    }
     Ok(())
 }
 

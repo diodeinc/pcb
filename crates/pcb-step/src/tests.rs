@@ -350,6 +350,20 @@ fn bare() -> Options {
     }
 }
 
+#[test]
+fn an_empty_board_has_nothing_to_export_even_with_outline_synthesis() {
+    let text = parse("");
+    let board = Board::parse(text.as_bytes()).unwrap();
+    let options = Options {
+        outline: crate::OutlinePolicy::Synthesize,
+        ..Options::default()
+    };
+    let mut out = Vec::new();
+    let err = export(&board, &options, &mut out, &mut Default::default()).unwrap_err();
+    assert!(matches!(err, crate::Error::NothingToExport), "{err}");
+    assert!(out.is_empty());
+}
+
 fn export_text(board: &str, options: &Options) -> (String, crate::Report) {
     let board = Board::parse(board.as_bytes()).unwrap();
     let mut out = Vec::new();

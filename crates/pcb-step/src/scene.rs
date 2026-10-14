@@ -220,7 +220,7 @@ impl Scene {
             (solids, synthetic_outline) =
                 outline_solids(board, frame, options.outline, &fonts, &variables, warnings)?;
         }
-        if options.board_body {
+        if options.board_body && !solids.is_empty() {
             layers.push(body(
                 board,
                 options,
