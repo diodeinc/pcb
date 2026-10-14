@@ -20,7 +20,7 @@ use crate::dialects::ipc::{
     SimpleShape, lower_layer_to_artwork_with,
 };
 use crate::geom::dfm::BBoxIndex;
-use crate::geom::{BBox, ContourSet, Point, Polarity, Span, tol};
+use crate::geom::{ContourSet, Point, Polarity, Span, tol};
 use crate::import::ipc2581::{
     ComponentOccurrenceId, FeatureOccurrence, FeatureOccurrenceId, ImportedDesign, LayerId,
     LayoutOccurrenceId, PopulationState, feature_occurrence_id, is_copper, layer_role,
@@ -139,9 +139,10 @@ pub struct PasteIsland {
     /// The electrical termination this paste feeds. IPC component, pin,
     /// padstack, and location identity decides when it names a termination.
     /// Otherwise the island links to the one termination whose source lands
-    /// on its mounting side it overlaps; lands of no termination do not count. When the paste
-    /// names a component, only that component's terminations count, and
-    /// overlapping only another component's is `Conflicting`.
+    /// on its mounting side it overlaps; lands of no termination do not
+    /// count. When the paste names a component, only that component's
+    /// terminations count, and overlapping only another component's is
+    /// `Conflicting`.
     pub termination: Association<PhysicalTerminationId>,
     pub termination_basis: Option<AssociationBasis>,
 }
@@ -555,16 +556,12 @@ impl ImportedDesign {
                             Some(AssociationBasis::SourceIdentity),
                         )
                     } else {
-                        let mut overlapped = BTreeSet::new();
-                        for entry in termination_lands.lands_meeting(image.bbox()) {
-                            let land = entry.land;
-                            if land.board == board
-                                && (side == Side::None || land.side == side)
-                                && land.image.intersection(&image)?.area() > tol::REGION_MM.powi(2)
-                            {
-                                overlapped.insert(entry.termination);
-                            }
-                        }
+                        let overlapped = termination_lands
+                            .overlapping(&image, board, |land| {
+                                side == Side::None || land.side == side
+                            })?
+                            .into_iter()
+                            .collect::<BTreeSet<_>>();
                         // Paste naming a component links only to its own
                         // terminations; lands of another one contradict it.
                         let mut own = overlapped
@@ -808,20 +805,13 @@ impl ImportedDesign {
             return Ok((association, Some(AssociationBasis::SourceIdentity)));
         }
 
-        let mut candidates = Vec::new();
-        for entry in terminations.lands_meeting(hole.image.bbox()) {
-            let land = entry.land;
-            if land.board == hole.board
-                && feature_definitely_spans_layer(
-                    hole.span,
-                    self.layer_definitions[land.layer.0 as usize].name,
-                    stackup,
-                )
-                && land.image.intersection(&hole.image)?.area() > tol::REGION_MM.powi(2)
-            {
-                candidates.push(entry.termination);
-            }
-        }
+        let candidates = terminations.overlapping(&hole.image, hole.board, |land| {
+            feature_definitely_spans_layer(
+                hole.span,
+                self.layer_definitions[land.layer.0 as usize].name,
+                stackup,
+            )
+        })?;
         Ok(match candidates.as_slice() {
             [] => (Association::Unresolved, None),
             [termination] => (
@@ -1169,7 +1159,7 @@ fn associate_lands(
     })
 }
 
-/// One land of a sided termination, for exact-geometry hole association.
+/// One land of a sided termination, for exact-geometry association.
 struct TerminationLand<'a> {
     termination: PhysicalTerminationId,
     land: &'a PhysicalLand,
@@ -1266,12 +1256,25 @@ impl<'a> TerminationIndex<'a> {
             .collect()
     }
 
-    /// Termination lands whose image bounds meet `bbox`, in index order.
-    fn lands_meeting(&self, bbox: BBox) -> impl Iterator<Item = &TerminationLand<'a>> {
-        self.land_bounds
-            .query(bbox)
-            .into_iter()
-            .map(|id| &self.lands[id])
+    /// The termination of every land on `board` that `keep` accepts and
+    /// `image` overlaps by positive area, in index order.
+    fn overlapping(
+        &self,
+        image: &ContourSet,
+        board: Option<LayoutOccurrenceId>,
+        keep: impl Fn(&PhysicalLand) -> bool,
+    ) -> Result<Vec<PhysicalTerminationId>> {
+        let mut terminations = Vec::new();
+        for id in self.land_bounds.query(image.bbox()) {
+            let TerminationLand { termination, land } = self.lands[id];
+            if land.board == board
+                && keep(land)
+                && land.image.intersection(image)?.area() > tol::REGION_MM.powi(2)
+            {
+                terminations.push(termination);
+            }
+        }
+        Ok(terminations)
     }
 
     /// The side every termination of `association` mounts on, if they agree.
