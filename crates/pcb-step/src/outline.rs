@@ -12,9 +12,10 @@ use std::f64::consts::{PI, TAU};
 use pcb_ir::geom::{ContourBuf, ContourSet, FillRule, PathCmd, Point};
 
 use crate::Error;
-use crate::board::{Board, RawEdge, ShapeKind};
+use crate::board::{Board, RawEdge};
 use crate::geom::{Vec2, ccw_sweep, chord_count, circle_center, point_in_polygon, signed_area};
 use crate::holes::RoundHole;
+use crate::outline_font::Fonts;
 use crate::rings::raw_islands;
 
 /// Endpoints closer than this are joined, matching KiCad's chaining epsilon.
@@ -352,13 +353,15 @@ pub(crate) fn outline_solids(
     board: &Board,
     frame: Frame,
     policy: OutlinePolicy,
+    fonts: &Fonts,
+    variables: &[(String, String)],
     warnings: &mut Vec<String>,
 ) -> Result<(Vec<Solid>, bool), Error> {
     match board_solids(board, frame) {
         Err(err @ (Error::Outline(_) | Error::OpenOutline(_)))
             if policy == OutlinePolicy::Synthesize =>
         {
-            let Some(solids) = synthesize(board, frame) else {
+            let Some(solids) = synthesize(board, frame, fonts, variables) else {
                 return Err(err);
             };
             warnings.push(format!(
@@ -370,7 +373,13 @@ pub(crate) fn outline_solids(
     }
 }
 
-fn synthesize(board: &Board, frame: Frame) -> Option<Vec<Solid>> {
+fn synthesize(
+    board: &Board,
+    frame: Frame,
+    fonts: &Fonts,
+    variables: &[(String, String)],
+) -> Option<Vec<Solid>> {
+    let corners = |lo: Vec2, hi: Vec2| [lo, Vec2::new(hi.x, lo.y), hi, Vec2::new(lo.x, hi.y)];
     let mut points: Vec<Vec2> = Vec::new();
     for fp in &board.footprints {
         points.push(frame.point(fp.at));
@@ -379,9 +388,10 @@ fn synthesize(board: &Board, frame: Frame) -> Option<Vec<Solid>> {
     // with a pad is reported when its copper is made.
     for pad in &board.pads {
         let edges = crate::copper::pad_outline(board, frame, pad, &mut Vec::new());
-        for (lo, hi) in edges.iter().flatten().map(Edge::bbox) {
-            points.extend([lo, hi, Vec2::new(lo.x, hi.y), Vec2::new(hi.x, lo.y)]);
-        }
+        points.extend(edges.iter().flatten().flat_map(|e| {
+            let (lo, hi) = e.bbox();
+            corners(lo, hi)
+        }));
     }
     for track in &board.tracks {
         points.extend([track.a, track.mid, track.b].map(|p| frame.point(p)));
@@ -393,31 +403,25 @@ fn synthesize(board: &Board, frame: Frame) -> Option<Vec<Solid>> {
         points.push(frame.point(hole.a));
         points.push(frame.point(hole.b));
     }
-    // Zone fills, and graphics and text on every layer drawn, the way
+    // Zone fills, and graphics and text on every layer as drawn, the way
     // KiCad bounds a board without an outline; the broken outline's own
-    // edges too.
-    let square = |c: Vec2, r: f64| {
-        let c = frame.point(c);
-        [(-r, -r), (r, -r), (r, r), (-r, r)].map(|(x, y)| c + Vec2::new(x, y))
-    };
+    // edges too. What is wrong with a drawing is reported when its layer
+    // is made.
     points.extend(board.fill_points.iter().map(|p| frame.point(*p)));
-    points.extend(board.shape_points.iter().map(|p| frame.point(*p)));
-    for shape in &board.shapes {
-        match shape.kind {
-            ShapeKind::Line { a, b } => points.extend([a, b].map(|p| frame.point(p))),
-            ShapeKind::Arc { a, mid, b } => points.extend([a, mid, b].map(|p| frame.point(p))),
-            ShapeKind::Circle { center, end } => {
-                points.extend(square(center, center.distance(end)))
-            }
-            ShapeKind::Poly { .. } => {}
-        }
-    }
-    points.extend(board.texts.iter().map(|t| frame.point(t.at)));
+    let drawn =
+        crate::faces::drawn_items(board, frame, fonts, None, true, variables, &mut Vec::new());
+    points.extend(drawn.iter().flatten().flat_map(|c| {
+        let (lo, hi) = (c.bbox.min, c.bbox.max);
+        corners(Vec2::new(lo.x, lo.y), Vec2::new(hi.x, hi.y))
+    }));
     for edge in &board.edges {
         match *edge {
             RawEdge::Line { a, b } => points.extend([a, b].map(|p| frame.point(p))),
             RawEdge::Arc { a, mid, b } => points.extend([a, mid, b].map(|p| frame.point(p))),
-            RawEdge::Circle { center, radius } => points.extend(square(center, radius)),
+            RawEdge::Circle { center, radius } => {
+                let (c, r) = (frame.point(center), Vec2::splat(radius));
+                points.extend(corners(c - r, c + r))
+            }
         }
     }
     points.retain(|p| p.x.is_finite() && p.y.is_finite());
@@ -432,22 +436,16 @@ fn synthesize(board: &Board, frame: Frame) -> Option<Vec<Solid>> {
             grown.push(*p + Vec2::new(a.cos(), a.sin()) * SYNTHETIC_MARGIN);
         }
     }
+    // Counter-clockwise, and a polygon: each point grows into a ring.
     let ring = convex_hull(grown);
-    if ring.len() < 3 {
-        return None;
-    }
-    let edges: Vec<Edge> = (0..ring.len())
+    let edges = (0..ring.len())
         .map(|i| Edge::Line {
             a: ring[i],
             b: ring[(i + 1) % ring.len()],
         })
         .collect();
-    let mut outer = Loop::new(edges);
-    if outer.area() < 0.0 {
-        outer.reverse();
-    }
     Some(vec![Solid {
-        outer,
+        outer: Loop::new(edges),
         holes: Vec::new(),
         round: Vec::new(),
     }])

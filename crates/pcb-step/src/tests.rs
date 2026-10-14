@@ -2261,6 +2261,38 @@ fn image_paste_takes_graphics_on_the_paste_layers() {
 }
 
 #[test]
+fn image_can_leave_out_all_paste_of_dnp_footprints() {
+    use crate::ImageKind::Paste;
+    // DNP U1 has a 1 x 1 mm pad, a 2 x 2 mm window and a text on the
+    // paste; U2 after it is fitted and has a 1 x 3 mm window.
+    let body = format!(
+        r#"{}(footprint "Lib:A" (layer "F.Cu") (at 5 5) (property "Reference" "U1") (attr smd dnp)
+  (fp_rect (start 2 -1) (end 4 1) (stroke (width 0) (type solid)) (fill yes) (layer "F.Paste"))
+  (fp_text user "PASTE" (at 0 3) (layer "F.Paste") (effects (font (size 1 1) (thickness 0.15))))
+  (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu" "F.Paste" "F.Mask")))
+(footprint "Lib:B" (layer "F.Cu") (at 20 10) (property "Reference" "U2")
+  (fp_rect (start 0 0) (end 1 3) (stroke (width 0) (type solid)) (fill yes) (layer "F.Paste")))
+"#,
+        rect_outline(0.0, 0.0, 30.0, 20.0)
+    );
+    let text = parse(&body);
+    let board = Board::parse(text.as_bytes()).unwrap();
+    let front = |include_dnp_paste| {
+        let options = crate::ImageOptions {
+            include_dnp_paste,
+            ..Default::default()
+        };
+        let image = crate::board_image(&board, &options).unwrap();
+        assert!(image.warnings.is_empty(), "{:?}", image.warnings);
+        image_area(&image, "F.Paste", Paste, "")
+    };
+    let all = front(true);
+    assert!(all > 8.0 + 0.1, "{all}");
+    let fitted = front(false);
+    assert!((fitted - 3.0).abs() < 1e-6, "{fitted}");
+}
+
+#[test]
 fn image_flashes_vias_as_kicad_does() {
     use crate::ImageKind::Copper;
     // Nothing connects to these vias but a track on In2.Cu ending at the
@@ -2339,6 +2371,32 @@ fn image_resolves_numbered_nets_by_their_declarations() {
 }
 
 #[test]
+fn image_keeps_a_kicad_10_net_named_0() {
+    use crate::ImageKind::Copper;
+    // KiCad 10 writes net names, always quoted, and declares no numbers:
+    // `(net "0")` is the net named 0, for a pad as for a segment.
+    let text = format!(
+        r#"(kicad_pcb (version 20260206) (generator "pcbnew")
+  (general (thickness 1.6))
+  (layers (0 "F.Cu" signal) (2 "B.Cu" signal) (25 "Edge.Cuts" user))
+{}(footprint "Lib:R" (layer "F.Cu") (at 5 5) (property "Reference" "R1")
+  (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu") (net "0")))
+(segment (start 5 5) (end 10 5) (width 0.5) (layer "F.Cu") (net "0"))
+(segment (start 5 15) (end 10 15) (width 0.5) (layer "F.Cu") (net "GND")))
+"#,
+        rect_outline(0.0, 0.0, 20.0, 20.0)
+    );
+    let board = Board::parse(text.as_bytes()).unwrap();
+    let image = crate::board_image(&board, &crate::ImageOptions::default()).unwrap();
+    let mut nets = image.nets.clone();
+    nets.sort();
+    assert_eq!(nets, ["", "0", "GND"]);
+    // The pad and the segment touch, so they are one region.
+    assert_eq!(image_region(&image, "F.Cu", Copper, "0").ring_count(), 1);
+    assert_eq!(image_area(&image, "F.Cu", Copper, ""), 0.0);
+}
+
+#[test]
 fn synthesized_outline_holds_zone_fills() {
     use crate::ImageKind::Copper;
     // No Edge.Cuts: a 6 x 6 mm fill and a short track beside it. The
@@ -2369,4 +2427,111 @@ fn synthesized_outline_holds_zone_fills() {
         .map(|l| l.name.as_str())
         .collect();
     assert_eq!(copper, ["B.Cu", "F.Cu"]);
+}
+
+#[test]
+fn synthesized_outline_holds_drawn_text() {
+    use crate::ImageKind::Silkscreen;
+    // No Edge.Cuts: a short track, and a centred label far wider than
+    // anything else on the board. Its silkscreen comes out whole, as it
+    // does inside an outline that clears it.
+    let items = r#"(segment (start 0 0) (end 1 0) (width 0.25) (layer "F.Cu") (net "SIG"))
+(gr_text "A VERY LONG SILKSCREEN LABEL THAT EXTENDS FAR" (at 0 5) (layer "F.SilkS")
+  (effects (font (size 1.5 1.5) (thickness 0.3))))
+"#;
+    let silk = |body: &str, outline| {
+        let text = parse(body);
+        let board = Board::parse(text.as_bytes()).unwrap();
+        let options = crate::ImageOptions {
+            outline,
+            ..Default::default()
+        };
+        let image = crate::board_image(&board, &options).unwrap();
+        let region = image_region(&image, "F.SilkS", Silkscreen, "");
+        (region.bbox(), region.area())
+    };
+    let (bbox, area) = silk(items, crate::OutlinePolicy::Synthesize);
+    let (whole_bbox, whole_area) = silk(
+        &format!("{}{items}", rect_outline(-100.0, -100.0, 100.0, 100.0)),
+        crate::OutlinePolicy::Strict,
+    );
+    assert!(whole_bbox.width() > 40.0, "{whole_bbox:?}");
+    assert!((area - whole_area).abs() < 1e-6, "{area} != {whole_area}");
+    assert!((bbox.min.x - whole_bbox.min.x).abs() < 1e-6, "{bbox:?}");
+    assert!((bbox.max.x - whole_bbox.max.x).abs() < 1e-6, "{bbox:?}");
+}
+
+#[test]
+fn footprint_files_parse_as_a_board_at_the_origin() {
+    use crate::ImageKind::Copper;
+    use pcb_ir::dialects::nc;
+    // A `.kicad_mod` as KiCad 10 writes it, with an L-shaped custom pad,
+    // a through-hole pad and an embedded model. Its `(at)` is ignored:
+    // the footprint sits at the origin.
+    let text = format!(
+        r#"(footprint "Test_Footprint"
+	(version 20260206)
+	(generator "pcbnew")
+	(generator_version "10.0")
+	(layer "F.Cu")
+	(at 10 5)
+	(property "Reference" "REF**" (at 0 -2 0) (layer "F.SilkS") (effects (font (size 1 1) (thickness 0.15))))
+	(attr through_hole)
+	(pad "1" smd custom (at -3 0) (size 0.5 0.5) (layers "F.Cu" "F.Mask")
+		(options (clearance outline) (anchor rect))
+		(primitives (gr_poly (pts (xy -1 -1) (xy 1 -1) (xy 1 0) (xy 0 0) (xy 0 1) (xy -1 1)) (width 0) (fill yes))))
+	(pad "2" thru_hole circle (at 2 0) (size 1.6 1.6) (drill 0.8) (layers "*.Cu" "*.Mask"))
+	{}
+	(model "kicad-embed://cube.step" (offset (xyz 0 0 0)) (scale (xyz 1 1 1)) (rotate (xyz 0 0 0)))
+)
+"#,
+        embed("cube.step", &donor_step())
+    );
+    let board = Board::parse(text.as_bytes()).unwrap();
+    let options = crate::ImageOptions {
+        outline: crate::OutlinePolicy::Synthesize,
+        ..Default::default()
+    };
+    let image = crate::board_image(&board, &options).unwrap();
+    // A footprint has no Edge.Cuts; the body is drawn around its items.
+    let synthesized = ["board outline: board has no Edge.Cuts outline; \
+        the board body is synthesized from the items on the board"];
+    assert_eq!(image.warnings, synthesized);
+    let copper: Vec<&str> = image
+        .stackup
+        .iter()
+        .filter(|l| l.role == crate::LayerRole::Copper)
+        .map(|l| l.name.as_str())
+        .collect();
+    assert_eq!(copper, ["B.Cu", "F.Cu"]);
+    let body = image.stackup.iter().find(|l| l.name == "Body").unwrap();
+    assert!((body.z1 - body.z0 - 1.6).abs() < 0.1, "{body:?}");
+
+    // The L and the anchor's corner outside it; the ring on both sides.
+    let ring = PI * (0.8 * 0.8 - 0.4 * 0.4);
+    let front = image_area(&image, "F.Cu", Copper, "");
+    assert!((front - (3.0625 + ring)).abs() < 0.01, "{front}");
+    let back = image_area(&image, "B.Cu", Copper, "");
+    assert!((back - ring).abs() < 0.01, "{back}");
+    let [drill] = &image.drills.objects[..] else {
+        panic!("{:?}", image.drills.objects);
+    };
+    assert_eq!(
+        drill.geometry,
+        nc::Geometry::Drill {
+            at: pcb_ir::geom::Point { x: 2.0, y: 0.0 },
+            diameter: 0.8
+        }
+    );
+
+    // The embedded model is found and placed.
+    let mut report = crate::Report::default();
+    let options = Options {
+        outline: crate::OutlinePolicy::Synthesize,
+        ..bare()
+    };
+    export(&board, &options, &mut Vec::new(), &mut report).unwrap();
+    assert_eq!(report.warnings, synthesized);
+    let status: Vec<_> = report.coverage.models.iter().map(|m| m.status).collect();
+    assert_eq!(status, [crate::Status::Rendered]);
 }

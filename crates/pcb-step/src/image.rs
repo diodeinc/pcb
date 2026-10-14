@@ -31,7 +31,8 @@ pub type NetId = u32;
 pub struct ImageOptions {
     /// Inner copper layers as well as the outer two.
     pub inner_copper: bool,
-    /// Paste on the pads of DNP footprints, as KiCad's 3D viewer draws it.
+    /// Paste of DNP footprints, on their pads and drawn on the paste
+    /// layers, as KiCad's 3D viewer draws it.
     pub include_dnp_paste: bool,
     pub outline: OutlinePolicy,
     /// Project text variables, substituted into `${NAME}` in silkscreen
@@ -122,7 +123,16 @@ pub fn board_image(board: &Board, options: &ImageOptions) -> Result<BoardImage, 
     let frame = Frame { origin: Vec2::ZERO };
     let physical = board.physical();
     let mut warnings = Vec::new();
-    let (solids, _) = outline_solids(board, frame, options.outline, &mut warnings)?;
+    let variables = board.text_variables(&options.text_variables);
+    let fonts = Fonts::load(board, &mut warnings);
+    let (solids, _) = outline_solids(
+        board,
+        frame,
+        options.outline,
+        &fonts,
+        &variables,
+        &mut warnings,
+    )?;
     let edge = BoardEdge::new(&solids);
     let outline = edge
         .region(&mut warnings)
@@ -270,8 +280,6 @@ pub fn board_image(board: &Board, options: &ImageOptions) -> Result<BoardImage, 
         warnings.extend(note);
     }
 
-    let variables = board.text_variables(&options.text_variables);
-    let fonts = Fonts::load(board, &mut warnings);
     let tech = faces::build(
         board,
         frame,

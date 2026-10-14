@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added
+
+- `pcb-step` parses standalone `.kicad_mod` footprints.
+
 ### Changed
 
 - `pcb-step` decodes embedded files with pure-Rust zstd, so it builds for WebAssembly without clang.
@@ -17,8 +21,11 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - `board-array create` and board-array analysis honor a board's non-zero Datum.
 - `pcb gltf export` draws solder paste drawn as graphics or text on `F.Paste` and `B.Paste`, such as paste windows over thermal pads, not just pad paste.
 - `pcb step export` and `pcb gltf export` leave a via off its start and end layers when it removes unused layers without keeping its end layers and nothing connects there, as KiCad does; `start_end_only` vias are on their end layers only.
+- The `pcb-step` board image with `include_dnp_paste: false` also hides DNP footprints' drawn paste, not just their pad paste.
 - The `pcb-step` board image and manifest name the nets of boards before KiCad 10 by their declared names instead of their numbers.
+- The `pcb-step` board image keeps copper on a KiCad 10 net named `0` on that net instead of on no net.
 - `pcb gltf export` builds the board body of a layout without `Edge.Cuts` around its zone fills, graphics, text and exact pad outlines too, so copper is no longer cut away.
+- `pcb gltf export` no longer cuts off long silkscreen labels on a layout without `Edge.Cuts`.
 - `pcb import` accepts symbol pins that have no footprint pad, such as a 24-pin USB-C symbol on a 16-pin footprint or a shield pin, and warns instead of failing. As in KiCad, the pin stays in the netlist but is not placed on the board. The generated component accepts `symbol.pin.no_pad` with a `# suppress:` comment, so `pcb build` passes, and `pcb layout --check` no longer reports the pin as a missing pad.
 - A `# suppress:` comment on a `Component()` call also suppresses findings about its KiCad symbol, which point into the symbol file, for that component only.
 
