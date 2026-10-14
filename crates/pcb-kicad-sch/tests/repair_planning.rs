@@ -597,6 +597,68 @@ fn intent_uses_a_global_driver_for_islands_cut_off_across_pages() {
     assert!(verified.analysis.is_equivalent(), "{:#?}", verified.issues);
 }
 
+#[test]
+fn intent_names_a_sheet_joined_net_locally_on_the_parent_page() {
+    const SHARED: &str = "SHARED_SIGNAL_WITH_A_LONG_NAME";
+    let netlist = common::compile_fixture("hierarchy", "root_and_sheets.zen");
+    let mut document = plan_reconciliation(None, &netlist, "RootAndSheets.kicad_sch")
+        .unwrap()
+        .apply(None)
+        .unwrap();
+    let root_page = document.root_page_ids[0].clone();
+    let root_index = document
+        .pages
+        .iter()
+        .position(|page| page.id == root_page)
+        .unwrap();
+    let sheet_pins = document.pages[root_index]
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            SchItem::Sheet(sheet) => Some(sheet.pins.iter().map(|pin| pin.at)),
+            _ => None,
+        })
+        .flatten()
+        .collect::<Vec<_>>();
+    // Without R1's own label, R1 is cut off; the root's sheet-pin labels
+    // still carry the net into both sheets, so a local label rejoins it.
+    document.pages[root_index].items.retain(|item| {
+        !matches!(item, SchItem::Label(label)
+            if label.text == SHARED && !sheet_pins.contains(&label.at))
+    });
+    let inspection = inspect_schematic(&document, &netlist).unwrap();
+    let key = SchematicIssueKey::DisconnectedNet(SHARED.to_string());
+    assert!(
+        inspection.issues.iter().any(|issue| issue.key == key),
+        "{:#?}",
+        inspection.issues
+    );
+
+    let intent = plan_connectivity_repair(
+        &document,
+        &netlist,
+        &inspection,
+        &BTreeSet::from([key.clone()]),
+        &BTreeSet::new(),
+    )
+    .unwrap();
+    assert_eq!(
+        intent.driver_kind(SHARED, &root_page),
+        Some(&NetDriverKind::Local),
+        "{:#?}",
+        intent.drivers()
+    );
+
+    // PCB's realizer places the driver the intent names.
+    let realized = plan_repairs(&document, &netlist, &inspection, BTreeSet::from([key]))
+        .unwrap()
+        .apply(Some(&document))
+        .unwrap();
+    let verified =
+        verify_connectivity_repair(&document, &inspection, &netlist, &intent, &realized).unwrap();
+    assert!(verified.analysis.is_equivalent(), "{:#?}", verified.issues);
+}
+
 fn label_point(document: &SchDocument, name: &str) -> Point {
     document
         .pages

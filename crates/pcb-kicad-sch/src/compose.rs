@@ -2585,10 +2585,11 @@ fn apply_connectivity_repair(
 
 /// The name driver a realizer must use for each reconnected net on each page
 /// where the net has visible pins or an interface port. Power-symbol nets use
-/// their netlist symbol; an island cut off from the same net on another page
-/// needs a global label; a page whose module interface exposes the net uses a
-/// hierarchical label; a net whose pins span pages without such an interface
-/// needs a global label; everything else is a local label.
+/// their netlist symbol; an island still cut off from the same net on another
+/// page once the page-scoped drivers join it (the realizer's rule, in
+/// `net_driver_islands`) needs a global label; a page whose module interface
+/// exposes the net uses a hierarchical label; everything else is a local
+/// label.
 pub(crate) fn plan_net_driver_kinds(
     document: &SchDocument,
     netlist: &Schematic,
@@ -2653,7 +2654,6 @@ pub(crate) fn plan_net_driver_kinds(
                     .map(|(page_index, _)| *page_index),
             );
         }
-        let spans_pages = pages.len() > 1;
         let per_page = pages
             .into_iter()
             .map(|page_index| {
@@ -2668,8 +2668,6 @@ pub(crate) fn plan_net_driver_kinds(
                     NetDriverKind::Hierarchical {
                         names: names.clone(),
                     }
-                } else if spans_pages {
-                    NetDriverKind::Global
                 } else {
                     NetDriverKind::Local
                 };
