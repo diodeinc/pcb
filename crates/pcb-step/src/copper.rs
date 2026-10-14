@@ -17,7 +17,9 @@ use pcb_ir::geom::{
 };
 use rayon::prelude::*;
 
-use crate::board::{Board, Fill, Pad, PadKind, PadShape, Physical, Primitive, Track, Via};
+use crate::board::{
+    Board, Fill, Pad, PadKind, PadShape, Physical, Primitive, Track, Unconnected, Via,
+};
 use crate::geom::{KICAD_MAX_ERROR, Vec2, ccw_sweep, circle_center, rotate_kicad};
 use crate::outline::{Edge, Frame, Loop, Solid, crosses, orient};
 use crate::rings::{IndexedRing, loops_of, polygons_of};
@@ -248,24 +250,28 @@ impl Connectivity {
     }
 }
 
-/// Whether an item that removes unused layers is flashed on `layer`.
+/// Whether a pad or via is flashed on a copper layer, as KiCad's
+/// `FlashLayer` decides it.
 struct Flash {
-    remove_unused: bool,
-    keep_ends: bool,
+    unconnected: Unconnected,
+    /// The drill's first and last copper layers.
+    ends: [u32; 2],
     net: u32,
     center: Vec2,
     reach: f64,
 }
 
 impl Flash {
-    fn on(&self, layer: u32, last: u32, connectivity: &Connectivity) -> bool {
-        if !self.remove_unused {
-            return true;
+    fn on(&self, layer: u32, connectivity: &Connectivity) -> bool {
+        let end = self.ends.contains(&layer);
+        match self.unconnected {
+            Unconnected::KeepAll => true,
+            Unconnected::EndsOnly => end,
+            Unconnected::KeepEnds if end => true,
+            Unconnected::KeepEnds | Unconnected::RemoveAll => {
+                connectivity.touches(self.net, layer, self.center, self.reach)
+            }
         }
-        if self.keep_ends && (layer == 0 || layer == last) {
-            return true;
-        }
-        connectivity.touches(self.net, layer, self.center, self.reach)
     }
 }
 
@@ -304,15 +310,19 @@ fn pad_pieces(
     let outline_loop = Loop::new(outline.clone());
     let hole_inside = hole.as_ref().is_some_and(|h| h.inside(&outline_loop));
 
+    // Only plated through holes leave unconnected layers bare.
     let flash = Flash {
-        remove_unused: pad.remove_unused,
-        keep_ends: pad.keep_ends,
+        unconnected: match pad.kind {
+            PadKind::ThroughHole => pad.unconnected,
+            _ => Unconnected::KeepAll,
+        },
+        ends: [0, last],
         net: pad.net,
         center,
         reach,
     };
     for layer in 0..=last {
-        if layers & (1 << layer) == 0 || !flash.on(layer, last, connectivity) {
+        if layers & (1 << layer) == 0 || !flash.on(layer, connectivity) {
             continue;
         }
         let mut push = |solid| {
@@ -1176,7 +1186,7 @@ fn segment_distance(p: Vec2, a: Vec2, b: Vec2) -> f64 {
 
 fn island(layout: &Layout, group: &Group, knockouts: &Knockouts) -> (Option<Island>, Vec<String>) {
     let (board, frame) = (layout.board, layout.frame);
-    let (connectivity, last) = (&layout.connectivity, layout.last);
+    let connectivity = &layout.connectivity;
     let mut warnings = Vec::new();
     let mut contours =
         Vec::with_capacity(group.tracks.len() + group.fills.len() + group.vias.len());
@@ -1198,13 +1208,13 @@ fn island(layout: &Layout, group: &Group, knockouts: &Knockouts) -> (Option<Isla
         }
         let at = frame.point(via.at);
         let flash = Flash {
-            remove_unused: via.remove_unused,
-            keep_ends: via.keep_ends || group.layer == via.top || group.layer == via.bottom,
+            unconnected: via.unconnected,
+            ends: [via.top, via.bottom],
             net: via.net,
             center: at,
             reach: via.size * 0.5,
         };
-        if !flash.on(group.layer, last, connectivity) {
+        if !flash.on(group.layer, connectivity) {
             continue;
         }
         contours.push(contour(&circle_edges(at, via.size * 0.5)));

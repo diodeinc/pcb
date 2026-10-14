@@ -19,6 +19,7 @@ use crate::copper::{self, CopperOptions, resolution, solid_contours};
 use crate::faces::{self, BoardEdge, island_contours};
 use crate::geom::Vec2;
 use crate::outline::{Frame, OutlinePolicy, outline_solids};
+use crate::outline_font::Fonts;
 use crate::scene::{
     MASK_ABOVE_COPPER, PASTE_ABOVE_COPPER, PASTE_RGB, SILK_ABOVE_COPPER, above_copper,
 };
@@ -128,13 +129,14 @@ pub fn board_image(board: &Board, options: &ImageOptions) -> Result<BoardImage, 
         .unwrap_or_else(|| ContourSet::empty(resolution()));
 
     // Bottom to top: the back's tech layers, B.Cu, the body, the inner
-    // layers, F.Cu, the front's tech layers. A lone copper layer is F.Cu.
+    // layers, F.Cu, the front's tech layers. The stack has at least the
+    // two copper layers KiCad requires, so a board declaring F.Cu alone
+    // still has a B.Cu.
     let n = physical.copper_z.len();
-    let copper_name = |i: usize| {
-        board
-            .copper_layers
-            .get(i)
-            .map_or_else(|| format!("Cu{i}"), |name| (*name).to_owned())
+    let copper_name = |i: usize| match board.copper_layers.get(i) {
+        Some(name) => (*name).to_owned(),
+        None if i + 1 == n => "B.Cu".to_owned(),
+        None => format!("In{i}.Cu"),
     };
     let mut stackup = Vec::new();
     let mut copper_at = vec![0; n];
@@ -269,6 +271,7 @@ pub fn board_image(board: &Board, options: &ImageOptions) -> Result<BoardImage, 
     }
 
     let variables = board.text_variables(&options.text_variables);
+    let fonts = Fonts::load(board, &mut warnings);
     let tech = faces::build(
         board,
         frame,
@@ -276,10 +279,18 @@ pub fn board_image(board: &Board, options: &ImageOptions) -> Result<BoardImage, 
         true,
         true,
         false,
+        &fonts,
         &variables,
         &mut warnings,
     );
-    let paste = faces::paste(board, frame, options.include_dnp_paste, &mut warnings);
+    let paste = faces::paste(
+        board,
+        frame,
+        &fonts,
+        options.include_dnp_paste,
+        &variables,
+        &mut warnings,
+    );
     let tech = tech
         .into_iter()
         .map(|(tech, islands)| {
