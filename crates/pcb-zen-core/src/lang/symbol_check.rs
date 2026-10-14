@@ -1,3 +1,4 @@
+use std::collections::hash_map::Entry;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -9,12 +10,15 @@ use pcb_eda::kicad::symbol_library::KicadSymbolLibrary;
 use starlark::{codemap::CodeMap, errors::EvalSeverity, values::ValueLike};
 use tracing::{info_span, instrument};
 
-use crate::{Diagnostic, FileProvider, STDLIB_MODULE_PATH, resolution::ResolutionResult};
+use crate::{
+    Diagnostic, DiagnosticReference, FileProvider, STDLIB_MODULE_PATH, resolution::ResolutionResult,
+};
 
 use super::component::FrozenComponentValue;
 use super::footprint::{resolve_file_backed_footprint, resolved_span};
 use super::module::{FrozenModuleValue, ModulePath};
 use super::symbol::{SymbolValue, loaded_symbol_library};
+use crate::passes::source_suppresses;
 
 /// A symbol library some component loaded from, with what it takes to turn
 /// its issues into diagnostics.
@@ -75,7 +79,17 @@ fn symbols<'a>(
             return None;
         }
         // Instances of one component repeat; resolving paths is the costly part.
-        let fresh = seen.insert((uri, name, component.footprint(), component.source_path()));
+        // Each `Component()` call is its own use: it can suppress findings for itself.
+        let call = component
+            .declaration_span()
+            .map(|span| (span.begin.line, span.begin.column));
+        let fresh = seen.insert((
+            uri,
+            name,
+            component.footprint(),
+            component.source_path(),
+            call,
+        ));
         let path = fresh.then(|| resolution.resolve_package_uri(uri).ok())??;
         Some((component, path, name, resolution.is_workspace_uri(uri)))
     })
@@ -119,9 +133,12 @@ pub(crate) fn check_symbols(
 ) -> Vec<Diagnostic> {
     let mut diagnostics = Vec::new();
     // Symbols that extend one parent repeat the findings in its pins.
-    let mut reported = HashSet::new();
+    // Each finding is reported once, by index; it stays suppressed only while every
+    // component that shares the symbol suppresses it.
+    let mut reported: HashMap<(String, usize, String), usize> = HashMap::new();
     let mut libraries: HashMap<PathBuf, Option<Library>> = HashMap::new();
     let mut pads: HashMap<PathBuf, Option<BTreeSet<String>>> = HashMap::new();
+    let mut sources: HashMap<PathBuf, Option<String>> = HashMap::new();
 
     for (component, path, name, workspace) in symbols(module_tree, resolution) {
         // The library is the one the symbol was loaded from, already parsed.
@@ -157,9 +174,33 @@ pub(crate) fn check_symbols(
         });
 
         for issue in check_symbol(&library.library, name, footprint_pads) {
+            let mut diagnostic = library.diagnostic(&issue, true);
+            // The symbol file cannot hold comments, so a `# suppress:` comment at the
+            // `Component()` call accepts the finding for that component only.
+            if let Some(span) = component.declaration_span() {
+                let path = component.source_path();
+                diagnostic.suppressed = sources
+                    .entry(PathBuf::from(path))
+                    .or_insert_with_key(|path| file_provider.read_file(path).ok())
+                    .as_deref()
+                    .is_some_and(|source| source_suppresses(&diagnostic, source, span.begin.line));
+                diagnostic = diagnostic.with_related(DiagnosticReference {
+                    path: path.to_string(),
+                    span,
+                    message: "Component using this symbol".to_string(),
+                });
+            }
             let file = library.sources[issue.source].0.clone();
-            if reported.insert((file, issue.span.start, issue.message.clone())) {
-                diagnostics.push(library.diagnostic(&issue, true));
+            match reported.entry((file, issue.span.start, issue.message.clone())) {
+                Entry::Vacant(entry) => {
+                    entry.insert(diagnostics.len());
+                    diagnostics.push(diagnostic);
+                }
+                // An active use keeps the finding active, pointing at that component.
+                Entry::Occupied(entry) if !diagnostic.suppressed => {
+                    diagnostics[*entry.get()] = diagnostic;
+                }
+                Entry::Occupied(_) => {}
             }
         }
     }

@@ -15,6 +15,8 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - `pcb step export` and `pcb gltf export` leave a via off its start and end layers when it removes unused layers without keeping its end layers and nothing connects there, as KiCad does; `start_end_only` vias are on their end layers only.
 - The `pcb-step` board image and manifest name the nets of boards before KiCad 10 by their declared names instead of their numbers.
 - `pcb gltf export` builds the board body of a layout without `Edge.Cuts` around its zone fills, graphics, text and exact pad outlines too, so copper is no longer cut away.
+- `pcb import` accepts symbol pins that have no footprint pad, such as a 24-pin USB-C symbol on a 16-pin footprint or a shield pin, and warns instead of failing. As in KiCad, the pin stays in the netlist but is not placed on the board. The generated component accepts `symbol.pin.no_pad` with a `# suppress:` comment, so `pcb build` passes, and `pcb layout --check` no longer reports the pin as a missing pad.
+- A `# suppress:` comment on a `Component()` call also suppresses findings about its KiCad symbol, which point into the symbol file, for that component only.
 
 ## [0.4.81] - 2026-10-13
 

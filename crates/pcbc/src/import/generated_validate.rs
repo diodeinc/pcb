@@ -25,8 +25,12 @@ pub(super) fn validate_generated_zen(
         "bom.unspecified".to_string(),
         "bom.underspecified".to_string(),
     ];
-    let passes: Vec<Box<dyn pcb_zen_core::DiagnosticsPass>> =
-        vec![Box::new(pcb_zen_core::SuppressPass::new(suppress))];
+    // Generated components accept findings KiCad tolerates with `# suppress:` comments, which
+    // `pcb build` honors too.
+    let passes: Vec<Box<dyn pcb_zen_core::DiagnosticsPass>> = vec![
+        Box::new(pcb_zen_core::SuppressPass::new(suppress)),
+        Box::new(pcb_zen_core::CommentSuppressPass::new()),
+    ];
     let result = eval_state.build(
         &board.board_zen,
         SmallMap::new(),

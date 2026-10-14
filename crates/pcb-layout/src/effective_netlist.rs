@@ -1,9 +1,10 @@
 use anyhow::{Context, Result, bail};
 use pcb_sch::kicad_identity::{footprint_kiid_path, uuid_for_path};
-use pcb_sch::{AttributeValue, InstanceKind, Schematic};
+use pcb_sch::{AttributeValue, Instance, InstanceKind, Schematic};
 use pcb_sexpr::Sexpr;
 use pcb_sexpr::board::{extract_keyed_footprints, footprint_name_from_fpid};
 use std::collections::{BTreeMap, BTreeSet};
+use std::path::PathBuf;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Port {
@@ -74,6 +75,10 @@ impl EffectiveNetlist {
 
 pub fn source_effective_netlist(schematic: &Schematic) -> Result<EffectiveNetlist> {
     let mut effective = EffectiveNetlist::default();
+    // KiCad does not realize a symbol pin whose footprint has no matching pad (e.g. a 24-pin
+    // USB-C symbol on a 16-pin footprint), so only the footprint's own pads are expected.
+    let mut pads_by_file: BTreeMap<PathBuf, Option<BTreeSet<String>>> = BTreeMap::new();
+    let mut footprint_pads: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
 
     for (instance_ref, instance) in &schematic.instances {
         if instance.kind != InstanceKind::Component {
@@ -84,6 +89,17 @@ pub fn source_effective_netlist(schematic: &Schematic) -> Result<EffectiveNetlis
         let (fpid, _) = schematic
             .kicad_footprint(instance)
             .with_context(|| format!("component `{component_path}`"))?;
+        if let Some(pads) = footprint_file(schematic, instance).and_then(|file| {
+            pads_by_file
+                .entry(file)
+                .or_insert_with_key(|file| {
+                    let text = std::fs::read_to_string(file).ok()?;
+                    Some(pcb_sexpr::kicad::footprint::all_pad_numbers(&text))
+                })
+                .clone()
+        }) {
+            footprint_pads.insert(component_path.clone(), pads);
+        }
 
         effective.footprints.insert(
             component_path,
@@ -112,6 +128,12 @@ pub fn source_effective_netlist(schematic: &Schematic) -> Result<EffectiveNetlis
                 let AttributeValue::String(pad_name) = pad else {
                     continue;
                 };
+                if footprint_pads
+                    .get(&component_path)
+                    .is_some_and(|pads| !pads.contains(pad_name))
+                {
+                    continue;
+                }
                 if let Some(fp) = effective.footprints.get_mut(&component_path) {
                     fp.pads.insert(pad_name.clone());
                 }
@@ -141,6 +163,15 @@ pub fn source_effective_netlist(schematic: &Schematic) -> Result<EffectiveNetlis
 
     effective.rebuild_nets();
     Ok(effective)
+}
+
+fn footprint_file(schematic: &Schematic, instance: &Instance) -> Option<PathBuf> {
+    let footprint = instance.string_attr(&["footprint"])?;
+    if footprint.starts_with(pcb_sch::PACKAGE_URI_PREFIX) {
+        schematic.resolve_package_uri(&footprint).ok()
+    } else {
+        Some(PathBuf::from(footprint))
+    }
 }
 
 pub fn layout_effective_netlist(
@@ -514,6 +545,65 @@ mod tests {
         }
         n.rebuild_nets();
         n
+    }
+
+    #[test]
+    fn source_expects_only_pads_the_footprint_defines() -> anyhow::Result<()> {
+        use pcb_sch::{Instance, InstanceRef, ModuleRef, Net};
+
+        let dir = tempfile::tempdir()?;
+        let footprint = dir.path().join("Shielded.kicad_mod");
+        std::fs::write(
+            &footprint,
+            r#"(footprint "Shielded"
+              (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu"))
+              (pad "MH" np_thru_hole circle (at 2 0) (size 1 1) (drill 1) (layers "*.Cu")))"#,
+        )?;
+        let module = ModuleRef::new("/test.zen", "<root>");
+        let instance = |path: &[&str]| {
+            InstanceRef::new(module.clone(), path.iter().map(|s| s.to_string()).collect())
+        };
+        let mut schematic = Schematic::new();
+        let mut component = Instance::component(module.clone());
+        component.attributes.insert(
+            "footprint".into(),
+            AttributeValue::String(footprint.to_string_lossy().into_owned()),
+        );
+        schematic.add_instance(instance(&["J1"]), component);
+        // The symbol pin `S1` has no pad, as KiCad allows; `MH` is a non-plated hole.
+        let mut ports = Vec::new();
+        for (port, pad) in [("P", "1"), ("SHIELD", "S1"), ("MOUNT", "MH")] {
+            let mut instance_value = Instance::new(module.clone(), InstanceKind::Port);
+            instance_value.attributes.insert(
+                "pads".into(),
+                AttributeValue::Array(vec![AttributeValue::String(pad.to_string())]),
+            );
+            let port_ref = instance(&["J1", port]);
+            schematic.add_instance(port_ref.clone(), instance_value);
+            ports.push(port_ref);
+        }
+        schematic.nets.insert(
+            "GND".to_string(),
+            Net {
+                kind: "Net".to_string(),
+                id: 1,
+                name: "GND".to_string(),
+                ports,
+                properties: Default::default(),
+            },
+        );
+
+        let effective = source_effective_netlist(&schematic)?;
+
+        assert_eq!(
+            effective.footprints["J1"].pads,
+            BTreeSet::from(["1".to_string(), "MH".to_string()])
+        );
+        assert_eq!(
+            effective.nets["GND"],
+            BTreeSet::from([port("J1", "1"), port("J1", "MH")])
+        );
+        Ok(())
     }
 
     #[test]
