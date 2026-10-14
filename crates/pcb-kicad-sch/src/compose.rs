@@ -2574,6 +2574,59 @@ fn clear_for_repair(
     Ok(())
 }
 
+/// The repair realizer's steps before it chooses drivers: the intent's edits,
+/// then the driver stage. The planner runs the same steps on a copy, so the
+/// driver kinds it publishes are the realizer's.
+fn stage_repair(
+    document: &mut SchDocument,
+    netlist: &Schematic,
+    placed: &mut BTreeMap<SymbolSlotKey, PlacedSymbol>,
+    net_symbol_specs: &BTreeMap<String, net_symbols::NetSymbolSpec>,
+    root_page: usize,
+    intent: &ConnectivityRepairIntent,
+    reconnect_nets: &BTreeSet<String>,
+) -> Result<DriverStage> {
+    clear_for_repair(document, placed, intent)?;
+    stage_drivers(
+        document,
+        netlist,
+        placed,
+        net_symbol_specs,
+        root_page,
+        reconnect_nets,
+    )
+}
+
+/// The driver kinds the realizer uses for the intent's nets: planned on the
+/// document its pre-driver steps leave, by running those same steps.
+pub(crate) fn plan_repair_driver_kinds(
+    document: &SchDocument,
+    netlist: &Schematic,
+    intent: &ConnectivityRepairIntent,
+) -> Result<BTreeMap<String, BTreeMap<String, NetDriverKind>>> {
+    let mut staged = document.clone();
+    let root_page = staged
+        .root_page_ids
+        .iter()
+        .find_map(|id| staged.pages.iter().position(|page| &page.id == id))
+        .context("KiCad schematic project has no loaded root page")?;
+    let expected_slots = component_slots::component_symbols(netlist)?
+        .into_iter()
+        .map(|(slot, _)| slot)
+        .collect::<BTreeSet<_>>();
+    let mut placed = placed_symbols_from_document(&staged, &expected_slots)?;
+    stage_repair(
+        &mut staged,
+        netlist,
+        &mut placed,
+        &net_symbols::specs(netlist)?,
+        root_page,
+        intent,
+        &intent.reconnect_nets,
+    )?;
+    plan_net_driver_kinds(&staged, netlist, &intent.reconnect_nets)
+}
+
 fn apply_connectivity_repair(
     document: &mut SchDocument,
     netlist: &Schematic,
@@ -2583,14 +2636,23 @@ fn apply_connectivity_repair(
     intent: &ConnectivityRepairIntent,
     reconnect_nets: &BTreeSet<String>,
 ) -> Result<()> {
-    clear_for_repair(document, placed, intent)?;
-    add_connectivity_drivers(
+    let stage = stage_repair(
+        document,
+        netlist,
+        placed,
+        net_symbol_specs,
+        root_page,
+        intent,
+        reconnect_nets,
+    )?;
+    place_drivers(
         document,
         netlist,
         placed,
         net_symbol_specs,
         root_page,
         reconnect_nets,
+        &stage,
     )?;
     for target in &intent.no_connect_additions {
         if document.pages.iter().any(|page| {
@@ -2627,7 +2689,7 @@ fn apply_connectivity_repair(
 /// `net_driver_islands`) needs a global label; a page whose module interface
 /// exposes the net uses a hierarchical label; everything else is a local
 /// label.
-pub(crate) fn plan_net_driver_kinds(
+fn plan_net_driver_kinds(
     document: &SchDocument,
     netlist: &Schematic,
     nets: &BTreeSet<String>,
@@ -2848,6 +2910,42 @@ fn add_connectivity_drivers(
     root_page: usize,
     target_nets: &BTreeSet<String>,
 ) -> Result<()> {
+    let stage = stage_drivers(
+        document,
+        netlist,
+        placed,
+        net_symbol_specs,
+        root_page,
+        target_nets,
+    )?;
+    place_drivers(
+        document,
+        netlist,
+        placed,
+        net_symbol_specs,
+        root_page,
+        target_nets,
+        &stage,
+    )
+}
+
+/// What the realizer has settled before it chooses each island's driver.
+struct DriverStage {
+    anchors_by_net: BTreeMap<String, Vec<PinTarget>>,
+    page_contexts: PageDriverContexts,
+}
+
+/// Every step the realizer takes before it chooses drivers: the hierarchy
+/// endpoints each page's interface owes the nets. Driver kinds are decided
+/// on the document this leaves, by the realizer and the repair planner alike.
+fn stage_drivers(
+    document: &mut SchDocument,
+    netlist: &Schematic,
+    placed: &BTreeMap<SymbolSlotKey, PlacedSymbol>,
+    net_symbol_specs: &BTreeMap<String, net_symbols::NetSymbolSpec>,
+    root_page: usize,
+    target_nets: &BTreeSet<String>,
+) -> Result<DriverStage> {
     let anchors_by_net = connectivity_targets(netlist, placed, target_nets)?;
     let page_contexts = page_driver_contexts(document, netlist, root_page)?;
     ensure_context_endpoints(
@@ -2857,17 +2955,33 @@ fn add_connectivity_drivers(
         &page_contexts,
         target_nets,
     )?;
+    Ok(DriverStage {
+        anchors_by_net,
+        page_contexts,
+    })
+}
+
+/// Choose and place each island's driver on a staged document.
+fn place_drivers(
+    document: &mut SchDocument,
+    netlist: &Schematic,
+    placed: &BTreeMap<SymbolSlotKey, PlacedSymbol>,
+    net_symbol_specs: &BTreeMap<String, net_symbols::NetSymbolSpec>,
+    root_page: usize,
+    target_nets: &BTreeSet<String>,
+    stage: &DriverStage,
+) -> Result<()> {
     sync_net_drivers(
         document,
-        &anchors_by_net,
+        &stage.anchors_by_net,
         placed,
         net_symbol_specs,
-        &page_contexts,
+        &stage.page_contexts,
     )?;
     ensure_symbol_root_endpoints(
         document,
         netlist,
-        &anchors_by_net,
+        &stage.anchors_by_net,
         net_symbol_specs,
         root_page,
         target_nets,

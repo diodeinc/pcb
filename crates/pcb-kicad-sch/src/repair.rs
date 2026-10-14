@@ -135,14 +135,10 @@ pub fn plan_connectivity_repair(
         selected_keys,
         forced_removals,
     )?;
-    // Kinds come from the document the drivers are added to: the intent's
-    // removals can cut a bridge, such as a sheet pin's label, that the
-    // inspected document still has.
-    intent.drivers = compose::plan_net_driver_kinds(
-        &intent.apply_edits(document)?,
-        netlist,
-        &intent.reconnect_nets,
-    )?;
+    // The realizer decides drivers after its own pre-driver steps, which can
+    // cut a bridge (a removed sheet-pin label) or restore one (a module
+    // page's hierarchical endpoint); run the same steps to plan them.
+    intent.drivers = compose::plan_repair_driver_kinds(document, netlist, &intent)?;
     Ok(intent)
 }
 

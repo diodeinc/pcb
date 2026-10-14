@@ -3,7 +3,7 @@ mod common;
 use std::collections::BTreeSet;
 
 use pcb_kicad_sch::{
-    LabelKind, NetDriverKind, Point, SchDocument, SchItem, SymbolField, Wire,
+    Label, LabelKind, NetDriverKind, Point, SchDocument, SchItem, SymbolField, Wire,
     analysis::{SchematicIssue, SchematicIssueKey, inspect_schematic},
     connectivity::ConnectivityItemRef,
     plan_connectivity_repair,
@@ -659,6 +659,119 @@ fn intent_names_a_sheet_joined_net_locally_on_the_parent_page() {
     assert!(verified.analysis.is_equivalent(), "{:#?}", verified.issues);
 }
 
+/// Force-remove `removal`, then check the intent's driver kinds against what
+/// PCB's own reconciliation of the ripped-up document places: a global label
+/// on exactly the pages the intent names Global, and every label the
+/// realizer adds of the kind the intent names for that page.
+fn assert_intent_matches_realizer(
+    document: &SchDocument,
+    netlist: &pcb_sch::Schematic,
+    root_file: &str,
+    removal: ConnectivityItemRef,
+) {
+    let inspection = inspect_schematic(document, netlist).unwrap();
+    let intent = plan_connectivity_repair(
+        document,
+        netlist,
+        &inspection,
+        &BTreeSet::new(),
+        &BTreeSet::from([removal.clone()]),
+    )
+    .unwrap();
+    let ripped = intent.apply_edits(document).unwrap();
+    let realized = plan_reconciliation(Some(&ripped), netlist, root_file)
+        .unwrap()
+        .apply(Some(&ripped))
+        .unwrap();
+    for (net_name, kinds) in intent.drivers() {
+        if kinds
+            .values()
+            .any(|kind| matches!(kind, NetDriverKind::NetSymbol(_)))
+        {
+            continue;
+        }
+        for page in &realized.pages {
+            let before = ripped
+                .pages
+                .iter()
+                .find(|candidate| candidate.id == page.id)
+                .map(|page| {
+                    page.items
+                        .iter()
+                        .filter_map(|item| match item {
+                            SchItem::Label(label) => Some(label.id.clone()),
+                            _ => None,
+                        })
+                        .collect::<BTreeSet<_>>()
+                })
+                .unwrap_or_default();
+            let names = |kind: &NetDriverKind| match kind {
+                NetDriverKind::Hierarchical { names } => names.clone(),
+                _ => BTreeSet::from([net_name.clone()]),
+            };
+            for label in page.items.iter().filter_map(|item| match item {
+                SchItem::Label(label) if !before.contains(&label.id) => Some(label),
+                _ => None,
+            }) {
+                let Some(kind) = kinds.get(&page.id) else {
+                    continue;
+                };
+                if !names(kind).contains(&label.text) {
+                    continue;
+                }
+                let realized_kind = match label.kind {
+                    LabelKind::Global { .. } => "global",
+                    LabelKind::Hierarchical { .. } => "hierarchical",
+                    _ => "local",
+                };
+                let planned_kind = match kind {
+                    NetDriverKind::Global => "global",
+                    NetDriverKind::Hierarchical { .. } => "hierarchical",
+                    _ => "local",
+                };
+                assert_eq!(
+                    realized_kind,
+                    planned_kind,
+                    "{net_name} on page {} after removing {removal:?}: {:#?}",
+                    page.id,
+                    intent.drivers()
+                );
+            }
+            let has_global = page.items.iter().any(|item| {
+                matches!(item, SchItem::Label(label)
+                    if !before.contains(&label.id)
+                        && &label.text == net_name
+                        && matches!(label.kind, LabelKind::Global { .. }))
+            });
+            assert_eq!(
+                has_global,
+                kinds.get(&page.id) == Some(&NetDriverKind::Global),
+                "{net_name} on page {} after removing {removal:?}: {:#?}",
+                page.id,
+                intent.drivers()
+            );
+        }
+    }
+}
+
+fn label_ref(
+    document: &SchDocument,
+    page_index: usize,
+    matches: impl Fn(&Label) -> bool,
+) -> ConnectivityItemRef {
+    let page = &document.pages[page_index];
+    page.items
+        .iter()
+        .find_map(|item| match item {
+            SchItem::Label(label) if matches(label) => Some(ConnectivityItemRef::Label {
+                page_id: page.id.clone(),
+                id: label.id.clone(),
+            }),
+            _ => None,
+        })
+        .unwrap()
+}
+
 #[test]
 fn intent_plans_drivers_on_the_document_after_its_removals() {
     const SHARED: &str = "SHARED_SIGNAL_WITH_A_LONG_NAME";
@@ -667,8 +780,7 @@ fn intent_plans_drivers_on_the_document_after_its_removals() {
         .unwrap()
         .apply(None)
         .unwrap();
-    let root = &document.pages[0];
-    let pin = root
+    let pin = document.pages[0]
         .items
         .iter()
         .find_map(|item| match item {
@@ -679,56 +791,57 @@ fn intent_plans_drivers_on_the_document_after_its_removals() {
         })
         .unwrap();
     // The label on FILTER_A's sheet pin is the net's only bridge into that
-    // sheet; the caller rips it up.
-    let bridge = root
-        .items
-        .iter()
-        .find_map(|item| match item {
-            SchItem::Label(label) if label.text == SHARED && label.at == pin => {
-                Some(ConnectivityItemRef::Label {
-                    page_id: root.id.clone(),
-                    id: label.id.clone(),
-                })
-            }
-            _ => None,
-        })
-        .unwrap();
-    let inspection = inspect_schematic(&document, &netlist).unwrap();
-    let intent = plan_connectivity_repair(
-        &document,
-        &netlist,
-        &inspection,
-        &BTreeSet::new(),
-        &BTreeSet::from([bridge]),
-    )
-    .unwrap();
+    // sheet: once it is ripped up, the realizer needs global labels.
+    let bridge = label_ref(&document, 0, |label| {
+        label.text == SHARED && label.at == pin
+    });
+    assert_intent_matches_realizer(&document, &netlist, "RootAndSheets.kicad_sch", bridge);
+}
 
-    // PCB's own reconciliation of the ripped-up document places the drivers
-    // the intent names.
-    let ripped = intent.apply_edits(&document).unwrap();
-    let realized = plan_reconciliation(Some(&ripped), &netlist, "RootAndSheets.kicad_sch")
+#[test]
+fn intent_counts_the_hierarchical_endpoint_the_realizer_restores() {
+    let netlist = common::compile_fixture("hierarchy", "root_and_sheets.zen");
+    let document = plan_reconciliation(None, &netlist, "RootAndSheets.kicad_sch")
         .unwrap()
-        .apply(Some(&ripped))
+        .apply(None)
         .unwrap();
-    let global_pages = realized
+    let child = document
         .pages
         .iter()
-        .filter(|page| {
-            page.items.iter().any(|item| {
-                matches!(item, SchItem::Label(label)
-                    if label.text == SHARED && matches!(label.kind, LabelKind::Global { .. }))
-            })
-        })
-        .map(|page| page.id.clone())
-        .collect::<BTreeSet<_>>();
-    assert!(!global_pages.is_empty());
-    let planned_global = realized
-        .pages
-        .iter()
-        .filter(|page| intent.driver_kind(SHARED, &page.id) == Some(&NetDriverKind::Global))
-        .map(|page| page.id.clone())
-        .collect::<BTreeSet<_>>();
-    assert_eq!(planned_global, global_pages, "{:#?}", intent.drivers());
+        .position(|page| page.file_name.as_deref() == Some("FILTER_A.kicad_sch"))
+        .unwrap();
+    // The module page's hierarchical INPUT label is ripped up; the realizer
+    // restores it as the page's interface endpoint, so no global is needed.
+    let endpoint = label_ref(&document, child, |label| {
+        label.text == "INPUT" && matches!(label.kind, LabelKind::Hierarchical { .. })
+    });
+    assert_intent_matches_realizer(&document, &netlist, "RootAndSheets.kicad_sch", endpoint);
+}
+
+#[test]
+fn intent_matches_the_realizer_for_every_ripped_up_label() {
+    for (entrypoint, root_file) in [
+        ("root.zen", "Hierarchy.kicad_sch"),
+        ("root_and_sheets.zen", "RootAndSheets.kicad_sch"),
+        ("sheet_port_external.zen", "SheetPort.kicad_sch"),
+        ("root_alias.zen", "RootAlias.kicad_sch"),
+    ] {
+        let netlist = common::compile_fixture("hierarchy", entrypoint);
+        let document = plan_reconciliation(None, &netlist, root_file)
+            .unwrap()
+            .apply(None)
+            .unwrap();
+        for (page_index, page) in document.pages.iter().enumerate() {
+            for item in &page.items {
+                let SchItem::Label(label) = item else {
+                    continue;
+                };
+                let id = label.id.clone();
+                let removal = label_ref(&document, page_index, |label| label.id == id);
+                assert_intent_matches_realizer(&document, &netlist, root_file, removal);
+            }
+        }
+    }
 }
 
 fn label_point(document: &SchDocument, name: &str) -> Point {
