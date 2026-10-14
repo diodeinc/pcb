@@ -1,11 +1,14 @@
 //! Set operations and ordered dark/clear paint composition.
 
-use super::simplification::{ON_EDGE_MM, overlay, resolve_groups, untagged};
+use super::simplification::{
+    ON_EDGE_MM, bounds_connected_groups, overlay, overlay_rules, resolve_groups, untagged,
+};
 use super::{ContourSet, PreparedRegion, Ring, Shape, flatten_shapes, rings_bbox, simplify_shapes};
 use crate::geom::accuracy::{lattice_per_mm, numerical_error};
 use crate::geom::{AccuracyError, BBox, FillRule, Polarity, Resolution};
 use i_overlay::core::fill_rule::FillRule as OverlayFillRule;
 use i_overlay::core::overlay_rule::OverlayRule;
+use rustc_hash::FxHashMap;
 
 /// Difference keeping the connected-shape structure of the result.
 pub(crate) fn difference_shapes(subject: Vec<Ring>, cutters: Vec<Ring>) -> Vec<Shape> {
@@ -67,6 +70,90 @@ fn overlay_rings(subject: Vec<Ring>, clip: Vec<Ring>, rule: OverlayRule) -> Vec<
     })
 }
 
+/// Intersection and difference of two regularized operands, each resolved
+/// group by group exactly as [`overlay_rings`] resolves it alone. The
+/// difference groups every `subject` ring; the intersection groups only
+/// `reaching`, when that is not all of them. A group holding the same
+/// operands under both groupings is overlaid once for both rules, which is
+/// every group when the whole subject is within the clip's reach.
+fn split_rings(
+    subject: Vec<Ring>,
+    reaching: Option<Vec<Ring>>,
+    clip: Vec<Ring>,
+) -> (Vec<Ring>, Vec<Ring>) {
+    let groups = |subject: Vec<Ring>, clip: Vec<Ring>| {
+        // Clip rings carry their index, so a group can be found again under
+        // the other grouping through its first clip ring.
+        let rings = sourced(subject, u32::MAX)
+            .chain(clip.into_iter().zip(0..))
+            .collect();
+        bounds_connected_groups(rings, 0.0)
+            .into_iter()
+            .map(|group| {
+                let (subject, clip): (Vec<_>, Vec<_>) =
+                    group.into_iter().partition(|(_, index)| *index == u32::MAX);
+                let first = clip.first().map(|(_, index)| *index);
+                (untagged(subject), untagged(clip), first)
+            })
+            .collect::<Vec<_>>()
+    };
+    let overlay_one = |subject: &[Ring], clip: &[Ring], rule| {
+        flatten_shapes(overlay(subject, clip, rule, OverlayFillRule::NonZero))
+    };
+    let overlay_both = |subject: &[Ring], clip: &[Ring]| {
+        overlay_rules(
+            subject,
+            clip,
+            [OverlayRule::Intersect, OverlayRule::Difference],
+            OverlayFillRule::NonZero,
+        )
+        .map(flatten_shapes)
+    };
+
+    // Only groups holding both operands contribute to the intersection.
+    let intersected = reaching.map(|reaching| {
+        groups(reaching, clip.clone())
+            .into_iter()
+            .filter(|(subject, clip, _)| !subject.is_empty() && !clip.is_empty())
+            .collect::<Vec<_>>()
+    });
+    let slots = intersected.iter().flatten().enumerate();
+    let slot_of = slots
+        .map(|(slot, (_, _, first))| (first.unwrap(), slot))
+        .collect::<FxHashMap<_, _>>();
+    let mut inside = Vec::new();
+    let mut shared = vec![None; slot_of.len()];
+    let mut outside = Vec::new();
+    for (subject, clip, first) in groups(subject, clip) {
+        let Some(first) = first else {
+            outside.extend(subject);
+            continue;
+        };
+        if subject.is_empty() {
+            continue;
+        }
+        let Some(intersected) = &intersected else {
+            let [intersection, difference] = overlay_both(&subject, &clip);
+            inside.extend(intersection);
+            outside.extend(difference);
+            continue;
+        };
+        match slot_of.get(&first) {
+            Some(&slot) if intersected[slot].0 == subject && intersected[slot].1 == clip => {
+                let [intersection, difference] = overlay_both(&subject, &clip);
+                shared[slot] = Some(intersection);
+                outside.extend(difference);
+            }
+            _ => outside.extend(overlay_one(&subject, &clip, OverlayRule::Difference)),
+        }
+    }
+    for ((subject, clip, _), shared) in intersected.into_iter().flatten().zip(shared) {
+        inside
+            .extend(shared.unwrap_or_else(|| overlay_one(&subject, &clip, OverlayRule::Intersect)));
+    }
+    (inside, outside)
+}
+
 impl ContourSet {
     /// Regularized union of many regions.
     pub fn union_all(
@@ -110,6 +197,28 @@ impl ContourSet {
     /// Regularized intersection: `self ∩ clip`.
     pub fn intersection(&self, clip: &Self) -> Result<Self, AccuracyError> {
         self.boolean(clip, OverlayRule::Intersect)
+    }
+
+    /// The parts of `self` inside and outside `clip`: exactly
+    /// `(self.intersection(clip)?, self.difference(clip)?)`, with each group
+    /// of rings the two share overlaid once for both. A ring of `self` that
+    /// stays clear of `clip`'s bounds but shares a group with rings that
+    /// reach them leaves the two with different groups, overlaid apart.
+    pub fn intersection_and_difference(&self, clip: &Self) -> Result<(Self, Self), AccuracyError> {
+        let numeric = numerical_error(self.bbox.union(clip.bbox));
+        let reaching = self.reaching(clip.bbox.expand(numeric));
+        let reaching = (reaching.rings.len() < self.rings.len()).then(|| reaching.into_rings());
+        let (inside, outside) = split_rings(
+            self.to_rings(),
+            reaching,
+            clip.reaching(self.bbox.expand(numeric)).into_rings(),
+        );
+        let resolution = self.resolution.meet(clip.resolution);
+        let uncertainty = self.uncertainty_mm.max(clip.uncertainty_mm) + numeric;
+        Ok((
+            Self::from_regularized(inside, resolution, uncertainty).checked()?,
+            Self::from_regularized(outside, resolution, uncertainty).checked()?,
+        ))
     }
 
     /// Intersection using a prepared snapshot of `clip` to resolve subjects

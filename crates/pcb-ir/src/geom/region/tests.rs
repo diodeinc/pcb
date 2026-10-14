@@ -1070,6 +1070,123 @@ fn mixed_budget_booleans_fail_when_the_coarser_history_does_not_fit() {
 }
 
 #[test]
+fn intersection_and_difference_equal_the_separate_booleans() {
+    let resolution = res(tol::REGION_MM);
+    let square = |x: f64, y: f64, size: f64| -> Ring {
+        vec![[x, y], [x + size, y], [x + size, y + size], [x, y + size]]
+    };
+    let region =
+        |rings: Vec<Ring>| ContourSet::from_rings(rings, FillRule::EvenOdd, resolution).unwrap();
+    // A pour with a grid of holes, and openings that straddle hole edges,
+    // sit inside a hole, share the pour's edge or touch it at a corner.
+    let pour = region(
+        std::iter::once(square(0.0, 0.0, 20.0))
+            .chain(
+                (0..16)
+                    .map(|i| square(2.0 + 4.5 * (i % 4) as f64, 2.0 + 4.5 * (i / 4) as f64, 1.5)),
+            )
+            .collect(),
+    );
+    let openings = |shift: f64| {
+        region(vec![
+            square(1.5 + shift, 1.5, 1.0),
+            square(6.75, 2.25, 0.5),
+            square(10.0 + shift, 10.0 - shift, 2.5),
+            square(20.0, 8.0 + shift, 1.0),
+            square(-1.0, -1.0, 1.0),
+            square(15.0 - shift, 15.0, 6.0),
+        ])
+    };
+    // A far island the openings never reach, so the two booleans group
+    // the subject differently.
+    let island = region(vec![square(100.0, 100.0, 3.0), square(101.0, 101.0, 1.0)]);
+    // Pads abutting along edges and at a corner, and openings sharing their
+    // edges exactly.
+    let pads = region(vec![
+        square(30.0, 0.0, 1.0),
+        square(31.0, 0.0, 1.0),
+        square(32.0, 1.0, 1.0),
+        square(40.0, 0.0, 1.0),
+    ]);
+    let pad_openings = region(vec![square(31.0, 0.0, 1.0), square(33.0, 1.0, 1.0)]);
+    let disc = |diameter: f64, center: f64| {
+        let contour = shapes::circle(diameter).unwrap();
+        let offset = Affine2::translation(Point::new(center, center));
+        ContourSet::from_contours(
+            &[contour.transformed(offset)],
+            FillRule::NonZero,
+            resolution,
+        )
+        .unwrap()
+    };
+    // An island in an L's notch shares the L's group in the difference
+    // but is out of the disc's reach, and its extent coarsens the lattice
+    // the difference group snaps the disc's vertices to.
+    let notched = region(vec![
+        vec![
+            [0.0, 0.0],
+            [25.0, 0.0],
+            [25.0, 10.0],
+            [10.0, 10.0],
+            [10.0, 25.0],
+            [0.0, 25.0],
+        ],
+        vec![[15.0, 15.0], [300.0, 15.0], [300.0, 20.0], [15.0, 20.0]],
+    ]);
+    let empty = ContourSet::empty(resolution);
+    let mut lossy_empty = empty.clone();
+    lossy_empty.uncertainty_mm = 1e-4;
+    let fine = Resolution::new(0.0, GeometryAccuracy::new(0.001).unwrap());
+    let coarse = ContourSet::from_contours(
+        &[shapes::circle(4.0).unwrap()],
+        FillRule::NonZero,
+        Resolution::new(0.0, GeometryAccuracy::new(0.05).unwrap()),
+    )
+    .unwrap();
+    let fine_square = ContourSet::rectangle(rect(0.0, 0.0, 1.0, 1.0), fine);
+
+    let mut pairs = (0..6)
+        .map(|step| (pour.clone(), openings(0.37 * step as f64)))
+        .collect::<Vec<_>>();
+    pairs.extend([
+        (pour.union(&island).unwrap(), openings(0.0)),
+        (
+            pour.union(&pads).unwrap(),
+            openings(0.5).union(&pad_openings).unwrap(),
+        ),
+        (pads.clone(), pad_openings.clone()),
+        (pour.clone(), disc(7.0, 10.0)),
+        (notched, disc(4.0, 3.0)),
+        (pour.clone(), pour.clone()),
+        (pour.clone(), empty.clone()),
+        (pour.clone(), lossy_empty.clone()),
+        (empty.clone(), empty.clone()),
+        (fine_square.clone(), coarse.clone()),
+    ]);
+    let same = |actual: Result<ContourSet, AccuracyError>,
+                expected: Result<ContourSet, AccuracyError>| match (actual, expected)
+    {
+        (Ok(actual), Ok(expected)) => {
+            assert_eq!(actual.rings, expected.rings);
+            assert_eq!(actual.resolution, expected.resolution);
+            assert_eq!(
+                actual.uncertainty_mm.to_bits(),
+                expected.uncertainty_mm.to_bits()
+            );
+        }
+        (actual, expected) => assert_eq!(actual.err(), expected.err()),
+    };
+    for (subject, clip) in pairs.iter().flat_map(|(a, b)| [(a, b), (b, a)]) {
+        let (inside, outside) = match subject.intersection_and_difference(clip) {
+            Ok((inside, outside)) => (Ok(inside), Ok(outside)),
+            Err(error) => (Err(error.clone()), Err(error)),
+        };
+        same(inside, subject.intersection(clip));
+        same(outside, subject.difference(clip));
+    }
+}
+
+#[test]
 fn polygon_preparation_checks_coordinate_rounding_against_the_budget() {
     let far = vec![[0.0, 0.0], [1000.0, 0.0], [1000.0, 1000.0], [0.0, 1000.0]];
     let resolution = Resolution::new(0.0, GeometryAccuracy::new(1e-15).unwrap());
