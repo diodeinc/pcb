@@ -203,6 +203,17 @@ pub struct PhysicalView {
     pub holes: Vec<PhysicalHole>,
 }
 
+/// The part of [`PhysicalView`] that component assembly consumes, as
+/// [`ImportedDesign::assembly_view`] derives it.
+#[derive(Debug, Clone, Default)]
+pub struct AssemblyView {
+    pub terminations: Vec<PhysicalTermination>,
+    pub paste_islands: Vec<PasteIsland>,
+    /// Drilled openings with their termination associations. `protection`
+    /// and source-land `lands` are not derived and stay empty.
+    pub holes: Vec<PhysicalHole>,
+}
+
 #[derive(Debug, Clone, Default)]
 struct FeatureEvidence {
     component_refs: Vec<Symbol>,
@@ -312,13 +323,52 @@ impl ImportedDesign {
             self.paste_islands(scope, &components, &source_lands, &terminations, resolution)?;
         let mask_openings = self.mask_openings(scope, &lands, resolution)?;
         let mut holes = self.derive_physical_holes(scope, &source_lands, &all, resolution)?;
-        self.attach_hole_assembly_evidence(scope, &lands, &terminations, &mut holes, resolution)?;
+        self.attach_hole_terminations(&lands, &terminations, &mut holes)?;
+        let stackup = physical_stackup_layers(&self.stackups, &self.layer_definitions)?;
+        self.attach_hole_protection(scope, &mut holes, stackup.as_deref(), resolution)?;
         Ok(PhysicalView {
             source_lands,
             lands,
             terminations,
             paste_islands,
             mask_openings,
+            holes,
+        })
+    }
+
+    /// Derive the terminations, paste islands, and drilled openings of
+    /// [`Self::physical_view`], with the same termination associations, for
+    /// component assembly. No soldermask or hole-protection layer is
+    /// materialized, and openings carry no source-land links.
+    pub fn assembly_view(
+        &self,
+        scope: ArtworkScope,
+        resolution: Resolution,
+    ) -> Result<AssemblyView> {
+        let components = self.component_index(scope)?;
+        let all = |_: &FeatureOccurrence| true;
+        let lands = self.derive_physical_lands(scope, &components, false, &all, resolution)?;
+        let terminations = self.derive_physical_terminations(&lands);
+        // Paste links only through termination lands, so no other source
+        // land needs an image.
+        let termination_lands = terminations
+            .iter()
+            .flat_map(|termination| &termination.lands)
+            .collect::<HashSet<_>>();
+        let source_lands = self.derive_physical_lands(
+            scope,
+            &components,
+            true,
+            &|land| termination_lands.contains(&LandId(land.id)),
+            resolution,
+        )?;
+        let paste_islands =
+            self.paste_islands(scope, &components, &source_lands, &terminations, resolution)?;
+        let mut holes = self.derive_physical_holes(scope, &[], &all, resolution)?;
+        self.attach_hole_terminations(&lands, &terminations, &mut holes)?;
+        Ok(AssemblyView {
+            terminations,
+            paste_islands,
             holes,
         })
     }
@@ -760,13 +810,11 @@ impl ImportedDesign {
         Ok(holes)
     }
 
-    fn attach_hole_assembly_evidence(
+    fn attach_hole_terminations(
         &self,
-        scope: ArtworkScope,
         lands: &[PhysicalLand],
         terminations: &[PhysicalTermination],
         holes: &mut [PhysicalHole],
-        resolution: Resolution,
     ) -> Result<()> {
         let stackup = physical_stackup_layers(&self.stackups, &self.layer_definitions)?;
         let terminations = TerminationIndex::new(self, lands, terminations);
@@ -784,7 +832,7 @@ impl ImportedDesign {
             hole.termination = termination;
             hole.termination_basis = basis;
         }
-        self.attach_hole_protection(scope, holes, stackup.as_deref(), resolution)
+        Ok(())
     }
 
     fn hole_termination_association(
@@ -1519,7 +1567,7 @@ mod tests {
         let mut holes = board_holes(&imported, fine).unwrap();
         holes[0].span = FeatureSpan::ThroughBoard;
         let assembly_error = imported
-            .attach_hole_assembly_evidence(scope, &lands, &terminations, &mut holes, fine)
+            .attach_hole_terminations(&lands, &terminations, &mut holes)
             .unwrap_err();
         for error in [hole_error, mask_error, assembly_error] {
             assert!(
@@ -1542,7 +1590,7 @@ mod tests {
                 &format!("<Layer name=\"PASTE\" layerFunction=\"{function}\""),
             );
             let mut imported = import(&xml);
-            make_paste_artwork_invalid(&mut imported);
+            make_artwork_invalid(&mut imported, "PASTE");
 
             let lands = imported.physical_lands(ArtworkScope::Board, Resolution::default());
             assert_eq!(lands.unwrap().len(), 7);
@@ -1559,6 +1607,60 @@ mod tests {
                 "{function}"
             );
         }
+    }
+
+    #[test]
+    fn assembly_view_matches_physical_view_on_assembly_facts() {
+        // A spanned plated hole under a hole-fill feature, so the full view
+        // carries protection evidence the assembly view leaves out.
+        let xml = physical_fixture()
+            .replace(
+                "<Layer name=\"DRILL\" layerFunction=\"DRILL\" side=\"ALL\" polarity=\"POSITIVE\"/>",
+                r#"<Layer name="DRILL" layerFunction="DRILL" side="ALL" polarity="POSITIVE"><Span fromLayer="TOP" toLayer="BOTTOM"/></Layer>
+      <Layer name="FILL" layerFunction="HOLEFILL" side="ALL" polarity="POSITIVE"><Span fromLayer="TOP" toLayer="BOTTOM"/></Layer>"#,
+            )
+            .replace(
+                "      </Step>",
+                r#"        <LayerFeature layerRef="FILL"><Set><Features><Location x="5" y="5"/><StandardPrimitiveRef id="paste"/></Features></Set></LayerFeature>
+      </Step>"#,
+            );
+        Ipc2581::validate(&xml).unwrap();
+        let mut imported = import(&xml);
+        let (scope, resolution) = (ArtworkScope::Board, Resolution::default());
+        let mut full = imported.physical_view(scope, resolution).unwrap();
+        assert!(!full.mask_openings.is_empty());
+        assert!(!full.holes[0].protection.is_empty());
+        assert!(full.holes[0].termination.resolved().is_some());
+        assert!(
+            full.paste_islands
+                .iter()
+                .any(|island| island.termination.resolved().is_some())
+        );
+        for hole in &mut full.holes {
+            hole.protection.clear();
+            hole.lands.clear();
+        }
+        let expected = format!(
+            "{:?}",
+            (&full.terminations, &full.paste_islands, &full.holes)
+        );
+        let narrow = |imported: &ImportedDesign| {
+            let view = imported.assembly_view(scope, resolution).unwrap();
+            format!("{:?}", (view.terminations, view.paste_islands, view.holes))
+        };
+        assert_eq!(narrow(&imported), expected);
+
+        // Mask and hole-protection artwork no physical view accepts leaves
+        // the assembly facts unchanged.
+        make_artwork_invalid(&mut imported, "MASK");
+        make_artwork_invalid(&mut imported, "FILL");
+        assert!(imported.physical_view(scope, resolution).is_err());
+        assert_eq!(narrow(&imported), expected);
+
+        // Paste artwork is the assembly view's own business.
+        make_artwork_invalid(&mut imported, "PASTE");
+        let error = imported.assembly_view(scope, resolution).unwrap_err();
+        assert!(error.to_string().contains("mixes Fill and Stroke paths"));
     }
 
     #[test]
@@ -2194,12 +2296,12 @@ mod tests {
         );
     }
 
-    fn make_paste_artwork_invalid(imported: &mut ImportedDesign) {
-        let paste = imported.layer_id("PASTE").unwrap();
+    fn make_artwork_invalid(imported: &mut ImportedDesign, layer: &str) {
+        let layer = imported.layer_id(layer).unwrap();
         let source_layer = imported
             .step_layers
             .iter()
-            .find(|layer| layer.layer == paste)
+            .find(|step_layer| step_layer.layer == layer)
             .unwrap()
             .document_layer as usize;
         let feature = imported.geometry.layers[source_layer].features.start as usize;

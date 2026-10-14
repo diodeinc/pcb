@@ -11,6 +11,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ### Added
 
 - `pcb-step` parses standalone `.kicad_mod` footprints.
+- `pcb-ir` `ImportedDesign::assembly_view` derives the terminations, paste islands and drilled openings of `physical_view` with the same termination links, but does not derive mask openings, hole protection or hole-land links. Errors in those layers do not stop it, and it is about 2.5 times faster on large boards.
 
 ### Changed
 
