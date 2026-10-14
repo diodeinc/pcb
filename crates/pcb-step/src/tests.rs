@@ -2356,3 +2356,78 @@ fn synthesized_outline_holds_drawn_text() {
     assert!((bbox.min.x - whole_bbox.min.x).abs() < 1e-6, "{bbox:?}");
     assert!((bbox.max.x - whole_bbox.max.x).abs() < 1e-6, "{bbox:?}");
 }
+
+#[test]
+fn footprint_files_parse_as_a_board_at_the_origin() {
+    use crate::ImageKind::Copper;
+    use pcb_ir::dialects::nc;
+    // A `.kicad_mod` as KiCad 10 writes it, with an L-shaped custom pad,
+    // a through-hole pad and an embedded model. Its `(at)` is ignored:
+    // the footprint sits at the origin.
+    let text = format!(
+        r#"(footprint "Test_Footprint"
+	(version 20260206)
+	(generator "pcbnew")
+	(generator_version "10.0")
+	(layer "F.Cu")
+	(at 10 5)
+	(property "Reference" "REF**" (at 0 -2 0) (layer "F.SilkS") (effects (font (size 1 1) (thickness 0.15))))
+	(attr through_hole)
+	(pad "1" smd custom (at -3 0) (size 0.5 0.5) (layers "F.Cu" "F.Mask")
+		(options (clearance outline) (anchor rect))
+		(primitives (gr_poly (pts (xy -1 -1) (xy 1 -1) (xy 1 0) (xy 0 0) (xy 0 1) (xy -1 1)) (width 0) (fill yes))))
+	(pad "2" thru_hole circle (at 2 0) (size 1.6 1.6) (drill 0.8) (layers "*.Cu" "*.Mask"))
+	{}
+	(model "kicad-embed://cube.step" (offset (xyz 0 0 0)) (scale (xyz 1 1 1)) (rotate (xyz 0 0 0)))
+)
+"#,
+        embed("cube.step", &donor_step())
+    );
+    let board = Board::parse(text.as_bytes()).unwrap();
+    let options = crate::ImageOptions {
+        outline: crate::OutlinePolicy::Synthesize,
+        ..Default::default()
+    };
+    let image = crate::board_image(&board, &options).unwrap();
+    // A footprint has no Edge.Cuts; the body is drawn around its items.
+    let synthesized = ["board outline: board has no Edge.Cuts outline; \
+        the board body is synthesized from the items on the board"];
+    assert_eq!(image.warnings, synthesized);
+    let copper: Vec<&str> = image
+        .stackup
+        .iter()
+        .filter(|l| l.role == crate::LayerRole::Copper)
+        .map(|l| l.name.as_str())
+        .collect();
+    assert_eq!(copper, ["B.Cu", "F.Cu"]);
+    let body = image.stackup.iter().find(|l| l.name == "Body").unwrap();
+    assert!((body.z1 - body.z0 - 1.6).abs() < 0.1, "{body:?}");
+
+    // The L and the anchor's corner outside it; the ring on both sides.
+    let ring = PI * (0.8 * 0.8 - 0.4 * 0.4);
+    let front = image_area(&image, "F.Cu", Copper, "");
+    assert!((front - (3.0625 + ring)).abs() < 0.01, "{front}");
+    let back = image_area(&image, "B.Cu", Copper, "");
+    assert!((back - ring).abs() < 0.01, "{back}");
+    let [drill] = &image.drills.objects[..] else {
+        panic!("{:?}", image.drills.objects);
+    };
+    assert_eq!(
+        drill.geometry,
+        nc::Geometry::Drill {
+            at: pcb_ir::geom::Point { x: 2.0, y: 0.0 },
+            diameter: 0.8
+        }
+    );
+
+    // The embedded model is found and placed.
+    let mut report = crate::Report::default();
+    let options = Options {
+        outline: crate::OutlinePolicy::Synthesize,
+        ..bare()
+    };
+    export(&board, &options, &mut Vec::new(), &mut report).unwrap();
+    assert_eq!(report.warnings, synthesized);
+    let status: Vec<_> = report.coverage.models.iter().map(|m| m.status).collect();
+    assert_eq!(status, [crate::Status::Rendered]);
+}
