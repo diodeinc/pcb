@@ -1438,6 +1438,28 @@ fn board_cell_repeat_places_the_board_by_its_datum() {
             "Datum {datum}"
         );
     }
+
+    // Mouse-bite tabs and holes are in the array Step, which the Datum must not move.
+    let mouse_bite_array_step = |datum: &str| {
+        let input = board_fixture_with_top_line_mm()
+            .replace(r#"<Datum x="0" y="0"/>"#, &format!("<Datum {datum}/>"));
+        let xml = create_board_array(
+            &input,
+            &options(2, 2, BoardMarginMm::all(5.0), BoardMarginMm::all(20.0)),
+            false,
+            Separation::MouseBite,
+            Resolution::default(),
+        )
+        .unwrap()
+        .xml;
+        let start = xml.find(r#"<Step name="array""#).unwrap();
+        let end = start + xml[start..].find("</Step>").unwrap();
+        xml[start..end].to_string()
+    };
+    assert_eq!(
+        mouse_bite_array_step(r#"x="0" y="0""#),
+        mouse_bite_array_step(r#"x="3" y="-1""#)
+    );
 }
 
 #[test]

@@ -314,37 +314,64 @@ fn step_fiducials_are_placed_filled_circles_or_an_error() {
         ]
     );
 
-    for (circle, expected) in [
+    // Each case is the fiducial's Xform and shape, and the error it gives.
+    for (xform, shape, expected) in [
         (
+            "",
             r#"<Circle diameter="1"><FillDesc fillProperty="VOID"/></Circle>"#,
             "is VOID, not filled",
         ),
         (
+            "",
             r#"<Circle diameter="1"><FillDescRef id="hollow"/></Circle>"#,
             "is HOLLOW, not filled",
         ),
         (
+            "",
             r#"<Circle diameter="1"><FillDescRef id="nowhere"/></Circle>"#,
             "FillDesc 'nowhere' is missing",
         ),
         (
+            "",
             r#"<StandardPrimitiveRef id="nowhere"/>"#,
             "standard primitive 'nowhere' is missing",
         ),
-        (r#"<Circle diameter="0"/>"#, "diameter 0 is not positive"),
-        (r#"<RectCenter width="1" height="1"/>"#, "not a circle"),
+        (
+            "",
+            r#"<Circle diameter="0"/>"#,
+            "diameter 0 is not positive",
+        ),
+        ("", r#"<RectCenter width="1" height="1"/>"#, "not a circle"),
+        // Finite numbers that overflow, or cancel, once scaled.
+        (
+            r#"<Xform scale="2"/>"#,
+            r#"<Circle diameter="1e308"/>"#,
+            "diameter inf is not positive",
+        ),
+        (
+            r#"<Xform scale="-2"/>"#,
+            r#"<Circle diameter="-1"/>"#,
+            "diameter 2 is not positive",
+        ),
+        (
+            r#"<Xform xOffset="1e308" scale="2"/>"#,
+            r#"<Circle diameter="1"/>"#,
+            "location is not finite",
+        ),
     ] {
         let error = fiducials(
             "POSITIVE",
             &set(
                 "",
-                &format!(r#"<GlobalFiducial><Location x="0" y="0"/>{circle}</GlobalFiducial>"#),
+                &format!(
+                    r#"<GlobalFiducial>{xform}<Location x="0" y="0"/>{shape}</GlobalFiducial>"#
+                ),
             ),
         )
         .unwrap_err();
         assert!(
             error.contains("feature 0 of set 0 on layer 'TOP'") && error.contains(expected),
-            "{circle}: {error}"
+            "{xform}{shape}: {error}"
         );
     }
 }

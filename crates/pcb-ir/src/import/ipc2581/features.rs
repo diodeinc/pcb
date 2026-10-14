@@ -977,8 +977,10 @@ fn step_fiducial(
         Point::new(fiducial.location.x, fiducial.location.y),
         fiducial.xform,
     );
+    // Each number is finite, but scaling them can overflow, and a negative
+    // diameter and scale would cancel.
     let diameter = circle.shape.diameter * placement.xform.scale;
-    if !(diameter.is_finite() && diameter > 0.0) {
+    if !(circle.shape.diameter > 0.0 && diameter.is_finite() && diameter > 0.0) {
         bail!("its circle's diameter {diameter} is not positive");
     }
     if !placement.center.is_finite() {
