@@ -1350,3 +1350,56 @@ fn repairing_a_missing_port_never_steals_a_label_from_another_page() {
             && label.id != taken_id
     )));
 }
+
+#[test]
+fn root_symbols_are_packed_clear_of_sheet_pin_labels() {
+    let netlist = common::compile_fixture("hierarchy", "long_net_names.zen");
+    let document = plan_reconciliation(None, &netlist, "LongNetNames.kicad_sch")
+        .unwrap()
+        .apply(None)
+        .unwrap();
+    let root = &document.pages[0];
+    let pins = root
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            SchItem::Sheet(sheet) => Some(sheet),
+            _ => None,
+        })
+        .flat_map(|sheet| sheet.pins.iter().map(|pin| pin.at))
+        .collect::<Vec<_>>();
+    assert_eq!(pins.len(), 12);
+    let symbols = root
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            SchItem::Symbol(symbol) if symbol.field_value("Path").is_some() => {
+                let definition = root.library.definitions.get(symbol.library_key()).unwrap();
+                Some((symbol, symbol.visual_bounds(definition).unwrap().unwrap()))
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(symbols.len(), 6);
+    // A lower bound on each label's run: KiCad's default 1.27 mm font draws
+    // wider glyphs than this.
+    for label in page_labels(root)
+        .into_iter()
+        .filter(|label| pins.contains(&label.at))
+    {
+        let left = label.at.x - label.text.chars().count() as f64 * 0.6 * 1.27;
+        for (symbol, bounds) in &symbols {
+            let crosses = bounds.min_x < label.at.x
+                && left < bounds.max_x
+                && bounds.min_y < label.at.y + 0.6
+                && label.at.y - 0.6 < bounds.max_y;
+            assert!(
+                !crosses,
+                "{} at {:?} runs into {:?}",
+                label.text,
+                label.at,
+                symbol.field_value("Path")
+            );
+        }
+    }
+}

@@ -1,0 +1,16 @@
+"""Linked child schematic with a bus of six signals."""
+
+Project(name="Bus", path="kicad", layout=False)
+
+Resistor = Module("@stdlib/generics/Resistor.zen")
+
+D0 = io("D0", Net)
+D1 = io("D1", Net)
+D2 = io("D2", Net)
+D3 = io("D3", Net)
+D4 = io("D4", Net)
+D5 = io("D5", Net)
+
+Resistor(name="R0", value="1kohms", package="0402", P1=D0, P2=D1)
+Resistor(name="R1", value="1kohms", package="0402", P1=D2, P2=D3)
+Resistor(name="R2", value="1kohms", package="0402", P1=D4, P2=D5)

@@ -165,7 +165,8 @@ pub(crate) fn reconcile_document(
         default_page,
         document.pages.len(),
     )?;
-    materialize_hierarchy(&mut document, netlist, &hierarchy)?;
+    let net_symbol_specs = net_symbols::specs(netlist)?;
+    materialize_hierarchy(&mut document, netlist, &net_symbol_specs, &hierarchy)?;
 
     let retained_native_symbols = if complete {
         native_symbol_locations(&document)?
@@ -187,7 +188,6 @@ pub(crate) fn reconcile_document(
                 .with_context(|| format!("placement page '{page_id}' is absent"))
         })
         .transpose()?;
-    let net_symbol_specs = net_symbols::specs(netlist)?;
     for slot in &project_slots {
         let selected = selected_existing.get(slot);
         let page_index = if let Some(selected) = selected {
@@ -864,6 +864,7 @@ fn linked_modules(netlist: &Schematic) -> Result<Vec<hierarchy::LinkedModule>> {
 fn materialize_hierarchy(
     document: &mut SchDocument,
     netlist: &Schematic,
+    net_symbol_specs: &BTreeMap<String, net_symbols::NetSymbolSpec>,
     plan: &hierarchy::HierarchyPlan,
 ) -> Result<()> {
     for sheet_plan in &plan.sheets {
@@ -938,6 +939,27 @@ fn materialize_hierarchy(
         child.file_name = Some(child_file_name);
         child.paper = document.pages[sheet_plan.parent_page].paper.clone();
         document.pages.push(child);
+
+        // Name each pin's net on the parent page now, so that later sheets
+        // and symbols are packed around the labels actually drawn there.
+        let page_contexts = page_driver_contexts(document, netlist, plan.root_page())?;
+        for (index, (net_name, port_name)) in ports.iter().enumerate() {
+            upsert_contextual_driver(
+                document,
+                net_symbol_specs,
+                &page_contexts,
+                sheet_plan.parent_page,
+                net_name,
+                (
+                    Point::new(at.x, at.y + (index as f64 + 2.0) * SHEET_PIN_SPACING_MM),
+                    LabelSpin::Left,
+                ),
+                &format!(
+                    "zener:module-parent-driver:{}:{port_name}:{net_name}",
+                    sheet_plan.module_path
+                ),
+            )?;
+        }
     }
     Ok(())
 }
@@ -1602,8 +1624,8 @@ fn occupy_page_items_except(
                 if let Some((min, max)) = sheet.bounds() {
                     let mut bounds = field_autoplace::Bounds::from_points([min, max])
                         .expect("sheet bounds have two corners");
-                    // Keep room for the labels that name each pin's net on
-                    // this page, which may not exist yet.
+                    // Labels already drawn at the pins are occupied as
+                    // labels; keep room for any a pin does not have yet.
                     for pin in &sheet.pins {
                         bounds.union(estimated_label_bounds(
                             pin.at,
@@ -2349,33 +2371,10 @@ fn add_hierarchy_connectivity(
     let page_contexts = page_driver_contexts(document, netlist, plan.root_page())?;
 
     for sheet_plan in &plan.sheets {
+        // The parent page's drivers were placed with the sheet.
         let ports = module_ports(netlist, &sheet_plan.module_path, &sheet_plan.instance_ref)?;
-        let sheet = document.pages[sheet_plan.parent_page]
-            .items
-            .iter()
-            .find_map(|item| match item {
-                SchItem::Sheet(sheet)
-                    if sheet.id == hierarchy::sheet_id(&sheet_plan.module_path) =>
-                {
-                    Some(sheet)
-                }
-                _ => None,
-            })
-            .context("materialized hierarchy sheet is absent from its parent page")?;
-        let parent_anchors = sheet.pins.iter().map(|pin| pin.at).collect::<Vec<_>>();
-
-        for ((net_name, port_name), parent_pin) in ports.into_iter().zip(parent_anchors) {
+        for (net_name, port_name) in ports {
             let key = format!("{}:{port_name}", sheet_plan.module_path);
-            upsert_contextual_driver(
-                document,
-                net_symbol_specs,
-                &page_contexts,
-                sheet_plan.parent_page,
-                &net_name,
-                (parent_pin, LabelSpin::Left),
-                &format!("zener:module-parent-driver:{key}:{net_name}"),
-            )?;
-
             let child_anchor = canonical_target(&targets, &net_name, sheet_plan.child_page)
                 .map(|target| (target.point, target.spin))
                 .unwrap_or((
