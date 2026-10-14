@@ -31,7 +31,8 @@ pub type NetId = u32;
 pub struct ImageOptions {
     /// Inner copper layers as well as the outer two.
     pub inner_copper: bool,
-    /// Paste on the pads of DNP footprints, as KiCad's 3D viewer draws it.
+    /// Paste of DNP footprints, on their pads and drawn on the paste
+    /// layers, as KiCad's 3D viewer draws it.
     pub include_dnp_paste: bool,
     pub outline: OutlinePolicy,
     /// Project text variables, substituted into `${NAME}` in silkscreen

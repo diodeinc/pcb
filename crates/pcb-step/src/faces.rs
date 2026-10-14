@@ -175,6 +175,7 @@ pub(crate) fn drawn_items(
     frame: Frame,
     fonts: &Fonts,
     tech: Option<Tech>,
+    include_dnp: bool,
     variables: &[(String, String)],
     warnings: &mut Vec<String>,
 ) -> Vec<Vec<ContourBuf>> {
@@ -185,13 +186,13 @@ pub(crate) fn drawn_items(
     let items: Vec<Item> = board
         .shapes
         .iter()
-        .filter(|s| tech.is_none_or(|t| s.layer == t))
+        .filter(|s| tech.is_none_or(|t| s.layer == t) && (include_dnp || !s.dnp))
         .map(Item::Shape)
         .chain(
             board
                 .texts
                 .iter()
-                .filter(|t| tech.is_none_or(|tech| t.layer == tech))
+                .filter(|t| tech.is_none_or(|tech| t.layer == tech) && (include_dnp || !t.dnp))
                 .map(Item::Text),
         )
         .collect();
@@ -713,7 +714,7 @@ fn silk_islands(
     warnings: &mut Vec<String>,
 ) -> Vec<Nested> {
     let what = format!("{} silkscreen", if tech.front() { "front" } else { "back" });
-    let items = drawn_items(board, frame, fonts, Some(tech), variables, warnings);
+    let items = drawn_items(board, frame, fonts, Some(tech), true, variables, warnings);
     let islands = nest(union_rings(items, &what, warnings));
     let boxes: Vec<(Vec2, Vec2)> = islands.iter().map(|i| ring_bbox(&i.outer)).collect();
     let outline = boxes
@@ -845,6 +846,7 @@ fn mask_openings(
         frame,
         fonts,
         Some(tech),
+        true,
         variables,
         warnings,
     ));
@@ -888,8 +890,8 @@ pub(crate) fn mask_coverage(
 
 /// Solder paste as KiCad's VRML export draws it, front side first: the
 /// sides with any paste and their islands: the pads' apertures and what
-/// is drawn on the paste layer. DNP footprints' pads are left out unless
-/// `include_dnp`.
+/// is drawn on the paste layer. DNP footprints' pads and paste graphics
+/// are left out unless `include_dnp`.
 pub(crate) fn paste(
     board: &Board,
     frame: Frame,
@@ -921,6 +923,7 @@ pub(crate) fn paste(
             frame,
             fonts,
             Some(tech),
+            include_dnp,
             variables,
             warnings,
         ));

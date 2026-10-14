@@ -2189,6 +2189,38 @@ fn image_paste_takes_graphics_on_the_paste_layers() {
 }
 
 #[test]
+fn image_can_leave_out_all_paste_of_dnp_footprints() {
+    use crate::ImageKind::Paste;
+    // DNP U1 has a 1 x 1 mm pad, a 2 x 2 mm window and a text on the
+    // paste; U2 after it is fitted and has a 1 x 3 mm window.
+    let body = format!(
+        r#"{}(footprint "Lib:A" (layer "F.Cu") (at 5 5) (property "Reference" "U1") (attr smd dnp)
+  (fp_rect (start 2 -1) (end 4 1) (stroke (width 0) (type solid)) (fill yes) (layer "F.Paste"))
+  (fp_text user "PASTE" (at 0 3) (layer "F.Paste") (effects (font (size 1 1) (thickness 0.15))))
+  (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu" "F.Paste" "F.Mask")))
+(footprint "Lib:B" (layer "F.Cu") (at 20 10) (property "Reference" "U2")
+  (fp_rect (start 0 0) (end 1 3) (stroke (width 0) (type solid)) (fill yes) (layer "F.Paste")))
+"#,
+        rect_outline(0.0, 0.0, 30.0, 20.0)
+    );
+    let text = parse(&body);
+    let board = Board::parse(text.as_bytes()).unwrap();
+    let front = |include_dnp_paste| {
+        let options = crate::ImageOptions {
+            include_dnp_paste,
+            ..Default::default()
+        };
+        let image = crate::board_image(&board, &options).unwrap();
+        assert!(image.warnings.is_empty(), "{:?}", image.warnings);
+        image_area(&image, "F.Paste", Paste, "")
+    };
+    let all = front(true);
+    assert!(all > 8.0 + 0.1, "{all}");
+    let fitted = front(false);
+    assert!((fitted - 3.0).abs() < 1e-6, "{fitted}");
+}
+
+#[test]
 fn image_flashes_vias_as_kicad_does() {
     use crate::ImageKind::Copper;
     // Nothing connects to these vias but a track on In2.Cu ending at the

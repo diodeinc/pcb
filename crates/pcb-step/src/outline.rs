@@ -408,7 +408,8 @@ fn synthesize(
     // edges too. What is wrong with a drawing is reported when its layer
     // is made.
     points.extend(board.fill_points.iter().map(|p| frame.point(*p)));
-    let drawn = crate::faces::drawn_items(board, frame, fonts, None, variables, &mut Vec::new());
+    let drawn =
+        crate::faces::drawn_items(board, frame, fonts, None, true, variables, &mut Vec::new());
     points.extend(drawn.iter().flatten().flat_map(|c| {
         let (lo, hi) = (c.bbox.min, c.bbox.max);
         corners(Vec2::new(lo.x, lo.y), Vec2::new(hi.x, hi.y))

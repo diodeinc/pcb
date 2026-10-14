@@ -17,6 +17,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - `board-array create` and board-array analysis honor a board's non-zero Datum.
 - `pcb gltf export` draws solder paste drawn as graphics or text on `F.Paste` and `B.Paste`, such as paste windows over thermal pads, not just pad paste.
 - `pcb step export` and `pcb gltf export` leave a via off its start and end layers when it removes unused layers without keeping its end layers and nothing connects there, as KiCad does; `start_end_only` vias are on their end layers only.
+- The `pcb-step` board image with `include_dnp_paste: false` also hides DNP footprints' drawn paste, not just their pad paste.
 - The `pcb-step` board image and manifest name the nets of boards before KiCad 10 by their declared names instead of their numbers.
 - The `pcb-step` board image keeps copper on a KiCad 10 net named `0` on that net instead of on no net.
 - `pcb gltf export` builds the board body of a layout without `Edge.Cuts` around its zone fills, graphics, text and exact pad outlines too, so copper is no longer cut away.
