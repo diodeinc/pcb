@@ -324,8 +324,7 @@ impl ImportedDesign {
         let mask_openings = self.mask_openings(scope, &lands, resolution)?;
         let mut holes = self.derive_physical_holes(scope, &source_lands, &all, resolution)?;
         self.attach_hole_terminations(&lands, &terminations, &mut holes)?;
-        let stackup = physical_stackup_layers(&self.stackups, &self.layer_definitions)?;
-        self.attach_hole_protection(scope, &mut holes, stackup.as_deref(), resolution)?;
+        self.attach_hole_protection(scope, &mut holes, resolution)?;
         Ok(PhysicalView {
             source_lands,
             lands,
@@ -885,9 +884,10 @@ impl ImportedDesign {
         &self,
         scope: ArtworkScope,
         holes: &mut [PhysicalHole],
-        stackup: Option<&[Symbol]>,
         resolution: Resolution,
     ) -> Result<()> {
+        let stackup = physical_stackup_layers(&self.stackups, &self.layer_definitions)?;
+        let stackup = stackup.as_deref();
         let hole_bounds = BBoxIndex::new(holes.iter().map(|hole| hole.image.bbox()).collect());
         for (layer_index, layer) in self.layer_definitions.iter().enumerate() {
             if !matches!(
