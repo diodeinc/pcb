@@ -506,6 +506,59 @@ limit = { minimum = "0.4 mm" }"#);
     }
 
     #[test]
+    fn unmeasurable_slot_width_keeps_other_valid_findings() {
+        let xml = board(
+            r#"<LayerFeature layerRef="DRILL"><Set>
+              <Hole name="small" diameter="0.1" platingStatus="VIA" x="5" y="5"/>
+            </Set></LayerFeature>
+            <LayerFeature layerRef="ROUT"><Set>
+              <SlotCavity name="tiny" platingStatus="PLATED"><Outline><Polygon>
+                <PolyBegin x="0.1" y="5"/><PolyStepSegment x="0.100293" y="4.999293"/>
+                <PolyStepSegment x="0.101" y="4.999"/><PolyStepSegment x="0.101707" y="4.999293"/>
+                <PolyStepSegment x="0.102" y="5"/><PolyStepSegment x="0.101707" y="5.000707"/>
+                <PolyStepSegment x="0.101" y="5.001"/><PolyStepSegment x="0.100293" y="5.000707"/>
+                <PolyStepSegment x="0.1" y="5"/>
+              </Polygon><LineDesc lineWidth="0" lineEnd="ROUND"/></Outline></SlotCavity>
+            </Set></LayerFeature>"#,
+            "",
+        );
+        let pdk = pdk(r#"[[rules.drilling.hole_diameter]]
+id = "via-diameter"
+select = { hole = "via" }
+limit = { minimum = "0.2 mm" }
+
+[[rules.drilling.slot_width]]
+id = "slot-width"
+select = { plating = "plated" }
+limit = { minimum = "0.5 mm" }
+
+[[rules.drilling.slot_to_board_edge_clearance]]
+id = "slot-edge"
+select = { plating = "plated" }
+limit = { minimum = "0.2 mm" }"#);
+        let report = check(&xml, &pdk, LayoutTarget::Board);
+        let width = report
+            .rules
+            .iter()
+            .find(|rule| rule.id == "slot-width")
+            .unwrap();
+        assert!(matches!(width.status, RuleStatus::Incomplete));
+        assert_eq!(report.findings.len(), 2);
+        for rule_id in ["via-diameter", "slot-edge"] {
+            let rule = report.rules.iter().find(|rule| rule.id == rule_id).unwrap();
+            assert!(matches!(rule.status, RuleStatus::Fail));
+            assert_eq!(rule.checked, 1);
+            let finding = report
+                .findings
+                .iter()
+                .find(|finding| finding.rule_id == rule_id)
+                .unwrap();
+            assert!((actual_mm(&finding.measurement) - 0.1).abs() < 1e-9);
+            assert!(!finding.sites.is_empty());
+        }
+    }
+
+    #[test]
     fn a_repeated_board_is_measured_once_to_its_own_profile_not_the_panel() {
         let xml = r#"<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
           <Content roleRef="owner"><FunctionMode mode="FABRICATION"/><StepRef name="panel"/><LayerRef name="DRILL"/></Content>

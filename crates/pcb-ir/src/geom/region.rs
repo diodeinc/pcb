@@ -28,6 +28,7 @@ pub(crate) use gaps::{TwoSidedResidualComponent, gap_reach_mm};
 pub use query::PreparedRegion;
 pub(crate) use simplification::{decimate_rings_inward, simplify_rings};
 pub use simplification::{grid_coordinate, grid_rounding_error, simplify_shapes};
+pub(crate) use widths::WidthAxis;
 
 use i_overlay::core::fill_rule::FillRule as OverlayFillRule;
 
