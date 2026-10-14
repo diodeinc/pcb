@@ -514,7 +514,7 @@ fn a_missing_outline_is_an_error_unless_the_caller_asks_for_a_visual_body() {
     assert!(err.to_string().contains("no Edge.Cuts"), "{err}");
     let options = Options {
         outline: OutlinePolicy::Synthesize,
-        ..Options::default()
+        ..visual()
     };
     let run = export(&text, &options).unwrap();
     assert_eq!(run.stats["pcb"]["board"]["syntheticOutline"], true);
@@ -522,6 +522,17 @@ fn a_missing_outline_is_an_error_unless_the_caller_asks_for_a_visual_body() {
     assert!(x0 < 9.0 && x1 > 11.0, "{x0} {x1}");
     let real = export(&board(&footprint("U1", "10 10", "", "")), &options).unwrap();
     assert_eq!(real.stats["pcb"]["board"]["syntheticOutline"], false);
+
+    // A new board has neither an outline nor items to surround. A preview
+    // represents that honestly as an empty scene, not a fabricated body.
+    let empty = format!("{HEAD})");
+    assert!(export(&empty, &Options::default()).is_err());
+    let run = export(&empty, &options).unwrap();
+    assert!(run.report.warnings.is_empty());
+    assert_eq!(run.stats["things"], serde_json::json!([]));
+    assert!(run.stats["json"].get("meshes").is_none());
+    assert!(run.stats["json"].get("buffers").is_none());
+    assert!(export("(kicad_pcb", &options).is_err());
 }
 
 #[test]
