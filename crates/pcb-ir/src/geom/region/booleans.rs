@@ -28,7 +28,7 @@ fn sourced(rings: Vec<Ring>, source: u32) -> impl Iterator<Item = (Ring, u32)> {
 /// single source is already regular and passes through untouched, so adding
 /// to a large image costs only the neighbourhoods the addition reaches.
 fn union_rings(rings: Vec<(Ring, u32)>) -> Vec<Ring> {
-    resolve_groups(rings, |group| {
+    resolve_groups(rings, 0.0, |group| {
         let source = group[0].1;
         let regular = group.iter().all(|(_, other)| *other == source);
         let rings = untagged(group);
@@ -50,7 +50,7 @@ fn union_rings(rings: Vec<(Ring, u32)>) -> Vec<Ring> {
 /// survive a difference verbatim, and everything else contributes nothing.
 fn overlay_rings(subject: Vec<Ring>, clip: Vec<Ring>, rule: OverlayRule) -> Vec<Ring> {
     let rings = sourced(subject, 0).chain(sourced(clip, 1)).collect();
-    resolve_groups(rings, |group| {
+    resolve_groups(rings, 0.0, |group| {
         let (subject, clip): (Vec<_>, Vec<_>) =
             group.into_iter().partition(|(_, source)| *source == 0);
         let (subject, clip) = (untagged(subject), untagged(clip));
