@@ -3,7 +3,7 @@ mod common;
 use std::collections::BTreeSet;
 
 use pcb_kicad_sch::{
-    NetDriverKind, Point, SchDocument, SchItem, SymbolField, Wire,
+    LabelKind, NetDriverKind, Point, SchDocument, SchItem, SymbolField, Wire,
     analysis::{SchematicIssue, SchematicIssueKey, inspect_schematic},
     connectivity::ConnectivityItemRef,
     plan_connectivity_repair,
@@ -657,6 +657,78 @@ fn intent_names_a_sheet_joined_net_locally_on_the_parent_page() {
     let verified =
         verify_connectivity_repair(&document, &inspection, &netlist, &intent, &realized).unwrap();
     assert!(verified.analysis.is_equivalent(), "{:#?}", verified.issues);
+}
+
+#[test]
+fn intent_plans_drivers_on_the_document_after_its_removals() {
+    const SHARED: &str = "SHARED_SIGNAL_WITH_A_LONG_NAME";
+    let netlist = common::compile_fixture("hierarchy", "root_and_sheets.zen");
+    let document = plan_reconciliation(None, &netlist, "RootAndSheets.kicad_sch")
+        .unwrap()
+        .apply(None)
+        .unwrap();
+    let root = &document.pages[0];
+    let pin = root
+        .items
+        .iter()
+        .find_map(|item| match item {
+            SchItem::Sheet(sheet) if sheet.file_name() == "FILTER_A.kicad_sch" => {
+                Some(sheet.pins[0].at)
+            }
+            _ => None,
+        })
+        .unwrap();
+    // The label on FILTER_A's sheet pin is the net's only bridge into that
+    // sheet; the caller rips it up.
+    let bridge = root
+        .items
+        .iter()
+        .find_map(|item| match item {
+            SchItem::Label(label) if label.text == SHARED && label.at == pin => {
+                Some(ConnectivityItemRef::Label {
+                    page_id: root.id.clone(),
+                    id: label.id.clone(),
+                })
+            }
+            _ => None,
+        })
+        .unwrap();
+    let inspection = inspect_schematic(&document, &netlist).unwrap();
+    let intent = plan_connectivity_repair(
+        &document,
+        &netlist,
+        &inspection,
+        &BTreeSet::new(),
+        &BTreeSet::from([bridge]),
+    )
+    .unwrap();
+
+    // PCB's own reconciliation of the ripped-up document places the drivers
+    // the intent names.
+    let ripped = intent.apply_edits(&document).unwrap();
+    let realized = plan_reconciliation(Some(&ripped), &netlist, "RootAndSheets.kicad_sch")
+        .unwrap()
+        .apply(Some(&ripped))
+        .unwrap();
+    let global_pages = realized
+        .pages
+        .iter()
+        .filter(|page| {
+            page.items.iter().any(|item| {
+                matches!(item, SchItem::Label(label)
+                    if label.text == SHARED && matches!(label.kind, LabelKind::Global { .. }))
+            })
+        })
+        .map(|page| page.id.clone())
+        .collect::<BTreeSet<_>>();
+    assert!(!global_pages.is_empty());
+    let planned_global = realized
+        .pages
+        .iter()
+        .filter(|page| intent.driver_kind(SHARED, &page.id) == Some(&NetDriverKind::Global))
+        .map(|page| page.id.clone())
+        .collect::<BTreeSet<_>>();
+    assert_eq!(planned_global, global_pages, "{:#?}", intent.drivers());
 }
 
 fn label_point(document: &SchDocument, name: &str) -> Point {

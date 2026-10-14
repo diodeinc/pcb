@@ -2553,6 +2553,27 @@ fn net_driver_islands(
         .collect())
 }
 
+/// Apply the intent's removals and relocations: the document a realizer adds
+/// the intent's drivers to, and the one their kinds are planned on.
+pub(crate) fn apply_repair_edits(
+    document: &mut SchDocument,
+    intent: &ConnectivityRepairIntent,
+) -> Result<()> {
+    clear_for_repair(document, &mut BTreeMap::new(), intent)
+}
+
+fn clear_for_repair(
+    document: &mut SchDocument,
+    placed: &mut BTreeMap<SymbolSlotKey, PlacedSymbol>,
+    intent: &ConnectivityRepairIntent,
+) -> Result<()> {
+    remove_items(document, &intent.removals)?;
+    for location in &intent.relocated_symbols {
+        relocate_symbol(document, placed, location)?;
+    }
+    Ok(())
+}
+
 fn apply_connectivity_repair(
     document: &mut SchDocument,
     netlist: &Schematic,
@@ -2562,10 +2583,7 @@ fn apply_connectivity_repair(
     intent: &ConnectivityRepairIntent,
     reconnect_nets: &BTreeSet<String>,
 ) -> Result<()> {
-    remove_items(document, &intent.removals)?;
-    for location in &intent.relocated_symbols {
-        relocate_symbol(document, placed, location)?;
-    }
+    clear_for_repair(document, placed, intent)?;
     add_connectivity_drivers(
         document,
         netlist,
