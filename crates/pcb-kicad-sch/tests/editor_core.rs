@@ -1032,6 +1032,54 @@ fn a_net_symbol_at_a_removed_pin_goes_with_it() {
 }
 
 #[test]
+fn a_driver_with_a_collision_suffixed_id_goes_with_its_pin() {
+    let local = common::compile_fixture("hierarchy", "sheet_port_local.zen");
+    let external = common::compile_fixture("hierarchy", "sheet_port_external.zen");
+    let renamed = common::compile_fixture("hierarchy", "sheet_port_renamed.zen");
+    let mut created = create(&local, "SheetPort.kicad_sch");
+
+    // Items on another page already hold the driver's deterministic id and
+    // its first suffixes, so the INPUT pin's label gets a later suffix.
+    let key = "zener:module-parent-driver:FILTER:INPUT:SIGNAL";
+    let child = created
+        .pages
+        .iter_mut()
+        .find(|page| page.file_name.as_deref() == Some("FILTER.kicad_sch"))
+        .unwrap();
+    for index in 0..12 {
+        let id = if index == 0 {
+            deterministic_uuid(key)
+        } else {
+            deterministic_uuid(format!("{key}:{index}"))
+        };
+        child.items.push(SchItem::Label(Label::new(
+            id,
+            "NOTE",
+            Point::new(20.32, 20.32 + index as f64 * 5.08),
+        )));
+    }
+    let mut crossing = reapply(&created, &external);
+    assert_eq!(sheet_pin_names(&crossing), ["INPUT"]);
+
+    // The user deletes those items; later the port is renamed, so SIGNAL
+    // still crosses, under IN.
+    for page in &mut crossing.pages {
+        page.items
+            .retain(|item| !matches!(item, SchItem::Label(label) if label.text == "NOTE"));
+    }
+    let applied = reapply(&crossing, &renamed);
+    assert_eq!(sheet_pin_names(&applied), ["IN"]);
+    let root = labels_on(&applied, "SheetPort.kicad_sch");
+    assert_eq!(
+        root.iter()
+            .filter(|label| **label == ("SIGNAL".to_string(), LabelKind::Local))
+            .count(),
+        2,
+        "R2's pin and pin IN: {root:#?}"
+    );
+}
+
+#[test]
 fn a_users_symbol_on_a_removed_pin_stays() {
     let local = common::compile_fixture("hierarchy", "sheet_power_local.zen");
     let external = common::compile_fixture("hierarchy", "sheet_power_external.zen");

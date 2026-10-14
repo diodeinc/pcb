@@ -37,6 +37,9 @@ const SHEET_MIN_HEIGHT_MM: f64 = 20.32;
 const PLACEMENT_BLOCK_GAP_CELLS: i32 = 4;
 const CONTEXT_LABEL_GAP_CELLS: i32 = 1;
 const CAPACITOR_BANK_BUS_OFFSET_CELLS: f64 = 2.0;
+/// Hidden label property naming the sheet pin whose driver the label is, set
+/// when the label could not take its deterministic id.
+const SHEET_PIN_FIELD: &str = "pcb:sheet_pin";
 
 pub(crate) fn reconcile_document(
     existing: Option<&SchDocument>,
@@ -963,10 +966,16 @@ fn materialize_hierarchy(
                     Point::new(at.x, at.y + (index as f64 + 2.0) * SHEET_PIN_SPACING_MM),
                     LabelSpin::Left,
                 ),
-                &format!(
-                    "zener:module-parent-driver:{}:{port_name}:{net_name}",
-                    sheet_plan.module_path
-                ),
+                DriverKey {
+                    key: &format!(
+                        "zener:module-parent-driver:{}:{port_name}:{net_name}",
+                        sheet_plan.module_path
+                    ),
+                    sheet_pin: Some(&deterministic_uuid(format!(
+                        "zener:module-sheet-pin:{}:{port_name}",
+                        sheet_plan.module_path
+                    ))),
+                },
             )?;
         }
     }
@@ -1174,28 +1183,35 @@ fn sync_generated_sheet_pins(
                 .is_some_and(|net_name| !interface.contains_key(net_name));
             let page = &document.pages[parent_page];
             // The pin's own driver is the label or net symbol pcb placed for
-            // it, named for its net: the port's net when it still has one,
-            // else the net the driver itself names. Anything else attached at
-            // the pin is the user's and stays.
+            // it: its id is the deterministic id for the pin's port and net
+            // (the port's net when it still has one, else the net the driver
+            // names), or, when that id was taken, a label records the pin.
+            // Anything else attached at the pin is the user's and stays.
             let generated_driver = |id: &str, named: &str| {
                 net_name
                     .iter()
                     .map(String::as_str)
                     .chain([named])
                     .any(|net_name| {
-                        let key = format!(
+                        id == deterministic_uuid(format!(
                             "zener:module-parent-driver:{}:{port_name}:{net_name}",
                             module.path
-                        );
-                        is_deterministic_id(id, &key, page.items.len())
+                        ))
                     })
+            };
+            let records_pin = |label: &Label| {
+                label
+                    .fields
+                    .get(SHEET_PIN_FIELD)
+                    .is_some_and(|field| field.value == id)
             };
             let attached = page
                 .items
                 .iter()
                 .map(|item| match item {
                     SchItem::Label(label) => {
-                        (points_connect(label.at, at) && generated_driver(&label.id, &label.text))
+                        (points_connect(label.at, at)
+                            && (generated_driver(&label.id, &label.text) || records_pin(label)))
                             || (left_module
                                 && label.kind == LabelKind::Local
                                 && net_name.as_ref() == Some(&label.text))
@@ -1269,10 +1285,13 @@ fn sync_generated_sheet_pins(
                     parent_page,
                     net_name,
                     (at, LabelSpin::Left),
-                    &format!(
-                        "zener:module-parent-driver:{}:{port_name}:{net_name}",
-                        module.path
-                    ),
+                    DriverKey {
+                        key: &format!(
+                            "zener:module-parent-driver:{}:{port_name}:{net_name}",
+                            module.path
+                        ),
+                        sheet_pin: Some(&pin_id(port_name)),
+                    },
                 )?;
                 let driver = driver_label(net_name, Some(names), false, String::new(), at);
                 relabel(
@@ -2793,7 +2812,10 @@ fn add_hierarchy_connectivity(
                 sheet_plan.child_page,
                 &net_name,
                 child_anchor,
-                &format!("zener:module-child-driver:{key}:{net_name}"),
+                DriverKey {
+                    key: &format!("zener:module-child-driver:{key}:{net_name}"),
+                    sheet_pin: None,
+                },
             )?;
         }
     }
@@ -3623,6 +3645,13 @@ fn canonical_target<'a>(
         .min_by_key(|target| (&target.slot, &target.number))
 }
 
+/// How a contextual driver is identified: its deterministic key and, for a
+/// sheet pin's driver on the parent page, that pin's id.
+struct DriverKey<'a> {
+    key: &'a str,
+    sheet_pin: Option<&'a str>,
+}
+
 fn upsert_contextual_driver(
     document: &mut SchDocument,
     net_symbol_specs: &BTreeMap<String, net_symbols::NetSymbolSpec>,
@@ -3630,9 +3659,10 @@ fn upsert_contextual_driver(
     page_index: usize,
     net_name: &str,
     anchor: (Point, LabelSpin),
-    key: &str,
+    key: DriverKey,
 ) -> Result<()> {
     let (at, spin) = anchor;
+    let DriverKey { key, sheet_pin } = key;
     if let Some(spec) = net_symbol_specs.get(net_name) {
         let symbol = build_net_symbol(spec, net_name, deterministic_uuid(key), at)?;
         return insert_net_symbol(document, page_index, symbol, &spec.definition);
@@ -3650,6 +3680,20 @@ fn upsert_contextual_driver(
         at,
     );
     label.spin = spin;
+    // A sheet pin's driver is known by its deterministic id. One that cannot
+    // take it, because another item already has it, gets a suffixed id that
+    // depends on the document at the time, so it records its pin instead.
+    if let Some(sheet_pin) = sheet_pin
+        && contains_id(document, &label.id)
+        && !document.pages[page_index]
+            .items
+            .iter()
+            .any(|item| matches!(item, SchItem::Label(existing) if existing.id == label.id))
+    {
+        let mut field = SymbolField::new(SHEET_PIN_FIELD, sheet_pin, at);
+        field.hidden = true;
+        label.fields.insert(SHEET_PIN_FIELD.to_string(), field);
+    }
     upsert_label(document, page_index, label)
 }
 
@@ -3925,13 +3969,6 @@ fn contains_id(document: &SchDocument, id: &str) -> bool {
         .pages
         .iter()
         .any(|page| page.items.iter().any(|item| item.id() == Some(id)))
-}
-
-/// Whether `id` is the deterministic id for `key`, or one of the first
-/// `collisions` ids `available_deterministic_id` would mint for it.
-fn is_deterministic_id(id: &str, key: &str, collisions: usize) -> bool {
-    id == deterministic_uuid(key)
-        || (1..=collisions).any(|index| id == deterministic_uuid(format!("{key}:{index}")))
 }
 
 fn available_deterministic_id(document: &SchDocument, key: &str) -> String {

@@ -34,7 +34,9 @@ symbols on the parent page, are the user's. pcb removes its own pins that the
 interface no longer has, with the label or net symbol it placed at each on
 the parent page and, once the net no longer leaves the module, the parent
 page's local labels for the net; a label or symbol the user attached at the
-pin stays. The module page's hierarchical labels for a
+pin stays. pcb knows its driver by the driver's deterministic id or, for a
+label that could not take that id, by a hidden `pcb:sheet_pin` property
+naming the pin. The module page's hierarchical labels for a
 removed pin become the page's own driver for the net, or go when the port is
 gone. A newly crossing port gets a pin and parent driver where the pin, its
 label and any growth of the sheet clear the page's other items, and the module
