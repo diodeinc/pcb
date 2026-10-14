@@ -503,7 +503,7 @@ fn embed_as(name: &str, kind: &str, data: &[u8]) -> String {
 }
 
 #[test]
-fn embedded_payloads_decode_with_and_without_content_size() {
+fn embedded_payloads_decode_like_the_c_zstd_decoder() {
     use base64::Engine;
     use std::io::Write;
     // Several MiB of half-compressible bytes span many zstd blocks and a
@@ -519,19 +519,53 @@ fn embedded_payloads_decode_with_and_without_content_size() {
             }
         })
         .collect();
-    // A streaming encoder that is not told the input size writes no
-    // content size in the frame header.
-    let mut encoder = zstd::Encoder::new(Vec::new(), 3).unwrap();
-    encoder.write_all(&data).unwrap();
-    let streamed = encoder.finish().unwrap();
-    assert!(matches!(
-        zstd::zstd_safe::get_frame_content_size(&streamed),
-        Ok(None)
-    ));
-    for compressed in [zstd::bulk::compress(&data, 3).unwrap(), streamed] {
+    // A streaming encoder writes a content size only when told the input
+    // size, and a checksum only when asked.
+    let frame = |data: &[u8], sized: bool| {
+        let mut encoder = zstd::Encoder::new(Vec::new(), 3).unwrap();
+        encoder.include_checksum(true).unwrap();
+        if sized {
+            encoder
+                .set_pledged_src_size(Some(data.len() as u64))
+                .unwrap();
+        }
+        encoder.write_all(data).unwrap();
+        encoder.finish().unwrap()
+    };
+    let decode = |compressed: &[u8]| {
         let text = base64::engine::general_purpose::STANDARD.encode(compressed);
         let wrapped = text.as_bytes().chunks(76).collect::<Vec<_>>().join(&b'\n');
-        assert!(crate::decode_embedded(&wrapped).unwrap() == data);
+        crate::decode_embedded(&wrapped)
+    };
+    let sized = frame(&data, true);
+    let unsized_ = frame(&data, false);
+    assert!(matches!(
+        zstd::zstd_safe::get_frame_content_size(&unsized_),
+        Ok(None)
+    ));
+    // Two frames with a skippable frame between them decode as one stream.
+    let (head, tail) = data.split_at(data.len() / 3);
+    let mut concatenated = frame(head, false);
+    concatenated.extend_from_slice(&[0x50, 0x2a, 0x4d, 0x18, 3, 0, 0, 0, 1, 2, 3]);
+    concatenated.extend(frame(tail, true));
+    for compressed in [&sized, &unsized_, &concatenated] {
+        assert!(decode(compressed).unwrap() == data);
+    }
+    // A wrong checksum or content size still decodes, but is corrupt.
+    let mut bad_checksum = sized.clone();
+    *bad_checksum.last_mut().unwrap() ^= 1;
+    // The content size follows the descriptor, a window byte unless the
+    // frame is a single segment, and a dictionary ID of 0, 1, 2 or 4 bytes.
+    let descriptor = sized[4];
+    let size_at =
+        5 + usize::from(descriptor & 0x20 == 0) + [0, 1, 2, 4][usize::from(descriptor & 3)];
+    let mut bad_size = sized.clone();
+    bad_size[size_at] ^= 1;
+    for (corrupt, error) in [
+        (bad_checksum, "checksum mismatch"),
+        (bad_size, "content size mismatch"),
+    ] {
+        assert!(matches!(decode(&corrupt), Err(crate::Error::Zstd(e)) if e == error));
     }
     assert!(matches!(
         crate::decode_embedded(b"bm90IHpzdGQ="),
