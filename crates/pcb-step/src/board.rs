@@ -514,6 +514,8 @@ pub(crate) struct Physical {
 impl<'a> Board<'a> {
     /// Parse a `.kicad_pcb` board, or a `.kicad_mod` footprint, which is
     /// placed at the origin of a two-layer board of the default thickness.
+    /// A footprint seldom has an Edge.Cuts outline, so it needs
+    /// [`OutlinePolicy::Synthesize`](crate::OutlinePolicy::Synthesize).
     pub fn parse(src: &'a [u8]) -> Result<Self, Error> {
         Self::parse_with(src, true, true)
     }
