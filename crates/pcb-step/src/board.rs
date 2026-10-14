@@ -1052,7 +1052,7 @@ impl<'a> Board<'a> {
                 }
                 "drill" => via.drill = p.f64("via drill")?.abs(),
                 "size" => via.size = p.f64("via size")?.abs(),
-                "net" => via.net = self.net_id(self.net_name((p.atom()?, p.atom()?))),
+                "net" => via.net = self.net_id(self.net_name(net_atoms(p)?)),
                 // As KiCad reads them: each flag sets the mode when yes
                 // and is ignored when no.
                 "remove_unused_layers" | "keep_end_layers" | "start_end_only" => {
@@ -1121,7 +1121,7 @@ impl<'a> Board<'a> {
                 "end" => track.b = p.xy("track end")?,
                 "width" => track.width = p.f64("track width")?,
                 "layer" => track.layer = self.copper_index(p.atom()?).unwrap_or(u32::MAX),
-                "net" => track.net = self.net_id(self.net_name((p.atom()?, p.atom()?))),
+                "net" => track.net = self.net_id(self.net_name(net_atoms(p)?)),
                 _ => {}
             }
             p.skip()?;
@@ -1140,7 +1140,7 @@ impl<'a> Board<'a> {
         while let Some(name) = p.open()? {
             match name {
                 "net" => {
-                    net = self.net_id(self.net_name((p.atom()?, p.atom()?)));
+                    net = self.net_id(self.net_name(net_atoms(p)?));
                     p.skip()?;
                 }
                 "filled_polygon" => {
@@ -1176,17 +1176,20 @@ impl<'a> Board<'a> {
         Ok(())
     }
 
-    /// The net a `(net ...)` list's two atoms name, as KiCad reads it.
-    /// KiCad 10 writes the name alone. Older files declare every net at
-    /// the top and write its number, and pads add the name: a pad whose
-    /// name disagrees with the number is on no net, and an undeclared
-    /// number leaves only the pad's name. Number 0 is no net, declared
-    /// or not.
-    fn net_name(&self, (first, name): NetAtoms<'a>) -> Option<&'a str> {
+    /// The net a `(net ...)` list names, as KiCad reads it. KiCad 10
+    /// writes the name alone, so `(net "0")` is the net named 0. Older
+    /// files declare every net at the top and write its number, and pads
+    /// add the name: a pad whose name disagrees with the number is on no
+    /// net, and an undeclared number leaves only the pad's name. Number 0
+    /// is no net, declared or not.
+    fn net_name(&self, (code, name): NetAtoms<'a>) -> Option<&'a str> {
         if self.net_codes.is_empty() {
-            return first.filter(|&n| n != "0");
+            return match code {
+                Some(code) => (code != "0").then_some(code),
+                None => name,
+            };
         }
-        match first.and_then(|code| self.net_codes.get(&code.parse().ok()?)) {
+        match code.and_then(|code| self.net_codes.get(&code.parse().ok()?)) {
             Some(&declared) => name.is_none_or(|n| n == declared).then_some(declared),
             None => name,
         }
@@ -1571,7 +1574,7 @@ fn parse_pad<'a>(
                 at = p.xy("pad at")?;
                 rotation = p.f64_or(0.0)?;
             }
-            "net" => net = (p.atom()?, p.atom()?),
+            "net" => net = net_atoms(p)?,
             "layers" => {
                 while let Some(layer) = p.atom()? {
                     layers |= copper_layer_mask(layer, copper_layers);
@@ -1824,8 +1827,16 @@ fn parse_primitives(
 /// A pad's drill, its copper, and its net as written.
 type ParsedPad<'a> = (Option<Hole<'a>>, Vec<Pad>, NetAtoms<'a>);
 
-/// The first two atoms of a `(net ...)` list.
+/// A `(net ...)` list's number and name. As KiCad reads it, an unquoted
+/// first atom is the number and a quoted one is the name.
 type NetAtoms<'a> = (Option<&'a str>, Option<&'a str>);
+
+fn net_atoms<'a>(p: &mut Parser<'a>) -> Result<NetAtoms<'a>, Error> {
+    if p.at_quoted() {
+        return Ok((None, p.atom()?));
+    }
+    Ok((p.atom()?, p.atom()?))
+}
 
 fn parse_yes_no(atom: Option<&str>) -> Option<bool> {
     match atom {

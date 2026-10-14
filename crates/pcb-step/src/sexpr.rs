@@ -145,6 +145,12 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// Whether the next token is a quoted atom.
+    pub(crate) fn at_quoted(&mut self) -> bool {
+        self.skip_ws();
+        self.src.get(self.pos) == Some(&b'"')
+    }
+
     /// Next atom of the current list, without consuming a paren.
     pub(crate) fn atom(&mut self) -> Result<Option<&'a str>, Error> {
         self.skip_ws();

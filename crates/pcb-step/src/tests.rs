@@ -2267,6 +2267,32 @@ fn image_resolves_numbered_nets_by_their_declarations() {
 }
 
 #[test]
+fn image_keeps_a_kicad_10_net_named_0() {
+    use crate::ImageKind::Copper;
+    // KiCad 10 writes net names, always quoted, and declares no numbers:
+    // `(net "0")` is the net named 0, for a pad as for a segment.
+    let text = format!(
+        r#"(kicad_pcb (version 20260206) (generator "pcbnew")
+  (general (thickness 1.6))
+  (layers (0 "F.Cu" signal) (2 "B.Cu" signal) (25 "Edge.Cuts" user))
+{}(footprint "Lib:R" (layer "F.Cu") (at 5 5) (property "Reference" "R1")
+  (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu") (net "0")))
+(segment (start 5 5) (end 10 5) (width 0.5) (layer "F.Cu") (net "0"))
+(segment (start 5 15) (end 10 15) (width 0.5) (layer "F.Cu") (net "GND")))
+"#,
+        rect_outline(0.0, 0.0, 20.0, 20.0)
+    );
+    let board = Board::parse(text.as_bytes()).unwrap();
+    let image = crate::board_image(&board, &crate::ImageOptions::default()).unwrap();
+    let mut nets = image.nets.clone();
+    nets.sort();
+    assert_eq!(nets, ["", "0", "GND"]);
+    // The pad and the segment touch, so they are one region.
+    assert_eq!(image_region(&image, "F.Cu", Copper, "0").ring_count(), 1);
+    assert_eq!(image_area(&image, "F.Cu", Copper, ""), 0.0);
+}
+
+#[test]
 fn synthesized_outline_holds_zone_fills() {
     use crate::ImageKind::Copper;
     // No Edge.Cuts: a 6 x 6 mm fill and a short track beside it. The
