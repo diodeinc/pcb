@@ -421,6 +421,11 @@ fn synthesize(
             }
         }
     }
+    // A footprint with nothing drawn, such as a model alone, is held by
+    // where it is placed.
+    if points.is_empty() {
+        points.extend(board.footprints.iter().map(|fp| frame.point(fp.at)));
+    }
     points.retain(|p| p.x.is_finite() && p.y.is_finite());
     if points.is_empty() {
         return None;
