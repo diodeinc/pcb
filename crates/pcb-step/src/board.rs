@@ -1209,14 +1209,8 @@ impl<'a> Board<'a> {
     /// files declare every net at the top and write its number, and pads
     /// add the name: a pad whose name disagrees with the number is on no
     /// net, and an undeclared number leaves only the pad's name. Number 0
-    /// is no net, declared or not.
+    /// is declared as the empty name, which is no net.
     fn net_name(&self, (code, name): NetAtoms<'a>) -> Option<&'a str> {
-        if self.net_codes.is_empty() {
-            return match code {
-                Some(code) => (code != "0").then_some(code),
-                None => name,
-            };
-        }
         match code.and_then(|code| self.net_codes.get(&code.parse().ok()?)) {
             Some(&declared) => name.is_none_or(|n| n == declared).then_some(declared),
             None => name,

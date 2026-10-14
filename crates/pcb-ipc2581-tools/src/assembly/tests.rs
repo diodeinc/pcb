@@ -778,6 +778,17 @@ fn board_scope_is_one_canonical_board() {
     assert_eq!(report.holes.len(), 3);
     assert_eq!(report.summary.paste.islands, 1);
     assert_eq!(report.diagnostics.len(), 1);
+
+    // Paste that names no component counts for the component whose
+    // termination it overlaps.
+    let xml = FIXTURE.replacen(
+        "<StandardPrimitiveRef id=\"paste\"/><PinRef componentRef=\"U1\" pin=\"1\"/>",
+        "<StandardPrimitiveRef id=\"paste\"/>",
+        1,
+    );
+    let paste = report_xml(&xml, LayoutTarget::Board).summary.paste;
+    assert_eq!(paste.exactly_linked_on_included_populated_components, 1);
+    assert_eq!(paste.on_included_populated_components, 1);
 }
 
 #[test]

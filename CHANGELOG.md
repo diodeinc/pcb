@@ -10,27 +10,23 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Added
 
-- `pcb-step` parses standalone `.kicad_mod` footprints.
-- `pcb-ir` `ImportedDesign::assembly_view` derives the terminations, paste islands and plated-hole termination links of `physical_view`, but does not derive mask openings, hole protection or hole-land links. Errors in those layers do not stop it, and it is about 2.5 times faster on large boards.
+- `pcb gltf export --synthesize-outline` reads a standalone `.kicad_mod` footprint.
+- `pcb-ir` `ImportedDesign::assembly_view` derives the assembly facts of `physical_view` without mask or hole protection, about 2.5 times faster on large boards.
 
 ### Changed
 
-- Unused via land detection derives only source lands and drilled openings, so errors in paste, mask or hole-protection artwork no longer stop it, and it runs about 25% faster.
-- `pcb-step` decodes embedded files with pure-Rust zstd, so it builds for WebAssembly without clang.
-- `pcb-ir` links a paste island that IPC does not identify with a termination, such as an exposed-pad paste window, to the one termination whose lands it overlaps, and marks the link resolved, ambiguous, conflicting or unresolved with its basis. The IPC-2581 assembly report counts these links and lists their paste under the termination.
+- Unused via land detection no longer fails on errors in paste, mask or hole-protection artwork, and runs about 25% faster.
+- The IPC-2581 assembly report links paste that matches no pin, such as exposed-pad paste windows, to the termination it overlaps.
 
 ### Fixed
 
-- `board-array create` and board-array analysis honor a board's non-zero Datum.
-- `pcb gltf export` draws solder paste drawn as graphics or text on `F.Paste` and `B.Paste`, such as paste windows over thermal pads, not just pad paste.
-- `pcb step export` and `pcb gltf export` leave a via off its start and end layers when it removes unused layers without keeping its end layers and nothing connects there, as KiCad does; `start_end_only` vias are on their end layers only.
-- The `pcb-step` board image with `include_dnp_paste: false` also hides DNP footprints' drawn paste, not just their pad paste.
-- The `pcb-step` board image and manifest name the nets of boards before KiCad 10 by their declared names instead of their numbers.
-- The `pcb-step` board image keeps copper on a KiCad 10 net named `0` on that net instead of on no net.
-- `pcb gltf export` builds the board body of a layout without `Edge.Cuts` around its zone fills, graphics, text and exact pad outlines too, so copper is no longer cut away.
-- `pcb gltf export` no longer cuts off long silkscreen labels on a layout without `Edge.Cuts`.
-- `pcb import` accepts symbol pins that have no footprint pad, such as a 24-pin USB-C symbol on a 16-pin footprint or a shield pin, and warns instead of failing. As in KiCad, the pin stays in the netlist but is not placed on the board. The generated component accepts `symbol.pin.no_pad` with a `# suppress:` comment, so `pcb build` passes, and `pcb layout --check` no longer reports the pin as a missing pad.
-- A `# suppress:` comment on a `Component()` call also suppresses findings about its KiCad symbol, which point into the symbol file, for that component only.
+- `board-array create` honors a board's non-zero Datum.
+- `pcb gltf export` draws paste drawn as graphics or text on `F.Paste` and `B.Paste`.
+- `pcb step export` and `pcb gltf export` leave vias off unused copper layers as KiCad does.
+- `pcb gltf export` names the nets of boards before KiCad 10 instead of numbering them, and keeps a KiCad 10 net named `0`.
+- `pcb gltf export` no longer cuts off copper or silkscreen when it synthesizes a missing `Edge.Cuts` outline.
+- `pcb import` keeps a symbol pin that has no footprint pad, as KiCad does, and warns instead of failing.
+- A `# suppress:` comment on a `Component()` call also suppresses its KiCad symbol findings.
 
 ## [0.4.81] - 2026-10-13
 

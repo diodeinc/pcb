@@ -669,7 +669,8 @@ pub(crate) fn decode_embedded(text: &[u8]) -> Result<Vec<u8>, Error> {
     let zstd_error = |err: &dyn std::fmt::Display| Error::Zstd(err.to_string());
     let mut input = compressed.as_slice();
     let mut out = Vec::new();
-    loop {
+    let mut decoded = false;
+    while !decoded || !input.is_empty() {
         let header = input;
         let mut decoder = match StreamingDecoder::new(&mut input) {
             Ok(decoder) => decoder,
@@ -701,10 +702,9 @@ pub(crate) fn decode_embedded(text: &[u8]) -> Result<Vec<u8>, Error> {
         {
             return Err(Error::Zstd("checksum mismatch".to_owned()));
         }
-        if input.is_empty() {
-            return Ok(out);
-        }
+        decoded = true;
     }
+    Ok(out)
 }
 
 fn base64_decode(text: &[u8]) -> Result<Vec<u8>, Error> {

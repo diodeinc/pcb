@@ -543,12 +543,14 @@ fn embedded_payloads_decode_like_the_c_zstd_decoder() {
         zstd::zstd_safe::get_frame_content_size(&unsized_),
         Ok(None)
     ));
-    // Two frames with a skippable frame between them decode as one stream.
+    // Two frames with skippable frames between and after them decode as one
+    // stream.
     let skippable = [0x50, 0x2a, 0x4d, 0x18, 3, 0, 0, 0, 1, 2, 3];
     let (head, tail) = data.split_at(data.len() / 3);
     let mut concatenated = frame(head, false);
     concatenated.extend_from_slice(&skippable);
     concatenated.extend(frame(tail, true));
+    concatenated.extend_from_slice(&skippable);
     for compressed in [&sized, &unsized_, &concatenated] {
         assert!(decode(compressed).unwrap() == data);
     }
