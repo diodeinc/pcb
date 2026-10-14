@@ -658,8 +658,9 @@ fn glob_match(pattern: &str, text: &str) -> bool {
 }
 
 /// Decode KiCad's embedded payload: base64 text (whitespace allowed) of a
-/// zstd stream. Like the C decoder, this reads every frame, skips skippable
-/// frames, and checks each frame's content size and checksum when present.
+/// zstd stream of at least one frame. Like the C decoder, this reads every
+/// frame, skips skippable frames, and checks each frame's content size and
+/// checksum when present.
 pub(crate) fn decode_embedded(text: &[u8]) -> Result<Vec<u8>, Error> {
     use ruzstd::decoding::StreamingDecoder;
     use ruzstd::decoding::errors::{FrameDecoderError, ReadFrameHeaderError};
@@ -668,7 +669,7 @@ pub(crate) fn decode_embedded(text: &[u8]) -> Result<Vec<u8>, Error> {
     let zstd_error = |err: &dyn std::fmt::Display| Error::Zstd(err.to_string());
     let mut input = compressed.as_slice();
     let mut out = Vec::new();
-    while !input.is_empty() {
+    loop {
         let header = input;
         let mut decoder = match StreamingDecoder::new(&mut input) {
             Ok(decoder) => decoder,
@@ -700,8 +701,10 @@ pub(crate) fn decode_embedded(text: &[u8]) -> Result<Vec<u8>, Error> {
         {
             return Err(Error::Zstd("checksum mismatch".to_owned()));
         }
+        if input.is_empty() {
+            return Ok(out);
+        }
     }
-    Ok(out)
 }
 
 fn base64_decode(text: &[u8]) -> Result<Vec<u8>, Error> {
