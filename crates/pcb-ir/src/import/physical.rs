@@ -209,9 +209,16 @@ pub struct PhysicalView {
 pub struct AssemblyView {
     pub terminations: Vec<PhysicalTermination>,
     pub paste_islands: Vec<PasteIsland>,
-    /// Drilled openings with their termination associations. `protection`
-    /// and source-land `lands` are not derived and stay empty.
-    pub holes: Vec<PhysicalHole>,
+    pub holes: Vec<AssemblyHole>,
+}
+
+/// A drilled opening and the termination it serves, as in [`PhysicalHole`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AssemblyHole {
+    pub id: HoleId,
+    pub plating: PlatingKind,
+    pub termination: Association<PhysicalTerminationId>,
+    pub termination_basis: Option<AssociationBasis>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -338,7 +345,7 @@ impl ImportedDesign {
     /// Derive the terminations, paste islands, and drilled openings of
     /// [`Self::physical_view`], with the same termination associations, for
     /// component assembly. No soldermask or hole-protection layer is
-    /// materialized, and openings carry no source-land links.
+    /// materialized, and openings are not linked to source lands.
     pub fn assembly_view(
         &self,
         scope: ArtworkScope,
@@ -368,7 +375,15 @@ impl ImportedDesign {
         Ok(AssemblyView {
             terminations,
             paste_islands,
-            holes,
+            holes: holes
+                .into_iter()
+                .map(|hole| AssemblyHole {
+                    id: hole.id,
+                    plating: hole.plating,
+                    termination: hole.termination,
+                    termination_basis: hole.termination_basis,
+                })
+                .collect(),
         })
     }
 
@@ -1627,7 +1642,7 @@ mod tests {
         Ipc2581::validate(&xml).unwrap();
         let mut imported = import(&xml);
         let (scope, resolution) = (ArtworkScope::Board, Resolution::default());
-        let mut full = imported.physical_view(scope, resolution).unwrap();
+        let full = imported.physical_view(scope, resolution).unwrap();
         assert!(!full.mask_openings.is_empty());
         assert!(!full.holes[0].protection.is_empty());
         assert!(full.holes[0].termination.resolved().is_some());
@@ -1636,14 +1651,17 @@ mod tests {
                 .iter()
                 .any(|island| island.termination.resolved().is_some())
         );
-        for hole in &mut full.holes {
-            hole.protection.clear();
-            hole.lands.clear();
-        }
-        let expected = format!(
-            "{:?}",
-            (&full.terminations, &full.paste_islands, &full.holes)
-        );
+        let holes = full
+            .holes
+            .iter()
+            .map(|hole| AssemblyHole {
+                id: hole.id,
+                plating: hole.plating,
+                termination: hole.termination.clone(),
+                termination_basis: hole.termination_basis,
+            })
+            .collect::<Vec<_>>();
+        let expected = format!("{:?}", (&full.terminations, &full.paste_islands, &holes));
         let narrow = |imported: &ImportedDesign| {
             let view = imported.assembly_view(scope, resolution).unwrap();
             format!("{:?}", (view.terminations, view.paste_islands, view.holes))
