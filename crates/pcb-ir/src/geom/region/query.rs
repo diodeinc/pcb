@@ -55,6 +55,94 @@ impl ContourSet {
             self.uncertainty_mm,
         )
     }
+
+    /// The deepest point of the region and its depth: the center and radius
+    /// of a largest disk inside it, so `disk_erode(t)` is non-empty exactly
+    /// for `t` below the depth.
+    ///
+    /// `mm` is the depth at `first`, a lower bound attained there; the
+    /// region's depth exceeds it by at most `precision_mm`. `second` is the
+    /// nearest boundary point. Depth is 1-Lipschitz, so a square cell can be
+    /// no deeper anywhere than at its center plus half its diagonal; cells
+    /// that could still beat the best center by more than `precision_mm` are
+    /// split, deepest first. Where the depth peaks along a ridge, as between
+    /// parallel walls, the work grows with the ridge length over
+    /// `precision_mm`: a few milliseconds for a 3 mm pad at 1 µm.
+    /// `None` for a region without filled area.
+    pub fn inradius(&self, precision_mm: f64) -> Option<Distance> {
+        struct Cell {
+            center: Point,
+            half: f64,
+            depth: f64,
+        }
+        impl Cell {
+            fn bound(&self) -> f64 {
+                self.depth + self.half * std::f64::consts::SQRT_2
+            }
+        }
+        impl PartialEq for Cell {
+            fn eq(&self, other: &Self) -> bool {
+                self.bound() == other.bound()
+            }
+        }
+        impl Eq for Cell {}
+        impl PartialOrd for Cell {
+            fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+                Some(self.cmp(other))
+            }
+        }
+        impl Ord for Cell {
+            fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+                self.bound().total_cmp(&other.bound())
+            }
+        }
+
+        let prepared = self.prepare_query();
+        let depth = |point: Point| prepared.signed_distance(point).map(|distance| -distance.mm);
+        let precision = precision_mm.max(tol::EPSILON_MM);
+        let side = self.bbox.width().min(self.bbox.height());
+        if side <= 0.0 {
+            return None;
+        }
+        let cell = |center: Point, half: f64| {
+            Some(Cell {
+                center,
+                half,
+                depth: depth(center)?,
+            })
+        };
+        let mut cells = std::collections::BinaryHeap::new();
+        let columns = (self.bbox.width() / side).ceil() as usize;
+        let rows = (self.bbox.height() / side).ceil() as usize;
+        for column in 0..columns {
+            for row in 0..rows {
+                let offset = Point::new(column as f64 + 0.5, row as f64 + 0.5) * side;
+                cells.push(cell(self.bbox.min + offset, side / 2.0)?);
+            }
+        }
+        let mut best = cell(self.bbox.center(), 0.0)?;
+        while let Some(next) = cells.pop() {
+            if next.depth > best.depth {
+                best = Cell { half: 0.0, ..next };
+            }
+            if next.bound() - best.depth <= precision {
+                break;
+            }
+            let half = next.half / 2.0;
+            for (dx, dy) in [(-1.0, -1.0), (1.0, -1.0), (-1.0, 1.0), (1.0, 1.0)] {
+                cells.push(cell(next.center + Point::new(dx, dy) * half, half)?);
+            }
+        }
+        (best.depth > 0.0).then(|| {
+            let nearest = prepared
+                .signed_distance(best.center)
+                .expect("the deepest point was measured");
+            Distance {
+                mm: best.depth,
+                ..nearest
+            }
+        })
+    }
 }
 
 impl PreparedRegion {

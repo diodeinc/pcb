@@ -154,7 +154,8 @@ impl ContourSet {
         Self::from_regularized(rings, self.resolution, self.uncertainty_mm)
     }
 
-    /// Connected components, each retaining its own hole rings.
+    /// Connected components, each retaining its own hole rings, in the same
+    /// order every time for the same region.
     pub fn connected_components(&self) -> Vec<Self> {
         simplify_shapes(self.to_rings(), FillRule::NonZero)
             .into_iter()

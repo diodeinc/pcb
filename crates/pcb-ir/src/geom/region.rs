@@ -9,6 +9,7 @@
 mod booleans;
 mod construction;
 mod decomposition;
+mod disk_area;
 mod flattening;
 mod gaps;
 mod offsets;
@@ -22,6 +23,7 @@ pub use booleans::PaintComposer;
 pub(crate) use booleans::difference_shapes;
 pub use construction::flatten_within;
 pub use decomposition::decompose_on_grid;
+pub use disk_area::{AreaBounds, DiskUnionArea};
 pub use flattening::rings_to_contours;
 pub use gaps::{DiskGapRegularization, GapRegularizationError};
 pub(crate) use gaps::{TwoSidedResidualComponent, gap_reach_mm};

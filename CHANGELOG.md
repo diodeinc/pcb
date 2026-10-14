@@ -8,6 +8,11 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added
+
+- `pcb-ir` `ContourSet::disk_union_area` bounds the area a union of disks covers of a region and the area it spills outside it, with certified lower and upper bounds that narrow with the region's accuracy budget.
+- `pcb-ir` `ContourSet::inradius` finds the deepest point of a region and its depth to a requested precision.
+
 ## [0.4.82] - 2026-10-14
 
 ### Added

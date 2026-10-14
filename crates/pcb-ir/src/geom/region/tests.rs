@@ -1067,3 +1067,117 @@ fn union_joins_a_fill_cut_along_an_edge_and_rounded_off_it() {
             .is_empty()
     );
 }
+
+#[test]
+fn disk_union_area_bounds_contain_analytic_areas() {
+    use std::f64::consts::PI;
+    let disk = |r: f64| PI * r * r;
+    // The part of a disk beyond a chord `h` from its center.
+    let segment = |r: f64, h: f64| r * r * (h / r).acos() - h * (r * r - h * h).sqrt();
+    // A slab with a hole, an island inside the hole, and a separate island.
+    let region = block(0.0, 0.0, 6.0, 4.0)
+        .difference(&block(3.0, 1.0, 5.0, 3.0))
+        .unwrap()
+        .union(&block(3.8, 1.8, 4.2, 2.2))
+        .unwrap()
+        .union(&block(8.0, 0.0, 9.0, 1.0))
+        .unwrap();
+    let r = 0.25;
+    let point = Point::new;
+    let disks = [
+        // Overlapping pair halved by the bottom edge.
+        (point(1.0, 0.0), r),
+        (point(1.3, 0.0), r),
+        // The same disk twice, wholly inside.
+        (point(1.0, 2.0), r),
+        (point(1.0, 2.0), r),
+        // Halved by the hole's edge, by the corner, and wholly outside.
+        (point(3.0, 2.0), r),
+        (point(6.0, 4.0), r),
+        (point(7.0, 2.0), r),
+        // Halved by the edge of the island inside the hole.
+        (point(4.2, 2.0), 0.15),
+        // Mostly above the separate island, reaching 0.15 into it.
+        (point(8.5, 1.1), r),
+    ];
+    let pair = 2.0 * disk(r) - 2.0 * segment(r, 0.15);
+    let covered =
+        pair / 2.0 + disk(r) + disk(r) / 2.0 + disk(r) / 4.0 + disk(0.15) / 2.0 + segment(r, 0.1);
+    let spill = pair / 2.0
+        + disk(r) / 2.0
+        + 3.0 * disk(r) / 4.0
+        + disk(r)
+        + disk(0.15) / 2.0
+        + (disk(r) - segment(r, 0.1));
+    let perimeter = 2.0 * PI * (7.0 * r + 0.15);
+
+    let mut widths = Vec::new();
+    for budget in [0.01, 1e-4] {
+        let region = region
+            .clone()
+            .rebudget(GeometryAccuracy::new(budget).unwrap())
+            .unwrap();
+        let area = region.disk_union_area(&disks).unwrap();
+        for (bounds, exact) in [(area.covered, covered), (area.spill, spill)] {
+            assert!(
+                bounds.lower <= exact && exact <= bounds.upper,
+                "{exact} outside {bounds:?} at budget {budget}"
+            );
+            assert!(bounds.upper - bounds.lower <= 2.0 * budget * perimeter);
+            widths.push(bounds.upper - bounds.lower);
+        }
+    }
+    // A hundredfold finer budget narrows the intervals about a hundredfold.
+    assert!(widths[2] * 50.0 < widths[0] && widths[3] * 50.0 < widths[1]);
+
+    let none = region.disk_union_area(&[]).unwrap();
+    assert_eq!((none.covered.upper, none.spill.upper), (0.0, 0.0));
+    assert!(region.disk_union_area(&[(point(0.0, 0.0), -1.0)]).is_err());
+}
+
+#[test]
+fn inradius_brackets_the_deepest_disk() {
+    // A square frame is deepest at its corners, where the outer walls and
+    // the hole's corner are equidistant.
+    let frame = block(0.0, 0.0, 4.0, 4.0)
+        .difference(&block(1.5, 1.5, 2.5, 2.5))
+        .unwrap();
+    let exact = 1.5 * std::f64::consts::SQRT_2 / (1.0 + std::f64::consts::SQRT_2);
+    let precision = 1e-4;
+    let deepest = frame.inradius(precision).unwrap();
+    assert!(deepest.mm <= exact && exact <= deepest.mm + precision);
+    assert!((deepest.first.distance_to(deepest.second) - deepest.mm).abs() < 1e-12);
+    assert!(!frame.disk_erode(deepest.mm - 1e-3).unwrap().is_empty());
+    assert!(frame.disk_erode(exact + 1e-3).unwrap().is_empty());
+
+    let strip = block(0.0, 0.0, 4.0, 2.0).inradius(1e-6).unwrap();
+    assert!(1.0 - 1e-6 <= strip.mm && strip.mm <= 1.0);
+    assert!(ContourSet::empty(res(0.0)).inradius(1e-3).is_none());
+}
+
+#[test]
+fn connected_components_keep_their_own_holes_in_a_stable_order() {
+    let region = block(0.0, 0.0, 10.0, 10.0)
+        .difference(&block(2.0, 2.0, 8.0, 8.0))
+        .unwrap()
+        .union(&block(4.0, 4.0, 6.0, 6.0))
+        .unwrap()
+        .union(&block(12.0, 0.0, 13.0, 1.0))
+        .unwrap();
+
+    let components = region.connected_components();
+
+    let mut shapes = components
+        .iter()
+        .map(|component| (component.ring_count(), component.area()))
+        .collect::<Vec<_>>();
+    shapes.sort_by(|left, right| left.1.total_cmp(&right.1));
+    assert_eq!(shapes, [(1, 1.0), (1, 4.0), (2, 64.0)]);
+    let again = region.connected_components();
+    assert!(
+        components
+            .iter()
+            .zip(&again)
+            .all(|(first, second)| first.rings == second.rings)
+    );
+}
