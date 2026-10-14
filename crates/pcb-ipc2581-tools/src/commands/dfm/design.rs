@@ -67,6 +67,9 @@ pub(super) struct Design<'a> {
     pub stackup: Option<PhysicalStackup>,
     pub holes: Vec<Hole>,
     pub slots: Vec<Slot>,
+    /// Widths of this Step's own slots, indexed like `slots`, prepared only
+    /// when a width rule requests them. Placed slots belong to their own Step.
+    pub slot_widths: Vec<Option<SlotWidth>>,
     pub copper_layers: Vec<CopperLayer>,
     /// One boundary index per copper layer, for clearance and enclosure
     /// queries against the Step's composed copper.
@@ -479,7 +482,7 @@ impl<'a> Design<'a> {
             Pools::HOLES | Pools::SLOTS,
             Pools::NONE,
             &mut blockers,
-            || collect_drilled(source, stackup.as_ref(), wanted.intersects(Pools::SLOTS)),
+            || collect_drilled(source, stackup.as_ref()),
         );
         blockers.extend(unusable);
         let drilled = (holes.iter().map(|hole| (hole.bbox, hole.branch)))
@@ -590,6 +593,13 @@ impl<'a> Design<'a> {
             resolution,
             conductor_boundaries,
             conductors_near,
+            slot_widths: pool(
+                wanted,
+                Pools::SLOT_WIDTHS,
+                Pools::SLOTS,
+                &mut blockers,
+                || collect_slot_widths(&slots),
+            ),
             copper_boundaries: pool(
                 wanted,
                 Pools::COPPER_BOUNDARIES,
@@ -1153,9 +1163,8 @@ pub(super) struct Slot {
     pub id: FeatureOccurrenceId,
     pub drill_span: DrillSpan,
     pub plating: PlatingKind,
-    /// Settled for the Step's own slots when slot rules are requested; a
-    /// placed slot's width is measured in the design of the Step that owns it.
-    pub width: Option<SlotWidth>,
+    /// The primitive's stated width, when the source provides one.
+    pub nominal_width_mm: Option<f64>,
     pub outline: ContourSet,
     pub provenance: SourceLocator,
     /// As for [`Hole::branch`].
@@ -1176,7 +1185,6 @@ pub(super) struct Slot {
 pub(super) struct SlotWidth {
     pub width: Distance,
     pub disk: WidthDisk,
-    pub nominal_mm: Option<f64>,
 }
 
 #[derive(Debug, Clone)]
@@ -1371,7 +1379,6 @@ pub(super) struct BoardArray {
 fn collect_drilled(
     source: Source<'_>,
     stackup: Option<&PhysicalStackup>,
-    measure_slot_width: bool,
 ) -> Result<(Vec<Hole>, Vec<Slot>, Vec<Blocker>)> {
     let Source {
         imported,
@@ -1406,31 +1413,6 @@ fn collect_drilled(
             .layer(layer_index)
             .with_context(|| format!("failed to extract drill layer '{layer_name}'"))?;
         pcb_ir::dialects::ipc::process::expand_feature_placement_groups(&mut document);
-        // A slot's width runs the whole width pipeline on its outline, so the
-        // layer's slots are measured together, in order, and only the Step's
-        // own: a placed slot's width is its own Step's to measure. Hole-only
-        // checks still retain slot outlines as cutouts, but need no widths.
-        let slot_features = document
-            .features
-            .iter()
-            .filter(|feature| feature.is_drill_like() && feature.kind == FeatureKind::Slot)
-            .collect::<Vec<_>>();
-        #[cfg(not(target_family = "wasm"))]
-        let slot_features = slot_features.into_par_iter();
-        #[cfg(target_family = "wasm")]
-        let slot_features = slot_features.into_iter();
-        let mut slot_shapes = slot_features
-            .map(|feature| {
-                let contours = document.placed_feature_contours(feature);
-                let outline = ContourSet::from_filled_contours(&contours, resolution)?;
-                let width_disk = match (measure_slot_width, source.placed(feature)) {
-                    (true, None) => min_width_disk(&outline)?,
-                    _ => None,
-                };
-                Ok((outline, width_disk))
-            })
-            .collect::<Result<Vec<_>>>()?
-            .into_iter();
         for feature in document
             .features
             .iter()
@@ -1495,9 +1477,8 @@ fn collect_drilled(
                     });
                 }
                 FeatureKind::Slot => {
-                    let (outline, width_disk) = slot_shapes
-                        .next()
-                        .expect("every slot feature of the layer was measured");
+                    let contours = document.placed_feature_contours(feature);
+                    let outline = ContourSet::from_filled_contours(&contours, resolution)?;
                     let at = format!(
                         "routed slot on layer '{layer_name}' at ({:.6}, {:.6})",
                         feature.bbox.center().x,
@@ -1510,31 +1491,10 @@ fn collect_drilled(
                         block(Pools::SLOTS, format!("{at} has unknown plating"));
                         continue;
                     }
-                    let width = match (placed, width_disk) {
-                        (Some(_), _) => None,
-                        (None, _) if !measure_slot_width => None,
-                        (None, None) => {
-                            block(Pools::SLOTS, format!("{at} has no measurable outline"));
-                            continue;
-                        }
-                        (None, Some(disk)) => {
-                            let nominal_mm = feature
-                                .shape
-                                .and_then(SimpleShape::slot_width)
-                                .filter(|width| *width > 0.0 && width.is_finite());
-                            match slot_width(nominal_mm, disk.width) {
-                                Ok(width) => Some(SlotWidth {
-                                    width,
-                                    disk,
-                                    nominal_mm,
-                                }),
-                                Err(error) => {
-                                    block(Pools::SLOTS, format!("{at} {error}"));
-                                    continue;
-                                }
-                            }
-                        }
-                    };
+                    if outline.is_empty() {
+                        block(Pools::SLOTS, format!("{at} has no filled outline"));
+                        continue;
+                    }
                     slots.push(Slot {
                         id: feature_occurrence_id(feature)
                             .context("materialized slot has no occurrence identity")?,
@@ -1545,7 +1505,10 @@ fn collect_drilled(
                             stackup,
                         ),
                         plating: feature.intent.plating,
-                        width,
+                        nominal_width_mm: feature
+                            .shape
+                            .and_then(SimpleShape::slot_width)
+                            .filter(|width| *width > 0.0 && width.is_finite()),
                         outline,
                         provenance: feature_provenance(source, layer_name, feature),
                         branch: source.branch(placed),
@@ -1581,6 +1544,31 @@ fn collect_drilled(
             .then_with(|| left.bbox.max.y.total_cmp(&right.bbox.max.y))
     });
     Ok((holes, slots, unusable))
+}
+
+fn collect_slot_widths(slots: &[Slot]) -> Result<Vec<Option<SlotWidth>>> {
+    #[cfg(not(target_family = "wasm"))]
+    let slots = slots.par_iter();
+    #[cfg(target_family = "wasm")]
+    let slots = slots.iter();
+    slots
+        .map(|slot| {
+            if slot.branch.is_some() {
+                return Ok(None);
+            }
+            let at = format!(
+                "routed slot on layer '{}' at ({:.6}, {:.6})",
+                slot.layer.name,
+                slot.bbox.center().x,
+                slot.bbox.center().y,
+            );
+            let disk = min_width_disk(&slot.outline)
+                .with_context(|| at.clone())?
+                .with_context(|| format!("{at} has no measurable outline"))?;
+            let width = slot_width(slot.nominal_width_mm, disk.width).with_context(|| at)?;
+            Ok(Some(SlotWidth { width, disk }))
+        })
+        .collect()
 }
 
 /// A slot's width: the stated primitive width when the source gives one,
@@ -2896,9 +2884,10 @@ mod tests {
             r#"<Location x="10" y="20"/>
               <Oval width="1.8" height="0.6"/>"#,
         );
-        let (_, slots, _) = collect_drilled(root(&oval, ArtworkScope::Board), None, true).unwrap();
+        let (_, slots, _) = collect_drilled(root(&oval, ArtworkScope::Board), None).unwrap();
         assert_eq!(slots.len(), 1);
-        let stated = slots[0].width.as_ref().unwrap().width;
+        let widths = collect_slot_widths(&slots).unwrap();
+        let stated = widths[0].as_ref().unwrap().width;
         assert!((stated.mm - 0.6).abs() < 1e-9);
         assert_eq!(stated.uncertainty_mm, 0.0, "a stated width is exact");
         assert!(
@@ -2918,10 +2907,10 @@ mod tests {
                 <LineDesc lineWidth="0" lineEnd="ROUND"/>
               </Outline>"#,
         );
-        let (_, slots, _) =
-            collect_drilled(root(&outline, ArtworkScope::Board), None, true).unwrap();
+        let (_, slots, _) = collect_drilled(root(&outline, ArtworkScope::Board), None).unwrap();
         assert_eq!(slots.len(), 1);
-        let width = slots[0].width.as_ref().unwrap().width;
+        let widths = collect_slot_widths(&slots).unwrap();
+        let width = widths[0].as_ref().unwrap().width;
         assert!(
             (width.mm - 0.6).abs() < 1e-8,
             "measured width was {}",

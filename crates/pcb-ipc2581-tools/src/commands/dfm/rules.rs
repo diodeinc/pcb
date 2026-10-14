@@ -198,13 +198,14 @@ pub(super) struct Semantics {
 /// union over the configured rules, so a rule set pays only for what it
 /// measures.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub(super) struct Pools(u16);
+pub(super) struct Pools(u32);
 
 impl Pools {
     pub const NONE: Self = Self(0);
     pub const STACKUP: Self = Self(1 << 0);
     pub const HOLES: Self = Self(1 << 1);
     pub const SLOTS: Self = Self(1 << 13);
+    pub const SLOT_WIDTHS: Self = Self(1 << 16);
     pub const COPPER: Self = Self(1 << 2);
     pub const CONDUCTOR_OWNERSHIP: Self = Self(1 << 3);
     pub const COPPER_BOUNDARIES: Self = Self(1 << 4);
@@ -347,7 +348,7 @@ impl RuleKind {
                 finding_title: format!("{} slot is below minimum width", slot_label(plating)),
                 quantity_label: format!("{} routed slot width", slot_label(plating)),
                 witness_roles: Some(["first_slot_boundary", "second_slot_boundary"]),
-                pools: Pools::SLOTS,
+                pools: Pools::SLOTS | Pools::SLOT_WIDTHS,
             },
             Self::HolePairClearance(first, second) => Semantics {
                 subject: "hole",

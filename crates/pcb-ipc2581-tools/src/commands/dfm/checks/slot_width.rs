@@ -1,12 +1,12 @@
 //! Minimum routed slot width.
 //!
-//! A routed slot's width is fixed at extraction ([`Slot::width`]): the
+//! A routed slot's width is prepared in [`Design::slot_widths`]: the
 //! stated primitive width when the source gives one — exact, and verified
 //! against the materialized outline — and otherwise the outline's narrowest
 //! local width, the separation of its two facing walls. The check is the
 //! pointwise predicate `wₛ ≥ W_min` for every slot `s`.
 
-use crate::commands::dfm::design::{Design, Slot};
+use crate::commands::dfm::design::Design;
 use crate::commands::dfm::pdk::SlotPlating;
 use crate::commands::dfm::report::{Evidence, MeasurementKind};
 use pcb_ir::geom::BBox;
@@ -20,16 +20,15 @@ pub(super) fn evaluate(
     plating: SlotPlating,
     design: &Design,
 ) -> anyhow::Result<Evaluation> {
-    let slots = super::slots_of_plating(design, plating)
-        .filter_map(|(_, slot)| Some((slot, slot.width.as_ref()?)))
-        .collect::<Vec<_>>();
-    let measured = slots
-        .iter()
-        .map(|&(slot, width): &(&Slot, _)| {
+    let measured = super::slots_of_plating(design, plating)
+        .map(|(index, slot)| {
+            let width = design.slot_widths[index]
+                .as_ref()
+                .expect("the width pool measures every own slot");
             let subject = slot_subject(design, slot, "offender");
             let sites = if !violates(&width.width, limit_mm) {
                 Vec::new()
-            } else if let Some(nominal) = width.nominal_mm {
+            } else if let Some(nominal) = slot.nominal_width_mm {
                 let center = width.disk.center;
                 let radial = width.disk.width.first - center;
                 let direction = radial / radial.length();
@@ -64,9 +63,9 @@ pub(super) fn evaluate(
             layers: vec![slot.layer.clone()],
             subjects: vec![subject],
             sites,
-        })}).collect::<anyhow::Result<_>>()?;
+        })}).collect::<anyhow::Result<Vec<_>>>()?;
     Ok(Evaluation {
-        checked: slots.len(),
+        checked: measured.len(),
         measured,
     })
 }
