@@ -926,7 +926,7 @@ fn a_second_pin_for_a_crossing_net_goes_and_the_net_keeps_its_parent_labels() {
         })
         .unwrap();
     older.pages[0].items.push(SchItem::Label(Label::new(
-        "older-parent-label",
+        deterministic_uuid("zener:module-parent-driver:ALIAS:B:SIGNAL"),
         "SIGNAL",
         pin_b,
     )));
@@ -1029,6 +1029,46 @@ fn a_net_symbol_at_a_removed_pin_goes_with_it() {
     let local_again = reapply(&crossing, &local);
     assert!(sheet_pin_names(&local_again).is_empty());
     assert_eq!(symbols_at(&local_again, pin), 0);
+}
+
+#[test]
+fn a_users_symbol_on_a_removed_pin_stays() {
+    let local = common::compile_fixture("hierarchy", "sheet_power_local.zen");
+    let external = common::compile_fixture("hierarchy", "sheet_power_external.zen");
+    let mut crossing = reapply(&create(&local, "SheetPower.kicad_sch"), &external);
+
+    // The user places their own VCC symbol right on the INPUT pin.
+    let mut user = crossing.pages[0]
+        .items
+        .iter()
+        .find_map(|item| match item {
+            SchItem::Symbol(symbol) if symbol.field_value("Value") == Some("VCC") => {
+                Some(symbol.clone())
+            }
+            _ => None,
+        })
+        .unwrap();
+    let pin = generated_sheet(&crossing).pins[0].at;
+    let definition = crossing.pages[0]
+        .library
+        .definitions
+        .get(user.library_key())
+        .unwrap()
+        .clone();
+    let offset = definition.placed_pins(&user).unwrap()[0].point;
+    user.at = Point::new(user.at.x + pin.x - offset.x, user.at.y + pin.y - offset.y);
+    user.id = "user-vcc".to_string();
+    user.fields.get_mut("Reference").unwrap().value = "#PWR_USER".to_string();
+    crossing.pages[0].items.push(SchItem::Symbol(user));
+
+    let local_again = reapply(&crossing, &local);
+    assert!(sheet_pin_names(&local_again).is_empty());
+    assert!(
+        local_again.pages[0]
+            .items
+            .iter()
+            .any(|item| matches!(item, SchItem::Symbol(symbol) if symbol.id == "user-vcc"))
+    );
 }
 
 #[test]

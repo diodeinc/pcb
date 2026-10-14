@@ -1057,10 +1057,10 @@ fn module_interface(
 /// A pin is pcb's while its id is the generated id for its own name; the user
 /// owns a pin they renamed or wired on the parent page, and the pins of a
 /// sheet whose module still has symbols on the parent page. pcb removes its
-/// own pins that
-/// the interface no longer has, with the labels and net symbols attached at
-/// them on the parent page and, once the net no longer leaves the module, the
-/// parent page's local labels for the net. The module page's hierarchical
+/// own pins that the interface no longer has, with the label or net symbol it
+/// placed at each on the parent page and, once the net no longer leaves the
+/// module, the parent page's local labels for the net; a label or symbol the
+/// user attached at the pin stays. The module page's hierarchical
 /// labels for a removed pin become the page's own driver for the net, or go
 /// when the port is gone. A port that newly crosses gets a pin, with its
 /// parent-page driver, where the pin, its label and any growth of the sheet
@@ -1173,22 +1173,44 @@ fn sync_generated_sheet_pins(
                 .as_ref()
                 .is_some_and(|net_name| !interface.contains_key(net_name));
             let page = &document.pages[parent_page];
+            // The pin's own driver is the label or net symbol pcb placed for
+            // it, named for its net: the port's net when it still has one,
+            // else the net the driver itself names. Anything else attached at
+            // the pin is the user's and stays.
+            let generated_driver = |id: &str, named: &str| {
+                net_name
+                    .iter()
+                    .map(String::as_str)
+                    .chain([named])
+                    .any(|net_name| {
+                        let key = format!(
+                            "zener:module-parent-driver:{}:{port_name}:{net_name}",
+                            module.path
+                        );
+                        is_deterministic_id(id, &key, page.items.len())
+                    })
+            };
             let attached = page
                 .items
                 .iter()
                 .map(|item| match item {
                     SchItem::Label(label) => {
-                        points_connect(label.at, at)
+                        (points_connect(label.at, at) && generated_driver(&label.id, &label.text))
                             || (left_module
                                 && label.kind == LabelKind::Local
                                 && net_name.as_ref() == Some(&label.text))
                     }
-                    SchItem::Symbol(symbol) if symbol.field_value("Path").is_none() => page
-                        .library
-                        .definitions
-                        .get(symbol.library_key())
-                        .and_then(|definition| definition.placed_pins(symbol).ok())
-                        .is_some_and(|pins| pins.iter().any(|pin| points_connect(pin.point, at))),
+                    SchItem::Symbol(symbol) if symbol.field_value("Path").is_none() => {
+                        generated_driver(&symbol.id, symbol.field_value("Value").unwrap_or(""))
+                            && page
+                                .library
+                                .definitions
+                                .get(symbol.library_key())
+                                .and_then(|definition| definition.placed_pins(symbol).ok())
+                                .is_some_and(|pins| {
+                                    pins.iter().any(|pin| points_connect(pin.point, at))
+                                })
+                    }
                     _ => false,
                 })
                 .collect::<Vec<_>>();
@@ -3905,6 +3927,13 @@ fn contains_id(document: &SchDocument, id: &str) -> bool {
         .pages
         .iter()
         .any(|page| page.items.iter().any(|item| item.id() == Some(id)))
+}
+
+/// Whether `id` is the deterministic id for `key`, or one of the first
+/// `collisions` ids `available_deterministic_id` would mint for it.
+fn is_deterministic_id(id: &str, key: &str, collisions: usize) -> bool {
+    id == deterministic_uuid(key)
+        || (1..=collisions).any(|index| id == deterministic_uuid(format!("{key}:{index}")))
 }
 
 fn available_deterministic_id(document: &SchDocument, key: &str) -> String {

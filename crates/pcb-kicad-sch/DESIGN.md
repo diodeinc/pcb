@@ -31,9 +31,10 @@ or stop leaving the module and as ports are renamed or removed. A pin is pcb's
 while its id is the generated id for its own name; a pin the user renamed or
 wired on the parent page, and the pins of a sheet whose module still has
 symbols on the parent page, are the user's. pcb removes its own pins that the
-interface no longer has, with the labels and net symbols attached at them on
+interface no longer has, with the label or net symbol it placed at each on
 the parent page and, once the net no longer leaves the module, the parent
-page's local labels for the net. The module page's hierarchical labels for a
+page's local labels for the net; a label or symbol the user attached at the
+pin stays. The module page's hierarchical labels for a
 removed pin become the page's own driver for the net, or go when the port is
 gone. A newly crossing port gets a pin and parent driver where the pin, its
 label and any growth of the sheet clear the page's other items, and the module
