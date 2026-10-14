@@ -194,10 +194,7 @@ pub fn build_report(
             let mut paste_islands = physical
                 .paste_islands
                 .iter()
-                .filter(|island| {
-                    island.termination_basis == Some(PhysicalAssociationBasis::SourceIdentity)
-                        && island.termination.resolved() == Some(&termination.id)
-                })
+                .filter(|island| island.termination.resolved() == Some(&termination.id))
                 .map(|island| report::PasteEvidence {
                     layer: imported
                         .resolve(imported.layer_definitions[island.layer.0 as usize].name)
@@ -310,9 +307,7 @@ pub fn build_report(
                 exactly_linked_to_termination: physical
                     .paste_islands
                     .iter()
-                    .filter(|island| {
-                        island.termination_basis == Some(PhysicalAssociationBasis::SourceIdentity)
-                    })
+                    .filter(|island| island.termination.resolved().is_some())
                     .count() as u64,
                 ..Default::default()
             },

@@ -139,7 +139,7 @@ pub struct PasteIsland {
     /// The electrical termination this paste feeds. IPC component, pin,
     /// padstack, and location identity decides when it names a termination.
     /// Otherwise the island links to the one termination whose source lands
-    /// it overlaps; lands of no termination do not count. When the paste
+    /// on its mounting side it overlaps; lands of no termination do not count. When the paste
     /// names a component, only that component's terminations count, and
     /// overlapping only another component's is `Conflicting`.
     pub termination: Association<PhysicalTerminationId>,
@@ -511,26 +511,7 @@ impl ImportedDesign {
             })
             .collect::<HashMap<_, _>>();
         // Source lands, so routing and clears cannot hide the land under paste.
-        let land_by_id = source_lands
-            .iter()
-            .map(|land| (land.id, land))
-            .collect::<HashMap<_, _>>();
-        let termination_lands = terminations
-            .iter()
-            .flat_map(|termination| {
-                let land_by_id = &land_by_id;
-                termination
-                    .lands
-                    .iter()
-                    .map(move |land| (termination.id, land_by_id[land]))
-            })
-            .collect::<Vec<_>>();
-        let land_bounds = BBoxIndex::new(
-            termination_lands
-                .iter()
-                .map(|(_, land)| land.image.bbox())
-                .collect(),
-        );
+        let termination_lands = TerminationIndex::new(self, source_lands, terminations);
         let mut islands = Vec::new();
         for (layer_index, layer) in self.layer_definitions.iter().enumerate() {
             if !matches!(
@@ -575,13 +556,13 @@ impl ImportedDesign {
                         )
                     } else {
                         let mut overlapped = BTreeSet::new();
-                        for entry in land_bounds.query(image.bbox()) {
-                            let (termination, land) = termination_lands[entry];
+                        for entry in termination_lands.lands_meeting(image.bbox()) {
+                            let land = entry.land;
                             if land.board == board
                                 && (side == Side::None || land.side == side)
                                 && land.image.intersection(&image)?.area() > tol::REGION_MM.powi(2)
                             {
-                                overlapped.insert(termination);
+                                overlapped.insert(entry.termination);
                             }
                         }
                         // Paste naming a component links only to its own
