@@ -568,51 +568,42 @@ impl ImportedDesign {
                             .copied()
                     });
                 for (island, image) in image.connected_components().into_iter().enumerate() {
-                    let (termination, termination_basis) = match identity {
-                        Some(termination) => (
+                    let (termination, termination_basis) = if let Some(termination) = identity {
+                        (
                             Association::Resolved(termination),
                             Some(AssociationBasis::SourceIdentity),
-                        ),
-                        None => {
-                            let mut candidates = BTreeSet::new();
-                            for entry in land_bounds.query(image.bbox()) {
-                                let (termination, land) = termination_lands[entry];
-                                if land.board == board
-                                    && (side == Side::None || land.side == side)
-                                    && !candidates.contains(&termination)
-                                    && land.image.intersection(&image)?.area()
-                                        > tol::REGION_MM.powi(2)
-                                {
-                                    candidates.insert(termination);
-                                }
-                            }
-                            // Paste naming a component links only to its own
-                            // terminations; lands of another one contradict it.
-                            let (mut own, others) =
-                                candidates
-                                    .into_iter()
-                                    .partition::<Vec<_>, _>(|termination| {
-                                        component.resolved().is_none_or(|component| {
-                                            terminations[termination.0 as usize].component
-                                                == *component
-                                        })
-                                    });
-                            match (own.len(), others.is_empty()) {
-                                (0, true) => (Association::Unresolved, None),
-                                (0, false) => (
-                                    Association::Conflicting(others),
-                                    Some(AssociationBasis::ExactGeometry),
-                                ),
-                                (1, _) => (
-                                    Association::Resolved(own.remove(0)),
-                                    Some(AssociationBasis::ExactGeometry),
-                                ),
-                                _ => (
-                                    Association::Ambiguous(own),
-                                    Some(AssociationBasis::ExactGeometry),
-                                ),
+                        )
+                    } else {
+                        let mut overlapped = BTreeSet::new();
+                        for entry in land_bounds.query(image.bbox()) {
+                            let (termination, land) = termination_lands[entry];
+                            if land.board == board
+                                && (side == Side::None || land.side == side)
+                                && land.image.intersection(&image)?.area() > tol::REGION_MM.powi(2)
+                            {
+                                overlapped.insert(termination);
                             }
                         }
+                        // Paste naming a component links only to its own
+                        // terminations; lands of another one contradict it.
+                        let mut own = overlapped
+                            .iter()
+                            .copied()
+                            .filter(|termination| {
+                                component.resolved().is_none_or(|component| {
+                                    terminations[termination.0 as usize].component == *component
+                                })
+                            })
+                            .collect::<Vec<_>>();
+                        let association = match own.len() {
+                            0 if overlapped.is_empty() => Association::Unresolved,
+                            0 => Association::Conflicting(overlapped.into_iter().collect()),
+                            1 => Association::Resolved(own.remove(0)),
+                            _ => Association::Ambiguous(own),
+                        };
+                        let basis = (association != Association::Unresolved)
+                            .then_some(AssociationBasis::ExactGeometry);
+                        (association, basis)
                     };
                     islands.push(PasteIsland {
                         id: PasteIslandId {
