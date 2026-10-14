@@ -479,7 +479,7 @@ impl<'a> Design<'a> {
             Pools::HOLES | Pools::SLOTS,
             Pools::NONE,
             &mut blockers,
-            || collect_drilled(source, stackup.as_ref()),
+            || collect_drilled(source, stackup.as_ref(), wanted.intersects(Pools::SLOTS)),
         );
         blockers.extend(unusable);
         let drilled = (holes.iter().map(|hole| (hole.bbox, hole.branch)))
@@ -1153,8 +1153,8 @@ pub(super) struct Slot {
     pub id: FeatureOccurrenceId,
     pub drill_span: DrillSpan,
     pub plating: PlatingKind,
-    /// Settled for the Step's own slots; a placed slot's width is measured in
-    /// the design of the Step that owns it.
+    /// Settled for the Step's own slots when slot rules are requested; a
+    /// placed slot's width is measured in the design of the Step that owns it.
     pub width: Option<SlotWidth>,
     pub outline: ContourSet,
     pub provenance: SourceLocator,
@@ -1371,6 +1371,7 @@ pub(super) struct BoardArray {
 fn collect_drilled(
     source: Source<'_>,
     stackup: Option<&PhysicalStackup>,
+    measure_slot_width: bool,
 ) -> Result<(Vec<Hole>, Vec<Slot>, Vec<Blocker>)> {
     let Source {
         imported,
@@ -1407,7 +1408,8 @@ fn collect_drilled(
         pcb_ir::dialects::ipc::process::expand_feature_placement_groups(&mut document);
         // A slot's width runs the whole width pipeline on its outline, so the
         // layer's slots are measured together, in order, and only the Step's
-        // own: a placed slot's width is its own Step's to measure.
+        // own: a placed slot's width is its own Step's to measure. Hole-only
+        // checks still retain slot outlines as cutouts, but need no widths.
         let slot_features = document
             .features
             .iter()
@@ -1421,9 +1423,9 @@ fn collect_drilled(
             .map(|feature| {
                 let contours = document.placed_feature_contours(feature);
                 let outline = ContourSet::from_filled_contours(&contours, resolution)?;
-                let width_disk = match source.placed(feature) {
-                    None => min_width_disk(&outline)?,
-                    Some(_) => None,
+                let width_disk = match (measure_slot_width, source.placed(feature)) {
+                    (true, None) => min_width_disk(&outline)?,
+                    _ => None,
                 };
                 Ok((outline, width_disk))
             })
@@ -1510,6 +1512,7 @@ fn collect_drilled(
                     }
                     let width = match (placed, width_disk) {
                         (Some(_), _) => None,
+                        (None, _) if !measure_slot_width => None,
                         (None, None) => {
                             block(Pools::SLOTS, format!("{at} has no measurable outline"));
                             continue;
@@ -2893,7 +2896,7 @@ mod tests {
             r#"<Location x="10" y="20"/>
               <Oval width="1.8" height="0.6"/>"#,
         );
-        let (_, slots, _) = collect_drilled(root(&oval, ArtworkScope::Board), None).unwrap();
+        let (_, slots, _) = collect_drilled(root(&oval, ArtworkScope::Board), None, true).unwrap();
         assert_eq!(slots.len(), 1);
         let stated = slots[0].width.as_ref().unwrap().width;
         assert!((stated.mm - 0.6).abs() < 1e-9);
@@ -2915,7 +2918,8 @@ mod tests {
                 <LineDesc lineWidth="0" lineEnd="ROUND"/>
               </Outline>"#,
         );
-        let (_, slots, _) = collect_drilled(root(&outline, ArtworkScope::Board), None).unwrap();
+        let (_, slots, _) =
+            collect_drilled(root(&outline, ArtworkScope::Board), None, true).unwrap();
         assert_eq!(slots.len(), 1);
         let width = slots[0].width.as_ref().unwrap().width;
         assert!(

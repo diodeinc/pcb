@@ -756,15 +756,22 @@ pub fn thin_gaps_reach_mm(min_gap_mm: f64, resolution: Resolution) -> f64 {
 }
 
 /// The narrowest local width of a filled region: the least separation of
-/// any two facing boundary branches. An opening wide enough to erase the
-/// whole region makes every piece of it a candidate. `None` when no two
-/// branches face each other (an empty region, or a single point).
+/// any two facing boundary branches. The whole filled region is a candidate,
+/// as it would be after an opening wide enough to erase it. `None` when no
+/// two branches face each other (an empty region, or a single point).
 pub fn min_width_disk(region: &ContourSet) -> Result<Option<WidthDisk>, AccuracyError> {
-    let erase_all = 2.0 * region.bbox.width().max(region.bbox.height());
-    Ok(thin_features(region, erase_all)?
-        .into_iter()
-        .map(|piece| piece.disk)
-        .min_by(|left, right| left.width.mm.total_cmp(&right.width.mm)))
+    // No inscribed disk can be wider than the smaller bounding-box span.
+    // Leave room for both boundary uncertainties and the preparation budget
+    // so every measurable disk survives pieces' strict radius clip.
+    let maximum_width = region.bbox.width().min(region.bbox.height())
+        + 2.0 * (region.uncertainty_mm + region.budget().max_error_mm());
+    Ok(pieces(
+        region.material_width_components(maximum_width)?,
+        maximum_width,
+    )
+    .into_iter()
+    .map(|piece| piece.disk)
+    .min_by(|left, right| left.width.mm.total_cmp(&right.width.mm)))
 }
 
 fn bits(point: Point) -> [u64; 2] {
@@ -1540,6 +1547,58 @@ mod tests {
         let plate = rect_region(0.0, 0.0, 10.0, 3.0);
         assert!((min_width(&plate).unwrap().mm - 3.0).abs() < 1e-9);
         assert!(min_width(&ContourSet::empty(res(tol::REGION_MM))).is_none());
+
+        let mut uncertain_plate = plate;
+        uncertain_plate.uncertainty_mm = 0.004;
+        let width = min_width(&uncertain_plate).unwrap();
+        assert!((width.mm - 3.0).abs() < 1e-9);
+        assert!((width.uncertainty_mm - 0.008).abs() < 1e-9);
+    }
+
+    #[test]
+    fn min_width_of_densely_tessellated_slot_retains_facet_accuracy() {
+        // Like PI0004's routed slots, but generated rather than retaining a
+        // private board. The semicircle facets have a known inradius, with
+        // at most half a source-grid diagonal of rounding at either wall;
+        // neither the nominal diameter nor the bounds is the measured width.
+        let radius = 0.675;
+        let half_straight = 0.65;
+        let intervals = 917;
+        let ring = [0.0, std::f64::consts::PI]
+            .into_iter()
+            .flat_map(|start| {
+                (0..=intervals).map(move |i| {
+                    let angle = start + std::f64::consts::PI * i as f64 / intervals as f64;
+                    let center_y = if start == 0.0 {
+                        half_straight
+                    } else {
+                        -half_straight
+                    };
+                    let point = [
+                        86.0336 + radius * angle.cos(),
+                        -38.773252 + center_y + radius * angle.sin(),
+                    ];
+                    point.map(|value| (value / tol::SOURCE_GRID_MM).round() * tol::SOURCE_GRID_MM)
+                })
+            })
+            .collect();
+        let region =
+            ContourSet::from_rings(vec![ring], FillRule::NonZero, Resolution::default()).unwrap();
+        let expected_radius = radius * (std::f64::consts::PI / (2.0 * intervals as f64)).cos();
+        let disk = min_width_disk(&region)
+            .unwrap()
+            .expect("a slot has facing walls");
+        let rounding = std::f64::consts::SQRT_2 * tol::SOURCE_GRID_MM;
+        assert!(
+            (disk.radius_mm - expected_radius).abs() < rounding / 2.0,
+            "{disk:?}"
+        );
+        assert!((disk.width.mm - 2.0 * expected_radius).abs() < rounding);
+        for contact in [disk.width.first, disk.width.second] {
+            assert!((disk.center.distance_to(contact) - disk.radius_mm).abs() < 1e-9);
+        }
+        let clearance = region.prepare_query().signed_distance(disk.center).unwrap();
+        assert!((clearance.mm + disk.radius_mm).abs() < 1e-9);
     }
 
     #[test]

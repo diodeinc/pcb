@@ -334,6 +334,25 @@ impl ContourSet {
         two_sided_gap_residual(self, &closing_residual(self, radius)?).checked()
     }
 
+    /// Facing-wall axes throughout the filled material, without constructing
+    /// an opening residue. `minimum_mm` must match the downstream radius clip.
+    /// A limit-free minimum-width query uses the whole region as its candidate.
+    pub(crate) fn material_width_components(
+        &self,
+        minimum_mm: f64,
+    ) -> Result<Vec<TwoSidedResidualComponent>, AccuracyError> {
+        if self.is_empty() {
+            return Ok(Vec::new());
+        }
+        self.budget().check(self.uncertainty_mm)?;
+        Ok(two_sided_residual_components(
+            self,
+            self,
+            minimum_mm / 2.0,
+            minimum_mm,
+        ))
+    }
+
     /// Connected material residues of the opening by `radius` whose local
     /// width can be under `width_mm`, with the local width of each.
     /// `minimum_mm` is the reported acceptance threshold the downstream
@@ -666,51 +685,55 @@ fn component_axis(
     let reachable = reachable.as_slice();
     let candidate_diameter = 2.0 * reach + error;
 
-    // Passing wall pairs, in first-major order. Validation is the expensive
-    // part; it runs in parallel below while preserving this order exactly.
-    let passing = sites
-        .iter()
-        .enumerate()
-        .filter(|&(first, _)| reachable[first])
-        .flat_map(|(first, &site)| {
-            let wall = &segments[site];
-            boundary
-                .segment_ids_near(wall.start, wall.end, candidate_diameter)
-                .into_iter()
-                .filter_map(|id| sites.binary_search(&id).ok())
-                .filter(move |&second| second > first && reachable[second])
-                .map(|second| &segments[sites[second]])
-                .filter(move |partner| {
-                    !same_wall(wall, partner)
-                        && dist::segments(wall.start, wall.end, partner.start, partner.end).0
-                            <= candidate_diameter
-                })
-                .map(move |partner| ((wall.start, wall.end), (partner.start, partner.end)))
-        })
-        .collect::<Vec<_>>();
-    // Validate pairs in parallel; the ordered collect keeps axis order
-    // identical to the sequential loop. Rayon has no threads on wasm, so the
-    // wasm target below runs the same closure sequentially.
-    let validate = |(first_wall, second_wall): ((Point, Point), (Point, Point))| {
-        WidthAxis::between(first_wall, second_wall, component.bounds())
+    // Validate one first wall's partners at a time, retaining only their
+    // axes, not a quadratic list of wall pairs and empty validation results.
+    // Ordered parallel collection preserves first-major axis order on both
+    // native and wasm targets.
+    let validate = |(first, &site): (usize, &usize)| {
+        if !reachable[first] {
+            return Vec::new();
+        }
+        let wall = &segments[site];
+        boundary
+            .segment_ids_near(wall.start, wall.end, candidate_diameter)
             .into_iter()
-            .flat_map(|axis| {
-                axis.in_region_with_contact_index(
-                    component,
-                    complete_boundary,
-                    radius_cap,
-                    contact_index,
+            .filter_map(|id| sites.binary_search(&id).ok())
+            .filter(|&second| second > first && reachable[second])
+            .map(|second| &segments[sites[second]])
+            .filter(|partner| {
+                !same_wall(wall, partner)
+                    && dist::segments(wall.start, wall.end, partner.start, partner.end).0
+                        <= candidate_diameter
+            })
+            .flat_map(|partner| {
+                WidthAxis::between(
+                    (wall.start, wall.end),
+                    (partner.start, partner.end),
+                    component.bounds(),
                 )
+                .into_iter()
+                .flat_map(|axis| {
+                    axis.in_region_with_contact_index(
+                        component,
+                        complete_boundary,
+                        radius_cap,
+                        contact_index,
+                    )
+                })
             })
             .collect::<Vec<_>>()
     };
     #[cfg(not(target_family = "wasm"))]
     let validated = {
         use rayon::prelude::*;
-        passing.into_par_iter().map(validate).collect::<Vec<_>>()
+        sites
+            .par_iter()
+            .enumerate()
+            .map(validate)
+            .collect::<Vec<_>>()
     };
     #[cfg(target_family = "wasm")]
-    let validated = passing.into_iter().map(validate).collect::<Vec<_>>();
+    let validated = sites.iter().enumerate().map(validate).collect::<Vec<_>>();
     validated.into_iter().flatten().collect()
 }
 
