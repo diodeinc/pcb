@@ -9,7 +9,6 @@
 mod booleans;
 mod construction;
 mod decomposition;
-mod disk_area;
 mod flattening;
 mod gaps;
 mod offsets;
@@ -23,7 +22,6 @@ pub use booleans::PaintComposer;
 pub(crate) use booleans::difference_shapes;
 pub use construction::flatten_within;
 pub use decomposition::decompose_on_grid;
-pub use disk_area::{AreaBounds, DiskUnionArea};
 pub use flattening::rings_to_contours;
 pub use gaps::{DiskGapRegularization, GapRegularizationError};
 pub(crate) use gaps::{TwoSidedResidualComponent, gap_reach_mm};
@@ -159,6 +157,13 @@ pub fn rings_area(rings: &[Ring]) -> f64 {
     rings.iter().map(ring_signed_area).sum::<f64>().abs()
 }
 
+/// A closed interval that contains an area, in mm².
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct AreaBounds {
+    pub lower: f64,
+    pub upper: f64,
+}
+
 /// Regularized filled planar point set.
 ///
 /// A `ContourSet` is always in canonical form: rings are regularized
@@ -260,6 +265,35 @@ impl ContourSet {
     /// Net enclosed area.
     pub fn area(&self) -> f64 {
         self.rings().map(signed_area_of).sum::<f64>().abs()
+    }
+
+    /// Bounds on the area of the source this region was prepared from.
+    ///
+    /// Every point of the boundary lies within `uncertainty_mm` of the
+    /// source boundary, so the two regions differ only within a band that
+    /// wide around the edges: each edge's stadium, plus the shoelace sum's
+    /// own rounding per vertex. A source feature thinner than the overlay
+    /// lattice that a boolean erased has no edge left to charge.
+    pub fn area_bounds(&self) -> AreaBounds {
+        let delta = self.uncertainty_mm;
+        let band = self
+            .bounded_rings()
+            .map(|(ring, bounds)| {
+                let extent = bounds.width().max(bounds.height());
+                edges_of(ring)
+                    .map(|(start, end)| {
+                        2.0 * delta * (start.distance_to(end) + 2.0 * delta)
+                            + std::f64::consts::PI * delta * delta
+                            + 8.0 * f64::EPSILON * extent * extent
+                    })
+                    .sum::<f64>()
+            })
+            .sum::<f64>();
+        let area = self.area();
+        AreaBounds {
+            lower: (area - band).max(0.0),
+            upper: area + band,
+        }
     }
 
     /// Portions of `start..end` the region covers, in query direction. The

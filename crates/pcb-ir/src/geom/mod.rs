@@ -32,8 +32,8 @@ pub use path::{ContourBuf, PathCmd, PathOp, Segment};
 pub use pattern::{StrokePatternMark, stroke_pattern_marks};
 pub use point::{Mirror, Point};
 pub use region::{
-    AreaBounds, ContourSet, DiskGapRegularization, DiskUnionArea, GapRegularizationError,
-    PaintComposer, PreparedRegion, Ring,
+    AreaBounds, ContourSet, DiskGapRegularization, GapRegularizationError, PaintComposer,
+    PreparedRegion, Ring,
 };
 pub(crate) use store::validate_bbox;
 pub use store::{Contour, Path, PathArena, Span};

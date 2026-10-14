@@ -1068,8 +1068,27 @@ fn union_joins_a_fill_cut_along_an_edge_and_rounded_off_it() {
     );
 }
 
+/// Bounds on the area a union of disks covers of a region and spills
+/// outside it, the way jet measures paste dots.
+fn coverage(region: &ContourSet, disks: &[(Point, f64)]) -> [AreaBounds; 2] {
+    let circles = disks
+        .iter()
+        .map(|&(center, radius)| {
+            shapes::circle(2.0 * radius)
+                .unwrap()
+                .transformed(Affine2::translation(center))
+        })
+        .collect::<Vec<_>>();
+    let disks =
+        ContourSet::from_contours(&circles, FillRule::NonZero, region.resolution.strict()).unwrap();
+    [
+        disks.intersection(region).unwrap().area_bounds(),
+        disks.difference(region).unwrap().area_bounds(),
+    ]
+}
+
 #[test]
-fn disk_union_area_bounds_contain_analytic_areas() {
+fn area_bounds_of_disk_booleans_contain_analytic_areas() {
     use std::f64::consts::PI;
     let disk = |r: f64| PI * r * r;
     // The part of a disk beyond a chord `h` from its center.
@@ -1117,8 +1136,8 @@ fn disk_union_area_bounds_contain_analytic_areas() {
             .clone()
             .rebudget(GeometryAccuracy::new(budget).unwrap())
             .unwrap();
-        let area = region.disk_union_area(&disks).unwrap();
-        for (bounds, exact) in [(area.covered, covered), (area.spill, spill)] {
+        let area = coverage(&region, &disks);
+        for (bounds, exact) in [(area[0], covered), (area[1], spill)] {
             assert!(
                 bounds.lower <= exact && exact <= bounds.upper,
                 "{exact} outside {bounds:?} at budget {budget}"
@@ -1129,24 +1148,13 @@ fn disk_union_area_bounds_contain_analytic_areas() {
     }
     // A hundredfold finer budget narrows the intervals about a hundredfold.
     assert!(widths[2] * 50.0 < widths[0] && widths[3] * 50.0 < widths[1]);
-
-    let none = region.disk_union_area(&[]).unwrap();
-    assert_eq!((none.covered.upper, none.spill.upper), (0.0, 0.0));
-    assert!(region.disk_union_area(&[(point(0.0, 0.0), -1.0)]).is_err());
-
-    // A sliver narrower than the overlay lattice vanishes from the result
-    // but not from the bounds.
-    let sliver = ContourSet::rectangle(rect(0.5, 0.0, 0.5 + 1e-16, 1.0), res(0.0));
-    let exact = 0.5 * (sliver.bbox.width());
-    let area = sliver.disk_union_area(&[(point(0.5, 0.5), r)]).unwrap();
-    assert!(exact > 0.0 && area.covered.lower <= exact && exact <= area.covered.upper);
 }
 
 #[test]
-fn disk_union_area_bounds_hold_for_the_region_source() {
+fn area_bounds_hold_for_the_region_source() {
     // Strips cross one disk many times, so most of what the bounds must
     // allow for is where the source may lie off the region's edges.
-    let uncertainty = 0.004;
+    let uncertainty = 0.009;
     let strips = |grow: f64| {
         (-9..=9).map(move |k| (k as f64 * 0.1 - 0.025 - grow, k as f64 * 0.1 + 0.025 + grow))
     };
@@ -1161,56 +1169,23 @@ fn disk_union_area_bounds_hold_for_the_region_source() {
         let x = x.clamp(-1.0, 1.0);
         x * (1.0 - x * x).sqrt() + x.asin()
     };
-    let area = region.disk_union_area(&[(Point::ZERO, 1.0)]).unwrap();
+    let area = coverage(&region, &[(Point::ZERO, 1.0)]);
     for grow in [-uncertainty, 0.0, uncertainty] {
         let covered = strips(grow)
             .map(|(left, right)| primitive(right) - primitive(left))
             .sum::<f64>();
         let spill = std::f64::consts::PI - covered;
         assert!(
-            area.covered.lower <= covered && covered <= area.covered.upper,
+            area[0].lower <= covered && covered <= area[0].upper,
             "{grow}: {covered} outside {:?}",
-            area.covered
+            area[0]
         );
         assert!(
-            area.spill.lower <= spill && spill <= area.spill.upper,
+            area[1].lower <= spill && spill <= area[1].upper,
             "{grow}: {spill} outside {:?}",
-            area.spill
+            area[1]
         );
     }
-}
-
-#[test]
-fn inradius_brackets_the_deepest_disk() {
-    // A square frame is deepest at its corners, where the outer walls and
-    // the hole's corner are equidistant.
-    let frame = block(0.0, 0.0, 4.0, 4.0)
-        .difference(&block(1.5, 1.5, 2.5, 2.5))
-        .unwrap();
-    let exact = 1.5 * std::f64::consts::SQRT_2 / (1.0 + std::f64::consts::SQRT_2);
-    let precision = 1e-4;
-    let deepest = frame.inradius(precision).unwrap();
-    assert!(deepest.mm <= exact && exact <= deepest.mm + precision);
-    assert!((deepest.first.distance_to(deepest.second) - deepest.mm).abs() < 1e-12);
-    assert!(!frame.disk_erode(deepest.mm - 1e-3).unwrap().is_empty());
-    assert!(frame.disk_erode(exact + 1e-3).unwrap().is_empty());
-
-    let strip = block(0.0, 0.0, 4.0, 2.0).inradius(1e-6).unwrap();
-    assert!(1.0 - 1e-6 <= strip.mm && strip.mm <= 1.0);
-    assert!(ContourSet::empty(res(0.0)).inradius(1e-3).is_none());
-
-    // Thin strips that miss every early sample are still found, deepest at
-    // their outer corner, like the frame.
-    let corner = block(0.0, 0.0, 1.0, 0.01)
-        .union(&block(0.0, 0.0, 0.01, 1.0))
-        .unwrap()
-        .inradius(1e-3)
-        .unwrap();
-    let exact = 0.01 * std::f64::consts::SQRT_2 / (1.0 + std::f64::consts::SQRT_2);
-    assert!(corner.mm <= exact && exact <= corner.mm + 1e-3);
-    // However long a hair, its search ends at the precision, not its length.
-    let hair = ContourSet::rectangle(rect(0.0, 0.0, 100.0, 1e-6), res(0.0));
-    assert!(hair.inradius(1e-3).is_none_or(|hair| hair.mm <= 5e-7));
 }
 
 #[test]
