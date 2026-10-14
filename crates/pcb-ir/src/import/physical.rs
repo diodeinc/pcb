@@ -140,8 +140,8 @@ pub struct PasteIsland {
     /// padstack, and location identity decides when it names a termination.
     /// Otherwise the island links to the one termination whose source lands
     /// on its mounting side it overlaps; lands of no termination do not
-    /// count. When the paste names a component, only that component's
-    /// terminations count, and overlapping only another component's is
+    /// count. When the paste names components, found or not, only their
+    /// terminations count, and overlapping only other components' is
     /// `Conflicting`.
     pub termination: Association<PhysicalTerminationId>,
     pub termination_basis: Option<AssociationBasis>,
@@ -640,21 +640,25 @@ impl ImportedDesign {
                             })?
                             .into_iter()
                             .collect::<BTreeSet<_>>();
-                        // Paste naming a component links only to its own
+                        // Paste naming components links only to their
                         // terminations; lands of another one contradict it.
-                        let mut own = overlapped
+                        let own = overlapped
                             .iter()
                             .copied()
                             .filter(|termination| {
-                                component.resolved().is_none_or(|component| {
-                                    terminations[termination.0 as usize].component == *component
-                                })
+                                let owner = &terminations[termination.0 as usize].component;
+                                match &component {
+                                    Association::Resolved(component) => owner == component,
+                                    Association::Ambiguous(named)
+                                    | Association::Conflicting(named) => named.contains(owner),
+                                    Association::Unresolved => evidence.component_refs.is_empty(),
+                                }
                             })
                             .collect::<Vec<_>>();
-                        let association = match own.len() {
-                            0 if overlapped.is_empty() => Association::Unresolved,
-                            0 => Association::Conflicting(overlapped.into_iter().collect()),
-                            1 => Association::Resolved(own.remove(0)),
+                        let association = match own.as_slice() {
+                            [] if overlapped.is_empty() => Association::Unresolved,
+                            [] => Association::Conflicting(overlapped.into_iter().collect()),
+                            [termination] => Association::Resolved(*termination),
                             _ => Association::Ambiguous(own),
                         };
                         let basis = (association != Association::Unresolved)
@@ -2297,7 +2301,7 @@ mod tests {
                 .unwrap();
             (island.termination.clone(), island.termination_basis)
         };
-        assert_eq!(physical.paste_islands.len(), 3);
+        assert_eq!(physical.paste_islands.len(), 4);
 
         // KiCad names an exposed pad's paste windows PAD0, PAD1, and so on,
         // which no package pin matches. The window lies inside pin 9's land.
@@ -2305,6 +2309,14 @@ mod tests {
             association(Point::new(0.5, 0.5)),
             (
                 Association::Resolved(termination("U1", "9")),
+                Some(AssociationBasis::ExactGeometry)
+            )
+        );
+        // Paste naming both J1 and J2 contradicts U1's land.
+        assert_eq!(
+            association(Point::new(-0.5, -0.5)),
+            (
+                Association::Conflicting(vec![termination("U1", "9")]),
                 Some(AssociationBasis::ExactGeometry)
             )
         );
@@ -2621,6 +2633,7 @@ mod tests {
         </LayerFeature>
         <LayerFeature layerRef="PASTE">
           <Set><Pad padstackDefRef="window"><Location x="0.5" y="0.5"/><StandardPrimitiveRef id="window"/><PinRef componentRef="U1" pin="PAD0"/></Pad></Set>
+          <Set componentRef="J1"><Pad padstackDefRef="window"><Location x="-0.5" y="-0.5"/><StandardPrimitiveRef id="window"/><PinRef componentRef="J2" pin="1"/></Pad></Set>
           <Set><Pad padstackDefRef="contact"><Location x="10" y="0"/><StandardPrimitiveRef id="contact"/><PinRef componentRef="J1" pin="A1"/></Pad></Set>
           <Set><Pad padstackDefRef="wide-paste"><Location x="20.3" y="0"/><StandardPrimitiveRef id="wide-paste"/><PinRef componentRef="J2" pin="PAD3"/></Pad></Set>
         </LayerFeature>

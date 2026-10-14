@@ -257,9 +257,13 @@ pub fn build_report(
 
     let mut component_paste_islands = HashMap::<&str, u64>::new();
     for island in &physical.paste_islands {
+        // Paste linked to a termination belongs to that termination's
+        // component, even when the paste names no component itself.
         if let Some(id) = island
-            .component
+            .termination
             .resolved()
+            .map(|termination| &physical.terminations[termination.0 as usize].component)
+            .or(island.component.resolved())
             .and_then(|component| component_ids.get(component))
         {
             *component_paste_islands.entry(id.as_str()).or_default() += 1;

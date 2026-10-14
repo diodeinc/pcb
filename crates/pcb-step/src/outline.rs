@@ -381,9 +381,6 @@ fn synthesize(
 ) -> Option<Vec<Solid>> {
     let corners = |lo: Vec2, hi: Vec2| [lo, Vec2::new(hi.x, lo.y), hi, Vec2::new(lo.x, hi.y)];
     let mut points: Vec<Vec2> = Vec::new();
-    for fp in &board.footprints {
-        points.push(frame.point(fp.at));
-    }
     // Pad outlines, offsets and custom shapes included; what is wrong
     // with a pad is reported when its copper is made.
     for pad in &board.pads {
@@ -403,7 +400,7 @@ fn synthesize(
         points.push(frame.point(hole.a));
         points.push(frame.point(hole.b));
     }
-    // Zone fills, and graphics and text on every layer as drawn, the way
+    // Zone fills, and graphics and text on the layers drawn, the way
     // KiCad bounds a board without an outline; the broken outline's own
     // edges too. What is wrong with a drawing is reported when its layer
     // is made.
