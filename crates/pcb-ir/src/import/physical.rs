@@ -1910,6 +1910,7 @@ mod tests {
             .source_lands
             .iter()
             .filter(|land| termination_lands.contains(&land.id))
+            .cloned()
             .collect::<Vec<_>>();
         assert!(!source_lands.is_empty());
         let expected = format!(
@@ -1923,11 +1924,10 @@ mod tests {
         );
         let narrow = |imported: &ImportedDesign| {
             let view = imported.assembly_view(scope, resolution).unwrap();
-            let source_lands = view.source_lands.iter().collect::<Vec<_>>();
             format!(
                 "{:?}",
                 (
-                    source_lands,
+                    view.source_lands,
                     view.terminations,
                     view.paste_islands,
                     view.holes
