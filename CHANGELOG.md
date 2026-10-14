@@ -12,6 +12,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 - `pcb-step` parses standalone `.kicad_mod` footprints.
 
+### Changed
+
+- `pcb-ir` links a paste island that IPC does not identify with a termination, such as an exposed-pad paste window, to the one termination whose lands it overlaps, and marks the link resolved, ambiguous or unresolved with its basis.
+
 ### Fixed
 
 - `board-array create` and board-array analysis honor a board's non-zero Datum.

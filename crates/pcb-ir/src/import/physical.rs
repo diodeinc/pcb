@@ -136,9 +136,12 @@ pub struct PasteIsland {
     pub pin: Option<Symbol>,
     pub padstack: Option<Symbol>,
     pub population: PopulationState,
-    /// Present only when IPC gives the same component, pin, padstack, and
-    /// location identity as an electrical termination.
-    pub termination: Option<PhysicalTerminationId>,
+    /// The electrical termination this paste feeds. IPC component, pin,
+    /// padstack, and location identity decides when it names a termination.
+    /// Otherwise the island links to the one termination whose source lands
+    /// it overlaps; lands of no termination do not count.
+    pub termination: Association<PhysicalTerminationId>,
+    pub termination_basis: Option<AssociationBasis>,
 }
 
 #[derive(Debug, Clone)]
@@ -300,10 +303,11 @@ impl ImportedDesign {
         let all = |_: &FeatureOccurrence| true;
         let lands = self.derive_physical_lands(scope, &components, false, &all, resolution)?;
         let terminations = self.derive_physical_terminations(&lands);
-        let paste_islands = self.paste_islands(scope, &components, &terminations, resolution)?;
-        let mask_openings = self.mask_openings(scope, &lands, resolution)?;
         let source_lands =
             self.derive_physical_lands(scope, &components, true, &all, resolution)?;
+        let paste_islands =
+            self.paste_islands(scope, &components, &source_lands, &terminations, resolution)?;
+        let mask_openings = self.mask_openings(scope, &lands, resolution)?;
         let mut holes = self.derive_physical_holes(scope, &source_lands, &all, resolution)?;
         self.attach_hole_assembly_evidence(scope, &lands, &terminations, &mut holes, resolution)?;
         Ok(PhysicalView {
@@ -486,6 +490,7 @@ impl ImportedDesign {
         &self,
         scope: ArtworkScope,
         components: &ComponentIndex,
+        source_lands: &[PhysicalLand],
         terminations: &[PhysicalTermination],
         resolution: Resolution,
     ) -> Result<Vec<PasteIsland>> {
@@ -503,6 +508,27 @@ impl ImportedDesign {
                 )
             })
             .collect::<HashMap<_, _>>();
+        // Source lands, so routing and clears cannot hide the land under paste.
+        let land_by_id = source_lands
+            .iter()
+            .map(|land| (land.id, land))
+            .collect::<HashMap<_, _>>();
+        let termination_lands = terminations
+            .iter()
+            .flat_map(|termination| {
+                let land_by_id = &land_by_id;
+                termination
+                    .lands
+                    .iter()
+                    .map(move |land| (termination.id, land_by_id[land]))
+            })
+            .collect::<Vec<_>>();
+        let land_bounds = BBoxIndex::new(
+            termination_lands
+                .iter()
+                .map(|(_, land)| land.image.bbox())
+                .collect(),
+        );
         let mut islands = Vec::new();
         for (layer_index, layer) in self.layer_definitions.iter().enumerate() {
             if !matches!(
@@ -529,9 +555,8 @@ impl ImportedDesign {
                     .and_then(|component| self.component_definition(component.component))
                     .map(|component| component.population)
                     .unwrap_or_default();
-                // Present only under the exact identity its termination was
-                // keyed by.
-                let termination = component
+                // The exact identity its termination was keyed by.
+                let identity = component
                     .resolved()
                     .zip(evidence.pin)
                     .zip(feature.padstack_ref)
@@ -541,6 +566,38 @@ impl ImportedDesign {
                             .copied()
                     });
                 for (island, image) in image.connected_components().into_iter().enumerate() {
+                    let (termination, termination_basis) = match identity {
+                        Some(termination) => (
+                            Association::Resolved(termination),
+                            Some(AssociationBasis::SourceIdentity),
+                        ),
+                        None => {
+                            let mut candidates = BTreeSet::new();
+                            for entry in land_bounds.query(image.bbox()) {
+                                let (termination, land) = termination_lands[entry];
+                                if land.board == board
+                                    && (side == Side::None || land.side == side)
+                                    && !candidates.contains(&termination)
+                                    && land.image.intersection(&image)?.area()
+                                        > tol::REGION_MM.powi(2)
+                                {
+                                    candidates.insert(termination);
+                                }
+                            }
+                            let mut candidates = candidates.into_iter().collect::<Vec<_>>();
+                            match candidates.len() {
+                                0 => (Association::Unresolved, None),
+                                1 => (
+                                    Association::Resolved(candidates.remove(0)),
+                                    Some(AssociationBasis::ExactGeometry),
+                                ),
+                                _ => (
+                                    Association::Ambiguous(candidates),
+                                    Some(AssociationBasis::ExactGeometry),
+                                ),
+                            }
+                        }
+                    };
                     islands.push(PasteIsland {
                         id: PasteIslandId {
                             source,
@@ -556,6 +613,7 @@ impl ImportedDesign {
                         padstack: feature.padstack_ref,
                         population,
                         termination,
+                        termination_basis,
                     });
                 }
             }
@@ -1980,43 +2038,79 @@ mod tests {
         );
 
         assert_eq!(physical.paste_islands.len(), 9);
-        let linked = physical
+        // Pads by their location; graphic features by the area they cover.
+        let association = |at: Point| {
+            let island = physical
+                .paste_islands
+                .iter()
+                .find(|island| island.at == at)
+                .or_else(|| {
+                    physical
+                        .paste_islands
+                        .iter()
+                        .find(|island| island.image.bbox().contains_point(at))
+                })
+                .unwrap();
+            (island.termination.clone(), island.termination_basis)
+        };
+        let u1_pin_at = |at: Point| {
+            physical
+                .terminations
+                .iter()
+                .find(|termination| {
+                    termination.at == at && termination.population == PopulationState::DoNotPopulate
+                })
+                .unwrap()
+                .id
+        };
+        let linked_surface = physical
             .paste_islands
-            .iter()
-            .filter(|island| island.termination.is_some())
-            .collect::<Vec<_>>();
-        assert_eq!(linked.len(), 2);
-        let linked_surface = linked
             .iter()
             .find(|island| island.at == Point::new(5.0, 5.0))
             .unwrap();
         assert_eq!(linked_surface.population, PopulationState::DoNotPopulate);
-        let termination = &physical.terminations[linked_surface.termination.unwrap().0 as usize];
-        assert_eq!(termination.at, Point::new(5.0, 5.0));
-        assert_eq!(imported.resolve(termination.pin), "1");
-        let linked_bottom = linked
-            .iter()
-            .find(|island| island.side == Side::Bottom)
-            .unwrap();
-        assert_eq!(linked_bottom.termination, Some(through.id));
-        assert!(physical.paste_islands.iter().any(|island| {
-            island
-                .pin
-                .is_some_and(|pin| imported.resolve(pin) == "PAD0")
-                && island.termination.is_none()
-        }));
-        assert!(physical.paste_islands.iter().any(|island| {
-            island.at == Point::new(5.1, 5.0)
-                && island.pin.is_some_and(|pin| imported.resolve(pin) == "1")
-                && island.termination.is_none()
-        }));
         assert_eq!(
-            physical
-                .paste_islands
-                .iter()
-                .filter(|island| island.termination.is_none())
-                .count(),
-            7
+            association(Point::new(5.0, 5.0)),
+            (
+                Association::Resolved(u1_pin_at(Point::new(5.0, 5.0))),
+                Some(AssociationBasis::SourceIdentity)
+            )
+        );
+        assert_eq!(
+            association(Point::new(40.0, 5.0)),
+            (
+                Association::Resolved(through.id),
+                Some(AssociationBasis::SourceIdentity)
+            )
+        );
+        // An offset location breaks identity, but the paste still sits on
+        // the pin's land.
+        assert_eq!(
+            association(Point::new(5.1, 5.0)),
+            (
+                Association::Resolved(u1_pin_at(Point::new(5.0, 5.0))),
+                Some(AssociationBasis::ExactGeometry)
+            )
+        );
+        // Wide paste over two separate terminations of one logical pin.
+        assert_eq!(
+            association(Point::new(15.0, 5.0)),
+            (
+                Association::Ambiguous(vec![
+                    u1_pin_at(Point::new(14.0, 5.0)),
+                    u1_pin_at(Point::new(16.0, 5.0)),
+                ]),
+                Some(AssociationBasis::ExactGeometry)
+            )
+        );
+        // Only a non-electrical land, or no land at all, lies under these.
+        assert_eq!(
+            association(Point::new(8.0, 5.0)),
+            (Association::Unresolved, None)
+        );
+        assert_eq!(
+            association(Point::new(35.0, 5.0)),
+            (Association::Unresolved, None)
         );
 
         assert_eq!(physical.mask_openings.len(), 1);
@@ -2031,6 +2125,67 @@ mod tests {
                 .lands
                 .iter()
                 .any(|association| matches!(association.land, Association::Resolved(_)))
+        );
+    }
+
+    #[test]
+    fn paste_links_by_identity_then_by_the_one_termination_it_overlaps() {
+        let xml = paste_link_fixture();
+        Ipc2581::validate(xml).expect("fixture conforms to IPC-2581C");
+        let imported = import(xml);
+        let physical = imported
+            .physical_view(ArtworkScope::Board, Resolution::default())
+            .unwrap();
+        let termination = |designator: &str, pin: &str| {
+            physical
+                .terminations
+                .iter()
+                .find(|termination| {
+                    imported.resolve(termination.pin) == pin
+                        && imported
+                            .component_definition(termination.component.component)
+                            .and_then(|component| component.source.ref_des)
+                            .is_some_and(|reference| imported.resolve(reference) == designator)
+                })
+                .unwrap()
+                .id
+        };
+        let association = |at: Point| {
+            let island = physical
+                .paste_islands
+                .iter()
+                .find(|island| island.image.bbox().contains_point(at))
+                .unwrap();
+            (island.termination.clone(), island.termination_basis)
+        };
+        assert_eq!(physical.paste_islands.len(), 3);
+
+        // KiCad names an exposed pad's paste windows PAD0, PAD1, and so on,
+        // which no package pin matches. The window lies inside pin 9's land.
+        assert_eq!(
+            association(Point::new(0.5, 0.5)),
+            (
+                Association::Resolved(termination("U1", "9")),
+                Some(AssociationBasis::ExactGeometry)
+            )
+        );
+        // A1 and B12 share one stacked land; identity picks A1.
+        assert_ne!(termination("J1", "A1"), termination("J1", "B12"));
+        assert_eq!(
+            association(Point::new(10.0, 0.0)),
+            (
+                Association::Resolved(termination("J1", "A1")),
+                Some(AssociationBasis::SourceIdentity)
+            )
+        );
+        // Paste larger than its pin also covers a mechanical land, which is
+        // no termination.
+        assert_eq!(
+            association(Point::new(20.3, 0.0)),
+            (
+                Association::Resolved(termination("J2", "1")),
+                Some(AssociationBasis::ExactGeometry)
+            )
         );
     }
 
@@ -2227,6 +2382,108 @@ mod tests {
         </LayerFeature>
         <LayerFeature layerRef="DRILL">
           <Set geometry="padstack"><Hole name="H1" diameter="0.3" platingStatus="PLATED" plusTol="0" minusTol="0" x="5" y="5"/></Set>
+        </LayerFeature>
+      </Step>
+    </CadData>
+  </Ecad>
+</IPC-2581>"#
+    }
+    fn paste_link_fixture() -> &'static str {
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
+  <Content roleRef="owner">
+    <FunctionMode mode="ASSEMBLY"/>
+    <StepRef name="board"/>
+    <BomRef name="bom"/>
+    <DictionaryLineDesc units="MILLIMETER">
+      <EntryLineDesc id="line"><LineDesc lineWidth="0" lineEnd="ROUND"/></EntryLineDesc>
+    </DictionaryLineDesc>
+    <DictionaryStandard units="MILLIMETER">
+      <EntryStandard id="exposed"><RectCenter width="3" height="3"/></EntryStandard>
+      <EntryStandard id="window"><RectCenter width="1" height="1"/></EntryStandard>
+      <EntryStandard id="contact"><RectCenter width="0.3" height="0.3"/></EntryStandard>
+      <EntryStandard id="wide-paste"><Circle diameter="1.2"/></EntryStandard>
+    </DictionaryStandard>
+  </Content>
+  <LogisticHeader>
+    <Role id="owner" roleFunction="OWNER"/>
+    <Enterprise id="owner-enterprise" code="owner" name="Owner"/>
+    <Person name="Owner" enterpriseRef="owner-enterprise" roleRef="owner"/>
+  </LogisticHeader>
+  <HistoryRecord number="1" origination="2026-01-01T00:00:00Z" software="test" lastChange="2026-01-01T00:00:00Z">
+    <FileRevision fileRevisionId="1" comment="test">
+      <SoftwarePackage name="test" vendor="test" revision="1"><Certification certificationStatus="SELFTEST"/></SoftwarePackage>
+    </FileRevision>
+  </HistoryRecord>
+  <Bom name="bom">
+    <BomHeader assembly="board" revision="1"/>
+    <BomItem OEMDesignNumberRef="part-u1" quantity="1" pinCount="1" category="ELECTRICAL">
+      <RefDes name="U1" packageRef="qfn" populate="true" layerRef="TOP"/>
+      <Characteristics category="ELECTRICAL"/>
+    </BomItem>
+    <BomItem OEMDesignNumberRef="part-j1" quantity="1" pinCount="2" category="ELECTRICAL">
+      <RefDes name="J1" packageRef="usb-c" populate="true" layerRef="TOP"/>
+      <Characteristics category="ELECTRICAL"/>
+    </BomItem>
+    <BomItem OEMDesignNumberRef="part-j2" quantity="1" pinCount="2" category="ELECTRICAL">
+      <RefDes name="J2" packageRef="header" populate="true" layerRef="TOP"/>
+      <Characteristics category="ELECTRICAL"/>
+    </BomItem>
+  </Bom>
+  <Ecad name="design">
+    <CadHeader units="MILLIMETER"/>
+    <CadData>
+      <Layer name="TOP" layerFunction="SIGNAL" side="TOP" polarity="POSITIVE"/>
+      <Layer name="PASTE" layerFunction="SOLDERPASTE" side="TOP" polarity="POSITIVE"/>
+      <Step name="board" type="BOARD">
+        <PadStackDef name="exposed">
+          <PadstackPadDef layerRef="TOP" padUse="REGULAR"><Location x="0" y="0"/><StandardPrimitiveRef id="exposed"/></PadstackPadDef>
+        </PadStackDef>
+        <PadStackDef name="window">
+          <PadstackPadDef layerRef="PASTE" padUse="REGULAR"><Location x="0" y="0"/><StandardPrimitiveRef id="window"/></PadstackPadDef>
+        </PadStackDef>
+        <PadStackDef name="contact">
+          <PadstackPadDef layerRef="TOP" padUse="REGULAR"><Location x="0" y="0"/><StandardPrimitiveRef id="contact"/></PadstackPadDef>
+          <PadstackPadDef layerRef="PASTE" padUse="REGULAR"><Location x="0" y="0"/><StandardPrimitiveRef id="contact"/></PadstackPadDef>
+        </PadStackDef>
+        <PadStackDef name="wide-paste">
+          <PadstackPadDef layerRef="PASTE" padUse="REGULAR"><Location x="0" y="0"/><StandardPrimitiveRef id="wide-paste"/></PadstackPadDef>
+        </PadStackDef>
+        <Datum x="0" y="0"/>
+        <Package name="qfn" type="OTHER" pinOne="9" pinOneOrientation="OTHER">
+          <Outline><Polygon><PolyBegin x="0" y="0"/><PolyStepSegment x="0" y="0"/></Polygon><LineDescRef id="line"/></Outline>
+          <Pin number="9" type="SURFACE" electricalType="ELECTRICAL" mountType="SURFACE_MOUNT_PAD"><Location x="0" y="0"/><StandardPrimitiveRef id="exposed"/></Pin>
+        </Package>
+        <Package name="usb-c" type="OTHER" pinOne="A1" pinOneOrientation="OTHER">
+          <Outline><Polygon><PolyBegin x="0" y="0"/><PolyStepSegment x="0" y="0"/></Polygon><LineDescRef id="line"/></Outline>
+          <Pin number="A1" type="SURFACE" electricalType="ELECTRICAL" mountType="SURFACE_MOUNT_PAD"><Location x="0" y="0"/><StandardPrimitiveRef id="contact"/></Pin>
+          <Pin number="B12" type="SURFACE" electricalType="ELECTRICAL" mountType="SURFACE_MOUNT_PAD"><Location x="0" y="0"/><StandardPrimitiveRef id="contact"/></Pin>
+        </Package>
+        <Package name="header" type="OTHER" pinOne="1" pinOneOrientation="OTHER">
+          <Outline><Polygon><PolyBegin x="0" y="0"/><PolyStepSegment x="0" y="0"/></Polygon><LineDescRef id="line"/></Outline>
+          <Pin number="1" type="SURFACE" electricalType="ELECTRICAL" mountType="SURFACE_MOUNT_PAD"><Location x="0" y="0"/><StandardPrimitiveRef id="contact"/></Pin>
+          <Pin number="MP" type="SURFACE" electricalType="MECHANICAL" mountType="SURFACE_MOUNT_PAD"><Location x="0.6" y="0"/><StandardPrimitiveRef id="contact"/></Pin>
+        </Package>
+        <Component refDes="U1" packageRef="qfn" part="part-u1" layerRef="TOP" mountType="SMT">
+          <Location x="0" y="0"/>
+        </Component>
+        <Component refDes="J1" packageRef="usb-c" part="part-j1" layerRef="TOP" mountType="SMT">
+          <Location x="10" y="0"/>
+        </Component>
+        <Component refDes="J2" packageRef="header" part="part-j2" layerRef="TOP" mountType="SMT">
+          <Location x="20" y="0"/>
+        </Component>
+        <LayerFeature layerRef="TOP">
+          <Set net="GND"><Pad padstackDefRef="exposed"><Location x="0" y="0"/><StandardPrimitiveRef id="exposed"/><PinRef componentRef="U1" pin="9"/></Pad></Set>
+          <Set net="GND"><Pad padstackDefRef="contact"><Location x="10" y="0"/><StandardPrimitiveRef id="contact"/><PinRef componentRef="J1" pin="A1"/></Pad></Set>
+          <Set net="GND"><Pad padstackDefRef="contact"><Location x="10" y="0"/><StandardPrimitiveRef id="contact"/><PinRef componentRef="J1" pin="B12"/></Pad></Set>
+          <Set net="N1"><Pad padstackDefRef="contact"><Location x="20" y="0"/><StandardPrimitiveRef id="contact"/><PinRef componentRef="J2" pin="1"/></Pad></Set>
+          <Set><Pad padstackDefRef="contact"><Location x="20.6" y="0"/><StandardPrimitiveRef id="contact"/><PinRef componentRef="J2" pin="MP"/></Pad></Set>
+        </LayerFeature>
+        <LayerFeature layerRef="PASTE">
+          <Set><Pad padstackDefRef="window"><Location x="0.5" y="0.5"/><StandardPrimitiveRef id="window"/><PinRef componentRef="U1" pin="PAD0"/></Pad></Set>
+          <Set><Pad padstackDefRef="contact"><Location x="10" y="0"/><StandardPrimitiveRef id="contact"/><PinRef componentRef="J1" pin="A1"/></Pad></Set>
+          <Set><Pad padstackDefRef="wide-paste"><Location x="20.3" y="0"/><StandardPrimitiveRef id="wide-paste"/><PinRef componentRef="J2" pin="PAD3"/></Pad></Set>
         </LayerFeature>
       </Step>
     </CadData>
