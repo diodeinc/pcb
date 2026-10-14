@@ -4,6 +4,7 @@ use super::{ContourSet, Ring, Shape, edges_of, flatten_shapes, overlay_fill_rule
 use crate::geom::accuracy::{lattice_per_mm, numerical_error};
 use crate::geom::dist;
 use crate::geom::{AccuracyError, BBox, FillRule, Point, tol};
+use i_overlay::core::extract::BooleanExtractionBuffer;
 use i_overlay::core::fill_rule::FillRule as OverlayFillRule;
 use i_overlay::core::overlay::{IntOverlayOptions, Overlay};
 use i_overlay::core::overlay_rule::OverlayRule;
@@ -41,11 +42,46 @@ pub(super) fn overlay(
     rule: OverlayRule,
     fill_rule: OverlayFillRule,
 ) -> Vec<Shape> {
+    let [shapes] = split_overlay(subject, clip, |mut overlay| {
+        [overlay.overlay(rule, fill_rule)]
+    });
+    shapes
+}
+
+/// Several rules over one overlay of the same operands. The graph is split,
+/// filled and linked once; each rule's extraction skips the links it
+/// excludes, so it yields exactly the shapes [`overlay`] yields for it.
+pub(super) fn overlay_rules<const N: usize>(
+    subject: &[Ring],
+    clip: &[Ring],
+    rules: [OverlayRule; N],
+    fill_rule: OverlayFillRule,
+) -> [Vec<Shape>; N] {
+    split_overlay(subject, clip, |mut overlay| {
+        let mut buffer = BooleanExtractionBuffer::default();
+        match overlay.build_graph_view(fill_rule) {
+            Some(graph) => rules.map(|rule| graph.extract_shapes(rule, &mut buffer)),
+            None => rules.map(|_| Vec::new()),
+        }
+    })
+}
+
+/// Overlay operands on their shared lattice, every edge split at the
+/// vertices lying on it.
+fn split_overlay<const N: usize>(
+    subject: &[Ring],
+    clip: &[Ring],
+    extract: impl FnOnce(Overlay<i64>) -> [IntShapes<i64>; N],
+) -> [Vec<Shape>; N] {
     let bbox = rings_bbox(subject).union(rings_bbox(clip));
     let vertices = VertexColumns::new(&[subject, clip], bbox);
-    overlay_on_lattice(subject, clip, bbox, rule, fill_rule, |ring, emit| {
-        vertices.split(ring, emit)
-    })
+    overlay_on_lattice(
+        subject,
+        clip,
+        bbox,
+        |ring, emit| vertices.split(ring, emit),
+        extract,
+    )
 }
 
 /// The region a constructed curve winds positively around, on the lattice
@@ -53,24 +89,23 @@ pub(super) fn overlay(
 /// cancels seams where source fills were cut along each other, and a curve
 /// built from regularized rings has none.
 pub(super) fn positive_winding(rings: &[Ring]) -> Vec<Ring> {
-    flatten_shapes(overlay_on_lattice(
+    let [shapes] = overlay_on_lattice(
         rings,
         &[],
         rings_bbox(rings),
-        OverlayRule::Subject,
-        OverlayFillRule::Positive,
         |ring, emit| ring.iter().copied().for_each(emit),
-    ))
+        |mut overlay| [overlay.overlay(OverlayRule::Subject, OverlayFillRule::Positive)],
+    );
+    flatten_shapes(shapes)
 }
 
-fn overlay_on_lattice(
+fn overlay_on_lattice<const N: usize>(
     subject: &[Ring],
     clip: &[Ring],
     bbox: BBox,
-    rule: OverlayRule,
-    fill_rule: OverlayFillRule,
     vertices: impl Fn(&[[f64; 2]], &mut dyn FnMut([f64; 2])),
-) -> Vec<Shape> {
+    extract: impl FnOnce(Overlay<i64>) -> [IntShapes<i64>; N],
+) -> [Vec<Shape>; N] {
     let scale = lattice_per_mm(bbox);
     let lattice = |rings: &[Ring]| {
         rings
@@ -87,20 +122,25 @@ fn overlay_on_lattice(
             })
             .collect::<Vec<_>>()
     };
-    Overlay::from_subj_and_clip(lattice(subject).as_slice(), lattice(clip).as_slice())
-        .overlay(rule, fill_rule)
-        .into_iter()
-        .map(|shape| {
-            shape
-                .into_iter()
-                .map(|ring| {
-                    ring.into_iter()
-                        .map(|point| [point.x as f64 / scale, point.y as f64 / scale])
-                        .collect()
-                })
-                .collect()
-        })
-        .collect()
+    extract(Overlay::from_subj_and_clip(
+        lattice(subject).as_slice(),
+        lattice(clip).as_slice(),
+    ))
+    .map(|shapes| {
+        shapes
+            .into_iter()
+            .map(|shape| {
+                shape
+                    .into_iter()
+                    .map(|ring| {
+                        ring.into_iter()
+                            .map(|point| [point.x as f64 / scale, point.y as f64 / scale])
+                            .collect()
+                    })
+                    .collect()
+            })
+            .collect()
+    })
 }
 
 /// The vertices of one overlay, indexed to find those lying on an edge.
@@ -266,7 +306,7 @@ pub(super) fn untagged<T>(group: Vec<(Ring, T)>) -> Vec<Ring> {
 ///
 /// `reach` widens every ring's bounds further, for operations that join
 /// rings that far apart.
-fn bounds_connected_groups<T>(rings: Vec<(Ring, T)>, reach: f64) -> Vec<Vec<(Ring, T)>> {
+pub(super) fn bounds_connected_groups<T>(rings: Vec<(Ring, T)>, reach: f64) -> Vec<Vec<(Ring, T)>> {
     struct Group {
         hull: BBox,
         root: usize,
