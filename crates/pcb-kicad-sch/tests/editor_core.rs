@@ -1080,6 +1080,36 @@ fn a_driver_with_a_collision_suffixed_id_goes_with_its_pin() {
 }
 
 #[test]
+fn an_older_driver_with_a_suffixed_id_and_no_marker_goes_with_its_pin() {
+    let external = common::compile_fixture("hierarchy", "sheet_port_external.zen");
+    let renamed = common::compile_fixture("hierarchy", "sheet_port_renamed.zen");
+    let mut older = create(&external, "SheetPort.kicad_sch");
+    // A released pcb gave the INPUT pin's label a collision-suffixed id and
+    // recorded no pin on it.
+    let pin = generated_sheet(&older).pins[0].at;
+    let key = "zener:module-parent-driver:FILTER:INPUT:SIGNAL";
+    for item in &mut older.pages[0].items {
+        if let SchItem::Label(label) = item
+            && label.at == pin
+        {
+            label.id = deterministic_uuid(format!("{key}:7"));
+            label.fields.clear();
+        }
+    }
+
+    let applied = reapply(&older, &renamed);
+    assert_eq!(sheet_pin_names(&applied), ["IN"]);
+    let root = labels_on(&applied, "SheetPort.kicad_sch");
+    assert_eq!(
+        root.iter()
+            .filter(|label| **label == ("SIGNAL".to_string(), LabelKind::Local))
+            .count(),
+        2,
+        "R2's pin and pin IN: {root:#?}"
+    );
+}
+
+#[test]
 fn a_users_symbol_on_a_removed_pin_stays() {
     let local = common::compile_fixture("hierarchy", "sheet_power_local.zen");
     let external = common::compile_fixture("hierarchy", "sheet_power_external.zen");

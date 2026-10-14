@@ -40,6 +40,9 @@ const CAPACITOR_BANK_BUS_OFFSET_CELLS: f64 = 2.0;
 /// Hidden label property naming the sheet pin whose driver the label is, set
 /// when the label could not take its deterministic id.
 const SHEET_PIN_FIELD: &str = "pcb:sheet_pin";
+/// How far to search the collision suffixes of a sheet pin's driver written
+/// before `SHEET_PIN_FIELD` existed, at least.
+const LEGACY_SUFFIX_SEARCH: usize = 1024;
 
 pub(crate) fn reconcile_document(
     existing: Option<&SchDocument>,
@@ -1205,13 +1208,40 @@ fn sync_generated_sheet_pins(
                     .get(SHEET_PIN_FIELD)
                     .is_some_and(|field| field.value == id)
             };
+            // Released versions recorded no pin, so a driver label they gave a
+            // collision-suffixed id is known by that suffix of its key. Only a
+            // label at the pin is searched, as far as any suffix a document of
+            // this size, or a far larger one, could have needed.
+            let suffix_bound = LEGACY_SUFFIX_SEARCH.max(
+                document
+                    .pages
+                    .iter()
+                    .map(|page| page.items.len())
+                    .sum::<usize>(),
+            );
+            let legacy_driver = |label: &Label| {
+                net_name
+                    .iter()
+                    .map(String::as_str)
+                    .chain([label.text.as_str()])
+                    .any(|net_name| {
+                        let key = format!(
+                            "zener:module-parent-driver:{}:{port_name}:{net_name}",
+                            module.path
+                        );
+                        (1..=suffix_bound)
+                            .any(|index| label.id == deterministic_uuid(format!("{key}:{index}")))
+                    })
+            };
             let attached = page
                 .items
                 .iter()
                 .map(|item| match item {
                     SchItem::Label(label) => {
                         (points_connect(label.at, at)
-                            && (generated_driver(&label.id, &label.text) || records_pin(label)))
+                            && (generated_driver(&label.id, &label.text)
+                                || records_pin(label)
+                                || legacy_driver(label)))
                             || (left_module
                                 && label.kind == LabelKind::Local
                                 && net_name.as_ref() == Some(&label.text))
