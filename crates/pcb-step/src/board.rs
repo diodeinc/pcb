@@ -512,6 +512,8 @@ pub(crate) struct Physical {
 }
 
 impl<'a> Board<'a> {
+    /// Parse a `.kicad_pcb` board, or a `.kicad_mod` footprint, which is
+    /// placed at the origin of a two-layer board of the default thickness.
     pub fn parse(src: &'a [u8]) -> Result<Self, Error> {
         Self::parse_with(src, true, true)
     }
@@ -563,8 +565,20 @@ impl<'a> Board<'a> {
             ..FootprintScratch::default()
         };
 
-        if p.open()? != Some("kicad_pcb") {
-            return Err(Error::Syntax("expected kicad_pcb"));
+        match p.open()? {
+            Some("kicad_pcb") => {}
+            // A `.kicad_mod` footprint: alone at the origin of a two-layer
+            // board, as KiCad's footprint editor shows it.
+            Some("footprint") => {
+                board.copper_layers = vec!["F.Cu", "B.Cu"];
+                scratch.at_origin = true;
+                board.parse_footprint(&mut p, &mut scratch)?;
+                if !p.at_end() {
+                    return Err(Error::Syntax("trailing data after footprint"));
+                }
+                return Ok(board);
+            }
+            _ => return Err(Error::Syntax("expected kicad_pcb or footprint")),
         }
         while let Some(name) = p.open()? {
             match name {
@@ -947,6 +961,9 @@ impl<'a> Board<'a> {
             }
         }
 
+        if scratch.at_origin {
+            fp.at = Vec2::ZERO;
+        }
         let place = |local: Vec2| fp.at + rotate_kicad(local, fp.rotation);
         let base = self.shape_points.len() as u32;
         self.shape_points
@@ -1375,6 +1392,8 @@ impl<'a> Board<'a> {
 struct FootprintScratch<'a> {
     copper: bool,
     graphics: bool,
+    /// Ignore the footprint's `(at)`, keeping its rotation.
+    at_origin: bool,
     holes: Vec<Hole<'a>>,
     edges: Vec<RawEdge>,
     pads: Vec<Pad>,
