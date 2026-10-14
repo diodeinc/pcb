@@ -2,7 +2,7 @@
 //! them: silkscreen is the union of its graphics and text with the drills
 //! taken out, clipped to the board; the mask is the union of its openings,
 //! which the scene takes out of the board; paste is the union of the pad
-//! apertures.
+//! apertures and the paste layer's graphics.
 
 use std::f64::consts::TAU;
 
@@ -39,10 +39,10 @@ pub(crate) fn build(
     silk: bool,
     mask: bool,
     cut_vias: bool,
+    fonts: &Fonts,
     variables: &[(String, String)],
     warnings: &mut Vec<String>,
 ) -> Vec<(Tech, Vec<Nested>)> {
-    let fonts = Fonts::load(board, warnings);
     let mut layers = Vec::new();
     if silk {
         layers.push(Tech::FrontSilk);
@@ -58,9 +58,9 @@ pub(crate) fn build(
         .map(|tech| {
             let mut notes = Vec::new();
             let islands = if tech.silk() {
-                silk_islands(board, frame, edge, &fonts, *tech, variables, &mut notes)
+                silk_islands(board, frame, edge, fonts, *tech, variables, &mut notes)
             } else {
-                mask_openings(board, frame, &fonts, *tech, cut_vias, variables, &mut notes)
+                mask_openings(board, frame, fonts, *tech, cut_vias, variables, &mut notes)
             };
             (islands, notes)
         })
@@ -879,12 +879,15 @@ pub(crate) fn mask_coverage(
 }
 
 /// Solder paste as KiCad's VRML export draws it, front side first: the
-/// sides with any paste and their islands. DNP footprints' pads are left
-/// out unless `include_dnp`.
+/// sides with any paste and their islands: the pads' apertures and what
+/// is drawn on the paste layer. DNP footprints' pads are left out unless
+/// `include_dnp`.
 pub(crate) fn paste(
     board: &Board,
     frame: Frame,
+    fonts: &Fonts,
     include_dnp: bool,
+    variables: &[(String, String)],
     warnings: &mut Vec<String>,
 ) -> Vec<(bool, Vec<Nested>)> {
     let mut layers = Vec::new();
@@ -900,6 +903,12 @@ pub(crate) fn paste(
                 openings.push(contours);
             }
         }
+        let tech = if front {
+            Tech::FrontPaste
+        } else {
+            Tech::BackPaste
+        };
+        openings.extend(drawn_items(board, frame, fonts, tech, variables, warnings));
         if openings.is_empty() {
             continue;
         }

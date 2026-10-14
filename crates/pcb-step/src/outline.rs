@@ -12,7 +12,7 @@ use std::f64::consts::{PI, TAU};
 use pcb_ir::geom::{ContourBuf, ContourSet, FillRule, PathCmd, Point};
 
 use crate::Error;
-use crate::board::{Board, RawEdge};
+use crate::board::{Board, RawEdge, ShapeKind};
 use crate::geom::{Vec2, ccw_sweep, chord_count, circle_center, point_in_polygon, signed_area};
 use crate::holes::RoundHole;
 use crate::rings::raw_islands;
@@ -375,16 +375,16 @@ fn synthesize(board: &Board, frame: Frame) -> Option<Vec<Solid>> {
     for fp in &board.footprints {
         points.push(frame.point(fp.at));
     }
+    // Pad outlines, offsets and custom shapes included; what is wrong
+    // with a pad is reported when its copper is made.
     for pad in &board.pads {
-        let r = pad.size.x.max(pad.size.y) * 0.5;
-        let c = frame.point(pad.at);
-        for (dx, dy) in [(-r, -r), (r, -r), (r, r), (-r, r)] {
-            points.push(c + Vec2::new(dx, dy));
+        let edges = crate::copper::pad_outline(board, frame, pad, &mut Vec::new());
+        for (lo, hi) in edges.iter().flatten().map(Edge::bbox) {
+            points.extend([lo, hi, Vec2::new(lo.x, hi.y), Vec2::new(hi.x, lo.y)]);
         }
     }
     for track in &board.tracks {
-        points.push(frame.point(track.a));
-        points.push(frame.point(track.b));
+        points.extend([track.a, track.mid, track.b].map(|p| frame.point(p)));
     }
     for via in &board.vias {
         points.push(frame.point(via.at));
@@ -392,6 +392,33 @@ fn synthesize(board: &Board, frame: Frame) -> Option<Vec<Solid>> {
     for hole in &board.holes {
         points.push(frame.point(hole.a));
         points.push(frame.point(hole.b));
+    }
+    // Zone fills, and graphics and text on every layer drawn, the way
+    // KiCad bounds a board without an outline; the broken outline's own
+    // edges too.
+    let square = |c: Vec2, r: f64| {
+        let c = frame.point(c);
+        [(-r, -r), (r, -r), (r, r), (-r, r)].map(|(x, y)| c + Vec2::new(x, y))
+    };
+    points.extend(board.fill_points.iter().map(|p| frame.point(*p)));
+    points.extend(board.shape_points.iter().map(|p| frame.point(*p)));
+    for shape in &board.shapes {
+        match shape.kind {
+            ShapeKind::Line { a, b } => points.extend([a, b].map(|p| frame.point(p))),
+            ShapeKind::Arc { a, mid, b } => points.extend([a, mid, b].map(|p| frame.point(p))),
+            ShapeKind::Circle { center, end } => {
+                points.extend(square(center, center.distance(end)))
+            }
+            ShapeKind::Poly { .. } => {}
+        }
+    }
+    points.extend(board.texts.iter().map(|t| frame.point(t.at)));
+    for edge in &board.edges {
+        match *edge {
+            RawEdge::Line { a, b } => points.extend([a, b].map(|p| frame.point(p))),
+            RawEdge::Arc { a, mid, b } => points.extend([a, mid, b].map(|p| frame.point(p))),
+            RawEdge::Circle { center, radius } => points.extend(square(center, radius)),
+        }
     }
     points.retain(|p| p.x.is_finite() && p.y.is_finite());
     if points.is_empty() {

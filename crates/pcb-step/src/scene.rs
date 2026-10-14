@@ -10,6 +10,7 @@ use crate::coverage::{Coverage, ModelCoverage, Status};
 use crate::geom::{Transform, Vec2};
 use crate::models::ModelError;
 use crate::outline::{Frame, cut_holes, cut_round, outline_solids};
+use crate::outline_font::Fonts;
 use crate::rings::loops_of;
 use crate::{Error, Options, Origin, copper, faces, glob_match, holes};
 
@@ -287,8 +288,10 @@ impl Scene {
                 }
             }
         }
+        let variables = board.text_variables(&options.text_variables);
+        let fonts = Fonts::load(board, warnings);
         if options.visual {
-            for (front, islands) in faces::paste(board, frame, true, warnings) {
+            for (front, islands) in faces::paste(board, frame, &fonts, true, &variables, warnings) {
                 layers.push(Layer {
                     kind: LayerKind::Paste { front },
                     color: PASTE_RGB,
@@ -302,7 +305,6 @@ impl Scene {
             }
         }
         if options.silkscreen || options.soldermask {
-            let variables = board.text_variables(&options.text_variables);
             let edge = faces::BoardEdge::new(&solids);
             let tech_layers = faces::build(
                 board,
@@ -311,6 +313,7 @@ impl Scene {
                 options.silkscreen,
                 options.soldermask,
                 options.visual,
+                &fonts,
                 &variables,
                 warnings,
             );
@@ -347,7 +350,9 @@ impl Scene {
                         0.17,
                         MASK_ABOVE_COPPER,
                     ),
-                    Tech::Copper(_) => unreachable!("faces are built for silkscreen and mask only"),
+                    Tech::FrontPaste | Tech::BackPaste | Tech::Copper(_) => {
+                        unreachable!("faces are built for silkscreen and mask only")
+                    }
                 };
                 layers.push(Layer {
                     kind,

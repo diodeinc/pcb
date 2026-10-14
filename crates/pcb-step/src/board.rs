@@ -36,7 +36,7 @@ pub struct Board<'a> {
     pub(crate) fills: Vec<Fill>,
     /// Polygon points of every zone fill, referenced by range.
     pub(crate) fill_points: Vec<Vec2>,
-    /// Graphics and text on the silkscreen and solder mask layers.
+    /// Graphics and text on the silkscreen, solder mask and paste layers.
     pub(crate) shapes: Vec<Shape>,
     pub(crate) shape_points: Vec<Vec2>,
     pub(crate) texts: Vec<Text>,
@@ -50,8 +50,10 @@ pub struct Board<'a> {
     pub(crate) gap_ratio: f64,
     /// Whether vias are tented by default on the front and back.
     pub(crate) tent: [bool; 2],
-    /// Net ids by the name or number written in the file; 0 is no net.
+    /// Net ids by name; 0 is no net.
     pub(crate) nets: std::collections::HashMap<&'a str, u32>,
+    /// Net names by number, declared by files before KiCad 10.
+    net_codes: std::collections::HashMap<i32, &'a str>,
 }
 
 /// A layer drawn on the outside of the board.
@@ -61,6 +63,8 @@ pub(crate) enum Tech {
     BackSilk,
     FrontMask,
     BackMask,
+    FrontPaste,
+    BackPaste,
     /// Index among the copper layers.
     Copper(u8),
 }
@@ -72,6 +76,8 @@ impl Tech {
             "B.SilkS" => Some(Self::BackSilk),
             "F.Mask" => Some(Self::FrontMask),
             "B.Mask" => Some(Self::BackMask),
+            "F.Paste" => Some(Self::FrontPaste),
+            "B.Paste" => Some(Self::BackPaste),
             _ => None,
         }
     }
@@ -86,7 +92,7 @@ impl Tech {
     }
 
     pub(crate) fn front(self) -> bool {
-        matches!(self, Self::FrontSilk | Self::FrontMask)
+        matches!(self, Self::FrontSilk | Self::FrontMask | Self::FrontPaste)
     }
 
     pub(crate) fn silk(self) -> bool {
@@ -94,7 +100,8 @@ impl Tech {
     }
 }
 
-/// A graphic on a silkscreen or mask layer, in board coordinates.
+/// A graphic on a silkscreen, mask, paste or copper layer, in board
+/// coordinates.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Shape {
     pub(crate) layer: Tech,
@@ -166,7 +173,7 @@ impl LineStyle {
     }
 }
 
-/// A text on a silkscreen or mask layer, in board coordinates.
+/// A text on a silkscreen, mask or paste layer, in board coordinates.
 #[derive(Debug, Clone)]
 pub(crate) struct Text {
     pub(crate) text: String,
@@ -300,11 +307,24 @@ pub(crate) struct Via {
     /// Annular ring diameter.
     pub(crate) size: f64,
     pub(crate) net: u32,
-    pub(crate) remove_unused: bool,
-    pub(crate) keep_ends: bool,
+    pub(crate) unconnected: Unconnected,
     /// Front and back tenting stated on the via; the board's default
     /// applies where absent.
     pub(crate) tented: [Option<bool>; 2],
+}
+
+/// Where a pad or via is left off copper layers that nothing connects
+/// to, as KiCad's `UNCONNECTED_LAYER_MODE`. The ends are the drill's
+/// first and last copper layers.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) enum Unconnected {
+    #[default]
+    KeepAll,
+    RemoveAll,
+    /// Removed except at the ends.
+    KeepEnds,
+    /// On the ends alone, connected or not.
+    EndsOnly,
 }
 
 /// A pad's copper, in board coordinates. The shape sits at `at + offset`
@@ -325,8 +345,8 @@ pub(crate) struct Pad {
     pub(crate) has_hole: bool,
     /// Drill size; zero without a hole.
     pub(crate) drill: Vec2,
-    pub(crate) remove_unused: bool,
-    pub(crate) keep_ends: bool,
+    /// What a plated through hole does on layers nothing connects to.
+    pub(crate) unconnected: Unconnected,
     pub(crate) primitives: std::ops::Range<u32>,
     /// Whether the pad opens the front and back solder mask.
     pub(crate) mask: [bool; 2],
@@ -499,7 +519,7 @@ impl<'a> Board<'a> {
     /// Parse a board; with `copper` false, pad copper, tracks and zone
     /// fills are skipped, which is a fifth of the parse time on large
     /// boards and all an export without copper needs; with `graphics`
-    /// false, silkscreen and mask graphics and text are skipped.
+    /// false, silkscreen, mask and paste graphics and text are skipped.
     pub fn parse_with(src: &'a [u8], copper: bool, graphics: bool) -> Result<Self, Error> {
         std::str::from_utf8(src).map_err(|_| Error::Utf8)?;
         let mut p = Parser::new(src);
@@ -535,6 +555,7 @@ impl<'a> Board<'a> {
             gap_ratio: DEFAULT_GAP_RATIO,
             tent: [false; 2],
             nets: std::collections::HashMap::new(),
+            net_codes: std::collections::HashMap::new(),
         };
         let mut scratch = FootprintScratch {
             copper,
@@ -556,6 +577,13 @@ impl<'a> Board<'a> {
                 "setup" => board.parse_setup(&mut p)?,
                 "footprint" => board.parse_footprint(&mut p, &mut scratch)?,
                 "via" => board.parse_via(&mut p)?,
+                "net" => {
+                    let code = p.atom()?.and_then(|c| c.parse().ok());
+                    if let (Some(code), Some(name)) = (code, p.atom()?) {
+                        board.net_codes.insert(code, name);
+                    }
+                    p.skip()?;
+                }
                 "segment" | "arc" if copper => board.parse_track(&mut p, name == "arc")?,
                 "zone" if copper => board.parse_zone(&mut p)?,
                 "embedded_files" => board.parse_embedded_files(&mut p)?,
@@ -863,16 +891,17 @@ impl<'a> Board<'a> {
                     p.skip()?;
                 }
                 "pad" => {
-                    let (hole, pads, net_atom) = parse_pad(
+                    let (hole, pads, net) = parse_pad(
                         p,
                         fp.rotation,
                         &self.copper_layers,
                         &mut self.primitives,
                         &mut self.primitive_points,
                     )?;
+                    let net_name = self.net_name(net).filter(|n| !n.is_empty());
                     let net = match pads.first() {
                         Some(pad) if scratch.copper && pad.kind != PadKind::NoPlate => {
-                            self.net_id(net_atom)
+                            self.net_id(net_name)
                         }
                         _ => 0,
                     };
@@ -882,7 +911,7 @@ impl<'a> Board<'a> {
                         scratch.holes.push(hole);
                     }
                     if !pads.is_empty()
-                        && let Some(net) = net_atom.filter(|n| !n.is_empty() && *n != "0")
+                        && let Some(net) = net_name
                         && !fp.nets.contains(&net)
                     {
                         fp.nets.push(net);
@@ -1009,8 +1038,7 @@ impl<'a> Board<'a> {
             machining: Machining::default(),
             size: 0.0,
             net: 0,
-            remove_unused: false,
-            keep_ends: false,
+            unconnected: Unconnected::KeepAll,
             tented: [None; 2],
         };
         let mut placed = false;
@@ -1024,12 +1052,18 @@ impl<'a> Board<'a> {
                 }
                 "drill" => via.drill = p.f64("via drill")?.abs(),
                 "size" => via.size = p.f64("via size")?.abs(),
-                "net" => {
-                    let atom = p.atom()?;
-                    via.net = self.net_id(atom);
+                "net" => via.net = self.net_id(self.net_name((p.atom()?, p.atom()?))),
+                // As KiCad reads them: each flag sets the mode when yes
+                // and is ignored when no.
+                "remove_unused_layers" | "keep_end_layers" | "start_end_only" => {
+                    if p.atom()? != Some("no") {
+                        via.unconnected = match name {
+                            "remove_unused_layers" => Unconnected::RemoveAll,
+                            "keep_end_layers" => Unconnected::KeepEnds,
+                            _ => Unconnected::EndsOnly,
+                        };
+                    }
                 }
-                "remove_unused_layers" => via.remove_unused = p.atom()? != Some("no"),
-                "keep_end_layers" => via.keep_ends = p.atom()? != Some("no"),
                 "layers" => {
                     let top = p.atom()?;
                     let bottom = p.atom()?;
@@ -1087,10 +1121,7 @@ impl<'a> Board<'a> {
                 "end" => track.b = p.xy("track end")?,
                 "width" => track.width = p.f64("track width")?,
                 "layer" => track.layer = self.copper_index(p.atom()?).unwrap_or(u32::MAX),
-                "net" => {
-                    let atom = p.atom()?;
-                    track.net = self.net_id(atom);
-                }
+                "net" => track.net = self.net_id(self.net_name((p.atom()?, p.atom()?))),
                 _ => {}
             }
             p.skip()?;
@@ -1109,8 +1140,7 @@ impl<'a> Board<'a> {
         while let Some(name) = p.open()? {
             match name {
                 "net" => {
-                    let atom = p.atom()?;
-                    net = self.net_id(atom);
+                    net = self.net_id(self.net_name((p.atom()?, p.atom()?)));
                     p.skip()?;
                 }
                 "filled_polygon" => {
@@ -1146,12 +1176,25 @@ impl<'a> Board<'a> {
         Ok(())
     }
 
-    /// Id of the net named by a `(net ...)` list's first atom. KiCad writes
-    /// a number in older files and a name in newer ones; both intern to
-    /// the same id space here. Unconnected items are net 0.
-    fn net_id(&mut self, atom: Option<&'a str>) -> u32 {
-        match atom {
-            None | Some("0") | Some("") => 0,
+    /// The net a `(net ...)` list's two atoms name, as KiCad reads it.
+    /// KiCad 10 writes the name alone. Older files declare every net at
+    /// the top and write its number, and pads add the name: a pad whose
+    /// name disagrees with the number is on no net, and an undeclared
+    /// number leaves only the pad's name.
+    fn net_name(&self, (first, name): NetAtoms<'a>) -> Option<&'a str> {
+        if self.net_codes.is_empty() {
+            return first;
+        }
+        match first.and_then(|code| self.net_codes.get(&code.parse().ok()?)) {
+            Some(&declared) => name.is_none_or(|n| n == declared).then_some(declared),
+            None => name,
+        }
+    }
+
+    /// Id of the net named `name`; no name or an empty one is net 0.
+    fn net_id(&mut self, name: Option<&'a str>) -> u32 {
+        match name {
+            None | Some("") => 0,
             Some(name) => {
                 let next = self.nets.len() as u32 + 1;
                 *self.nets.entry(name).or_insert(next)
@@ -1513,9 +1556,8 @@ fn parse_pad<'a>(
     let mut rotation = 0.0;
     let mut drill = Vec2::ZERO;
     let mut layers = 0u64;
-    let mut net_atom = None;
-    let mut remove_unused = false;
-    let mut keep_ends = false;
+    let mut net = (None, None);
+    let mut unconnected = Unconnected::KeepAll;
     let mut machining = Machining::default();
     let mut mask = [false; 2];
     let mut mask_margin = None;
@@ -1528,7 +1570,7 @@ fn parse_pad<'a>(
                 at = p.xy("pad at")?;
                 rotation = p.f64_or(0.0)?;
             }
-            "net" => net_atom = p.atom()?,
+            "net" => net = (p.atom()?, p.atom()?),
             "layers" => {
                 while let Some(layer) = p.atom()? {
                     layers |= copper_layer_mask(layer, copper_layers);
@@ -1546,8 +1588,19 @@ fn parse_pad<'a>(
             "solder_mask_margin" => mask_margin = Some(p.f64("solder_mask_margin")?),
             "solder_paste_margin" => paste_margin = Some(p.f64("solder_paste_margin")?),
             "solder_paste_margin_ratio" => paste_ratio = Some(p.f64("solder_paste_margin_ratio")?),
-            "remove_unused_layers" => remove_unused = p.atom()? != Some("no"),
-            "keep_end_layers" => keep_ends = p.atom()? != Some("no"),
+            // As KiCad reads them, each in turn setting the mode.
+            "remove_unused_layers" => {
+                unconnected = match p.atom()? {
+                    Some("no") => Unconnected::KeepAll,
+                    _ => Unconnected::RemoveAll,
+                }
+            }
+            "keep_end_layers" => {
+                unconnected = match p.atom()? {
+                    Some("no") => Unconnected::RemoveAll,
+                    _ => Unconnected::KeepEnds,
+                }
+            }
             "drill" => {
                 match p.atom()? {
                     Some("oval") => {
@@ -1642,8 +1695,7 @@ fn parse_pad<'a>(
         net: 0,
         has_hole,
         drill,
-        remove_unused,
-        keep_ends,
+        unconnected,
         primitives: geometry.primitives.clone(),
         mask,
         mask_margin,
@@ -1678,7 +1730,7 @@ fn parse_pad<'a>(
             })
             .collect()
     };
-    Ok((hole, pads, net_atom))
+    Ok((hole, pads, net))
 }
 
 /// Copper layers named by one `(layers ...)` entry: a layer name, `*.Cu`
@@ -1768,8 +1820,11 @@ fn parse_primitives(
     Ok(())
 }
 
-/// A pad's drill, its copper, and its net atom still to intern.
-type ParsedPad<'a> = (Option<Hole<'a>>, Vec<Pad>, Option<&'a str>);
+/// A pad's drill, its copper, and its net as written.
+type ParsedPad<'a> = (Option<Hole<'a>>, Vec<Pad>, NetAtoms<'a>);
+
+/// The first two atoms of a `(net ...)` list.
+type NetAtoms<'a> = (Option<&'a str>, Option<&'a str>);
 
 fn parse_yes_no(atom: Option<&str>) -> Option<bool> {
     match atom {

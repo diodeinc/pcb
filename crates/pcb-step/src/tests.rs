@@ -941,8 +941,7 @@ fn machining_becomes_radius_profiles() {
         filled: false,
         size: 0.8,
         net: 0,
-        remove_unused: false,
-        keep_ends: false,
+        unconnected: crate::board::Unconnected::KeepAll,
         tented: [None; 2],
         machining: Machining {
             backdrills: [
@@ -1119,7 +1118,7 @@ fn parses_copper_items() {
     assert!((pad.at - Vec2::new(10.0, 9.0)).length() < 1e-9);
     let tht = &board.pads[1];
     assert_eq!(tht.layers, 0b1111);
-    assert!(tht.has_hole && tht.remove_unused && tht.keep_ends);
+    assert!(tht.has_hole && tht.unconnected == crate::board::Unconnected::KeepEnds);
     assert_eq!(tht.kind, crate::board::PadKind::ThroughHole);
     let custom = &board.pads[2];
     assert!(matches!(
@@ -2149,4 +2148,146 @@ fn image_takes_padstack_shapes_per_layer() {
     assert_eq!(name(drill.net), Some("GND"));
     assert_eq!(name(drill.component), Some("MH1"));
     assert_eq!(name(drill.pin), Some("1"));
+}
+
+/// The area of the image's regions of `kind` on the stackup layer named
+/// `layer` for `net`; zero when there are none.
+fn image_area(image: &crate::BoardImage, layer: &str, kind: crate::ImageKind, net: &str) -> f64 {
+    image
+        .layers
+        .iter()
+        .filter(|l| {
+            image.stackup[l.layer].name == layer
+                && l.kind == kind
+                && image.nets[l.net as usize] == net
+        })
+        .map(|l| l.region.area())
+        .sum()
+}
+
+#[test]
+fn image_paste_takes_graphics_on_the_paste_layers() {
+    use crate::ImageKind::Paste;
+    // A 1 x 2 mm pad with paste, a 2 x 3 mm window drawn beside it, and
+    // a triangle drawn on the back paste.
+    let body = format!(
+        r#"{}(footprint "Lib:QFN" (layer "F.Cu") (at 10 10) (property "Reference" "U1")
+  (fp_rect (start 2 -1.5) (end 4 1.5) (stroke (width 0) (type solid)) (fill yes) (layer "F.Paste"))
+  (pad "1" smd rect (at 0 0) (size 1 2) (layers "F.Cu" "F.Paste" "F.Mask")))
+(gr_poly (pts (xy 5 15) (xy 9 15) (xy 5 18)) (stroke (width 0) (type solid)) (fill yes) (layer "B.Paste"))
+"#,
+        rect_outline(0.0, 0.0, 30.0, 20.0)
+    );
+    let text = parse(&body);
+    let board = Board::parse(text.as_bytes()).unwrap();
+    let image = crate::board_image(&board, &crate::ImageOptions::default()).unwrap();
+    assert!(image.warnings.is_empty(), "{:?}", image.warnings);
+    let front = image_area(&image, "F.Paste", Paste, "");
+    assert!((front - 8.0).abs() < 1e-6, "{front}");
+    let back = image_area(&image, "B.Paste", Paste, "");
+    assert!((back - 6.0).abs() < 1e-6, "{back}");
+}
+
+#[test]
+fn image_flashes_vias_as_kicad_does() {
+    use crate::ImageKind::Copper;
+    // Nothing connects to these vias but a track on In2.Cu ending at the
+    // last one. Each is on a net named for its mode.
+    let body = format!(
+        r#"{}(via (at 5 5) (size 1 1) (drill 0.5) (layers "F.Cu" "B.Cu") (remove_unused_layers yes) (keep_end_layers no) (net "REMOVE_ALL"))
+(via (at 10 5) (size 1 1) (drill 0.5) (layers "F.Cu" "B.Cu") (remove_unused_layers yes) (keep_end_layers yes) (net "KEEP_ENDS"))
+(via (at 15 5) (size 1 1) (drill 0.5) (layers "F.Cu" "In1.Cu") (remove_unused_layers yes) (keep_end_layers yes) (net "BLIND"))
+(via (at 25 15) (size 1 1) (drill 0.5) (layers "F.Cu" "B.Cu") (start_end_only yes) (net "ENDS_ONLY"))
+(segment (start 25 15) (end 26 15) (width 0.1) (layer "In2.Cu") (net "ENDS_ONLY"))
+"#,
+        rect_outline(0.0, 0.0, 30.0, 20.0)
+    );
+    let text = parse(&body);
+    let board = Board::parse(text.as_bytes()).unwrap();
+    let options = crate::ImageOptions {
+        inner_copper: true,
+        ..Default::default()
+    };
+    let image = crate::board_image(&board, &options).unwrap();
+    assert!(image.warnings.is_empty(), "{:?}", image.warnings);
+    // Layers with a ring; the short track alone is far less copper.
+    let ring = PI * (0.5f64.powi(2) - 0.25f64.powi(2));
+    let flashed = |net: &str| -> Vec<&str> {
+        ["F.Cu", "In1.Cu", "In2.Cu", "B.Cu"]
+            .into_iter()
+            .filter(|layer| image_area(&image, layer, Copper, net) > ring * 0.9)
+            .collect()
+    };
+    assert_eq!(flashed("REMOVE_ALL"), Vec::<&str>::new());
+    assert_eq!(flashed("KEEP_ENDS"), ["F.Cu", "B.Cu"]);
+    assert_eq!(flashed("BLIND"), ["F.Cu", "In1.Cu"]);
+    assert_eq!(flashed("ENDS_ONLY"), ["F.Cu", "B.Cu"]);
+}
+
+#[test]
+fn image_resolves_numbered_nets_by_their_declarations() {
+    use crate::ImageKind::Copper;
+    // A board before KiCad 10: items give net numbers, declared at the
+    // top. The second pad's name disagrees with its number and the last
+    // segment's number is never declared, so KiCad puts both on no net.
+    let body = format!(
+        r#"(net 0 "")
+(net 1 "GND")
+(net 2 "VCC")
+{}(footprint "Lib:R" (layer "F.Cu") (at 5 10) (property "Reference" "R1")
+  (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu") (net 1 "GND"))
+  (pad "2" smd rect (at 3 0) (size 1 1) (layers "F.Cu") (net 2 "GND")))
+(segment (start 5 10) (end 5 15) (width 0.5) (layer "F.Cu") (net 1))
+(via (at 5 15) (size 1 1) (drill 0.5) (layers "F.Cu" "B.Cu") (net 1))
+(segment (start 20 2) (end 25 2) (width 0.5) (layer "F.Cu") (net 9))
+(zone (net 2) (net_name "VCC") (layer "B.Cu")
+  (filled_polygon (layer "B.Cu") (pts (xy 10 10) (xy 14 10) (xy 14 12) (xy 10 12))))
+"#,
+        rect_outline(0.0, 0.0, 30.0, 20.0)
+    );
+    let text = parse(&body);
+    let board = Board::parse(text.as_bytes()).unwrap();
+    let image = crate::board_image(&board, &crate::ImageOptions::default()).unwrap();
+    assert!(image.warnings.is_empty(), "{:?}", image.warnings);
+    let mut nets = image.nets.clone();
+    nets.sort();
+    assert_eq!(nets, ["", "GND", "VCC"]);
+    // The pad, the segment and the via are one net, so one region.
+    let gnd = image_region(&image, "F.Cu", Copper, "GND");
+    assert_eq!(gnd.ring_count(), 2, "the via's drill is the only hole");
+    assert!((image_area(&image, "B.Cu", Copper, "VCC") - 8.0).abs() < 1e-6);
+    let unconnected = image_area(&image, "F.Cu", Copper, "");
+    assert!(
+        (unconnected - (1.0 + 2.5 + PI * 0.0625)).abs() < 0.01,
+        "{unconnected}"
+    );
+}
+
+#[test]
+fn synthesized_outline_holds_zone_fills() {
+    use crate::ImageKind::Copper;
+    // No Edge.Cuts: a 6 x 6 mm fill and a short track beside it.
+    // The board also declares F.Cu alone.
+    let text = r#"(kicad_pcb (version 20241229) (generator "pcbnew")
+  (general (thickness 1.6))
+  (layers (0 "F.Cu" signal))
+  (segment (start 2 3) (end 3 3) (width 0.25) (layer "F.Cu") (net "SIG"))
+  (zone (net "GND") (layer "F.Cu")
+    (filled_polygon (layer "F.Cu") (pts (xy 0 0) (xy 6 0) (xy 6 -6) (xy 0 -6)))))
+"#;
+    let board = Board::parse(text.as_bytes()).unwrap();
+    let options = crate::ImageOptions {
+        outline: crate::OutlinePolicy::Synthesize,
+        ..Default::default()
+    };
+    let image = crate::board_image(&board, &options).unwrap();
+    let fill = image_area(&image, "F.Cu", Copper, "GND");
+    assert!((fill - 36.0).abs() < 1e-6, "{fill}");
+    let copper: Vec<&str> = image
+        .stackup
+        .iter()
+        .filter(|l| l.role == crate::LayerRole::Copper)
+        .map(|l| l.name.as_str())
+        .collect();
+    assert_eq!(copper, ["B.Cu", "F.Cu"]);
 }
