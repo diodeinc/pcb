@@ -1180,10 +1180,11 @@ impl<'a> Board<'a> {
     /// KiCad 10 writes the name alone. Older files declare every net at
     /// the top and write its number, and pads add the name: a pad whose
     /// name disagrees with the number is on no net, and an undeclared
-    /// number leaves only the pad's name.
+    /// number leaves only the pad's name. Number 0 is no net, declared
+    /// or not.
     fn net_name(&self, (first, name): NetAtoms<'a>) -> Option<&'a str> {
         if self.net_codes.is_empty() {
-            return first;
+            return first.filter(|&n| n != "0");
         }
         match first.and_then(|code| self.net_codes.get(&code.parse().ok()?)) {
             Some(&declared) => name.is_none_or(|n| n == declared).then_some(declared),
@@ -1191,10 +1192,10 @@ impl<'a> Board<'a> {
         }
     }
 
-    /// Id of the net named `name`; no name, an empty one or `0` is net 0.
+    /// Id of the net named `name`; no name or an empty one is net 0.
     fn net_id(&mut self, name: Option<&'a str>) -> u32 {
         match name {
-            None | Some("" | "0") => 0,
+            None | Some("") => 0,
             Some(name) => {
                 let next = self.nets.len() as u32 + 1;
                 *self.nets.entry(name).or_insert(next)

@@ -2230,16 +2230,19 @@ fn image_resolves_numbered_nets_by_their_declarations() {
     // A board before KiCad 10: items give net numbers, declared at the
     // top. The second pad's name disagrees with its number and the last
     // segment's number is never declared, so KiCad puts both on no net.
+    // A net may be named `0`; only the number 0 is no net.
     let body = format!(
         r#"(net 0 "")
 (net 1 "GND")
 (net 2 "VCC")
+(net 3 "0")
 {}(footprint "Lib:R" (layer "F.Cu") (at 5 10) (property "Reference" "R1")
   (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu") (net 1 "GND"))
   (pad "2" smd rect (at 3 0) (size 1 1) (layers "F.Cu") (net 2 "GND")))
 (segment (start 5 10) (end 5 15) (width 0.5) (layer "F.Cu") (net 1))
 (via (at 5 15) (size 1 1) (drill 0.5) (layers "F.Cu" "B.Cu") (net 1))
 (segment (start 20 2) (end 25 2) (width 0.5) (layer "F.Cu") (net 9))
+(segment (start 20 18) (end 25 18) (width 0.5) (layer "F.Cu") (net 3))
 (zone (net 2) (net_name "VCC") (layer "B.Cu")
   (filled_polygon (layer "B.Cu") (pts (xy 10 10) (xy 14 10) (xy 14 12) (xy 10 12))))
 "#,
@@ -2251,7 +2254,7 @@ fn image_resolves_numbered_nets_by_their_declarations() {
     assert!(image.warnings.is_empty(), "{:?}", image.warnings);
     let mut nets = image.nets.clone();
     nets.sort();
-    assert_eq!(nets, ["", "GND", "VCC"]);
+    assert_eq!(nets, ["", "0", "GND", "VCC"]);
     // The pad, the segment and the via are one net, so one region.
     let gnd = image_region(&image, "F.Cu", Copper, "GND");
     assert_eq!(gnd.ring_count(), 2, "the via's drill is the only hole");
