@@ -1031,43 +1031,52 @@ fn a_net_symbol_at_a_removed_pin_goes_with_it() {
     assert_eq!(symbols_at(&local_again, pin), 0);
 }
 
-#[test]
-fn a_driver_with_a_collision_suffixed_id_goes_with_its_pin() {
+/// The INPUT pin's parent label, minted by pcb while other items held its
+/// deterministic id and the first `taken` replacements pcb would try, which
+/// the user then deleted.
+fn crossing_with_a_collided_driver(taken: u64) -> SchDocument {
     let local = common::compile_fixture("hierarchy", "sheet_port_local.zen");
     let external = common::compile_fixture("hierarchy", "sheet_port_external.zen");
-    let renamed = common::compile_fixture("hierarchy", "sheet_port_renamed.zen");
     let mut created = create(&local, "SheetPort.kicad_sch");
-
-    // Items on another page already hold the driver's deterministic id and
-    // its first suffixes, so the INPUT pin's label gets a later suffix.
-    let key = "zener:module-parent-driver:FILTER:INPUT:SIGNAL";
+    let id = deterministic_uuid("zener:module-parent-driver:FILTER:INPUT:SIGNAL");
     let child = created
         .pages
         .iter_mut()
         .find(|page| page.file_name.as_deref() == Some("FILTER.kicad_sch"))
         .unwrap();
-    for index in 0..12 {
-        let id = if index == 0 {
-            deterministic_uuid(key)
+    let occupied = std::iter::once(id.clone()).chain((0..taken).map(|index| {
+        deterministic_uuid(if index == 0 {
+            id.clone()
         } else {
-            deterministic_uuid(format!("{key}:{index}"))
-        };
+            format!("{id}:{index}")
+        })
+    }));
+    for (row, occupied) in occupied.enumerate() {
         child.items.push(SchItem::Label(Label::new(
-            id,
+            occupied,
             "NOTE",
-            Point::new(20.32, 20.32 + index as f64 * 5.08),
+            Point::new(20.32, 20.32 + row as f64 * 5.08),
         )));
     }
     let mut crossing = reapply(&created, &external);
     assert_eq!(sheet_pin_names(&crossing), ["INPUT"]);
-
-    // The user deletes those items; later the port is renamed, so SIGNAL
-    // still crosses, under IN.
+    let pin = generated_sheet(&crossing).pins[0].at;
+    let driver = page_labels(&crossing.pages[0])
+        .into_iter()
+        .find(|label| label.at == pin)
+        .unwrap();
+    assert_ne!(driver.id, id, "pcb minted a replacement id");
+    assert!(driver.fields.contains_key("pcb:sheet_pin"));
     for page in &mut crossing.pages {
         page.items
             .retain(|item| !matches!(item, SchItem::Label(label) if label.text == "NOTE"));
     }
-    let applied = reapply(&crossing, &renamed);
+    crossing
+}
+
+fn assert_signal_only_at_r2_and_in(document: &SchDocument) {
+    let renamed = common::compile_fixture("hierarchy", "sheet_port_renamed.zen");
+    let applied = reapply(document, &renamed);
     assert_eq!(sheet_pin_names(&applied), ["IN"]);
     let root = labels_on(&applied, "SheetPort.kicad_sch");
     assert_eq!(
@@ -1080,33 +1089,23 @@ fn a_driver_with_a_collision_suffixed_id_goes_with_its_pin() {
 }
 
 #[test]
+fn a_driver_with_a_collision_suffixed_id_goes_with_its_pin() {
+    // A replacement far past the page's item count; the port is then
+    // renamed, so SIGNAL still crosses, under IN.
+    assert_signal_only_at_r2_and_in(&crossing_with_a_collided_driver(12));
+}
+
+#[test]
 fn an_older_driver_with_a_suffixed_id_and_no_marker_goes_with_its_pin() {
-    let external = common::compile_fixture("hierarchy", "sheet_port_external.zen");
-    let renamed = common::compile_fixture("hierarchy", "sheet_port_renamed.zen");
-    let mut older = create(&external, "SheetPort.kicad_sch");
-    // A released pcb gave the INPUT pin's label a collision-suffixed id and
-    // recorded no pin on it.
-    let pin = generated_sheet(&older).pins[0].at;
-    let key = "zener:module-parent-driver:FILTER:INPUT:SIGNAL";
+    // A released pcb minted the replacement id the same way but recorded no
+    // pin on the label.
+    let mut older = crossing_with_a_collided_driver(3);
     for item in &mut older.pages[0].items {
-        if let SchItem::Label(label) = item
-            && label.at == pin
-        {
-            label.id = deterministic_uuid(format!("{key}:7"));
-            label.fields.clear();
+        if let SchItem::Label(label) = item {
+            label.fields.remove("pcb:sheet_pin");
         }
     }
-
-    let applied = reapply(&older, &renamed);
-    assert_eq!(sheet_pin_names(&applied), ["IN"]);
-    let root = labels_on(&applied, "SheetPort.kicad_sch");
-    assert_eq!(
-        root.iter()
-            .filter(|label| **label == ("SIGNAL".to_string(), LabelKind::Local))
-            .count(),
-        2,
-        "R2's pin and pin IN: {root:#?}"
-    );
+    assert_signal_only_at_r2_and_in(&older);
 }
 
 #[test]

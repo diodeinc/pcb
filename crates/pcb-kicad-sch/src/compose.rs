@@ -1208,10 +1208,11 @@ fn sync_generated_sheet_pins(
                     .get(SHEET_PIN_FIELD)
                     .is_some_and(|field| field.value == id)
             };
-            // Released versions recorded no pin, so a driver label they gave a
-            // collision-suffixed id is known by that suffix of its key. Only a
-            // label at the pin is searched, as far as any suffix a document of
-            // this size, or a far larger one, could have needed.
+            // Released versions recorded no pin, so a driver label that could
+            // not take its id is known by the replacement `upsert_label`
+            // minted from that id. Only a label at the pin is searched, as far
+            // as any replacement a document of this size, or a far larger one,
+            // could have needed.
             let suffix_bound = LEGACY_SUFFIX_SEARCH.max(
                 document
                     .pages
@@ -1225,12 +1226,12 @@ fn sync_generated_sheet_pins(
                     .map(String::as_str)
                     .chain([label.text.as_str()])
                     .any(|net_name| {
-                        let key = format!(
+                        let id = deterministic_uuid(format!(
                             "zener:module-parent-driver:{}:{port_name}:{net_name}",
                             module.path
-                        );
-                        (1..=suffix_bound)
-                            .any(|index| label.id == deterministic_uuid(format!("{key}:{index}")))
+                        ));
+                        (0..=suffix_bound as u64)
+                            .any(|index| label.id == deterministic_id_candidate(&id, index))
                     })
             };
             let attached = page
@@ -4135,15 +4136,18 @@ fn contains_id(document: &SchDocument, id: &str) -> bool {
 
 fn available_deterministic_id(document: &SchDocument, key: &str) -> String {
     (0_u64..)
-        .map(|index| {
-            deterministic_uuid(if index == 0 {
-                key.to_string()
-            } else {
-                format!("{key}:{index}")
-            })
-        })
+        .map(|index| deterministic_id_candidate(key, index))
         .find(|id| !contains_id(document, id))
         .expect("a finite schematic cannot exhaust deterministic UUIDs")
+}
+
+/// The `index`th id `available_deterministic_id` tries for `key`.
+fn deterministic_id_candidate(key: &str, index: u64) -> String {
+    deterministic_uuid(if index == 0 {
+        key.to_string()
+    } else {
+        format!("{key}:{index}")
+    })
 }
 
 fn upsert_label(document: &mut SchDocument, page_index: usize, mut label: Label) -> Result<()> {
