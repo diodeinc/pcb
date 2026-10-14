@@ -52,6 +52,17 @@ pub struct LandId(pub FeatureOccurrenceId);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct PhysicalTerminationId(pub u32);
 
+/// One contact of one component occurrence. Terminations of a component
+/// share a pad when they name the same pin, so one pin drawn as several
+/// lands is one pad, or when their lands have exactly equal padstack and
+/// location, so stacked pins such as USB-C A1 and B12 are one pad. No
+/// geometric tolerance applies. Pads are numbered in termination order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct PadId(pub u32);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct PasteRegionId(pub u32);
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct PasteIslandId {
     pub source: FeatureOccurrenceId,
@@ -113,6 +124,7 @@ pub struct PhysicalLand {
 #[derive(Debug, Clone)]
 pub struct PhysicalTermination {
     pub id: PhysicalTerminationId,
+    pub pad: PadId,
     pub component: ComponentOccurrenceId,
     pub pin: Symbol,
     pub pin_type: PackagePinType,
@@ -145,6 +157,30 @@ pub struct PasteIsland {
     /// `Conflicting`.
     pub termination: Association<PhysicalTerminationId>,
     pub termination_basis: Option<AssociationBasis>,
+}
+
+/// One connected component of the paste printed on one side of one board:
+/// the union of its paste islands, so overlapping and duplicate features
+/// count once and clears stay cut out.
+#[derive(Debug, Clone)]
+pub struct PasteRegion {
+    pub id: PasteRegionId,
+    pub side: Side,
+    pub board: Option<LayoutOccurrenceId>,
+    pub image: ContourSet,
+    /// The islands of [`AssemblyView::paste_islands`] that each overlap this
+    /// region more than any other.
+    pub islands: Vec<PasteIslandId>,
+    /// The pad its islands' termination links name: `Resolved` when they
+    /// name one pad, `Ambiguous` when they name several, and `Conflicting`
+    /// when any island's link is.
+    pub pad: Association<PadId>,
+    /// `SourceIdentity` only when every island links by identity.
+    pub pad_basis: Option<AssociationBasis>,
+    /// The population of the linked pad's component and of every component
+    /// an island resolves to; `Conflicting` lists the states when they
+    /// disagree.
+    pub population: Association<PopulationState>,
 }
 
 #[derive(Debug, Clone)]
@@ -209,6 +245,8 @@ pub struct PhysicalView {
 pub struct AssemblyView {
     pub terminations: Vec<PhysicalTermination>,
     pub paste_islands: Vec<PasteIsland>,
+    /// The paste of each side and board as disjoint regions, in island order.
+    pub paste_regions: Vec<PasteRegion>,
     pub holes: Vec<AssemblyHole>,
 }
 
@@ -384,11 +422,13 @@ impl ImportedDesign {
         )?;
         let paste_islands =
             self.paste_islands(scope, &components, &source_lands, &terminations, resolution)?;
+        let paste_regions = paste_regions(&paste_islands, &terminations, resolution)?;
         let mut holes = self.derive_physical_holes(scope, &[], &all, resolution)?;
         self.attach_hole_terminations(&lands, &terminations, &mut holes)?;
         Ok(AssemblyView {
             terminations,
             paste_islands,
+            paste_regions,
             holes: holes
                 .into_iter()
                 .map(|hole| AssemblyHole {
@@ -513,6 +553,7 @@ impl ImportedDesign {
             );
             terminations.push(PhysicalTermination {
                 id: PhysicalTerminationId(0),
+                pad: PadId(0),
                 component,
                 pin,
                 pin_type: package_pin.pin_type,
@@ -536,8 +577,49 @@ impl ImportedDesign {
                 .then_with(|| left.at.x.total_cmp(&right.at.x))
                 .then_with(|| left.at.y.total_cmp(&right.at.y))
         });
-        for (index, termination) in terminations.iter_mut().enumerate() {
+        // A pad joins the terminations of one component that share a pin or
+        // an exactly stacked land. Each set is rooted at its first member.
+        let mut root = (0..terminations.len()).collect::<Vec<_>>();
+        fn find(root: &mut [usize], mut index: usize) -> usize {
+            while root[index] != index {
+                root[index] = root[root[index]];
+                index = root[index];
+            }
+            index
+        }
+        let mut by_pin = HashMap::new();
+        let mut by_land = HashMap::new();
+        for (index, termination) in terminations.iter().enumerate() {
+            let land = (
+                termination.component,
+                termination.padstack,
+                exact_coordinate(termination.at.x),
+                exact_coordinate(termination.at.y),
+            );
+            for first in [
+                *by_pin
+                    .entry((termination.component, termination.pin))
+                    .or_insert(index),
+                *by_land.entry(land).or_insert(index),
+            ] {
+                let (a, b) = (find(&mut root, index), find(&mut root, first));
+                root[a.max(b)] = a.min(b);
+            }
+        }
+        let mut pads = Vec::<PadId>::with_capacity(terminations.len());
+        let mut count = 0;
+        for index in 0..terminations.len() {
+            let first = find(&mut root, index);
+            pads.push(if first == index {
+                count += 1;
+                PadId(count - 1)
+            } else {
+                pads[first]
+            });
+        }
+        for (index, (termination, pad)) in terminations.iter_mut().zip(pads).enumerate() {
             termination.id = PhysicalTerminationId(index as u32);
+            termination.pad = pad;
         }
         terminations
     }
@@ -1132,6 +1214,116 @@ fn component_association(
         [component] => Association::Resolved(*component),
         _ => Association::Ambiguous(candidates),
     }
+}
+
+/// The connected components of the union of each side and board's paste
+/// islands, each linked to the pad its islands name.
+fn paste_regions(
+    islands: &[PasteIsland],
+    terminations: &[PhysicalTermination],
+    resolution: Resolution,
+) -> Result<Vec<PasteRegion>> {
+    let mut groups = Vec::<((Side, Option<LayoutOccurrenceId>), Vec<&PasteIsland>)>::new();
+    let mut group_of = HashMap::new();
+    for island in islands {
+        let key = (island.side, island.board);
+        let group = *group_of.entry(key).or_insert_with(|| {
+            groups.push((key, Vec::new()));
+            groups.len() - 1
+        });
+        groups[group].1.push(island);
+    }
+    // Termination ids are positions in `terminations`.
+    let pad = |id: &PhysicalTerminationId| terminations[id.0 as usize].pad;
+    let pad_population = terminations
+        .iter()
+        .map(|termination| (termination.pad, termination.population))
+        .collect::<HashMap<_, _>>();
+    let mut regions = Vec::new();
+    for ((side, board), group) in groups {
+        let images =
+            ContourSet::union_all(resolution, group.iter().map(|island| island.image.clone()))?
+                .connected_components();
+        let bounds = BBoxIndex::new(images.iter().map(ContourSet::bbox).collect());
+        let mut members = vec![Vec::<&PasteIsland>::new(); images.len()];
+        for island in group {
+            let mut most = None::<(usize, f64)>;
+            for index in bounds.query(island.image.bbox()) {
+                let area = images[index].intersection(&island.image)?.area();
+                if area > most.map_or(0.0, |(_, most)| most) {
+                    most = Some((index, area));
+                }
+            }
+            if let Some((index, _)) = most {
+                members[index].push(island);
+            }
+        }
+        for (image, members) in images.into_iter().zip(members) {
+            let mut named = BTreeSet::new();
+            let mut conflicting = false;
+            for island in &members {
+                match &island.termination {
+                    Association::Resolved(id) => {
+                        named.insert(pad(id));
+                    }
+                    Association::Ambiguous(ids) => named.extend(ids.iter().map(pad)),
+                    Association::Conflicting(ids) => {
+                        conflicting = true;
+                        named.extend(ids.iter().map(pad));
+                    }
+                    Association::Unresolved => {}
+                }
+            }
+            let named = named.into_iter().collect::<Vec<_>>();
+            let pad = match named.as_slice() {
+                _ if conflicting => Association::Conflicting(named),
+                [] => Association::Unresolved,
+                [pad] => Association::Resolved(*pad),
+                _ => Association::Ambiguous(named),
+            };
+            let pad_basis = (pad != Association::Unresolved).then(|| {
+                if members.iter().all(|island| {
+                    island.termination_basis == Some(AssociationBasis::SourceIdentity)
+                }) {
+                    AssociationBasis::SourceIdentity
+                } else {
+                    AssociationBasis::ExactGeometry
+                }
+            });
+            let mut states = Vec::new();
+            let known = pad
+                .resolved()
+                .map(|pad| pad_population[pad])
+                .into_iter()
+                .chain(
+                    members
+                        .iter()
+                        .filter(|island| island.component.resolved().is_some())
+                        .map(|island| island.population),
+                );
+            for state in known {
+                if !states.contains(&state) {
+                    states.push(state);
+                }
+            }
+            let population = match states.as_slice() {
+                [] => Association::Unresolved,
+                [state] => Association::Resolved(*state),
+                _ => Association::Conflicting(states),
+            };
+            regions.push(PasteRegion {
+                id: PasteRegionId(regions.len() as u32),
+                side,
+                board,
+                image,
+                islands: members.iter().map(|island| island.id).collect(),
+                pad,
+                pad_basis,
+                population,
+            });
+        }
+    }
+    Ok(regions)
 }
 
 /// Lands of one association context in view order, indexed once by image
@@ -2340,6 +2532,118 @@ mod tests {
         );
     }
 
+    #[test]
+    fn paste_regions_union_islands_and_link_one_pad_each() {
+        let xml = paste_region_fixture();
+        Ipc2581::validate(xml).expect("fixture conforms to IPC-2581C");
+        let imported = import(xml);
+        let view = imported
+            .assembly_view(ArtworkScope::Board, Resolution::default())
+            .unwrap();
+        let pad = |designator: &str, pin: &str| {
+            view.terminations
+                .iter()
+                .find(|termination| {
+                    imported.resolve(termination.pin) == pin
+                        && imported
+                            .component_definition(termination.component.component)
+                            .and_then(|component| component.source.ref_des)
+                            .is_some_and(|reference| imported.resolve(reference) == designator)
+                })
+                .unwrap()
+                .pad
+        };
+        let region = |x: f64, y: f64| {
+            let at = Point::new(x, y);
+            let mut regions = view
+                .paste_regions
+                .iter()
+                .filter(|region| region.image.bbox().contains_point(at));
+            let region = regions.next().unwrap();
+            assert!(regions.next().is_none());
+            region
+        };
+        let populated = Association::Resolved(PopulationState::Populate);
+        assert_eq!(view.paste_islands.len(), 13);
+        assert_eq!(view.paste_regions.len(), 6);
+        // Every island belongs to exactly one region.
+        let mut islands = view
+            .paste_regions
+            .iter()
+            .flat_map(|region| region.islands.iter().copied())
+            .collect::<Vec<_>>();
+        islands.sort();
+        let mut expected = view
+            .paste_islands
+            .iter()
+            .map(|island| island.id)
+            .collect::<Vec<_>>();
+        expected.sort();
+        assert_eq!(islands, expected);
+
+        // A 3 by 3 parent aperture drawn over its own four windows is one
+        // region, the rectangle. The windows link by geometry.
+        let exposed = region(0.0, 0.0);
+        assert_eq!(exposed.islands.len(), 5);
+        assert!((exposed.image.area() - 9.0).abs() < 1e-6);
+        assert_eq!(exposed.pad, Association::Resolved(pad("U1", "9")));
+        assert_eq!(exposed.pad_basis, Some(AssociationBasis::ExactGeometry));
+        assert_eq!(exposed.population, populated);
+
+        // A1 and B12 share one exactly stacked land, so each pin's paste
+        // prints the same pad. So does a duplicated paste feature.
+        assert_eq!(pad("J1", "A1"), pad("J1", "B12"));
+        for x in [10.0, 20.0] {
+            let stacked = region(x, 0.0);
+            assert_eq!(stacked.islands.len(), 2);
+            assert!((stacked.image.area() - 0.09).abs() < 1e-6);
+            assert_eq!(stacked.pad_basis, Some(AssociationBasis::SourceIdentity));
+            assert_eq!(stacked.population, populated);
+        }
+        assert_eq!(
+            region(10.0, 0.0).pad,
+            Association::Resolved(pad("J1", "A1"))
+        );
+        assert_eq!(region(20.0, 0.0).pad, Association::Resolved(pad("J2", "1")));
+
+        // A clear inside the paste stays cut out of its region.
+        let cleared = region(40.0, 0.0);
+        let hole = std::f64::consts::PI * 0.25 * 0.25;
+        // Arcs flatten to chords, which leave the hole slightly smaller.
+        assert!((cleared.image.area() - (4.0 - hole)).abs() < 0.01);
+        assert_eq!(cleared.pad, Association::Resolved(pad("U3", "1")));
+
+        // One pin drawn as two lands is one pad, so paste over both resolves.
+        assert_ne!(pad("Q1", "1"), pad("Q1", "2"));
+        let lands = region(30.25, 0.0);
+        let island = view
+            .paste_islands
+            .iter()
+            .find(|island| island.id == lands.islands[0])
+            .unwrap();
+        assert!(matches!(&island.termination, Association::Ambiguous(ids) if ids.len() == 2));
+        assert_eq!(lands.pad, Association::Resolved(pad("Q1", "1")));
+        assert_eq!(lands.pad_basis, Some(AssociationBasis::ExactGeometry));
+
+        // Paste of two different pads that touches is one region naming
+        // both, and parts that disagree on population conflict.
+        let touching = region(30.0, 2.0);
+        assert_eq!(touching.islands.len(), 2);
+        assert!((touching.image.area() - 0.5).abs() < 1e-6);
+        assert_eq!(
+            touching.pad,
+            Association::Ambiguous(vec![pad("Q1", "2"), pad("Q2", "1")])
+        );
+        assert_eq!(touching.pad_basis, Some(AssociationBasis::SourceIdentity));
+        assert_eq!(
+            touching.population,
+            Association::Conflicting(vec![
+                PopulationState::Populate,
+                PopulationState::DoNotPopulate
+            ])
+        );
+    }
+
     fn make_artwork_invalid(imported: &mut ImportedDesign, layer: &str) {
         let layer = imported.layer_id(layer).unwrap();
         let source_layer = imported
@@ -2636,6 +2940,152 @@ mod tests {
           <Set componentRef="J1"><Pad padstackDefRef="window"><Location x="-0.5" y="-0.5"/><StandardPrimitiveRef id="window"/><PinRef componentRef="J2" pin="1"/></Pad></Set>
           <Set><Pad padstackDefRef="contact"><Location x="10" y="0"/><StandardPrimitiveRef id="contact"/><PinRef componentRef="J1" pin="A1"/></Pad></Set>
           <Set><Pad padstackDefRef="wide-paste"><Location x="20.3" y="0"/><StandardPrimitiveRef id="wide-paste"/><PinRef componentRef="J2" pin="PAD3"/></Pad></Set>
+        </LayerFeature>
+      </Step>
+    </CadData>
+  </Ecad>
+</IPC-2581>"#
+    }
+    fn paste_region_fixture() -> &'static str {
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
+  <Content roleRef="owner">
+    <FunctionMode mode="ASSEMBLY"/>
+    <StepRef name="board"/>
+    <BomRef name="bom"/>
+    <DictionaryLineDesc units="MILLIMETER">
+      <EntryLineDesc id="line"><LineDesc lineWidth="0" lineEnd="ROUND"/></EntryLineDesc>
+    </DictionaryLineDesc>
+    <DictionaryStandard units="MILLIMETER">
+      <EntryStandard id="exposed"><RectCenter width="3" height="3"/></EntryStandard>
+      <EntryStandard id="window"><RectCenter width="1" height="1"/></EntryStandard>
+      <EntryStandard id="contact"><RectCenter width="0.3" height="0.3"/></EntryStandard>
+      <EntryStandard id="half"><RectCenter width="0.5" height="0.5"/></EntryStandard>
+      <EntryStandard id="big"><RectCenter width="2" height="2"/></EntryStandard>
+      <EntryStandard id="clear"><Circle diameter="0.5"/></EntryStandard>
+      <EntryStandard id="wide-paste"><Circle diameter="1.2"/></EntryStandard>
+    </DictionaryStandard>
+  </Content>
+  <LogisticHeader>
+    <Role id="owner" roleFunction="OWNER"/>
+    <Enterprise id="owner-enterprise" code="owner" name="Owner"/>
+    <Person name="Owner" enterpriseRef="owner-enterprise" roleRef="owner"/>
+  </LogisticHeader>
+  <HistoryRecord number="1" origination="2026-01-01T00:00:00Z" software="test" lastChange="2026-01-01T00:00:00Z">
+    <FileRevision fileRevisionId="1" comment="test">
+      <SoftwarePackage name="test" vendor="test" revision="1"><Certification certificationStatus="SELFTEST"/></SoftwarePackage>
+    </FileRevision>
+  </HistoryRecord>
+  <Bom name="bom">
+    <BomHeader assembly="board" revision="1"/>
+    <BomItem OEMDesignNumberRef="part-u1" quantity="1" pinCount="1" category="ELECTRICAL">
+      <RefDes name="U1" packageRef="qfn" populate="true" layerRef="TOP"/>
+      <Characteristics category="ELECTRICAL"/>
+    </BomItem>
+    <BomItem OEMDesignNumberRef="part-j1" quantity="1" pinCount="2" category="ELECTRICAL">
+      <RefDes name="J1" packageRef="usb-c" populate="true" layerRef="TOP"/>
+      <Characteristics category="ELECTRICAL"/>
+    </BomItem>
+    <BomItem OEMDesignNumberRef="part-j2" quantity="1" pinCount="1" category="ELECTRICAL">
+      <RefDes name="J2" packageRef="single" populate="true" layerRef="TOP"/>
+      <Characteristics category="ELECTRICAL"/>
+    </BomItem>
+    <BomItem OEMDesignNumberRef="part-q1" quantity="1" pinCount="2" category="ELECTRICAL">
+      <RefDes name="Q1" packageRef="fet" populate="true" layerRef="TOP"/>
+      <Characteristics category="ELECTRICAL"/>
+    </BomItem>
+    <BomItem OEMDesignNumberRef="part-q2" quantity="1" pinCount="1" category="ELECTRICAL">
+      <RefDes name="Q2" packageRef="single" populate="false" layerRef="TOP"/>
+      <Characteristics category="ELECTRICAL"/>
+    </BomItem>
+    <BomItem OEMDesignNumberRef="part-u3" quantity="1" pinCount="1" category="ELECTRICAL">
+      <RefDes name="U3" packageRef="block" populate="true" layerRef="TOP"/>
+      <Characteristics category="ELECTRICAL"/>
+    </BomItem>
+  </Bom>
+  <Ecad name="design">
+    <CadHeader units="MILLIMETER"/>
+    <CadData>
+      <Layer name="TOP" layerFunction="SIGNAL" side="TOP" polarity="POSITIVE"/>
+      <Layer name="PASTE" layerFunction="SOLDERPASTE" side="TOP" polarity="POSITIVE"/>
+      <Step name="board" type="BOARD">
+        <PadStackDef name="exposed">
+          <PadstackPadDef layerRef="TOP" padUse="REGULAR"><Location x="0" y="0"/><StandardPrimitiveRef id="exposed"/></PadstackPadDef>
+          <PadstackPadDef layerRef="PASTE" padUse="REGULAR"><Location x="0" y="0"/><StandardPrimitiveRef id="exposed"/></PadstackPadDef>
+        </PadStackDef>
+        <PadStackDef name="window">
+          <PadstackPadDef layerRef="PASTE" padUse="REGULAR"><Location x="0" y="0"/><StandardPrimitiveRef id="window"/></PadstackPadDef>
+        </PadStackDef>
+        <PadStackDef name="contact">
+          <PadstackPadDef layerRef="TOP" padUse="REGULAR"><Location x="0" y="0"/><StandardPrimitiveRef id="contact"/></PadstackPadDef>
+          <PadstackPadDef layerRef="PASTE" padUse="REGULAR"><Location x="0" y="0"/><StandardPrimitiveRef id="contact"/></PadstackPadDef>
+        </PadStackDef>
+        <PadStackDef name="half">
+          <PadstackPadDef layerRef="TOP" padUse="REGULAR"><Location x="0" y="0"/><StandardPrimitiveRef id="half"/></PadstackPadDef>
+          <PadstackPadDef layerRef="PASTE" padUse="REGULAR"><Location x="0" y="0"/><StandardPrimitiveRef id="half"/></PadstackPadDef>
+        </PadStackDef>
+        <PadStackDef name="big">
+          <PadstackPadDef layerRef="TOP" padUse="REGULAR"><Location x="0" y="0"/><StandardPrimitiveRef id="big"/></PadstackPadDef>
+          <PadstackPadDef layerRef="PASTE" padUse="REGULAR"><Location x="0" y="0"/><StandardPrimitiveRef id="big"/></PadstackPadDef>
+        </PadStackDef>
+        <PadStackDef name="wide-paste">
+          <PadstackPadDef layerRef="PASTE" padUse="REGULAR"><Location x="0" y="0"/><StandardPrimitiveRef id="wide-paste"/></PadstackPadDef>
+        </PadStackDef>
+        <Datum x="0" y="0"/>
+        <Package name="qfn" type="OTHER" pinOne="9" pinOneOrientation="OTHER">
+          <Outline><Polygon><PolyBegin x="0" y="0"/><PolyStepSegment x="0" y="0"/></Polygon><LineDescRef id="line"/></Outline>
+          <Pin number="9" type="SURFACE" electricalType="ELECTRICAL" mountType="SURFACE_MOUNT_PAD"><Location x="0" y="0"/><StandardPrimitiveRef id="exposed"/></Pin>
+        </Package>
+        <Package name="usb-c" type="OTHER" pinOne="A1" pinOneOrientation="OTHER">
+          <Outline><Polygon><PolyBegin x="0" y="0"/><PolyStepSegment x="0" y="0"/></Polygon><LineDescRef id="line"/></Outline>
+          <Pin number="A1" type="SURFACE" electricalType="ELECTRICAL" mountType="SURFACE_MOUNT_PAD"><Location x="0" y="0"/><StandardPrimitiveRef id="contact"/></Pin>
+          <Pin number="B12" type="SURFACE" electricalType="ELECTRICAL" mountType="SURFACE_MOUNT_PAD"><Location x="0" y="0"/><StandardPrimitiveRef id="contact"/></Pin>
+        </Package>
+        <Package name="single" type="OTHER" pinOne="1" pinOneOrientation="OTHER">
+          <Outline><Polygon><PolyBegin x="0" y="0"/><PolyStepSegment x="0" y="0"/></Polygon><LineDescRef id="line"/></Outline>
+          <Pin number="1" type="SURFACE" electricalType="ELECTRICAL" mountType="SURFACE_MOUNT_PAD"><Location x="0" y="0"/><StandardPrimitiveRef id="contact"/></Pin>
+        </Package>
+        <Package name="fet" type="OTHER" pinOne="1" pinOneOrientation="OTHER">
+          <Outline><Polygon><PolyBegin x="0" y="0"/><PolyStepSegment x="0" y="0"/></Polygon><LineDescRef id="line"/></Outline>
+          <Pin number="1" type="SURFACE" electricalType="ELECTRICAL" mountType="SURFACE_MOUNT_PAD"><Location x="0" y="0"/><StandardPrimitiveRef id="contact"/></Pin>
+          <Pin number="2" type="SURFACE" electricalType="ELECTRICAL" mountType="SURFACE_MOUNT_PAD"><Location x="0" y="2"/><StandardPrimitiveRef id="half"/></Pin>
+        </Package>
+        <Package name="block" type="OTHER" pinOne="1" pinOneOrientation="OTHER">
+          <Outline><Polygon><PolyBegin x="0" y="0"/><PolyStepSegment x="0" y="0"/></Polygon><LineDescRef id="line"/></Outline>
+          <Pin number="1" type="SURFACE" electricalType="ELECTRICAL" mountType="SURFACE_MOUNT_PAD"><Location x="0" y="0"/><StandardPrimitiveRef id="big"/></Pin>
+        </Package>
+        <Component refDes="U1" packageRef="qfn" part="part-u1" layerRef="TOP" mountType="SMT"><Location x="0" y="0"/></Component>
+        <Component refDes="J1" packageRef="usb-c" part="part-j1" layerRef="TOP" mountType="SMT"><Location x="10" y="0"/></Component>
+        <Component refDes="J2" packageRef="single" part="part-j2" layerRef="TOP" mountType="SMT"><Location x="20" y="0"/></Component>
+        <Component refDes="Q1" packageRef="fet" part="part-q1" layerRef="TOP" mountType="SMT"><Location x="30" y="0"/></Component>
+        <Component refDes="Q2" packageRef="single" part="part-q2" layerRef="TOP" mountType="SMT"><Location x="30.5" y="2"/></Component>
+        <Component refDes="U3" packageRef="block" part="part-u3" layerRef="TOP" mountType="SMT"><Location x="40" y="0"/></Component>
+        <LayerFeature layerRef="TOP">
+          <Set net="GND"><Pad padstackDefRef="exposed"><Location x="0" y="0"/><StandardPrimitiveRef id="exposed"/><PinRef componentRef="U1" pin="9"/></Pad></Set>
+          <Set net="GND"><Pad padstackDefRef="contact"><Location x="10" y="0"/><StandardPrimitiveRef id="contact"/><PinRef componentRef="J1" pin="A1"/></Pad></Set>
+          <Set net="GND"><Pad padstackDefRef="contact"><Location x="10" y="0"/><StandardPrimitiveRef id="contact"/><PinRef componentRef="J1" pin="B12"/></Pad></Set>
+          <Set net="N1"><Pad padstackDefRef="contact"><Location x="20" y="0"/><StandardPrimitiveRef id="contact"/><PinRef componentRef="J2" pin="1"/></Pad></Set>
+          <Set net="N2"><Pad padstackDefRef="contact"><Location x="30" y="0"/><StandardPrimitiveRef id="contact"/><PinRef componentRef="Q1" pin="1"/></Pad></Set>
+          <Set net="N2"><Pad padstackDefRef="contact"><Location x="30.5" y="0"/><StandardPrimitiveRef id="contact"/><PinRef componentRef="Q1" pin="1"/></Pad></Set>
+          <Set net="N3"><Pad padstackDefRef="half"><Location x="30" y="2"/><StandardPrimitiveRef id="half"/><PinRef componentRef="Q1" pin="2"/></Pad></Set>
+          <Set net="N4"><Pad padstackDefRef="half"><Location x="30.5" y="2"/><StandardPrimitiveRef id="half"/><PinRef componentRef="Q2" pin="1"/></Pad></Set>
+          <Set net="N5"><Pad padstackDefRef="big"><Location x="40" y="0"/><StandardPrimitiveRef id="big"/><PinRef componentRef="U3" pin="1"/></Pad></Set>
+        </LayerFeature>
+        <LayerFeature layerRef="PASTE">
+          <Set><Pad padstackDefRef="exposed"><Location x="0" y="0"/><StandardPrimitiveRef id="exposed"/><PinRef componentRef="U1" pin="9"/></Pad></Set>
+          <Set><Pad padstackDefRef="window"><Location x="-0.6" y="-0.6"/><StandardPrimitiveRef id="window"/><PinRef componentRef="U1" pin="PAD0"/></Pad></Set>
+          <Set><Pad padstackDefRef="window"><Location x="0.6" y="-0.6"/><StandardPrimitiveRef id="window"/><PinRef componentRef="U1" pin="PAD1"/></Pad></Set>
+          <Set><Pad padstackDefRef="window"><Location x="-0.6" y="0.6"/><StandardPrimitiveRef id="window"/><PinRef componentRef="U1" pin="PAD2"/></Pad></Set>
+          <Set><Pad padstackDefRef="window"><Location x="0.6" y="0.6"/><StandardPrimitiveRef id="window"/><PinRef componentRef="U1" pin="PAD3"/></Pad></Set>
+          <Set><Pad padstackDefRef="contact"><Location x="10" y="0"/><StandardPrimitiveRef id="contact"/><PinRef componentRef="J1" pin="A1"/></Pad></Set>
+          <Set><Pad padstackDefRef="contact"><Location x="10" y="0"/><StandardPrimitiveRef id="contact"/><PinRef componentRef="J1" pin="B12"/></Pad></Set>
+          <Set><Pad padstackDefRef="contact"><Location x="20" y="0"/><StandardPrimitiveRef id="contact"/><PinRef componentRef="J2" pin="1"/></Pad></Set>
+          <Set><Pad padstackDefRef="contact"><Location x="20" y="0"/><StandardPrimitiveRef id="contact"/><PinRef componentRef="J2" pin="1"/></Pad></Set>
+          <Set><Pad padstackDefRef="wide-paste"><Location x="30.25" y="0"/><StandardPrimitiveRef id="wide-paste"/><PinRef componentRef="Q1" pin="PAD0"/></Pad></Set>
+          <Set><Pad padstackDefRef="half"><Location x="30" y="2"/><StandardPrimitiveRef id="half"/><PinRef componentRef="Q1" pin="2"/></Pad></Set>
+          <Set><Pad padstackDefRef="half"><Location x="30.5" y="2"/><StandardPrimitiveRef id="half"/><PinRef componentRef="Q2" pin="1"/></Pad></Set>
+          <Set><Pad padstackDefRef="big"><Location x="40" y="0"/><StandardPrimitiveRef id="big"/><PinRef componentRef="U3" pin="1"/></Pad></Set>
+          <Set polarity="NEGATIVE"><Features><Location x="40" y="0"/><StandardPrimitiveRef id="clear"/></Features></Set>
         </LayerFeature>
       </Step>
     </CadData>

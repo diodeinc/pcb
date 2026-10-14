@@ -12,6 +12,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 - `pcb gltf export --synthesize-outline` reads a standalone `.kicad_mod` footprint.
 - `pcb-ir` `ImportedDesign::assembly_view` derives the assembly facts of `physical_view` without mask or hole protection, about 2.5 times faster on large boards.
+- `pcb-ir` `AssemblyView::paste_regions` gives the paste of each board side as disjoint connected regions. Each region lists its source paste islands and links to one pad, with its population. `PhysicalTermination::pad` joins the terminations of one pin, and the terminations of exactly stacked lands such as USB-C A1 and B12, into one pad.
 
 ### Changed
 
