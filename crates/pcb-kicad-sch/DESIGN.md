@@ -27,13 +27,19 @@ applications preserve user reorganizations rather than restoring that layout.
 A generated sheet has one pin for each net that leaves its module, under one
 of the net's port names; a net used only inside the module stays local to its
 page. Full reconciliation keeps a generated sheet's pins in step as nets start
-or stop leaving the module. It adds a missing pin with its parent label and
-turns the module page's local labels for the net into hierarchical ones. It
-removes a pin it generated with the parent page's labels at the pin, and with
-the parent page's local labels for the net once the net no longer leaves the
-module, and turns the module page's hierarchical labels for the port into
-the page's own driver for the net. A pin the user renamed or wired on the
-parent page, or a sheet whose module has symbols on the parent page, is kept.
+or stop leaving the module and as ports are renamed or removed. A pin is pcb's
+while its id is the generated id for its own name; a pin the user renamed or
+wired on the parent page, and the pins of a sheet whose module still has
+symbols on the parent page, are the user's. pcb removes its own pins that the
+interface no longer has, with the labels and net symbols attached at them on
+the parent page and, once the net no longer leaves the module, the parent
+page's local labels for the net. The module page's hierarchical labels for a
+removed pin become the page's own driver for the net, or go when the port is
+gone. A newly crossing port gets a pin and parent driver where the pin, its
+label and any growth of the sheet clear the page's other items, and the module
+page's local labels for its net become hierarchical. Existing layout never
+moves: a pin that does not fit is left to the connectivity repair, which joins
+the net as it does across a sheet the user organized.
 Full reconciliation removes an obsolete generated subtree only when its page
 filenames, page UUIDs and incoming sheet UUIDs still identify the generated
 module paths and parent-relative filenames, and it contains no live managed

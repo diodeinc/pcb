@@ -1,0 +1,9 @@
+"""A linked bus sheet whose six nets stay inside it; bus_external.zen adds root endpoints."""
+
+Project(name="BusSheet", path="kicad", layout=False)
+
+Bus = Module("bus.zen")
+
+NETS = [Net("BUS_NET_{}".format(i)) for i in range(6)]
+
+Bus(name="BUS", D0=NETS[0], D1=NETS[1], D2=NETS[2], D3=NETS[3], D4=NETS[4], D5=NETS[5])

@@ -1,0 +1,15 @@
+"""sheet_power_local.zen with a root endpoint on the power net."""
+
+Project(name="SheetPower", path="kicad", layout=False)
+
+Resistor = Module("@stdlib/generics/Resistor.zen")
+Filter = Module("filter.zen")
+
+VCC = Power("VCC")
+ROOT_A = Net("ROOT_A")
+ROOT_B = Net("ROOT_B")
+SHEET_ONLY = Net("SHEET_ONLY")
+
+Resistor(name="R1", value="1kohms", package="0402", P1=ROOT_A, P2=ROOT_B)
+Resistor(name="R2", value="1kohms", package="0402", P1=VCC, P2=ROOT_B)
+Filter(name="FILTER", resistance="1kohms", INPUT=VCC, OUTPUT=SHEET_ONLY)

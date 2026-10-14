@@ -168,7 +168,13 @@ pub(crate) fn reconcile_document(
     let net_symbol_specs = net_symbols::specs(netlist)?;
     materialize_hierarchy(&mut document, netlist, &net_symbol_specs, &hierarchy)?;
     if complete {
-        sync_generated_sheet_pins(&mut document, netlist, &net_symbol_specs, default_page)?;
+        sync_generated_sheet_pins(
+            &mut document,
+            netlist,
+            &net_symbol_specs,
+            &expected_slots,
+            default_page,
+        )?;
     }
 
     let retained_native_symbols = if complete {
@@ -1046,18 +1052,27 @@ fn module_interface(
 
 /// Keep each existing generated module sheet's pins in step with the
 /// module's sheet interface, which changes when a net starts or stops leaving
-/// the module. When a port starts crossing, the sheet gets a pin with a label
-/// on the parent page, and the module page's local labels for the net become
-/// hierarchical labels. When it stops, the pin goes with the parent page's
-/// labels at the pin, and with its local labels for the net once the net no
-/// longer leaves the module, and the module page's hierarchical labels for
-/// the port become the page's own driver for the net. Only generated sheets change; a pin the user renamed or wired on the
-/// parent page, or a sheet whose module has symbols on the parent page, keeps
-/// its pins.
+/// the module or a port is renamed or removed.
+///
+/// A pin is pcb's while its id is the generated id for its own name; the user
+/// owns a pin they renamed or wired on the parent page, and the pins of a
+/// sheet whose module still has symbols on the parent page. pcb removes its
+/// own pins that
+/// the interface no longer has, with the labels and net symbols attached at
+/// them on the parent page and, once the net no longer leaves the module, the
+/// parent page's local labels for the net. The module page's hierarchical
+/// labels for a removed pin become the page's own driver for the net, or go
+/// when the port is gone. A port that newly crosses gets a pin, with its
+/// parent-page driver, where the pin, its label and any growth of the sheet
+/// fit clear of the page's other items; the module page's local labels for
+/// its net become hierarchical labels. Existing layout never moves: a pin
+/// that does not fit is left to the connectivity repair, which joins the net
+/// as it does across a sheet the user organized.
 fn sync_generated_sheet_pins(
     document: &mut SchDocument,
     netlist: &Schematic,
     net_symbol_specs: &BTreeMap<String, net_symbols::NetSymbolSpec>,
+    expected_slots: &BTreeSet<SymbolSlotKey>,
     root_page: usize,
 ) -> Result<()> {
     let page_contexts = page_driver_contexts(document, netlist, root_page)?;
@@ -1093,43 +1108,56 @@ fn sync_generated_sheet_pins(
             ))
         };
         let ports = root_interface::ports_by_net(netlist, &module.instance_ref)?;
+        let net_of_port = |port_name: &str| {
+            ports
+                .iter()
+                .find(|(_, names)| names.contains(port_name))
+                .map(|(net_name, _)| net_name.clone())
+        };
         let interface = module_interface(netlist, &module.path, &module.instance_ref)?;
+        let crossing = interface.values().flatten().collect::<BTreeSet<_>>();
         let child_context = page_contexts.get(&child_page);
 
-        // A module symbol the user moved onto the parent page keeps the
-        // module's nets there; leave that sheet's pins alone.
+        // A module symbol the user moved onto the parent page, and that the
+        // netlist still has, keeps the module's nets there.
         let parent_holds_module_symbols = document.pages[parent_page].items.iter().any(|item| {
-            matches!(item, SchItem::Symbol(symbol)
-            if symbol.field_value("Path").is_some_and(|path| {
-                hierarchy::is_descendant(path, &module.path)
-            }))
-        });
-        let mut present = BTreeSet::new();
-        let mut stale = Vec::new();
-        for pin in &sheet.pins {
-            let Some((net_name, port_name)) = ports.iter().find_map(|(net_name, names)| {
-                names
-                    .iter()
-                    .find(|name| pin.name == **name || pin.id == pin_id(name))
-                    .map(|name| (net_name, name))
-            }) else {
-                continue;
+            let SchItem::Symbol(symbol) = item else {
+                return false;
             };
-            present.insert(port_name.clone());
-            let crosses = interface
-                .get(net_name)
-                .is_some_and(|names| names.contains(port_name));
-            if !crosses
-                && !parent_holds_module_symbols
-                && pin.name == *port_name
-                && pin.id == pin_id(port_name)
-                && !page_wired_at(&document.pages[parent_page], pin.at)
-            {
-                stale.push((pin.id.clone(), pin.at, net_name.clone(), port_name.clone()));
-            }
-        }
+            symbol
+                .field_value("Path")
+                .and_then(|path| SymbolSlotKey::new(path, symbol.unit))
+                .is_some_and(|slot| {
+                    expected_slots.contains(&slot)
+                        && hierarchy::is_descendant(slot.component_path(), &module.path)
+                })
+        });
 
-        for (id, at, net_name, port_name) in stale {
+        // Ports that already have a pin, the user's included.
+        let present = sheet
+            .pins
+            .iter()
+            .flat_map(|pin| {
+                ports
+                    .values()
+                    .flatten()
+                    .filter(|name| pin.name == **name || pin.id == pin_id(name))
+            })
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        let stale = sheet
+            .pins
+            .iter()
+            .filter(|pin| {
+                !parent_holds_module_symbols
+                    && pin.id == pin_id(&pin.name)
+                    && !crossing.contains(&pin.name)
+                    && !page_wired_at(&document.pages[parent_page], pin.at)
+            })
+            .map(|pin| (pin.id.clone(), pin.at, pin.name.clone()))
+            .collect::<Vec<_>>();
+
+        for (id, at, port_name) in stale {
             if let Some(SchItem::Sheet(sheet)) = document.pages[parent_page]
                 .items
                 .iter_mut()
@@ -1137,44 +1165,79 @@ fn sync_generated_sheet_pins(
             {
                 sheet.pins.retain(|pin| pin.id != id);
             }
+            let net_name = net_of_port(&port_name);
             // When the net no longer leaves the module at all, a local label
             // naming it on the parent page, such as one left by a removed
             // symbol, names nothing there either.
-            let left_module = !interface.contains_key(&net_name);
-            document.pages[parent_page].items.retain(|item| {
-                !matches!(item, SchItem::Label(label)
-                    if points_connect(label.at, at)
-                        || (left_module
-                            && label.kind == LabelKind::Local
-                            && label.text == net_name))
-            });
-            let driver = driver_label(
-                &net_name,
-                child_context.and_then(|context| context.get(&net_name)),
-                false,
-                String::new(),
-                Point::default(),
-            );
-            relabel(
-                &mut document.pages[child_page],
-                |label| {
-                    matches!(label.kind, LabelKind::Hierarchical { .. }) && label.text == port_name
-                },
-                &driver,
-            );
+            let left_module = net_name
+                .as_ref()
+                .is_some_and(|net_name| !interface.contains_key(net_name));
+            let page = &document.pages[parent_page];
+            let attached = page
+                .items
+                .iter()
+                .map(|item| match item {
+                    SchItem::Label(label) => {
+                        points_connect(label.at, at)
+                            || (left_module
+                                && label.kind == LabelKind::Local
+                                && net_name.as_ref() == Some(&label.text))
+                    }
+                    SchItem::Symbol(symbol) if symbol.field_value("Path").is_none() => page
+                        .library
+                        .definitions
+                        .get(symbol.library_key())
+                        .and_then(|definition| definition.placed_pins(symbol).ok())
+                        .is_some_and(|pins| pins.iter().any(|pin| points_connect(pin.point, at))),
+                    _ => false,
+                })
+                .collect::<Vec<_>>();
+            let mut attached = attached.into_iter();
+            document.pages[parent_page]
+                .items
+                .retain(|_| !attached.next().expect("one flag per item"));
+
+            let selected = |label: &Label| {
+                matches!(label.kind, LabelKind::Hierarchical { .. }) && label.text == port_name
+            };
+            match &net_name {
+                Some(net_name) => {
+                    let driver = driver_label(
+                        net_name,
+                        child_context.and_then(|context| context.get(net_name)),
+                        false,
+                        String::new(),
+                        Point::default(),
+                    );
+                    relabel(&mut document.pages[child_page], selected, &driver);
+                }
+                None => document.pages[child_page]
+                    .items
+                    .retain(|item| !matches!(item, SchItem::Label(label) if selected(label))),
+            }
         }
 
+        let parent_context = page_contexts.get(&parent_page);
         for (net_name, names) in &interface {
             for port_name in names {
                 if present.contains(port_name) {
                     continue;
                 }
+                let parent_label = driver_label(
+                    net_name,
+                    parent_context.and_then(|context| context.get(net_name)),
+                    false,
+                    String::new(),
+                    Point::default(),
+                );
                 let Some(at) = add_sheet_pin(
                     &mut document.pages[parent_page],
                     &sheet_id,
                     port_name,
                     pin_id(port_name),
-                ) else {
+                    &parent_label,
+                )?
+                else {
                     continue;
                 };
                 upsert_contextual_driver(
@@ -1243,26 +1306,72 @@ fn relabel(page: &mut SchPage, selected: impl Fn(&Label) -> bool, driver: &Label
     });
 }
 
-/// Add a pin to the left side of a sheet, in its first free row, growing the
-/// sheet when every row is taken. Returns the pin's point.
-fn add_sheet_pin(page: &mut SchPage, sheet_id: &str, name: &str, id: String) -> Option<Point> {
-    let sheet = page.items.iter_mut().find_map(|item| match item {
+/// Add a pin to the left side of a sheet in its first free row where the pin's
+/// `label`, and the sheet grown to hold the row, clear every other item on
+/// the page. Returns the pin's point, or `None` when no row fits without
+/// moving existing layout.
+fn add_sheet_pin(
+    page: &mut SchPage,
+    sheet_id: &str,
+    name: &str,
+    id: String,
+    label: &Label,
+) -> Result<Option<Point>> {
+    let Some(sheet) = page.items.iter().find_map(|item| match item {
         SchItem::Sheet(sheet) if sheet.id == sheet_id => Some(sheet),
         _ => None,
-    })?;
-    let (at, size) = (sheet.at?, sheet.size?);
-    let taken = |y: f64| {
-        sheet
-            .pins
-            .iter()
-            .any(|pin| pin.rotation == Rotation::Deg180 && (pin.at.y - y).abs() <= GEOMETRY_EPS_MM)
+    }) else {
+        return Ok(None);
+    };
+    let (Some(at), Some(size)) = (sheet.at, sheet.size) else {
+        return Ok(None);
+    };
+    let taken = sheet
+        .pins
+        .iter()
+        .filter(|pin| pin.rotation == Rotation::Deg180)
+        .map(|pin| pin.at.y)
+        .collect::<Vec<_>>();
+    let obstacles = page_item_bounds(page, sheet_id)?;
+    let clear = |bounds: field_autoplace::Bounds| {
+        !obstacles.iter().any(|other| {
+            bounds.min_x < other.max_x
+                && other.min_x < bounds.max_x
+                && bounds.min_y < other.max_y
+                && other.min_y < bounds.max_y
+        })
     };
     let mut row = 2.0;
-    while taken(at.y + row * SHEET_PIN_SPACING_MM) {
+    let (point, height) = loop {
+        let point = Point::new(at.x, at.y + row * SHEET_PIN_SPACING_MM);
+        let height = size.y.max((row + 1.0) * SHEET_PIN_SPACING_MM);
         row += 1.0;
-    }
-    let point = Point::new(at.x, at.y + row * SHEET_PIN_SPACING_MM);
-    let height = (row + 1.0) * SHEET_PIN_SPACING_MM;
+        if taken.iter().any(|y| (y - point.y).abs() <= GEOMETRY_EPS_MM) {
+            continue;
+        }
+        let mut label = label.clone();
+        label.at = point;
+        label.spin = LabelSpin::Left;
+        let grows = height > size.y + GEOMETRY_EPS_MM;
+        let growth = field_autoplace::Bounds::from_points([
+            Point::new(at.x, at.y + size.y),
+            Point::new(at.x + size.x, at.y + height),
+        ])
+        .expect("two points define bounds");
+        if clear(label_visual_bounds(&label)) && (!grows || clear(growth)) {
+            break (point, height);
+        }
+        if grows {
+            return Ok(None);
+        }
+    };
+    let Some(SchItem::Sheet(sheet)) = page
+        .items
+        .iter_mut()
+        .find(|item| matches!(item, SchItem::Sheet(sheet) if sheet.id == sheet_id))
+    else {
+        unreachable!("the sheet was found above");
+    };
     if height > size.y + GEOMETRY_EPS_MM {
         if sheet.file.at.y >= at.y + size.y - GEOMETRY_EPS_MM {
             sheet.file.at.y += height - size.y;
@@ -1278,7 +1387,43 @@ fn add_sheet_pin(page: &mut SchPage, sheet_id: &str, name: &str, id: String) -> 
         effects: crate::TextEffects::default(),
         unsupported: Vec::new(),
     });
-    Some(point)
+    Ok(Some(point))
+}
+
+/// The visual bounds of the page's items other than one sheet: symbols,
+/// sheets with their pin labels, labels, wires and graphics.
+fn page_item_bounds(page: &SchPage, except_sheet: &str) -> Result<Vec<field_autoplace::Bounds>> {
+    let mut bounds = Vec::new();
+    for item in &page.items {
+        match item {
+            SchItem::Symbol(symbol) => {
+                if let Some(definition) = page.library.definitions.get(symbol.library_key()) {
+                    bounds.extend(field_autoplace::symbol_visual_bounds(symbol, definition)?);
+                }
+            }
+            SchItem::Sheet(sheet) if sheet.id != except_sheet => {
+                if let Some((min, max)) = sheet.bounds() {
+                    let mut sheet_bounds = field_autoplace::Bounds::from_points([min, max])
+                        .expect("sheet bounds have two corners");
+                    for pin in &sheet.pins {
+                        sheet_bounds.union(estimated_label_bounds(
+                            pin.at,
+                            sheet_pin_spin(pin.rotation),
+                            estimated_shaped_label_width(&pin.name),
+                        ));
+                    }
+                    bounds.push(sheet_bounds);
+                }
+            }
+            SchItem::Label(label) => bounds.push(label_visual_bounds(label)),
+            SchItem::Wire(wire) => {
+                bounds.extend(field_autoplace::Bounds::from_points([wire.a, wire.b]))
+            }
+            SchItem::Graphic(graphic) => bounds.extend(field_autoplace::graphic_bounds(graphic)),
+            _ => {}
+        }
+    }
+    Ok(bounds)
 }
 
 /// Place a sheet whose footprint, relative to its top-left corner, includes
