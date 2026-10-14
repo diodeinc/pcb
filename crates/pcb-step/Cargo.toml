@@ -26,6 +26,9 @@ pcb-ir = { workspace = true }
 pcb-sexpr = { workspace = true }
 rayon = { workspace = true }
 rustybuzz = { workspace = true }
+ruzstd = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+
+[dev-dependencies]
 zstd = { workspace = true }

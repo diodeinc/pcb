@@ -134,7 +134,7 @@ ttf-parser = "0.25"
 subsetter = { version = "0.2", default-features = false }
 pdf-writer = "0.15"
 flate2 = "1"
-ruzstd = "0.9"
+ruzstd = "0.9.1"
 terminal_size = "0.4.4"
 terminal_hyperlink = "0.1"
 uppsala = "0.11.0"
