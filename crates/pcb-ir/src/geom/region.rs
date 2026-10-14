@@ -253,11 +253,6 @@ impl ContourSet {
         self.rings().zip(self.ring_bounds.iter().copied())
     }
 
-    /// The rings as the overlay reads them.
-    fn overlay_source(&self) -> &[Ring] {
-        &self.rings
-    }
-
     pub fn bbox(&self) -> BBox {
         self.bbox
     }

@@ -28,7 +28,7 @@ pub fn simplify_shapes(rings: Vec<Ring>, fill_rule: FillRule) -> Vec<Shape> {
     regularize(rings, overlay_fill_rule(fill_rule))
 }
 
-fn regularize(rings: Vec<Ring>, rule: OverlayFillRule) -> Vec<Shape> {
+pub(super) fn regularize(rings: Vec<Ring>, rule: OverlayFillRule) -> Vec<Shape> {
     bounds_connected_groups(rings.into_iter().map(|ring| (ring, ())).collect())
         .into_iter()
         .flat_map(|group| overlay(&untagged(group), &[], OverlayRule::Subject, rule))

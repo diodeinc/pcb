@@ -384,6 +384,57 @@ fn segment_spans_omit_degenerate_and_sub_tolerance_intervals() {
 }
 
 #[test]
+fn offsets_collapse_curves_to_their_analytic_shapes() {
+    use std::f64::consts::PI;
+    let resolution = Resolution::default().with_accuracy(GeometryAccuracy::new(0.00025).unwrap());
+    let prepare = |contours: &[ContourBuf], fill_rule| {
+        ContourSet::from_contours(contours, fill_rule, resolution).unwrap()
+    };
+    let assert_area = |region: ContourSet, expected: f64, perimeter: f64| {
+        let tolerance = region.uncertainty_mm * perimeter + 1e-9;
+        assert!(
+            (region.area() - expected).abs() <= tolerance,
+            "{} vs {expected} within {tolerance}",
+            region.area()
+        );
+    };
+    let pad = prepare(
+        &[shapes::rounded_rect(0.56, 0.62, 0.15, shapes::ALL_CORNERS).unwrap()],
+        FillRule::NonZero,
+    );
+    // Eroding by a corner's radius or more leaves the sharp inner rectangle.
+    for d in [0.15, 0.2] {
+        let (w, h) = (0.56 - 2.0 * d, 0.62 - 2.0 * d);
+        assert_area(pad.disk_erode(d).unwrap(), w * h, 2.0 * (w + h));
+    }
+    // A disk narrower than the erosion vanishes, and a hole narrower than
+    // the dilation fills.
+    let circle = prepare(&[shapes::circle(0.65).unwrap()], FillRule::NonZero);
+    assert!(circle.disk_erode(0.35).unwrap().is_empty());
+    let washer = prepare(
+        &[shapes::circle(2.0).unwrap(), shapes::circle(0.65).unwrap()],
+        FillRule::EvenOdd,
+    );
+    assert_area(
+        washer.disk_dilate(0.35).unwrap(),
+        PI * 1.35 * 1.35,
+        2.0 * PI * 1.35,
+    );
+    // A slotted washer's bore turns through more than half a circle, so the
+    // dilation that closes it must not leave its centre open.
+    let slot = shapes::rect(1.2, 0.25)
+        .unwrap()
+        .transformed(Affine2::translation(Point::new(0.6, 0.0)));
+    let closed = washer
+        .difference(&prepare(&[slot], FillRule::NonZero))
+        .unwrap()
+        .disk_dilate(0.5)
+        .unwrap();
+    assert_eq!(closed.ring_count(), 1);
+    assert!(closed.contains_point(Point::ZERO));
+}
+
+#[test]
 fn erodes_outer_boundaries_and_expands_holes() {
     let outer = block(0.0, 0.0, 10.0, 10.0);
     let hole = block(4.0, 4.0, 6.0, 6.0);
