@@ -449,6 +449,30 @@ fn offsets_collapse_curves_to_their_analytic_shapes() {
 }
 
 #[test]
+fn dilation_fills_a_reentrant_notch_to_the_disk_radius() {
+    // The notch walls turn 120 degrees at its tip, 30 degrees off vertical,
+    // so a point `t` above the tip on the bisector lies `t / 2` from both.
+    let w = 5.0 * 30f64.to_radians().tan();
+    let notched = ContourSet::from_rings(
+        vec![vec![
+            [0.0, 0.0],
+            [10.0, 0.0],
+            [10.0, 10.0],
+            [5.0 + w, 10.0],
+            [5.0, 5.0],
+            [5.0 - w, 10.0],
+            [0.0, 10.0],
+        ]],
+        FillRule::NonZero,
+        res(tol::REGION_MM),
+    )
+    .unwrap();
+    let dilated = notched.disk_dilate(1.0).unwrap();
+    assert!(dilated.contains_point(Point::new(5.0, 6.8)));
+    assert!(!dilated.contains_point(Point::new(5.0, 7.2)));
+}
+
+#[test]
 fn erodes_outer_boundaries_and_expands_holes() {
     let outer = block(0.0, 0.0, 10.0, 10.0);
     let hole = block(4.0, 4.0, 6.0, 6.0);
