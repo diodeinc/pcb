@@ -68,7 +68,8 @@ impl ContourSet {
     /// split, deepest first. Where the depth peaks along a ridge, as between
     /// parallel walls, the work grows with the ridge length over
     /// `precision_mm`: a few milliseconds for a 3 mm pad at 1 µm.
-    /// `None` for a region without filled area.
+    /// `None` means no point of the region is deeper than `precision_mm`,
+    /// as for an empty region.
     pub fn inradius(&self, precision_mm: f64) -> Option<Distance> {
         struct Cell {
             center: Point,
@@ -100,8 +101,7 @@ impl ContourSet {
         let prepared = self.prepare_query();
         let depth = |point: Point| prepared.signed_distance(point).map(|distance| -distance.mm);
         let precision = precision_mm.max(tol::EPSILON_MM);
-        let side = self.bbox.width().min(self.bbox.height());
-        if side <= 0.0 {
+        if self.bbox.is_empty() {
             return None;
         }
         let cell = |center: Point, half: f64| {
@@ -111,21 +111,20 @@ impl ContourSet {
                 depth: depth(center)?,
             })
         };
-        let mut cells = std::collections::BinaryHeap::new();
-        let columns = (self.bbox.width() / side).ceil() as usize;
-        let rows = (self.bbox.height() / side).ceil() as usize;
-        for column in 0..columns {
-            for row in 0..rows {
-                let offset = Point::new(column as f64 + 0.5, row as f64 + 0.5) * side;
-                cells.push(cell(self.bbox.min + offset, side / 2.0)?);
-            }
-        }
-        let mut best = cell(self.bbox.center(), 0.0)?;
+        let root = cell(
+            self.bbox.center(),
+            self.bbox.width().max(self.bbox.height()) / 2.0,
+        )?;
+        let mut best = Cell { half: 0.0, ..root };
+        let mut cells = std::collections::BinaryHeap::from([root]);
+        // Only a filled point can be the answer, so a negative best never
+        // ends the search: it ends once no cell can beat zero by more than
+        // the precision either.
         while let Some(next) = cells.pop() {
             if next.depth > best.depth {
                 best = Cell { half: 0.0, ..next };
             }
-            if next.bound() - best.depth <= precision {
+            if next.bound() - best.depth.max(0.0) <= precision {
                 break;
             }
             let half = next.half / 2.0;

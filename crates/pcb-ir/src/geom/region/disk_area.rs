@@ -33,8 +33,8 @@ impl ContourSet {
     /// enclose the exact union from inside and outside. Overlapping disks
     /// are unioned before measuring and count once. The overlay's coordinate
     /// rounding is charged as the area of a band its recorded displacement
-    /// wide around every result edge, so the exact areas lie within the
-    /// bounds. Each interval is about `2 × budget × perimeter` wide.
+    /// wide around every edge the operations read, so the exact areas lie
+    /// within the bounds. Each interval is about `2 × budget × perimeter` wide.
     ///
     /// The region's polygons are what is measured: approximation they carry
     /// relative to their own source is not part of the bounds.
@@ -58,19 +58,34 @@ impl ContourSet {
                 0.0,
             ));
         }
-        let inner = ContourSet::union_all(strict, inner)?;
-        let outer = ContourSet::union_all(strict, outer)?;
         let region = ContourSet {
             uncertainty_mm: 0.0,
             ..self.clone()
         };
-        let bounds = |inside: ContourSet, outside: ContourSet| AreaBounds {
-            lower: (inside.area() - rounding_area(&inside)).max(0.0),
-            upper: outside.area() + rounding_area(&outside),
+        // The exact boundary of every result lies on the disk polygons, their
+        // computed union, and the region, so a band around all of those
+        // covers whatever rounding moved or erased, even a ring too thin
+        // to survive in the result.
+        let measure = |polygons: Vec<ContourSet>| {
+            let mut boundary = polygons.iter().map(Boundary::of).sum::<Boundary>();
+            let union = ContourSet::union_all(strict, polygons)?;
+            boundary = boundary + Boundary::of(&union) + Boundary::of(&region.reaching(union.bbox));
+            let area = |result: ContourSet| (result.area(), boundary.band(result.uncertainty_mm));
+            Ok::<_, AccuracyError>((
+                area(union.intersection(&region)?),
+                area(union.difference(&region)?),
+            ))
         };
+        let (inner_covered, inner_spill) = measure(inner)?;
+        let (outer_covered, outer_spill) = measure(outer)?;
+        let bounds =
+            |(inside, inside_error): (f64, f64), (outside, outside_error): (f64, f64)| AreaBounds {
+                lower: (inside - inside_error).max(0.0),
+                upper: outside + outside_error,
+            };
         Ok(DiskUnionArea {
-            covered: bounds(inner.intersection(&region)?, outer.intersection(&region)?),
-            spill: bounds(inner.difference(&region)?, outer.difference(&region)?),
+            covered: bounds(inner_covered, outer_covered),
+            spill: bounds(inner_spill, outer_spill),
         })
     }
 }
@@ -110,23 +125,55 @@ fn disk_polygons(
     ))
 }
 
-/// The most a computed boolean's area can differ from the exact one: every
-/// point of its boundary lies within `uncertainty_mm` of the exact boundary,
-/// so the two differ only inside a band that wide around its edges. The
-/// shoelace sum's own rounding is charged per vertex.
-fn rounding_area(region: &ContourSet) -> f64 {
-    let delta = region.uncertainty_mm;
-    region
-        .bounded_rings()
-        .map(|(ring, bounds)| {
-            let extent = bounds.width().max(bounds.height());
-            super::edges_of(ring)
-                .map(|(start, end)| {
-                    2.0 * delta * (start.distance_to(end) + 2.0 * delta)
-                        + PI * delta * delta
-                        + 8.0 * f64::EPSILON * extent * extent
-                })
-                .sum::<f64>()
-        })
-        .sum()
+/// What the area of a band around some polygon edges depends on.
+#[derive(Default)]
+struct Boundary {
+    length: f64,
+    edges: f64,
+    /// The shoelace sum's own rounding, charged per vertex.
+    shoelace: f64,
+}
+
+impl Boundary {
+    fn of(region: &ContourSet) -> Self {
+        region
+            .bounded_rings()
+            .map(|(ring, bounds)| {
+                let extent = bounds.width().max(bounds.height());
+                let edges = ring.len() as f64;
+                Self {
+                    length: super::edges_of(ring)
+                        .map(|(start, end)| start.distance_to(end))
+                        .sum(),
+                    edges,
+                    shoelace: edges * 8.0 * f64::EPSILON * extent * extent,
+                }
+            })
+            .sum()
+    }
+
+    /// The area within `delta` of these edges, each a stadium.
+    fn band(&self, delta: f64) -> f64 {
+        2.0 * delta * (self.length + 2.0 * delta * self.edges)
+            + PI * delta * delta * self.edges
+            + self.shoelace
+    }
+}
+
+impl std::ops::Add for Boundary {
+    type Output = Self;
+
+    fn add(self, other: Self) -> Self {
+        Self {
+            length: self.length + other.length,
+            edges: self.edges + other.edges,
+            shoelace: self.shoelace + other.shoelace,
+        }
+    }
+}
+
+impl std::iter::Sum for Boundary {
+    fn sum<I: Iterator<Item = Self>>(iter: I) -> Self {
+        iter.fold(Self::default(), std::ops::Add::add)
+    }
 }

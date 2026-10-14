@@ -1133,6 +1133,13 @@ fn disk_union_area_bounds_contain_analytic_areas() {
     let none = region.disk_union_area(&[]).unwrap();
     assert_eq!((none.covered.upper, none.spill.upper), (0.0, 0.0));
     assert!(region.disk_union_area(&[(point(0.0, 0.0), -1.0)]).is_err());
+
+    // A sliver narrower than the overlay lattice vanishes from the result
+    // but not from the bounds.
+    let sliver = ContourSet::rectangle(rect(0.5, 0.0, 0.5 + 1e-16, 1.0), res(0.0));
+    let exact = 0.5 * (sliver.bbox.width());
+    let area = sliver.disk_union_area(&[(point(0.5, 0.5), r)]).unwrap();
+    assert!(exact > 0.0 && area.covered.lower <= exact && exact <= area.covered.upper);
 }
 
 #[test]
@@ -1153,6 +1160,19 @@ fn inradius_brackets_the_deepest_disk() {
     let strip = block(0.0, 0.0, 4.0, 2.0).inradius(1e-6).unwrap();
     assert!(1.0 - 1e-6 <= strip.mm && strip.mm <= 1.0);
     assert!(ContourSet::empty(res(0.0)).inradius(1e-3).is_none());
+
+    // Thin strips that miss every early sample are still found, deepest at
+    // their outer corner, like the frame.
+    let corner = block(0.0, 0.0, 1.0, 0.01)
+        .union(&block(0.0, 0.0, 0.01, 1.0))
+        .unwrap()
+        .inradius(1e-3)
+        .unwrap();
+    let exact = 0.01 * std::f64::consts::SQRT_2 / (1.0 + std::f64::consts::SQRT_2);
+    assert!(corner.mm <= exact && exact <= corner.mm + 1e-3);
+    // However long a hair, its search ends at the precision, not its length.
+    let hair = ContourSet::rectangle(rect(0.0, 0.0, 100.0, 1e-6), res(0.0));
+    assert!(hair.inradius(1e-3).is_none_or(|hair| hair.mm <= 5e-7));
 }
 
 #[test]
