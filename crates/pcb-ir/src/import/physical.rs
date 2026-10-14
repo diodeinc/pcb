@@ -277,6 +277,20 @@ impl ImportedDesign {
         Ok(self.derive_physical_terminations(&lands))
     }
 
+    /// Source lands and every drilled opening of `scope` linked to them, without
+    /// the assembly evidence of [`Self::physical_view`].
+    pub(crate) fn source_lands_and_holes(
+        &self,
+        scope: ArtworkScope,
+        resolution: Resolution,
+    ) -> Result<(Vec<PhysicalLand>, Vec<PhysicalHole>)> {
+        let components = self.component_index(scope)?;
+        let all = |_: &FeatureOccurrence| true;
+        let lands = self.derive_physical_lands(scope, &components, true, &all, resolution)?;
+        let holes = self.derive_physical_holes(scope, &lands, &all, resolution)?;
+        Ok((lands, holes))
+    }
+
     /// The drilled openings that one Step occurrence of `scope` holds itself
     /// and their source-land relationships, without the assembly evidence of
     /// [`Self::physical_view`]: no final copper is composed and no assembly,
