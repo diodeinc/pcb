@@ -167,6 +167,9 @@ pub(crate) fn reconcile_document(
     )?;
     let net_symbol_specs = net_symbols::specs(netlist)?;
     materialize_hierarchy(&mut document, netlist, &net_symbol_specs, &hierarchy)?;
+    if complete {
+        sync_generated_sheet_pins(&mut document, netlist, &net_symbol_specs, default_page)?;
+    }
 
     let retained_native_symbols = if complete {
         native_symbol_locations(&document)?
@@ -1039,6 +1042,243 @@ fn module_interface(
             Some((net_name, BTreeSet::from([name])))
         })
         .collect())
+}
+
+/// Keep each existing generated module sheet's pins in step with the
+/// module's sheet interface, which changes when a net starts or stops leaving
+/// the module. When a port starts crossing, the sheet gets a pin with a label
+/// on the parent page, and the module page's local labels for the net become
+/// hierarchical labels. When it stops, the pin goes with the parent page's
+/// labels at the pin, and with its local labels for the net once the net no
+/// longer leaves the module, and the module page's hierarchical labels for
+/// the port become the page's own driver for the net. Only generated sheets change; a pin the user renamed or wired on the
+/// parent page, or a sheet whose module has symbols on the parent page, keeps
+/// its pins.
+fn sync_generated_sheet_pins(
+    document: &mut SchDocument,
+    netlist: &Schematic,
+    net_symbol_specs: &BTreeMap<String, net_symbols::NetSymbolSpec>,
+    root_page: usize,
+) -> Result<()> {
+    let page_contexts = page_driver_contexts(document, netlist, root_page)?;
+    for module in linked_modules(netlist)? {
+        let Some(child_page) = document
+            .pages
+            .iter()
+            .position(|page| page.id == hierarchy::page_id(&module.path))
+        else {
+            continue;
+        };
+        let sheet_id = hierarchy::sheet_id(&module.path);
+        let Some((parent_page, sheet)) =
+            document
+                .pages
+                .iter()
+                .enumerate()
+                .find_map(|(page_index, page)| {
+                    page.items.iter().find_map(|item| match item {
+                        SchItem::Sheet(sheet) if sheet.id == sheet_id => {
+                            Some((page_index, sheet.as_ref().clone()))
+                        }
+                        _ => None,
+                    })
+                })
+        else {
+            continue;
+        };
+        let pin_id = |port_name: &str| {
+            deterministic_uuid(format!(
+                "zener:module-sheet-pin:{}:{port_name}",
+                module.path
+            ))
+        };
+        let ports = root_interface::ports_by_net(netlist, &module.instance_ref)?;
+        let interface = module_interface(netlist, &module.path, &module.instance_ref)?;
+        let child_context = page_contexts.get(&child_page);
+
+        // A module symbol the user moved onto the parent page keeps the
+        // module's nets there; leave that sheet's pins alone.
+        let parent_holds_module_symbols = document.pages[parent_page].items.iter().any(|item| {
+            matches!(item, SchItem::Symbol(symbol)
+            if symbol.field_value("Path").is_some_and(|path| {
+                hierarchy::is_descendant(path, &module.path)
+            }))
+        });
+        let mut present = BTreeSet::new();
+        let mut stale = Vec::new();
+        for pin in &sheet.pins {
+            let Some((net_name, port_name)) = ports.iter().find_map(|(net_name, names)| {
+                names
+                    .iter()
+                    .find(|name| pin.name == **name || pin.id == pin_id(name))
+                    .map(|name| (net_name, name))
+            }) else {
+                continue;
+            };
+            present.insert(port_name.clone());
+            let crosses = interface
+                .get(net_name)
+                .is_some_and(|names| names.contains(port_name));
+            if !crosses
+                && !parent_holds_module_symbols
+                && pin.name == *port_name
+                && pin.id == pin_id(port_name)
+                && !page_wired_at(&document.pages[parent_page], pin.at)
+            {
+                stale.push((pin.id.clone(), pin.at, net_name.clone(), port_name.clone()));
+            }
+        }
+
+        for (id, at, net_name, port_name) in stale {
+            if let Some(SchItem::Sheet(sheet)) = document.pages[parent_page]
+                .items
+                .iter_mut()
+                .find(|item| matches!(item, SchItem::Sheet(sheet) if sheet.id == sheet_id))
+            {
+                sheet.pins.retain(|pin| pin.id != id);
+            }
+            // When the net no longer leaves the module at all, a local label
+            // naming it on the parent page, such as one left by a removed
+            // symbol, names nothing there either.
+            let left_module = !interface.contains_key(&net_name);
+            document.pages[parent_page].items.retain(|item| {
+                !matches!(item, SchItem::Label(label)
+                    if points_connect(label.at, at)
+                        || (left_module
+                            && label.kind == LabelKind::Local
+                            && label.text == net_name))
+            });
+            let driver = driver_label(
+                &net_name,
+                child_context.and_then(|context| context.get(&net_name)),
+                false,
+                String::new(),
+                Point::default(),
+            );
+            relabel(
+                &mut document.pages[child_page],
+                |label| {
+                    matches!(label.kind, LabelKind::Hierarchical { .. }) && label.text == port_name
+                },
+                &driver,
+            );
+        }
+
+        for (net_name, names) in &interface {
+            for port_name in names {
+                if present.contains(port_name) {
+                    continue;
+                }
+                let Some(at) = add_sheet_pin(
+                    &mut document.pages[parent_page],
+                    &sheet_id,
+                    port_name,
+                    pin_id(port_name),
+                ) else {
+                    continue;
+                };
+                upsert_contextual_driver(
+                    document,
+                    net_symbol_specs,
+                    &page_contexts,
+                    parent_page,
+                    net_name,
+                    (at, LabelSpin::Left),
+                    &format!(
+                        "zener:module-parent-driver:{}:{port_name}:{net_name}",
+                        module.path
+                    ),
+                )?;
+                let driver = driver_label(net_name, Some(names), false, String::new(), at);
+                relabel(
+                    &mut document.pages[child_page],
+                    |label| label.kind == LabelKind::Local && label.text == *net_name,
+                    &driver,
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Whether wiring on the page meets `at`.
+fn page_wired_at(page: &SchPage, at: Point) -> bool {
+    page.items.iter().any(|item| match item {
+        SchItem::Wire(wire) => point_on_segment(at, wire.a, wire.b),
+        SchItem::Junction(junction) => points_connect(junction.at, at),
+        SchItem::NoConnect(marker) => points_connect(marker.at, at),
+        _ => false,
+    })
+}
+
+/// Give the labels `selected` picks the kind and text of `driver` in place.
+/// A label that would repeat one already at its point is removed instead.
+fn relabel(page: &mut SchPage, selected: impl Fn(&Label) -> bool, driver: &Label) {
+    let same_driver = |label: &Label| {
+        label.text == driver.text
+            && std::mem::discriminant(&label.kind) == std::mem::discriminant(&driver.kind)
+    };
+    let mut driven = page
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            SchItem::Label(label) if !selected(label) && same_driver(label) => Some(label.at),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    page.items.retain_mut(|item| {
+        let SchItem::Label(label) = item else {
+            return true;
+        };
+        if !selected(label) {
+            return true;
+        }
+        if driven.iter().any(|at| points_connect(*at, label.at)) {
+            return false;
+        }
+        label.kind = driver.kind;
+        label.text = driver.text.clone();
+        driven.push(label.at);
+        true
+    });
+}
+
+/// Add a pin to the left side of a sheet, in its first free row, growing the
+/// sheet when every row is taken. Returns the pin's point.
+fn add_sheet_pin(page: &mut SchPage, sheet_id: &str, name: &str, id: String) -> Option<Point> {
+    let sheet = page.items.iter_mut().find_map(|item| match item {
+        SchItem::Sheet(sheet) if sheet.id == sheet_id => Some(sheet),
+        _ => None,
+    })?;
+    let (at, size) = (sheet.at?, sheet.size?);
+    let taken = |y: f64| {
+        sheet
+            .pins
+            .iter()
+            .any(|pin| pin.rotation == Rotation::Deg180 && (pin.at.y - y).abs() <= GEOMETRY_EPS_MM)
+    };
+    let mut row = 2.0;
+    while taken(at.y + row * SHEET_PIN_SPACING_MM) {
+        row += 1.0;
+    }
+    let point = Point::new(at.x, at.y + row * SHEET_PIN_SPACING_MM);
+    let height = (row + 1.0) * SHEET_PIN_SPACING_MM;
+    if height > size.y + GEOMETRY_EPS_MM {
+        if sheet.file.at.y >= at.y + size.y - GEOMETRY_EPS_MM {
+            sheet.file.at.y += height - size.y;
+        }
+        sheet.size = Some(Point::new(size.x, height));
+    }
+    sheet.pins.push(SheetPin {
+        id,
+        name: name.to_string(),
+        at: point,
+        rotation: Rotation::Deg180,
+        shape: LabelShape::Bidirectional,
+        effects: crate::TextEffects::default(),
+        unsupported: Vec::new(),
+    });
+    Some(point)
 }
 
 /// Place a sheet whose footprint, relative to its top-left corner, includes

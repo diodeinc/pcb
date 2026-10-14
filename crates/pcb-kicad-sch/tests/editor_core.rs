@@ -3,8 +3,8 @@ mod common;
 use std::collections::BTreeSet;
 
 use pcb_kicad_sch::{
-    Label, LabelKind, MirrorAxis, Point, Rotation, SchDocument, SchItem, SchPage, Symbol,
-    SymbolDefinition,
+    Label, LabelKind, LabelShape, MirrorAxis, Point, Rotation, SchDocument, SchItem, SchPage,
+    Symbol, SymbolDefinition, Wire,
     analysis::{SchematicIssue, SchematicIssueKey, inspect_schematic},
     connectivity::{PhysicalConnectivity, PinVisibility, Terminal},
     deterministic_uuid,
@@ -792,6 +792,224 @@ fn a_net_that_stays_in_its_linked_sheet_gets_no_sheet_pin() {
             .analysis
             .is_equivalent()
     );
+}
+
+fn sheet_pin_names(document: &SchDocument) -> Vec<&str> {
+    document
+        .pages
+        .iter()
+        .flat_map(|page| &page.items)
+        .filter_map(|item| match item {
+            SchItem::Sheet(sheet) => Some(sheet),
+            _ => None,
+        })
+        .flat_map(|sheet| sheet.pins.iter().map(|pin| pin.name.as_str()))
+        .collect()
+}
+
+fn labels_on(document: &SchDocument, file_name: &str) -> Vec<(String, LabelKind)> {
+    let page = document
+        .pages
+        .iter()
+        .find(|page| page.file_name.as_deref() == Some(file_name))
+        .unwrap();
+    let mut labels = page_labels(page)
+        .into_iter()
+        .map(|label| (label.text.clone(), label.kind))
+        .collect::<Vec<_>>();
+    labels.sort_by(|left, right| left.0.cmp(&right.0));
+    labels
+}
+
+fn reapply(document: &SchDocument, netlist: &Schematic) -> SchDocument {
+    let root_file = document.pages[0].file_name.clone().unwrap();
+    let plan = plan_reconciliation(Some(document), netlist, &root_file).unwrap();
+    let applied = plan.apply(Some(document)).unwrap();
+    let inspection = inspect_schematic(&applied, netlist).unwrap();
+    assert!(
+        inspection.analysis.is_equivalent(),
+        "{:#?}",
+        inspection.analysis
+    );
+    assert!(
+        plan_reconciliation(Some(&applied), netlist, &root_file)
+            .unwrap()
+            .is_empty(),
+        "a second apply changes nothing"
+    );
+    applied
+}
+
+#[test]
+fn successive_applies_follow_a_port_into_and_out_of_its_sheet() {
+    let local = common::compile_fixture("hierarchy", "sheet_port_local.zen");
+    let external = common::compile_fixture("hierarchy", "sheet_port_external.zen");
+    let hierarchical = LabelKind::Hierarchical {
+        shape: LabelShape::Bidirectional,
+    };
+
+    let created = plan_reconciliation(None, &local, "SheetPort.kicad_sch")
+        .unwrap()
+        .apply(None)
+        .unwrap();
+    assert!(sheet_pin_names(&created).is_empty());
+    assert!(
+        labels_on(&created, "FILTER.kicad_sch").contains(&("SIGNAL".to_string(), LabelKind::Local))
+    );
+
+    // A root endpoint takes SIGNAL out of the sheet: the existing sheet gains
+    // the INPUT pin and the module page's SIGNAL label becomes hierarchical.
+    let crossing = reapply(&created, &external);
+    assert_eq!(sheet_pin_names(&crossing), ["INPUT"]);
+    let child = labels_on(&crossing, "FILTER.kicad_sch");
+    assert!(
+        child.contains(&("INPUT".to_string(), hierarchical)),
+        "{child:#?}"
+    );
+    assert!(child.iter().all(|(text, _)| text != "SIGNAL"), "{child:#?}");
+    let root = labels_on(&crossing, "SheetPort.kicad_sch");
+    assert_eq!(
+        root.iter()
+            .filter(|label| **label == ("SIGNAL".to_string(), LabelKind::Local))
+            .count(),
+        2,
+        "R2's pin and the sheet pin: {root:#?}"
+    );
+    for document in [&crossing] {
+        for page in &document.pages {
+            assert!(
+                page_labels(page)
+                    .iter()
+                    .all(|label| !matches!(label.kind, LabelKind::Global { .. }))
+            );
+        }
+    }
+
+    // Without the root endpoint, the pin and its parent label go again and
+    // the module page names SIGNAL locally.
+    let local_again = reapply(&crossing, &local);
+    assert!(sheet_pin_names(&local_again).is_empty());
+    let child = labels_on(&local_again, "FILTER.kicad_sch");
+    assert!(
+        child.contains(&("SIGNAL".to_string(), LabelKind::Local)),
+        "{child:#?}"
+    );
+    assert!(child.iter().all(|(text, _)| text != "INPUT"), "{child:#?}");
+    let root = labels_on(&local_again, "SheetPort.kicad_sch");
+    assert!(root.iter().all(|(text, _)| text != "SIGNAL"), "{root:#?}");
+}
+
+#[test]
+fn a_second_pin_for_a_crossing_net_goes_and_the_net_keeps_its_parent_labels() {
+    let netlist = common::compile_fixture("hierarchy", "root_alias.zen");
+    let created = plan_reconciliation(None, &netlist, "RootAlias.kicad_sch")
+        .unwrap()
+        .apply(None)
+        .unwrap();
+    assert_eq!(sheet_pin_names(&created), ["A"]);
+
+    // An older pcb gave the net a pin under each of its port names.
+    let mut older = created.clone();
+    let pin_b = older.pages[0]
+        .items
+        .iter_mut()
+        .find_map(|item| match item {
+            SchItem::Sheet(sheet) => {
+                let mut pin = sheet.pins[0].clone();
+                pin.id = deterministic_uuid("zener:module-sheet-pin:ALIAS:B");
+                pin.name = "B".to_string();
+                pin.at.y += 5.08;
+                sheet.pins.push(pin.clone());
+                Some(pin.at)
+            }
+            _ => None,
+        })
+        .unwrap();
+    older.pages[0].items.push(SchItem::Label(Label::new(
+        "older-parent-label",
+        "SIGNAL",
+        pin_b,
+    )));
+    let child = older
+        .pages
+        .iter_mut()
+        .find(|page| page.file_name.as_deref() == Some("ALIAS.kicad_sch"))
+        .unwrap();
+    let mut label_b = page_labels(child)
+        .into_iter()
+        .find(|label| label.text == "A")
+        .unwrap()
+        .clone();
+    label_b.id = "older-child-label".to_string();
+    label_b.text = "B".to_string();
+    child.items.push(SchItem::Label(label_b));
+
+    let applied = reapply(&older, &netlist);
+    assert_eq!(sheet_pin_names(&applied), ["A"]);
+    let root = labels_on(&applied, "RootAlias.kicad_sch");
+    assert_eq!(
+        root.iter()
+            .filter(|label| **label == ("SIGNAL".to_string(), LabelKind::Local))
+            .count(),
+        2,
+        "R1's pin and pin A: {root:#?}"
+    );
+    let child = labels_on(&applied, "ALIAS.kicad_sch");
+    assert!(child.iter().all(|(text, _)| text != "B"), "{child:#?}");
+}
+
+#[test]
+fn a_renamed_or_wired_sheet_pin_is_kept_when_its_net_stays_inside() {
+    let local = common::compile_fixture("hierarchy", "sheet_port_local.zen");
+    let external = common::compile_fixture("hierarchy", "sheet_port_external.zen");
+    let created = plan_reconciliation(None, &local, "SheetPort.kicad_sch")
+        .unwrap()
+        .apply(None)
+        .unwrap();
+    let crossing = reapply(&created, &external);
+
+    // The user renames the pin, and its hierarchical label, to their own
+    // convention: the pin is theirs now.
+    let mut renamed = crossing.clone();
+    for page in &mut renamed.pages {
+        for item in &mut page.items {
+            match item {
+                SchItem::Sheet(sheet) => {
+                    for pin in &mut sheet.pins {
+                        pin.name = format!("CUSTOM_{}", pin.name);
+                    }
+                }
+                SchItem::Label(label)
+                    if matches!(label.kind, LabelKind::Hierarchical { .. })
+                        && label.text == "INPUT" =>
+                {
+                    label.text = "CUSTOM_INPUT".to_string();
+                }
+                _ => {}
+            }
+        }
+    }
+    let kept = reapply(&renamed, &local);
+    assert_eq!(sheet_pin_names(&kept), ["CUSTOM_INPUT"]);
+
+    // The user wires the pin on the parent page: the wiring is theirs.
+    let mut wired = crossing.clone();
+    let pin = wired.pages[0]
+        .items
+        .iter()
+        .find_map(|item| match item {
+            SchItem::Sheet(sheet) => sheet.pins.first().map(|pin| pin.at),
+            _ => None,
+        })
+        .unwrap();
+    wired.pages[0].items.push(SchItem::Wire(Wire {
+        id: "user-wire".to_string(),
+        a: pin,
+        b: Point::new(pin.x - 5.08, pin.y),
+        unsupported: Vec::new(),
+    }));
+    let kept = reapply(&wired, &local);
+    assert_eq!(sheet_pin_names(&kept), ["INPUT"]);
 }
 
 #[test]

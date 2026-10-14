@@ -11,8 +11,9 @@ generated labels, wires, sheets, and other items do not grant continued
 ownership of those items.
 
 Analysis interprets the schematic as KiCad does. Reconciliation preserves an
-equivalent schematic except to refresh netlist-derived symbol assembly flags
-and prune obsolete generated module sheets as described below.
+equivalent schematic except to refresh netlist-derived symbol assembly flags,
+keep generated module sheets' pins in step with their modules, and prune
+obsolete generated module sheets as described below.
 Otherwise, it makes the smallest repair needed to restore equivalence.
 
 KiCad power symbols are adopted by their exact effective net name and
@@ -23,6 +24,16 @@ an existing equivalent schematic.
 
 Generation may give a new module instance its own child sheet and file. Later
 applications preserve user reorganizations rather than restoring that layout.
+A generated sheet has one pin for each net that leaves its module, under one
+of the net's port names; a net used only inside the module stays local to its
+page. Full reconciliation keeps a generated sheet's pins in step as nets start
+or stop leaving the module. It adds a missing pin with its parent label and
+turns the module page's local labels for the net into hierarchical ones. It
+removes a pin it generated with the parent page's labels at the pin, and with
+the parent page's local labels for the net once the net no longer leaves the
+module, and turns the module page's hierarchical labels for the port into
+the page's own driver for the net. A pin the user renamed or wired on the
+parent page, or a sheet whose module has symbols on the parent page, is kept.
 Full reconciliation removes an obsolete generated subtree only when its page
 filenames, page UUIDs and incoming sheet UUIDs still identify the generated
 module paths and parent-relative filenames, and it contains no live managed

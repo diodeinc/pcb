@@ -1,0 +1,10 @@
+"""Linked child schematic whose two ports carry one net."""
+
+Project(name="Alias", path="kicad", layout=False)
+
+Resistor = Module("@stdlib/generics/Resistor.zen")
+
+A = io("A", Net)
+B = io("B", Net)
+
+Resistor(name="R1", value="1kohms", package="0402", P1=A, P2=B)
