@@ -153,14 +153,15 @@ const SMOOTH_TURN: f64 = std::f64::consts::FRAC_PI_8;
 /// right, away from the material on its left, joined corner by corner.
 ///
 /// Where the offset edges part, a round join of chords within `join_angle`
-/// fills the gap. Where they overlap, they join through the corner, as the
-/// backend this replaces did; with `direct`, a smooth turn of a flattened
-/// curve joins them where they cross, as the curve's own offset would, or
-/// straight across where they cross beyond either edge.
-/// Offset edges at full length through every corner of a flattened curve
-/// cross each other near its centre once the offset nears its radius, and
-/// resolving those crossings costs the overlay a hundred times what crossing
-/// joins do.
+/// fills the gap. Where they overlap, they join through the corner; with
+/// `direct`, a smooth turn of a flattened curve joins them where they cross,
+/// as the curve's own offset would, or straight across where they cross
+/// beyond either edge.
+///
+/// Direct joins exist for speed: offset edges at full length through every
+/// corner of a flattened curve cross each other near its centre once the
+/// offset nears its radius, and resolving those crossings costs the overlay
+/// a hundred times what crossing joins do.
 fn raw_offset(ring: &[[f64; 2]], offset: f64, join_angle: f64, direct: bool) -> (Ring, f64, bool) {
     let edges = edges_of(ring)
         .filter_map(|(start, end)| {

@@ -555,18 +555,7 @@ impl<'a> Design<'a> {
                 #[cfg(target_family = "wasm")]
                 let layers = copper_layers.iter();
                 Ok(layers
-                    .map(|layer| {
-                        let conductors = layer.conductors.iter();
-                        (
-                            conductors
-                                .clone()
-                                .map(|conductor| conductor.image.prepare_query())
-                                .collect::<Vec<_>>(),
-                            BBoxIndex::new(
-                                conductors.map(|conductor| conductor.image.bbox).collect(),
-                            ),
-                        )
-                    })
+                    .map(|layer| conductor_index(&layer.conductors))
                     .unzip())
             },
         );
@@ -1309,6 +1298,23 @@ pub(super) struct CopperConductor {
     /// As for [`Hole::branch`].
     pub branch: Option<u32>,
     pub image: ContourSet,
+}
+
+/// Boundary queries for each conductor and a bounds index over them, as
+/// [`Design::conductor_boundaries`] and [`Design::conductors_near`] hold.
+pub(super) fn conductor_index(conductors: &[CopperConductor]) -> (Vec<PreparedRegion>, BBoxIndex) {
+    (
+        conductors
+            .iter()
+            .map(|conductor| conductor.image.prepare_query())
+            .collect(),
+        BBoxIndex::new(
+            conductors
+                .iter()
+                .map(|conductor| conductor.image.bbox)
+                .collect(),
+        ),
+    )
 }
 
 /// Coordinate-rounding slack, independent of copper feature significance.
