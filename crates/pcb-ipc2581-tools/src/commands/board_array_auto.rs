@@ -31,8 +31,7 @@ impl AutoSheetSize {
         }
     }
 
-    /// Short and long side.
-    pub fn dimensions_mm(self) -> (f64, f64) {
+    fn dimensions_mm(self) -> (f64, f64) {
         match self {
             Self::A7 => (74.0, 105.0),
             Self::A6 => (105.0, 148.0),
@@ -137,44 +136,47 @@ pub fn auto_board_array_plan(
         })
 }
 
-/// What ordering `quantity` boards on one sheet takes when every order is at
-/// least `moq` arrays.
-#[derive(Debug, Clone, Copy, PartialEq)]
+/// Boards wanted, and the fewest arrays the fabricator accepts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+pub struct Order {
+    pub quantity: u32,
+    pub moq: u32,
+}
+
+/// What an [`Order`] takes on one sheet.
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize)]
 pub struct SheetOrder {
-    pub arrays: u32,
-    pub boards_ordered: u32,
-    pub surplus: u32,
+    pub arrays: u64,
+    pub boards_ordered: u64,
+    pub surplus: u64,
     pub ordered_area_mm2: f64,
 }
 
-pub fn sheet_order(plan: &AutoBoardArrayPlan, quantity: u32, moq: u32) -> SheetOrder {
-    let arrays = quantity.div_ceil(plan.boards()).max(moq);
-    let boards_ordered = arrays * plan.boards();
-    SheetOrder {
-        arrays,
-        boards_ordered,
-        surplus: boards_ordered - quantity,
-        ordered_area_mm2: arrays as f64 * plan.area_mm2(),
-    }
-}
-
-/// The plan whose order uses the least array area; a tie goes to the smaller
-/// sheet, so a larger sheet wins only by packing better. Plans must be in
-/// ascending sheet size.
-pub fn recommend_sheet(
-    plans: &[AutoBoardArrayPlan],
-    quantity: u32,
-    moq: u32,
-) -> Option<AutoBoardArrayPlan> {
-    plans.iter().copied().fold(None, |best, plan| match best {
-        Some(best)
-            if sheet_order(&best, quantity, moq).ordered_area_mm2
-                <= sheet_order(&plan, quantity, moq).ordered_area_mm2 =>
-        {
-            Some(best)
+impl Order {
+    pub fn on(self, plan: &AutoBoardArrayPlan) -> SheetOrder {
+        // Counts widen to u64: up to 100 boards an array, times any u32
+        // quantity or MOQ.
+        let (quantity, boards) = (u64::from(self.quantity), u64::from(plan.boards()));
+        let arrays = quantity.div_ceil(boards).max(self.moq.into());
+        let boards_ordered = arrays * boards;
+        SheetOrder {
+            arrays,
+            boards_ordered,
+            surplus: boards_ordered - quantity,
+            ordered_area_mm2: arrays as f64 * plan.area_mm2(),
         }
-        _ => Some(plan),
-    })
+    }
+
+    /// The plan that orders the least array area. `min_by` keeps the first of
+    /// equal plans, so with plans in ascending sheet size a larger sheet wins
+    /// only by packing better.
+    pub fn recommend(self, plans: &[AutoBoardArrayPlan]) -> Option<&AutoBoardArrayPlan> {
+        plans.iter().min_by(|a, b| {
+            self.on(a)
+                .ordered_area_mm2
+                .total_cmp(&self.on(b).ordered_area_mm2)
+        })
+    }
 }
 
 pub fn auto_board_array_plan_for_sheet(
@@ -193,7 +195,7 @@ pub fn auto_board_array_plan_for_sheet(
     )
 }
 
-fn plan_for_sheet(
+pub fn plan_for_sheet(
     sheet: AutoSheetSize,
     board_width_mm: f64,
     board_height_mm: f64,
@@ -363,6 +365,7 @@ mod tests {
             [2, 4, 12, 28]
         );
 
+        let order = |quantity, moq| Order { quantity, moq };
         for (quantity, moq, sheet) in [
             // The minimum order fills more than enough small arrays.
             (5, 5, A7),
@@ -370,18 +373,19 @@ mod tests {
             (50, 5, A5),
             (500, 1, A4),
         ] {
-            let pick = recommend_sheet(&plans, quantity, moq).unwrap();
+            let pick = order(quantity, moq).recommend(&plans).unwrap();
             assert_eq!(pick.sheet, sheet, "quantity {quantity}, moq {moq}");
         }
 
-        let order = sheet_order(&plans[2], 50, 5);
-        assert_eq!(
-            (order.arrays, order.boards_ordered, order.surplus),
-            (5, 60, 10)
-        );
-        assert_eq!(order.ordered_area_mm2, 5.0 * 148.0 * 210.0);
-        assert_eq!(sheet_order(&plans[0], 5, 5).arrays, 5);
-        assert!(recommend_sheet(&[], 5, 1).is_none());
+        let a5 = order(50, 5).on(&plans[2]);
+        assert_eq!((a5.arrays, a5.boards_ordered, a5.surplus), (5, 60, 10));
+        assert_eq!(a5.ordered_area_mm2, 5.0 * 148.0 * 210.0);
+
+        // Neither the largest quantity nor the largest MOQ overflows.
+        let a7 = order(u32::MAX, 1).on(&plans[0]);
+        assert_eq!((a7.arrays, a7.surplus), (1 << 31, 1));
+        let a4 = order(1, u32::MAX).on(&plans[3]);
+        assert_eq!(a4.boards_ordered, u64::from(u32::MAX) * 28);
     }
 
     #[test]

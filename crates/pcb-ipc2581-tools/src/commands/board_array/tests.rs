@@ -550,7 +550,8 @@ fn auto_create_derives_board_margin_from_courtyard_overhang() {
     ] {
         let ipc = Ipc2581::parse(&courtyard).unwrap();
         let board = primary_board_layout(&ipc).unwrap();
-        let margin = auto_board_margin(&ipc, board.bbox, Resolution::default()).unwrap();
+        let imported = import_design(&ipc, Resolution::default()).unwrap();
+        let margin = auto_board_margin(&ipc, &imported, board.bbox).unwrap();
         assert_eq!(margin, expected);
 
         let xml = create_auto_board_array_xml(&courtyard, None).unwrap();

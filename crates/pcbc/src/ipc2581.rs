@@ -387,9 +387,9 @@ enum BoardArrayCommands {
         /// Boards to order; adds order math and a recommended sheet
         #[arg(long, value_parser = clap::value_parser!(u32).range(1..))]
         quantity: Option<u32>,
-        /// Minimum board arrays per order. Defaults to 1.
-        #[arg(long, requires = "quantity", value_parser = clap::value_parser!(u32).range(1..))]
-        moq: Option<u32>,
+        /// Minimum board arrays per order
+        #[arg(long, default_value_t = 1, requires = "quantity", value_parser = clap::value_parser!(u32).range(1..))]
+        moq: u32,
         #[arg(short, long, default_value = "text")]
         format: OutputFormat,
     },
@@ -698,10 +698,7 @@ pub fn execute(args: Ipc2581Args, resolution: Resolution) -> anyhow::Result<()> 
             } => commands::board_array::plan::execute(
                 &input,
                 format,
-                quantity.map(|quantity| commands::board_array::plan::OrderRequest {
-                    quantity,
-                    moq: moq.unwrap_or(1),
-                }),
+                quantity.map(|quantity| commands::board_array_auto::Order { quantity, moq }),
                 resolution,
             ),
         },
