@@ -247,6 +247,8 @@ pub struct PhysicalView {
 /// [`ImportedDesign::assembly_view`] derives it.
 #[derive(Debug, Clone, Default)]
 pub struct AssemblyView {
+    /// Surviving copper, as in [`PhysicalView::lands`].
+    pub lands: Vec<PhysicalLand>,
     pub terminations: Vec<PhysicalTermination>,
     pub paste_islands: Vec<PasteIsland>,
     /// The paste of each side and board as disjoint regions, in island order.
@@ -398,7 +400,7 @@ impl ImportedDesign {
         })
     }
 
-    /// Derive the terminations, paste islands, and drilled openings of
+    /// Derive the lands, terminations, paste islands, and drilled openings of
     /// [`Self::physical_view`], with the same termination associations, for
     /// component assembly. No soldermask or hole-protection layer is
     /// materialized, and openings are not linked to source lands.
@@ -430,6 +432,7 @@ impl ImportedDesign {
         let mut holes = self.derive_physical_holes(scope, &[], &all, resolution)?;
         self.attach_hole_terminations(&lands, &terminations, &mut holes)?;
         Ok(AssemblyView {
+            lands,
             terminations,
             paste_islands,
             paste_regions,
@@ -1898,10 +1901,21 @@ mod tests {
                 termination_basis: hole.termination_basis,
             })
             .collect::<Vec<_>>();
-        let expected = format!("{:?}", (&full.terminations, &full.paste_islands, &holes));
+        let expected = format!(
+            "{:?}",
+            (&full.lands, &full.terminations, &full.paste_islands, &holes)
+        );
         let narrow = |imported: &ImportedDesign| {
             let view = imported.assembly_view(scope, resolution).unwrap();
-            format!("{:?}", (view.terminations, view.paste_islands, view.holes))
+            format!(
+                "{:?}",
+                (
+                    view.lands,
+                    view.terminations,
+                    view.paste_islands,
+                    view.holes
+                )
+            )
         };
         assert_eq!(narrow(&imported), expected);
 
