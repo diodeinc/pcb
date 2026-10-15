@@ -582,6 +582,79 @@ fn a_huge_board_keeps_mask_and_copper_apart_in_depth() {
     assert!(z["soldermask:front"].0 - z["pads:"].1 >= 0.0145, "{z:?}");
 }
 
+#[test]
+fn mask_exports_keep_chamfered_tips_and_rounded_arcs() {
+    // The tip's four co-circular vertices are three authored straight
+    // edges, not a polygonized arc (ENG-4114). The other end is a real
+    // semicircle, which must still be reconstructed after clipping.
+    // Also check a small tip whose false arc is within the sagitta limit,
+    // paired with a real semicircle flattened to exactly four chords.
+    for (scale, radius) in [(1.0, 2.0), (0.025, 0.04)] {
+        let (x, flat, y) = (3.35 * scale, 1.6 * scale, 2.85 * scale);
+        let end = 10.0 + radius;
+        let text = format!(
+            r#"{HEAD}
+(gr_line (start -4 8) (end -4 6) (layer "Edge.Cuts"))
+(gr_line (start -4 6) (end -{x} {y}) (layer "Edge.Cuts"))
+(gr_line (start -{x} {y}) (end -{flat} 0) (layer "Edge.Cuts"))
+(gr_line (start -{flat} 0) (end {flat} 0) (layer "Edge.Cuts"))
+(gr_line (start {flat} 0) (end {x} {y}) (layer "Edge.Cuts"))
+(gr_line (start {x} {y}) (end 4 6) (layer "Edge.Cuts"))
+(gr_line (start 4 6) (end 4 8) (layer "Edge.Cuts"))
+(gr_line (start 4 8) (end {radius} 10) (layer "Edge.Cuts"))
+(gr_arc (start {radius} 10) (mid 0 {end}) (end -{radius} 10) (layer "Edge.Cuts"))
+(gr_line (start -{radius} 10) (end -4 8) (layer "Edge.Cuts")))"#
+        );
+        let options = Options {
+            board_body: false,
+            components: false,
+            silkscreen: false,
+            ..Options::default()
+        };
+        let run = export(&text, &options).unwrap();
+        assert!(run.report.warnings.is_empty(), "{:?}", run.report.warnings);
+        let masks: Vec<_> = run.stats["things"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .flat_map(|t| t["primitives"].as_array().unwrap())
+            .filter(|p| p["extras"]["layer"] == "soldermask")
+            .collect();
+        assert_eq!(masks.len(), 2);
+        for side in ["front", "back"] {
+            let mask = masks.iter().find(|p| p["extras"]["side"] == side).unwrap();
+            // glTF's z is KiCad's y. Quantization is well below a micrometre
+            // here; the false arc extends the full-size tip by about 0.407 mm.
+            near(mask["min"][2].as_f64().unwrap() * 1e3, 0.0, 0.001);
+            near(mask["max"][2].as_f64().unwrap() * 1e3, end, 0.01);
+        }
+
+        let board = Board::parse(text.as_bytes()).unwrap();
+        let mut step = Vec::new();
+        let mut report = Report::default();
+        pcb_step::export(&board, &options, &mut step, &mut report).unwrap();
+        assert!(report.warnings.is_empty(), "{:?}", report.warnings);
+        let step = String::from_utf8(step).unwrap();
+        let radii: Vec<f64> = step
+            .lines()
+            .filter_map(|line| line.split_once(" = CIRCLE("))
+            .map(|(_, args)| {
+                args.rsplit(',')
+                    .next()
+                    .unwrap()
+                    .trim_end_matches(");")
+                    .parse()
+                    .unwrap()
+            })
+            .collect();
+        // Each mask keeps the real semicircle analytic, with no false tip arc.
+        assert_eq!(radii.len(), 2, "{radii:?}");
+        for emitted in radii {
+            near(emitted, radius, 0.001);
+        }
+    }
+}
+
 fn layer_z(run: &Run) -> HashMap<String, (f64, f64)> {
     run.stats["things"]
         .as_array()
