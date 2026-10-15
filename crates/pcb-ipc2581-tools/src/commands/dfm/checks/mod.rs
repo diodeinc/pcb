@@ -142,7 +142,7 @@ enum RuleEvaluation {
     Distance(Vec<(Option<Vec<u32>>, Evaluation)>),
     Count(CountEvaluation),
     Ratio(RatioEvaluation),
-    Property(board_property::Evaluation),
+    Property(Result<board_property::Evaluation, (RuleStatus, String)>),
 }
 
 impl From<Evaluation> for RuleEvaluation {
@@ -334,16 +334,14 @@ fn judge_in(
             result.checked += evaluation.checked * design.placements.len();
         }
         RuleEvaluation::Property(evaluation) => {
+            let evaluation = match evaluation {
+                Ok(evaluation) => evaluation,
+                Err(unjudged) => return Ok(Some(unjudged)),
+            };
             for assumption in evaluation.assumptions {
                 if !result.assumptions.contains(&assumption) {
                     result.assumptions.push(assumption);
                 }
-            }
-            if let Some(reason) = evaluation.incomplete_reason {
-                return Ok(Some((RuleStatus::Incomplete, reason)));
-            }
-            if let Some(reason) = evaluation.unstated {
-                return Ok(Some((RuleStatus::NotApplicable, reason)));
             }
             findings.extend(
                 evaluation

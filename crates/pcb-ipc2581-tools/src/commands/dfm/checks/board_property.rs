@@ -18,7 +18,7 @@ use crate::commands::dfm::design::Design;
 use crate::commands::dfm::pdk::{
     CopperWeight, LayerPosition, SoldermaskColor, SurfaceFinish, copper_weight_class,
 };
-use crate::commands::dfm::report::{LayerRef, Subject};
+use crate::commands::dfm::report::{LayerRef, RuleStatus, Subject};
 use crate::commands::dfm::rules::{Allowed, Rule, RuleKind, position_label};
 use crate::layers;
 use pcb_ir::geom::dfm::COMPARISON_EPSILON_MM;
@@ -26,9 +26,6 @@ use pcb_ir::geom::dfm::COMPARISON_EPSILON_MM;
 pub(super) struct Evaluation {
     pub checked: usize,
     pub nonconforming: Vec<Nonconforming>,
-    pub incomplete_reason: Option<String>,
-    /// Why the design states nothing for the rule to judge.
-    pub unstated: Option<String>,
     pub assumptions: Vec<String>,
 }
 
@@ -38,33 +35,23 @@ pub(super) struct Nonconforming {
     pub subject: Subject,
 }
 
-impl Evaluation {
-    fn incomplete(reason: String) -> Self {
-        Self {
-            checked: 0,
-            nonconforming: Vec::new(),
-            incomplete_reason: Some(reason),
-            unstated: None,
-            assumptions: Vec::new(),
-        }
-    }
+/// Why a rule judged nothing: an `Incomplete` or `NotApplicable` status.
+type Unjudged = (RuleStatus, String);
 
-    fn unstated(reason: &str) -> Self {
-        Self {
-            unstated: Some(reason.to_owned()),
-            ..Self::judged(0, Vec::new())
-        }
+fn judged(checked: usize, nonconforming: impl IntoIterator<Item = Nonconforming>) -> Evaluation {
+    Evaluation {
+        checked,
+        nonconforming: nonconforming.into_iter().collect(),
+        assumptions: Vec::new(),
     }
+}
 
-    fn judged(checked: usize, nonconforming: Vec<Nonconforming>) -> Self {
-        Self {
-            checked,
-            nonconforming,
-            incomplete_reason: None,
-            unstated: None,
-            assumptions: Vec::new(),
-        }
-    }
+fn incomplete(reason: impl Into<String>) -> Unjudged {
+    (RuleStatus::Incomplete, reason.into())
+}
+
+fn unstated(reason: &str) -> Unjudged {
+    (RuleStatus::NotApplicable, reason.to_owned())
 }
 
 fn subject(kind: &'static str, name: impl Into<String>) -> Subject {
@@ -76,42 +63,41 @@ fn subject(kind: &'static str, name: impl Into<String>) -> Subject {
     }
 }
 
-pub(super) fn evaluate(rule: &Rule, design: &Design) -> Evaluation {
+pub(super) fn evaluate(rule: &Rule, design: &Design) -> Result<Evaluation, Unjudged> {
+    let allowed_text = rule.limit.allowed().describe();
     match (rule.kind, rule.limit.allowed()) {
         (RuleKind::CopperWeight(position), Allowed::CopperWeights(allowed)) => {
-            copper_weight(rule, position, allowed, design)
+            copper_weight(rule, position, allowed, &allowed_text, design)
         }
         (RuleKind::BoardThickness, Allowed::Thickness(limit)) => {
             let stackup = design
                 .stackup
                 .as_ref()
                 .expect("thickness rules request stackup extraction");
-            let thickness = match stackup.total_thickness() {
-                Ok(thickness) => thickness.millimeters,
-                Err(reason) => return Evaluation::incomplete(reason),
-            };
+            let thickness = stackup.total_thickness().map_err(incomplete)?.millimeters;
             let fits = limit.nominal.iter().any(|nominal| {
                 let nominal = nominal.millimeters();
                 (thickness - nominal).abs() <= limit.tolerance_mm(nominal) + COMPARISON_EPSILON_MM
             });
             let nonconforming = (!fits).then(|| Nonconforming {
                 message: format!(
-                    "finished board thickness is {thickness:.4} mm; the PDK allows {}",
-                    limit.describe()
+                    "finished board thickness is {thickness:.4} mm; the PDK allows {allowed_text}"
                 ),
                 layers: Vec::new(),
                 subject: subject("stackup", stackup.name.clone()),
             });
-            Evaluation::judged(1, nonconforming.into_iter().collect())
+            Ok(judged(1, nonconforming))
         }
-        (RuleKind::SurfaceFinish, Allowed::Finishes(allowed)) => surface_finish(allowed, design),
-        (RuleKind::SoldermaskColor, Allowed::Colors(allowed)) => soldermask_color(allowed, design),
+        (RuleKind::SurfaceFinish, Allowed::Finishes(allowed)) => {
+            surface_finish(allowed, &allowed_text, design)
+        }
+        (RuleKind::SoldermaskColor, Allowed::Colors(allowed)) => {
+            soldermask_color(allowed, &allowed_text, design)
+        }
         (RuleKind::BoardSize, Allowed::Size(limit)) => {
-            let Some(bounds) = design.report_layout().bounding_box else {
-                return Evaluation::incomplete(
-                    "the selected layout target has no board profile to measure".to_owned(),
-                );
-            };
+            let bounds = design.report_layout().bounding_box.ok_or_else(|| {
+                incomplete("the selected layout target has no board profile to measure")
+            })?;
             let (width, height) = (bounds.max.x - bounds.min.x, bounds.max.y - bounds.min.y);
             let extents = [width.max(height), width.min(height)];
             let below = limit.minimum().is_some_and(|minimum| {
@@ -122,15 +108,13 @@ pub(super) fn evaluate(rule: &Rule, design: &Design) -> Evaluation {
             });
             let nonconforming = (below || above).then(|| Nonconforming {
                 message: format!(
-                    "board extents are {:.3} × {:.3} mm; the PDK allows {}",
-                    extents[0],
-                    extents[1],
-                    limit.describe()
+                    "board extents are {:.3} × {:.3} mm; the PDK allows {allowed_text}",
+                    extents[0], extents[1]
                 ),
                 layers: Vec::new(),
                 subject: subject("board", "layout profile"),
             });
-            Evaluation::judged(1, nonconforming.into_iter().collect())
+            Ok(judged(1, nonconforming))
         }
         (kind, _) => unreachable!("{kind:?} is not a board property with this limit"),
     }
@@ -140,8 +124,9 @@ fn copper_weight(
     rule: &Rule,
     position: LayerPosition,
     allowed: &[CopperWeight],
+    allowed_text: &str,
     design: &Design,
-) -> Evaluation {
+) -> Result<Evaluation, Unjudged> {
     let stackup = design
         .stackup
         .as_ref()
@@ -150,12 +135,7 @@ fn copper_weight(
         LayerPosition::Outer => rule.conditions.assumed_outer_copper_weight_oz,
         LayerPosition::Inner => rule.conditions.assumed_inner_copper_weight_oz,
     };
-    let allowed_text = allowed
-        .iter()
-        .map(CopperWeight::original)
-        .collect::<Vec<_>>()
-        .join(", ");
-    let mut evaluation = Evaluation::judged(0, Vec::new());
+    let mut evaluation = judged(0, []);
     for (layer, stated) in stackup.copper_layers.iter().zip(&stackup.copper_weights_oz) {
         let layer_position = if layer.side == Some("inner") {
             LayerPosition::Inner
@@ -176,10 +156,10 @@ fn copper_weight(
                 ounces
             }
             (None, None) => {
-                return Evaluation::incomplete(format!(
+                return Err(incomplete(format!(
                     "copper layer '{}' states no weight or thickness",
                     layer.name
-                ));
+                )));
             }
         };
         evaluation.checked += 1;
@@ -200,7 +180,7 @@ fn copper_weight(
             });
         }
     }
-    evaluation
+    Ok(evaluation)
 }
 
 fn format_ounces(ounces: f64) -> String {
@@ -210,7 +190,11 @@ fn format_ounces(ounces: f64) -> String {
 
 /// The surface finish each coating layer's stackup spec states, judged once
 /// per spec, with the coating layers that reference it.
-fn surface_finish(allowed: &[SurfaceFinish], design: &Design) -> Evaluation {
+fn surface_finish(
+    allowed: &[SurfaceFinish],
+    allowed_text: &str,
+    design: &Design,
+) -> Result<Evaluation, Unjudged> {
     use ipc2581::types::FinishType;
     let imported = design.imported;
     let mut finishes: Vec<(&str, FinishType, Vec<LayerRef>)> = Vec::new();
@@ -238,13 +222,8 @@ fn surface_finish(allowed: &[SurfaceFinish], design: &Design) -> Evaluation {
         }
     }
     if finishes.is_empty() {
-        return Evaluation::unstated("the IPC-2581 file states no surface finish");
+        return Err(unstated("the IPC-2581 file states no surface finish"));
     }
-    let allowed_text = allowed
-        .iter()
-        .map(|finish| finish.label())
-        .collect::<Vec<_>>()
-        .join(", ");
     let mut nonconforming = Vec::new();
     for (spec, finish, layers) in &finishes {
         let stated = match (finish, SurfaceFinish::from_ipc(*finish)) {
@@ -259,9 +238,9 @@ fn surface_finish(allowed: &[SurfaceFinish], design: &Design) -> Evaluation {
                 (true, true) => continue,
                 (false, false) => "solder leveling (IPC S)",
                 _ => {
-                    return Evaluation::incomplete(format!(
+                    return Err(incomplete(format!(
                         "surface finish spec '{spec}' states solder leveling (IPC S) without its lead content; the PDK allows {allowed_text}"
-                    ));
+                    )));
                 }
             },
             (_, None) => "OTHER",
@@ -272,7 +251,7 @@ fn surface_finish(allowed: &[SurfaceFinish], design: &Design) -> Evaluation {
             subject: subject("surface_finish", *spec),
         });
     }
-    Evaluation::judged(finishes.len(), nonconforming)
+    Ok(judged(finishes.len(), nonconforming))
 }
 
 fn layer_ref(
@@ -292,7 +271,11 @@ fn layer_ref(
 
 /// The colour each soldermask layer's stackup spec gives it, by colour term
 /// or a `Color : <name>` property.
-fn soldermask_color(allowed: &[SoldermaskColor], design: &Design) -> Evaluation {
+fn soldermask_color(
+    allowed: &[SoldermaskColor],
+    allowed_text: &str,
+    design: &Design,
+) -> Result<Evaluation, Unjudged> {
     let imported = design.imported;
     let stackup_layers = imported
         .stackups
@@ -304,11 +287,9 @@ fn soldermask_color(allowed: &[SoldermaskColor], design: &Design) -> Evaluation 
         .iter()
         .filter(|layer| layer.layer_function == LayerFunction::Soldermask)
         .collect::<Vec<_>>();
-    let allowed_text = allowed
-        .iter()
-        .map(SoldermaskColor::name)
-        .collect::<Vec<_>>()
-        .join(", ");
+    if masks.is_empty() {
+        return Err(unstated("the design has no soldermask layers"));
+    }
     let mut nonconforming = Vec::new();
     let mut stated = 0;
     for mask in &masks {
@@ -347,11 +328,8 @@ fn soldermask_color(allowed: &[SoldermaskColor], design: &Design) -> Evaluation 
             });
         }
     }
-    if masks.is_empty() {
-        return Evaluation::unstated("the design has no soldermask layers");
-    }
     if stated == 0 {
-        return Evaluation::unstated("the IPC-2581 file states no soldermask colour");
+        return Err(unstated("the IPC-2581 file states no soldermask colour"));
     }
-    Evaluation::judged(stated, nonconforming)
+    Ok(judged(stated, nonconforming))
 }
