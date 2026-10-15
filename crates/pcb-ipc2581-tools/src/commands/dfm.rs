@@ -174,8 +174,8 @@ fn check_with_scene(
 /// the rest in name order. A kit of one profile always runs it, so its
 /// support rules report what the design lacks. When the design cannot be
 /// qualified for a profile considered before one it meets, because what the
-/// support reads is missing, the default runs and its support rules report
-/// the gap; when it meets none, no profile fits and the check cannot run.
+/// support reads is missing, or when it meets none, the default runs and its
+/// support rules report what the design lacks.
 fn select_profile(
     pdk: &pdk::Pdk,
     imported: &ImportedDesign,
@@ -221,15 +221,11 @@ fn select_profile(
                 .collect(),
         });
     }
-    let reasons = rejected
-        .iter()
-        .map(|profile| format!("{}: {}", profile.profile, profile.reasons.join("; ")))
-        .collect::<Vec<_>>();
-    bail!(
-        "no profile of PDK '{}' fits this design ({})",
-        pdk.pdk.id,
-        reasons.join(" | ")
-    )
+    rejected.retain(|profile| profile.profile != pdk.default_profile);
+    Ok(report::ProfileSelection::automatic(
+        &pdk.default_profile,
+        rejected,
+    ))
 }
 
 #[cfg(feature = "cli")]
@@ -1253,14 +1249,16 @@ limit = { minimum = "300 mil" }
         assert!(matches!(support.status, report::RuleStatus::Fail));
         assert_eq!(support.checked, 2);
 
-        let error = check_builtin(&weighted_board("0.105"), "jlc").unwrap_err();
-        let message = format!("{error:#}");
-        assert!(
-            message.contains("no profile of PDK 'jlcpcb-rigid-fr4' fits")
-                && message.contains("one-ounce:")
-                && message.contains("two-ounce:"),
-            "{message}"
-        );
+        // 3 oz fits no profile, so the default runs and its support fails.
+        let unfit = check_builtin(&weighted_board("0.105"), "jlc").unwrap();
+        assert_eq!(unfit.pdk.profile, "one-ounce");
+        let [rejected] = unfit.pdk.profile_selection.rejected.as_slice() else {
+            panic!("two-ounce is rejected besides the default");
+        };
+        assert_eq!(rejected.profile, "two-ounce");
+        let support = rule(&unfit, "profile.support.outer_copper_weight");
+        assert!(matches!(support.status, report::RuleStatus::Fail));
+        assert!(matches!(unfit.verdict, report::Verdict::Fail));
     }
 
     #[test]
@@ -1334,7 +1332,8 @@ limit = { minimum = ["10 mm", "5 mm"], maximum = ["40 mm", "25 mm"] }"#,
         // IPC S does not say which of the two lead contents it is.
         assert_eq!(status(&specified("S", "green"), "finish"), "Incomplete");
         assert_eq!(status(&specified("S", "green"), "color"), "Pass");
-        let report = check_with_pdk(&specified("OSP", "Black"), LayoutTarget::Board, &pdk);
+        // KiCad writes a custom colour as hex; it is named for the nearest.
+        let report = check_with_pdk(&specified("OSP", "#191919e6"), LayoutTarget::Board, &pdk);
         let messages = report
             .findings
             .iter()

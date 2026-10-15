@@ -136,8 +136,8 @@ the first executable profile whose `profile.support` the design meets, trying
 `default_profile` first and then the other profiles in name order. The report
 records the selected profile and why each earlier profile did not fit. A kit
 of one executable profile always runs it, and its support rules report what
-the design lacks. When the design meets no profile's support, no profile fits
-and the check stops with an error that lists each profile's reasons. When the
+the design lacks. When the design meets no profile's support, the default
+profile runs and its support rules fail on what the design lacks. When the
 design does not state what the support of a profile tried earlier reads, the
 default profile runs and its support rules report the missing data as
 `incomplete`. An executable profile lowers only rules whose `profiles` list
@@ -209,13 +209,17 @@ has no unambiguous physical stackup. The `technologies` list remains descriptive
 metadata because imported designs do not yet state rigid, flex, and HDI
 technology reliably enough for qualification.
 
-A copper-weight condition names a nominal weight, while a stackup states a
-thickness that only approximates one: 1 oz is 34.3 µm nominal (IPC-4562A), is
-allowed down to 90 % as foil, typically finishes near 88 %, and plates up on
-outer layers. A layer therefore matches the condition whose standard weight
-(⅛, ¼, ⅓, ½, then whole ounces) is nearest its own as a ratio, so 1.4 mil is
-1 oz, 0.07 mm is 2 oz, and a 0.0152 mm finished inner layer is 0.5 oz. Two
-cases naming the same standard weight overlap.
+A copper-weight condition names a standard weight (⅛, ¼, ⅓, ½, then whole
+ounces), while a stackup states a thickness that only approximates one: 1 oz
+is 34.3 µm nominal (IPC-4562A), is allowed down to 90 % as foil, typically
+finishes near 88 %, and plates up on outer layers. A layer names the nearest
+standard weight whose window holds it: from 85 % of nominal up to 0.1 oz
+above, plus 0.45 oz of plating on outer layers. So 1.4 mil is 1 oz, 0.07 mm
+is 2 oz, a 0.0152 mm inner layer is 0.5 oz, and 1.46 oz is 1 oz outside but
+no standard weight inside. A layer that names none matches no condition and
+no allowed weight. PDK weights must name a standard weight; two cases naming
+the same one overlap. `pcb ipc info --format json` reports the same
+`outer_copper_nominal_oz` and `inner_copper_nominal_oz`.
 
 Layer counts are positive integers. Every dimensional minimum is a positive
 string containing a number and `mm`, `mil`, `mils`, or `um`; copper weight is a
@@ -502,7 +506,8 @@ hold wherever it is placed; the report lists those placements once per Step
     `hasl` and `lead_free_hasl` are allowed, does not conform when neither
     is, and leaves the rule `incomplete` when only one is. Soldermask
     colour reads the colour term or `Color : <name>` property of each
-    soldermask layer's stackup spec. A finish or colour the file does not
+    soldermask layer's stackup spec; a custom `#rrggbb[aa]` colour, as KiCad
+    writes it, takes the nearest named colour. A finish or colour the file does not
     state (KiCad writes `Not specified`) is left to the fab, so the rule is
     `not_applicable`. IPC `OTHER` finishes are never allowed.
   - Board size measures the extents of the checked layout: the board for

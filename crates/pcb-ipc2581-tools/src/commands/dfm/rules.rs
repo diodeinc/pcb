@@ -13,9 +13,10 @@ use super::pdk::{
     AssemblyDiagnostic, Case, CopperWeight, HoleKind, LayerPosition, Length, LengthCase,
     LengthLimit, Pdk, PlatedHoleKind, Profile, ProfileStatus, Ratio, RatioLimit, RuleConditions,
     RuleMetadata, SelectingRule, SizeLimit, SlotPlating, SoldermaskColor, SurfaceFinish,
-    ThicknessLimit, copper_weight_class,
+    ThicknessLimit,
 };
 use super::report::{Severity, ViewRecipe};
+use crate::accessors::nominal_copper_weight;
 
 #[derive(Debug, Clone)]
 pub(super) struct Rule {
@@ -77,10 +78,11 @@ impl Conditions {
             LayerPosition::Outer => self.assumed_outer_copper_weight_oz,
             LayerPosition::Inner => self.assumed_inner_copper_weight_oz,
         });
-        // A stated thickness only approximates a nominal weight, so both
-        // sides are compared as the standard weight they belong to.
-        actual_oz
-            .is_some_and(|actual| copper_weight_class(actual) == copper_weight_class(required_oz))
+        // A stated thickness only approximates the standard weight it names.
+        actual_oz.is_some_and(|actual| {
+            nominal_copper_weight(actual, layer.position == LayerPosition::Outer)
+                == Some(required_oz)
+        })
     }
 }
 

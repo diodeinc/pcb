@@ -5,7 +5,7 @@
 //! A property is categorical: it conforms or it does not, so each rule
 //! permits no nonconforming property and reports one finding per property
 //! that is not allowed. Copper weight compares standard weights, as weight
-//! conditions do ([`copper_weight_class`]). Thickness conforms when it lies
+//! conditions do ([`nominal_copper_weight`]). Thickness conforms when it lies
 //! within the tolerance of some nominal thickness. Size compares the
 //! layout's extents long side to long side. A stackup property the file does
 //! not state leaves the rule incomplete; it is never assumed allowed. A
@@ -14,10 +14,9 @@
 
 use ipc2581::types::LayerFunction;
 
+use crate::accessors::{ColorInfo, format_ounces, nominal_copper_weight};
 use crate::commands::dfm::design::Design;
-use crate::commands::dfm::pdk::{
-    CopperWeight, LayerPosition, SoldermaskColor, SurfaceFinish, copper_weight_class,
-};
+use crate::commands::dfm::pdk::{CopperWeight, LayerPosition, SoldermaskColor, SurfaceFinish};
 use crate::commands::dfm::report::{LayerRef, RuleStatus, Subject};
 use crate::commands::dfm::rules::{Allowed, Rule, RuleKind, position_label};
 use crate::layers;
@@ -166,17 +165,20 @@ fn copper_weight(
             }
         };
         evaluation.checked += 1;
-        let class = copper_weight_class(ounces);
-        if allowed
+        let nominal = nominal_copper_weight(ounces, position == LayerPosition::Outer);
+        if !allowed
             .iter()
-            .all(|weight| copper_weight_class(weight.ounces()) != class)
+            .any(|weight| Some(weight.ounces()) == nominal)
         {
+            let weight = match nominal {
+                Some(nominal) => format!("{} oz standard weight", format_ounces(nominal)),
+                None => "no standard weight".to_owned(),
+            };
             evaluation.nonconforming.push(Nonconforming {
                 message: format!(
-                    "{} copper layer '{}' is {ounces:.2} oz ({} oz standard weight); the PDK allows {allowed_text}",
+                    "{} copper layer '{}' is {ounces:.2} oz ({weight}); the PDK allows {allowed_text}",
                     position_label(position),
                     layer.name,
-                    format_ounces(class)
                 ),
                 layers: vec![layer.clone()],
                 subject: subject("copper_layer", layer.name.clone()),
@@ -184,11 +186,6 @@ fn copper_weight(
         }
     }
     Ok(evaluation)
-}
-
-fn format_ounces(ounces: f64) -> String {
-    let rounded = (ounces * 1000.0).round() / 1000.0;
-    format!("{rounded}")
 }
 
 /// The surface finish each coating layer's stackup spec states, judged once
@@ -311,20 +308,22 @@ fn soldermask_color(
                         .next()
                 })
         });
-        // KiCad writes an unset colour as `Not specified`.
         let Some(color) = color
-            .map(str::trim)
-            .filter(|color| !color.is_empty() && !color.eq_ignore_ascii_case("not specified"))
+            .and_then(|color| {
+                let name = Some(color.to_owned());
+                ColorInfo { name, rgb: None }.color_name()
+            })
+            .map(|color| SoldermaskColor::new(&color))
         else {
             continue;
         };
         stated += 1;
-        if !allowed.contains(&SoldermaskColor::new(color)) {
+        if !allowed.contains(&color) {
             let layer = layer_ref(imported, mask);
             nonconforming.push(Nonconforming {
                 message: format!(
                     "soldermask layer '{name}' is {}; the PDK allows {allowed_text}",
-                    SoldermaskColor::new(color).name()
+                    color.name()
                 ),
                 layers: vec![layer],
                 subject: subject("soldermask_layer", name),

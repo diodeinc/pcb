@@ -3,6 +3,8 @@ use std::collections::{BTreeMap, HashSet};
 use anyhow::{Result, bail};
 use serde::Deserialize;
 
+use crate::accessors::nominal_copper_weight;
+
 /// The report rule ids `profile.support` lowers to, reserved from authored rules.
 pub const SUPPORT_RULE_IDS: &[&str] = &[
     "profile.support.copper_layers.minimum",
@@ -408,11 +410,8 @@ fn validate_allowed<T: PartialEq>(values: &[T], context: &str) -> Result<()> {
 /// Weights are listed as the standard weights they name, so two entries
 /// naming the same one are a duplicate.
 fn validate_copper_weights(weights: &[CopperWeight], context: &str) -> Result<()> {
-    let classes = weights
-        .iter()
-        .map(|weight| copper_weight_class(weight.ounces()).to_bits())
-        .collect::<Vec<_>>();
-    validate_allowed(&classes, context)
+    let nominal = weights.iter().map(CopperWeight::ounces).collect::<Vec<_>>();
+    validate_allowed(&nominal, context)
 }
 
 /// An inclusive positive-integer range. `exact` is shorthand for equal bounds.
@@ -911,9 +910,7 @@ impl CopperCondition {
     fn overlaps(&self, other: &Self) -> bool {
         self.position == other.position
             && match (&self.weight, &other.weight) {
-                (Some(left), Some(right)) => {
-                    copper_weight_class(left.ounces()) == copper_weight_class(right.ounces())
-                }
+                (Some(left), Some(right)) => left.ounces() == right.ounces(),
                 _ => true,
             }
     }
@@ -1187,7 +1184,8 @@ impl TryFrom<String> for Length {
     }
 }
 
-/// Finished copper weight in ounces per square foot.
+/// A standard copper weight in ounces per square foot, as written and as the
+/// nominal weight it names.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(try_from = "String")]
 pub struct CopperWeight {
@@ -1225,33 +1223,13 @@ impl TryFrom<String> for CopperWeight {
         {
             return Err(copper_weight_error(&value));
         }
+        let ounces = nominal_copper_weight(number, false)
+            .ok_or_else(|| format!("copper weight '{value}' names no standard weight"))?;
         Ok(Self {
             original: value.trim().to_owned(),
-            ounces: number,
+            ounces,
         })
     }
-}
-
-/// The standard foil weight a copper weight belongs to, in ounces.
-///
-/// Copper is ordered in standard weights, and a stackup states a thickness
-/// that only approximates one: IPC-4562A puts 1 oz at 34.3 µm nominal with a
-/// minimum of 90 %, fabrication typically leaves about 88 %, and plating adds
-/// to outer layers. The standard bounds only the minimum, so there is no
-/// two-sided tolerance band to test a thickness against; a weight instead
-/// belongs to the nearest standard weight. Nearness is a ratio, as foil
-/// tolerances are, which puts the boundary between neighbouring weights at
-/// their geometric mean. ¾ oz is not a class: fabs do not offer it, and it
-/// would claim finished 1 oz copper.
-pub(super) fn copper_weight_class(ounces: f64) -> f64 {
-    const BELOW_ONE_OUNCE: [f64; 4] = [0.125, 0.25, 1.0 / 3.0, 0.5];
-    let whole = ounces.floor().max(1.0);
-    let distance = |class: f64| (ounces / class).ln().abs();
-    BELOW_ONE_OUNCE
-        .into_iter()
-        .chain([whole, whole + 1.0])
-        .min_by(|left, right| distance(*left).total_cmp(&distance(*right)))
-        .expect("the standard weights are not empty")
 }
 
 fn copper_weight_error(value: &str) -> String {
@@ -1488,12 +1466,10 @@ limit = { minimum = "300 mil" }
         };
         // A layer belongs to exactly one standard weight, so two cases naming
         // the same one would both apply to it.
-        assert!(outer("1 oz").overlaps(&outer("1.2 oz")));
+        assert!(outer("1 oz").overlaps(&outer("1.05 oz")));
         assert!(!outer("1 oz").overlaps(&outer("2 oz")));
         assert!(!outer("0.5 oz").overlaps(&outer("1 oz")));
-        for (ounces, class) in [(0.437, 0.5), (1.022, 1.0), (2.011, 2.0), (0.35, 1.0 / 3.0)] {
-            assert_eq!(copper_weight_class(ounces), class);
-        }
+        assert!(CopperWeight::try_from("1.5 oz".to_owned()).is_err());
     }
 
     #[test]

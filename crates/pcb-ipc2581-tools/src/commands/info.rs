@@ -21,6 +21,7 @@ use serde_json::json;
 
 use crate::accessors::{
     ColorInfo, DrillHoleType, DrillStats, IpcAccessor, StackupLayerType, drill_stats,
+    nominal_copper_weight,
 };
 #[cfg(feature = "cli")]
 use crate::utils::{file as file_utils, units};
@@ -127,41 +128,11 @@ fn map_layer_side(side: Option<ipc2581::types::Side>) -> ComponentSide {
 }
 
 fn canonical_soldermask_kind(color: Option<&ColorInfo>) -> SoldermaskKind {
-    let Some(color) = color else {
-        return SoldermaskKind::Other;
-    };
-
-    if color
-        .name
-        .as_ref()
-        .is_some_and(|name| name.eq_ignore_ascii_case("black"))
-    {
-        return SoldermaskKind::Black;
+    match color.and_then(ColorInfo::color_name).as_deref() {
+        Some("black") => SoldermaskKind::Black,
+        Some("green") => SoldermaskKind::Green,
+        _ => SoldermaskKind::Other,
     }
-
-    if color
-        .rgb_color()
-        .is_some_and(|(r, g, b)| r == 0x00 && g == 0x00 && b == 0x00)
-    {
-        return SoldermaskKind::Black;
-    }
-
-    if color
-        .name
-        .as_ref()
-        .is_some_and(|name| name.eq_ignore_ascii_case("green"))
-    {
-        return SoldermaskKind::Green;
-    }
-
-    if color
-        .rgb_color()
-        .is_some_and(|(r, g, b)| r == 0x00 && g == 0x64 && b == 0x00)
-    {
-        return SoldermaskKind::Green;
-    }
-
-    SoldermaskKind::Other
 }
 
 #[cfg(feature = "cli")]
@@ -877,9 +848,19 @@ pub fn info_json(
                 .soldermask_color
                 .as_ref()
                 .and_then(|c| c.name.clone()),
+            "soldermask_color": stackup_details
+                .soldermask_color
+                .as_ref()
+                .and_then(ColorInfo::color_name),
             "soldermask_kind": canonical_soldermask_kind(stackup_details.soldermask_color.as_ref()),
             "outer_copper_oz": stackup_details.outer_copper_oz,
             "inner_copper_oz": stackup_details.inner_copper_oz,
+            "outer_copper_nominal_oz": stackup_details
+                .outer_copper_oz
+                .and_then(|oz| nominal_copper_weight(oz, true)),
+            "inner_copper_nominal_oz": stackup_details
+                .inner_copper_oz
+                .and_then(|oz| nominal_copper_weight(oz, false)),
             "layers": layers,
         });
     }

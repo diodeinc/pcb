@@ -28,11 +28,13 @@ pub struct StackupDetails {
 
 impl StackupDetails {
     pub fn outer_copper_weight(&self) -> Option<String> {
-        self.outer_copper_oz.map(format_copper_weight)
+        self.outer_copper_oz
+            .map(|oz| format_copper_weight(oz, nominal_copper_weight(oz, true)))
     }
 
     pub fn inner_copper_weight(&self) -> Option<String> {
-        self.inner_copper_oz.map(format_copper_weight)
+        self.inner_copper_oz
+            .map(|oz| format_copper_weight(oz, nominal_copper_weight(oz, false)))
     }
 }
 
@@ -53,21 +55,40 @@ fn uniform_copper_oz(conductors: &[(Option<Side>, Option<f64>)], sides: &[Side])
 /// Finished thickness of one ounce per square foot of copper.
 const COPPER_MM_PER_OZ: f64 = 0.0348;
 
-fn format_copper_weight(oz: f64) -> String {
-    let standard_oz = if oz < 0.75 {
-        0.5
-    } else if oz < 1.25 {
-        1.0
-    } else if oz < 1.75 {
-        1.5
-    } else if oz < 2.5 {
-        2.0
-    } else if oz < 3.5 {
-        3.0
-    } else {
-        4.0
-    };
-    format!("{:.2} oz (~{} oz)", oz, standard_oz)
+/// The standard foil weight a stated copper weight names, in ounces, or
+/// `None` when it names none.
+///
+/// A stackup states a thickness that only approximates the weight ordered:
+/// IPC-4562A allows foil 10 % under nominal and fabrication typically
+/// leaves about 88 %, so a weight reaches down to 85 % of its nominal. Above
+/// it allows 0.1 oz of export rounding, and outer layers 0.45 oz more of
+/// plating. Where an outer layer could be plated thinner foil, the nearest
+/// nominal wins. ¾ oz is not a standard weight: fabs do not offer it.
+pub(crate) fn nominal_copper_weight(ounces: f64, outer: bool) -> Option<f64> {
+    const BELOW_ONE_OUNCE: [f64; 4] = [0.125, 0.25, 1.0 / 3.0, 0.5];
+    const EPSILON: f64 = 1e-9;
+    let plating = if outer { 0.45 } else { 0.0 };
+    let whole = ounces.floor().max(1.0);
+    BELOW_ONE_OUNCE
+        .into_iter()
+        .chain([whole, whole + 1.0])
+        .filter(|nominal| {
+            ounces >= nominal * 0.85 - EPSILON && ounces <= nominal + 0.1 + plating + EPSILON
+        })
+        .min_by(|left, right| (ounces - left).abs().total_cmp(&(ounces - right).abs()))
+}
+
+fn format_copper_weight(oz: f64, nominal: Option<f64>) -> String {
+    match nominal {
+        Some(nominal) => format!("{oz:.2} oz (~{} oz)", format_ounces(nominal)),
+        None => format!("{oz:.2} oz"),
+    }
+}
+
+/// A standard weight as written: `1`, `0.5`, `0.333`.
+pub(crate) fn format_ounces(ounces: f64) -> String {
+    let rounded = (ounces * 1000.0).round() / 1000.0;
+    format!("{rounded}")
 }
 
 /// Surface finish information
@@ -134,27 +155,65 @@ pub struct ColorInfo {
     pub rgb: Option<(u8, u8, u8)>,
 }
 
+/// Colour names and the RGB values they stand for, preferred names first.
+const NAMED_COLORS: [(&str, (u8, u8, u8)); 13] = [
+    ("black", (0x00, 0x00, 0x00)),
+    ("white", (0xFF, 0xFF, 0xFF)),
+    ("green", (0x00, 0x64, 0x00)),
+    ("red", (0x8B, 0x00, 0x00)),
+    ("blue", (0x00, 0x00, 0x8B)),
+    ("yellow", (0xFF, 0xD7, 0x00)),
+    ("brown", (0x8B, 0x45, 0x13)),
+    ("orange", (0xFF, 0x8C, 0x00)),
+    ("pink", (0xFF, 0xC0, 0xCB)),
+    ("purple", (0x80, 0x00, 0x80)),
+    ("magenta", (0x80, 0x00, 0x80)),
+    ("gray", (0x80, 0x80, 0x80)),
+    ("grey", (0x80, 0x80, 0x80)),
+];
+
 impl ColorInfo {
-    /// Get RGB values, either from stored RGB or by mapping the color name
+    /// Get RGB values: the stored RGB, a `#rrggbb[aa]` name as KiCad writes
+    /// a custom colour, or the RGB a colour name stands for.
     pub fn rgb_color(&self) -> Option<(u8, u8, u8)> {
         self.rgb.or_else(|| {
-            self.name
-                .as_ref()
-                .and_then(|name| match name.to_lowercase().as_str() {
-                    "black" => Some((0x00, 0x00, 0x00)),
-                    "white" => Some((0xFF, 0xFF, 0xFF)),
-                    "green" => Some((0x00, 0x64, 0x00)),
-                    "red" => Some((0x8B, 0x00, 0x00)),
-                    "blue" => Some((0x00, 0x00, 0x8B)),
-                    "yellow" => Some((0xFF, 0xD7, 0x00)),
-                    "brown" => Some((0x8B, 0x45, 0x13)),
-                    "orange" => Some((0xFF, 0x8C, 0x00)),
-                    "pink" => Some((0xFF, 0xC0, 0xCB)),
-                    "purple" | "magenta" => Some((0x80, 0x00, 0x80)),
-                    "gray" | "grey" => Some((0x80, 0x80, 0x80)),
-                    _ => None,
-                })
+            let name = self.name.as_deref()?.trim();
+            if let Some(hex) = name
+                .strip_prefix('#')
+                .filter(|hex| matches!(hex.len(), 6 | 8))
+            {
+                let channel = |at: usize| u8::from_str_radix(hex.get(at..at + 2)?, 16).ok();
+                return Some((channel(0)?, channel(2)?, channel(4)?));
+            }
+            NAMED_COLORS
+                .iter()
+                .find(|(named, _)| named.eq_ignore_ascii_case(name))
+                .map(|(_, rgb)| *rgb)
         })
+    }
+
+    /// The colour's name, lowercase. A colour stated only as RGB is named
+    /// for the nearest named colour. KiCad writes an unset colour as
+    /// `Not specified`, which names none.
+    pub fn color_name(&self) -> Option<String> {
+        let name = self.name.as_deref().map(str::trim).unwrap_or_default();
+        if name.eq_ignore_ascii_case("not specified") {
+            return None;
+        }
+        if !name.is_empty() && !name.starts_with('#') {
+            return Some(name.to_lowercase());
+        }
+        let (r, g, b) = self.rgb_color()?;
+        let distance = |(nr, ng, nb): (u8, u8, u8)| {
+            [(r, nr), (g, ng), (b, nb)]
+                .map(|(left, right)| (i32::from(left) - i32::from(right)).pow(2))
+                .iter()
+                .sum::<i32>()
+        };
+        NAMED_COLORS
+            .iter()
+            .min_by_key(|(_, rgb)| distance(*rgb))
+            .map(|(named, _)| (*named).to_owned())
     }
 
     /// Get hex color string (e.g., "#FF0000")
@@ -629,6 +688,26 @@ mod tests {
         assert!((stackup.outer_copper_oz.unwrap() - 2.0).abs() < 1e-9);
         assert!((stackup.inner_copper_oz.unwrap() - 0.5).abs() < 1e-9);
         assert_eq!(stackup.outer_copper_weight().unwrap(), "2.00 oz (~2 oz)");
+    }
+
+    #[test]
+    fn stated_copper_names_the_standard_weight_within_its_tolerance() {
+        for (ounces, outer, nominal) in [
+            (0.437, false, Some(0.5)),
+            (0.862, false, Some(1.0)),
+            (1.753, false, Some(2.0)),
+            (1.3, false, None),
+            (0.35, false, Some(1.0 / 3.0)),
+            // Plating thickens outer copper, never inner.
+            (1.46, true, Some(1.0)),
+            (1.46, false, None),
+            (1.6, true, None),
+            (0.74, true, Some(0.5)),
+            (0.9, true, Some(1.0)),
+            (2.011, true, Some(2.0)),
+        ] {
+            assert_eq!(nominal_copper_weight(ounces, outer), nominal, "{ounces} oz");
+        }
     }
 
     #[test]
