@@ -35,6 +35,10 @@ const INTERNAL_ERROR: i32 = -32603;
 // computed against. Clients should re-request with a fresh `baseHash`.
 const CONTENT_MODIFIED: i32 = -32801;
 
+/// Save-time simulation runs inside the `didSave` handler and blocks the language
+/// server until ngspice exits. `pcb sim` has no limit for longer analyses.
+const SIM_ON_SAVE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
 /// Hex-encoded SHA-256 of the document text (exact UTF-8 bytes, no
 /// normalization). Used to correlate position edits and evaluation results
 /// with the document content they were computed from.
@@ -776,7 +780,7 @@ impl LspContext for LspEvalContext {
             return vec![];
         }
 
-        match pcb_sim::run_ngspice_captured(tmp.path(), zen_dir) {
+        match pcb_sim::run_ngspice_captured(tmp.path(), zen_dir, Some(SIM_ON_SAVE_TIMEOUT)) {
             Ok(result) if !result.success => {
                 vec![lsp_types::Diagnostic {
                     range: sim_setup_range,
@@ -791,7 +795,7 @@ impl LspContext for LspEvalContext {
                     range: sim_setup_range,
                     severity: Some(lsp_types::DiagnosticSeverity::ERROR),
                     source: Some("ngspice".to_string()),
-                    message: format!("Simulation failed: {e}"),
+                    message: format!("Simulation failed: {e:#}"),
                     ..Default::default()
                 }]
             }
