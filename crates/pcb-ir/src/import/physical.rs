@@ -390,7 +390,7 @@ impl ImportedDesign {
             self.paste_islands(scope, &components, &source_lands, &terminations, resolution)?;
         let mask_openings = self.mask_openings(scope, &lands, resolution)?;
         let mut holes = self.derive_physical_holes(scope, &source_lands, &all, resolution)?;
-        self.attach_hole_terminations(&lands, &terminations, &mut holes)?;
+        self.attach_hole_terminations(&source_lands, &terminations, &mut holes)?;
         self.attach_hole_protection(scope, &mut holes, resolution)?;
         Ok(PhysicalView {
             source_lands,
@@ -432,7 +432,7 @@ impl ImportedDesign {
             self.paste_islands(scope, &components, &source_lands, &terminations, resolution)?;
         let paste_regions = paste_regions(&paste_islands, &terminations, resolution)?;
         let mut holes = self.derive_physical_holes(scope, &[], &all, resolution)?;
-        self.attach_hole_terminations(&lands, &terminations, &mut holes)?;
+        self.attach_hole_terminations(&source_lands, &terminations, &mut holes)?;
         Ok(AssemblyView {
             lands,
             terminations,
@@ -957,14 +957,17 @@ impl ImportedDesign {
         Ok(holes)
     }
 
+    /// Link each hole to the termination its evidence names or, without
+    /// evidence, whose source lands it overlaps. Source lands, not surviving
+    /// copper, because a slot clears the copper it passes through.
     fn attach_hole_terminations(
         &self,
-        lands: &[PhysicalLand],
+        source_lands: &[PhysicalLand],
         terminations: &[PhysicalTermination],
         holes: &mut [PhysicalHole],
     ) -> Result<()> {
         let stackup = physical_stackup_layers(&self.stackups, &self.layer_definitions)?;
-        let terminations = TerminationIndex::new(self, lands, terminations);
+        let terminations = TerminationIndex::new(self, source_lands, terminations);
         for hole in holes.iter_mut() {
             let evidence = self.feature_evidence(hole.id.0);
             let (termination, basis) = self.hole_termination_association(
@@ -2013,6 +2016,21 @@ mod tests {
                     .land,
                 Association::Resolved(land)
             );
+            // The slot sits inside its pin's source land, so it serves that
+            // pin even though it clears the copper it overlaps. A wide slot
+            // leaves no surviving copper and so no termination.
+            let termination = view
+                .terminations
+                .iter()
+                .find(|termination| termination.lands.contains(&land))
+                .map(|termination| termination.id);
+            assert_eq!(termination.is_some(), height < 1.0);
+            let expected = termination.map_or(Association::Unresolved, Association::Resolved);
+            assert_eq!(view.holes[0].termination, expected);
+            let assembly = imported
+                .assembly_view(ArtworkScope::Board, Resolution::default())
+                .unwrap();
+            assert_eq!(assembly.holes[0].termination, expected);
         }
     }
 
