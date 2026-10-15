@@ -694,14 +694,29 @@ fn bom_hydration_edits(
     bom_hydrations: &[BomHydration],
 ) -> Result<Vec<ipc2581::edit::Edit>> {
     let mut edits = Vec::new();
+    // One pass over the document: a lookup per hydration rescans every element.
+    let mut items: HashMap<&str, Vec<ipc2581::edit::Node>> = HashMap::new();
+    for item in doc.find_all("BomItem") {
+        if let Some(oem_design_number) = doc.attr(item, "OEMDesignNumberRef") {
+            items.entry(oem_design_number).or_default().push(item);
+        }
+    }
 
     for hydration in bom_hydrations {
-        let item = unique_node_by_attr(
-            doc,
-            "BomItem",
-            "OEMDesignNumberRef",
-            &hydration.oem_design_number,
-        )?;
+        let item = match items
+            .get(hydration.oem_design_number.as_str())
+            .map(Vec::as_slice)
+        {
+            Some([item]) => *item,
+            Some(_) => anyhow::bail!(
+                "BomItem OEMDesignNumberRef={} is duplicated",
+                hydration.oem_design_number
+            ),
+            None => anyhow::bail!(
+                "BomItem OEMDesignNumberRef={} not found",
+                hydration.oem_design_number
+            ),
+        };
         let characteristics = doc.child(item, "Characteristics").ok_or_else(|| {
             anyhow::anyhow!(
                 "BOM item {} has no Characteristics section",
