@@ -876,6 +876,20 @@ mod tests {
     }
 
     #[test]
+    fn plan_moq_needs_a_quantity_but_its_default_does_not() {
+        let base = ["pcb", "ipc2581", "board-array", "plan", "board.xml"];
+        for (args, ok) in [
+            (vec![], true),
+            (vec!["--quantity", "5"], true),
+            (vec!["--quantity", "5", "--moq", "5"], true),
+            (vec!["--moq", "5"], false),
+        ] {
+            let parsed = crate::Cli::try_parse_from(base.into_iter().chain(args.clone()));
+            assert_eq!(parsed.is_ok(), ok, "{args:?}");
+        }
+    }
+
+    #[test]
     fn fab_drawing_writes_a_pdf() {
         let dir = tempfile::tempdir().unwrap();
         let input = dir.path().join("board.xml");
