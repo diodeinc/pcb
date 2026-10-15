@@ -2297,6 +2297,47 @@ fn image_unions_overlapping_pads_whatever_their_winding() {
 }
 
 #[test]
+fn image_cuts_copper_to_the_board_only_where_it_leaves_it() {
+    use crate::ImageKind::Copper;
+    // A 30 x 20 mm board with a 4 x 4 mm cutout. "A" fills over the
+    // cutout, "B" runs off the right edge, "C" frames the cutout with a
+    // 0.5 mm clearance, as a zone fill does, and "D" has an island off
+    // the board.
+    let fill = |net: &str, x0: f64, y0: f64, x1: f64, y1: f64| {
+        format!(
+            "(zone (net \"{net}\") (layers \"F.Cu\") (filled_polygon (layer \"F.Cu\") \
+             (pts (xy {x0} {y0}) (xy {x1} {y0}) (xy {x1} {y1}) (xy {x0} {y1}))))\n"
+        )
+    };
+    let body = [
+        rect_outline(0.0, 0.0, 30.0, 20.0),
+        rect_outline(10.0, 8.0, 14.0, 12.0),
+        fill("A", 8.0, 6.0, 16.0, 14.0),
+        fill("B", 26.0, 2.0, 34.0, 4.0),
+        fill("C", 9.0, 7.0, 15.0, 7.5),
+        fill("C", 9.0, 12.5, 15.0, 13.0),
+        fill("C", 9.0, 7.0, 9.5, 13.0),
+        fill("C", 14.5, 7.0, 15.0, 13.0),
+        fill("D", 2.0, 16.0, 4.0, 18.0),
+        fill("D", 32.0, 16.0, 34.0, 18.0),
+    ]
+    .concat();
+    let text = parse(&body);
+    let board = Board::parse(text.as_bytes()).unwrap();
+    let image = crate::board_image(&board, &crate::ImageOptions::default()).unwrap();
+    assert!(image.warnings.is_empty(), "{:?}", image.warnings);
+    for (net, area) in [
+        ("A", 64.0 - 16.0),
+        ("B", 8.0),
+        ("C", 36.0 - 25.0),
+        ("D", 4.0),
+    ] {
+        let copper = image_region(&image, "F.Cu", Copper, net).area();
+        assert!((copper - area).abs() < 1e-6, "{net}: {copper}");
+    }
+}
+
+#[test]
 fn image_takes_padstack_shapes_per_layer() {
     use crate::ImageKind::{Copper, MaskOpening};
     use pcb_ir::dialects::nc;

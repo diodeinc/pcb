@@ -13,7 +13,8 @@
 //! `Physical::copper_z`.
 
 use pcb_ir::geom::{
-    ContourBuf, ContourSet, FillRule, GeometryAccuracy, PathCmd, Point, Resolution,
+    BBox, ContourBuf, ContourSet, FillRule, GeometryAccuracy, PathCmd, Point, PreparedRegion,
+    Resolution,
 };
 use rayon::prelude::*;
 
@@ -102,7 +103,13 @@ pub(crate) fn build(
     if mask == 0 {
         return copper;
     }
-    let clip = clip.and_then(|edge| edge.region(warnings).map(|region| Clip { edge, region }));
+    let clip = clip.and_then(|edge| {
+        edge.region(warnings).map(|region| Clip {
+            edge,
+            boundary: region.prepare_query(),
+            region,
+        })
+    });
     let layout = Layout {
         board,
         frame,
@@ -180,6 +187,8 @@ pub(crate) fn build(
 struct Clip<'a> {
     edge: &'a crate::faces::BoardEdge,
     region: ContourSet,
+    /// The board region's boundary, indexed.
+    boundary: PreparedRegion,
 }
 
 impl Clip<'_> {
@@ -187,6 +196,39 @@ impl Clip<'_> {
     fn needed(&self, bbox: (Vec2, Vec2)) -> bool {
         self.edge.meets(bbox) || !self.edge.contains(bbox.0)
     }
+
+    /// Whether cutting `region` to the board leaves it as it is: its
+    /// boundary keeps clear of the board's, every ring of it lies on the
+    /// board and no board ring lies in it. A zone fill spans the board but
+    /// keeps its edge clearance, so the boolean is rarely needed.
+    fn keeps(&self, region: &ContourSet) -> bool {
+        let clearance = region.tolerance().max(self.region.tolerance());
+        let clear = |a: Point, b: Point| {
+            self.boundary
+                .segments_meeting(BBox::spanning(a, b).expand(clearance))
+                .all(|(c, d)| segments_distance(a, b, c, d) > clearance)
+        };
+        region.rings().all(|ring| {
+            let point = |k: usize| Point::new(ring[k][0], ring[k][1]);
+            self.boundary.winding(point(0)) != 0
+                && (0..ring.len()).all(|k| clear(point(k), point((k + 1) % ring.len())))
+        }) && self
+            .region
+            .rings()
+            .all(|ring| !region.contains_point(Point::new(ring[0][0], ring[0][1])))
+    }
+}
+
+/// Distance between segments `ab` and `cd`.
+fn segments_distance(a: Point, b: Point, c: Point, d: Point) -> f64 {
+    let [a, b, c, d] = [a, b, c, d].map(|p| Vec2::new(p.x, p.y));
+    if crate::geom::segments_cross(a, b, c, d) {
+        return 0.0;
+    }
+    segment_distance(a, c, d)
+        .min(segment_distance(b, c, d))
+        .min(segment_distance(c, a, b))
+        .min(segment_distance(d, a, b))
 }
 
 /// What every copper solid is built from.
@@ -1312,7 +1354,7 @@ fn island(layout: &Layout, group: &Group, knockouts: &Knockouts) -> (Option<Isla
     let region = match &layout.clip {
         Some(clip) => {
             let bbox = region_bbox(&region);
-            if clip.needed(bbox) {
+            if clip.needed(bbox) && !clip.keeps(&region) {
                 or_unclipped(region.intersection(&clip.region), region, &mut warnings)
             } else {
                 region
