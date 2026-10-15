@@ -130,9 +130,11 @@ pub(crate) enum ShapeKind {
         center: Vec2,
         end: Vec2,
     },
-    /// Indices into `shape_points`; rectangles and curves are polygons.
+    /// Indices into `shape_points`; rectangles are closed polygons and
+    /// curves open ones.
     Poly {
         points: (u32, u32),
+        closed: bool,
     },
 }
 
@@ -424,6 +426,11 @@ pub(crate) enum Primitive {
         points: (u32, u32),
         width: f64,
         filled: bool,
+    },
+    /// A cubic Bezier, stroked.
+    Curve {
+        control: [Vec2; 4],
+        width: f64,
     },
 }
 
@@ -989,8 +996,9 @@ impl<'a> Board<'a> {
                     center: place(center),
                     end: place(end),
                 },
-                ShapeKind::Poly { points } => ShapeKind::Poly {
+                ShapeKind::Poly { points, closed } => ShapeKind::Poly {
                     points: (points.0 + base, points.1 + base),
+                    closed,
                 },
             };
             self.shapes.push(Shape {
@@ -1833,6 +1841,10 @@ fn parse_primitives(
                 width,
                 filled,
             }),
+            "gr_curve" if points.len() == 4 => out.push(Primitive::Curve {
+                control: [points[0], points[1], points[2], points[3]],
+                width,
+            }),
             "gr_poly" if points.len() >= 3 => {
                 let start = all_points.len() as u32;
                 all_points.extend_from_slice(&points);
@@ -2067,11 +2079,12 @@ fn parse_graphic<'a>(
         p.skip()?;
     }
     if let (Some(layer), Some((shapes, points))) = (tech, shapes.as_mut()) {
-        let polygon = |points: &mut Vec<Vec2>, corners: &[Vec2]| {
+        let polygon = |points: &mut Vec<Vec2>, corners: &[Vec2], closed: bool| {
             let first = points.len() as u32;
             points.extend_from_slice(corners);
             ShapeKind::Poly {
                 points: (first, points.len() as u32),
+                closed,
             }
         };
         let shape = match kind {
@@ -2082,18 +2095,18 @@ fn parse_graphic<'a>(
                 b: end,
             },
             "circle" => ShapeKind::Circle { center, end },
-            "rect" => polygon(points, &rounded_rect_points(start, end, radius)),
+            "rect" => polygon(points, &rounded_rect_points(start, end, radius), true),
             "curve" => {
                 let control = bezier_control_points(&pts)?;
                 let corners: Vec<Vec2> = (0..=BEZIER_SEGMENTS)
                     .map(|i| bezier_point(control, i as f64 / BEZIER_SEGMENTS as f64))
                     .collect();
-                polygon(points, &corners)
+                polygon(points, &corners, false)
             }
             _ => {
                 let mut corners = Vec::new();
                 flatten_pts(&pts, &mut corners);
-                polygon(points, &corners)
+                polygon(points, &corners, true)
             }
         };
         shapes.push(Shape {
@@ -2438,7 +2451,10 @@ fn parse_text_box<'a>(
     if border && width > 0.0 {
         shapes.push(Shape {
             layer,
-            kind: ShapeKind::Poly { points: frame },
+            kind: ShapeKind::Poly {
+                points: frame,
+                closed: true,
+            },
             width,
             style: LineStyle::Solid,
             filled: false,
@@ -2700,4 +2716,4 @@ fn bezier_control_points(pts: &[PolyPoint]) -> Result<[Vec2; 4], Error> {
     Ok(out)
 }
 
-const BEZIER_SEGMENTS: usize = 24;
+pub(crate) const BEZIER_SEGMENTS: usize = 24;

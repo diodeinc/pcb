@@ -322,7 +322,7 @@ pub(crate) fn shape_contours(
                 arc(center, radius, angle_of(end - center), TAU, out);
             }
         }
-        ShapeKind::Poly { points } => {
+        ShapeKind::Poly { points, closed } => {
             let pts: Vec<Vec2> = board.shape_points[points.0 as usize..points.1 as usize]
                 .iter()
                 .map(|p| frame.point(*p))
@@ -330,7 +330,7 @@ pub(crate) fn shape_contours(
             if pts.len() < 2 {
                 return;
             }
-            if shape.filled && pts.len() >= 3 {
+            if shape.filled && closed && pts.len() >= 3 {
                 let edges: Vec<Edge> = (0..pts.len())
                     .map(|k| Edge::Line {
                         a: pts[k],
@@ -341,7 +341,8 @@ pub(crate) fn shape_contours(
             }
             if w > 0.0 {
                 let raw = &board.shape_points[points.0 as usize..points.1 as usize];
-                for k in 0..raw.len() {
+                let sides = if closed { raw.len() } else { raw.len() - 1 };
+                for k in 0..sides {
                     line(raw[k], raw[(k + 1) % raw.len()], out);
                 }
             }
@@ -799,26 +800,22 @@ fn mask_openings(
         let Some(outline) = pad_outline(board, frame, pad, warnings) else {
             continue;
         };
-        let exact = contour(&outline);
+        let exact = outline.contours();
         if margin.abs() < 1e-9 {
-            openings.push(vec![exact]);
+            openings.push(exact);
             continue;
         }
-        let grown = ContourSet::from_contours(
-            std::slice::from_ref(&exact),
-            FillRule::NonZero,
-            resolution(),
-        )
-        .and_then(|set| {
-            if margin > 0.0 {
-                set.disk_dilate(margin)
-            } else {
-                set.disk_erode(-margin)
-            }
-        });
+        let grown =
+            ContourSet::from_contours(&exact, FillRule::NonZero, resolution()).and_then(|set| {
+                if margin > 0.0 {
+                    set.disk_dilate(margin)
+                } else {
+                    set.disk_erode(-margin)
+                }
+            });
         openings.push(match grown {
             Ok(set) => set.to_contours(),
-            Err(_) => vec![exact],
+            Err(_) => exact,
         });
     }
     // An untented via opens the mask by its ring plus the board margin.
@@ -959,7 +956,7 @@ fn paste_aperture(
     use crate::board::PadShape;
     let custom = matches!(pad.shape, PadShape::Custom { .. });
     if margin.x.abs().max(margin.y.abs()) < 1e-9 {
-        return pad_outline(board, frame, pad, warnings).map(|e| vec![contour(&e)]);
+        return pad_outline(board, frame, pad, warnings).map(|o| o.contours());
     }
     let even = (margin.x - margin.y).abs() < 1e-9;
     if even || custom {
@@ -967,22 +964,18 @@ fn paste_aperture(
         if let Some(edges) = grown_pad_outline(pad, frame, margin.x) {
             return Some(vec![contour(&edges)]);
         }
-        let exact = contour(&pad_outline(board, frame, pad, warnings)?);
-        let grown = ContourSet::from_contours(
-            std::slice::from_ref(&exact),
-            FillRule::NonZero,
-            resolution(),
-        )
-        .and_then(|set| {
-            if margin.x > 0.0 {
-                set.disk_dilate(margin.x)
-            } else {
-                set.disk_erode(-margin.x)
-            }
-        });
+        let exact = pad_outline(board, frame, pad, warnings)?.contours();
+        let grown =
+            ContourSet::from_contours(&exact, FillRule::NonZero, resolution()).and_then(|set| {
+                if margin.x > 0.0 {
+                    set.disk_dilate(margin.x)
+                } else {
+                    set.disk_erode(-margin.x)
+                }
+            });
         return Some(match grown {
             Ok(set) => set.to_contours(),
-            Err(_) => vec![exact],
+            Err(_) => exact,
         });
     }
     let mut resized = pad.clone();
@@ -990,5 +983,5 @@ fn paste_aperture(
     if resized.size.x <= 1e-9 || resized.size.y <= 1e-9 {
         return None;
     }
-    pad_outline(board, frame, &resized, warnings).map(|e| vec![contour(&e)])
+    pad_outline(board, frame, &resized, warnings).map(|o| o.contours())
 }

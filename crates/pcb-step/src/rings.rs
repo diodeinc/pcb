@@ -6,7 +6,7 @@ use std::f64::consts::PI;
 use pcb_ir::geom::{ContourBuf, ContourSet};
 use rayon::prelude::*;
 
-use crate::geom::{BoxGrid, Vec2, circle_center, signed_area};
+use crate::geom::{BoxGrid, KICAD_MAX_ERROR, Vec2, circle_center, signed_area};
 use crate::outline::{Edge, Loop, intersect, orient};
 
 /// Points this close to a circle are refitted onto it. Polygonized arcs
@@ -376,6 +376,9 @@ struct Piece {
 fn refit_pieces(points: &[Vec2]) -> Vec<Piece> {
     const MAX_RADIUS: f64 = 25.0;
     const MIN_STEP: f64 = 0.5 * PI / 180.0;
+    /// Largest distance from a chord to its arc, with room above KiCad's
+    /// default chord error for boards flattened more coarsely.
+    const MAX_SAGITTA: f64 = 4.0 * KICAD_MAX_ERROR;
     /// Slack for the first estimate of a run's circle.
     const COARSE_TOLERANCE: f64 = 0.004;
     let n = points.len();
@@ -400,7 +403,11 @@ fn refit_pieces(points: &[Vec2]) -> Vec<Piece> {
         }
         let turn = (p - c).perp_dot(q - c);
         let angle = turn.atan2((p - c).dot(q - c));
-        (angle.abs() >= MIN_STEP).then_some(angle)
+        // A flattened arc's chords stay within its chord error of it; the
+        // corners of any isosceles trapezoid share a circle too, and its
+        // sides would pass as an arc bulging far past them.
+        let sagitta = r * (1.0 - (0.5 * angle).cos());
+        (angle.abs() >= MIN_STEP && sagitta <= MAX_SAGITTA).then_some(angle)
     };
     let uniform = |angles: &[f64]| {
         let first = angles[0];

@@ -1313,6 +1313,28 @@ fn polygonized_arcs_are_refitted() {
         .count();
     assert_eq!(arcs, 2, "{edges:?}");
     assert_eq!(edges.len(), 4, "{edges:?}");
+
+    // A chamfered board top: its four corners lie on one circle, as any
+    // isosceles trapezoid's do, but its sides are not a flattened arc.
+    let chamfered: Vec<Vec2> = [
+        (0.0, 0.0),
+        (6.7, 0.0),
+        (6.7, 8.0),
+        (4.95, 10.85),
+        (1.75, 10.85),
+        (0.0, 8.0),
+    ]
+    .into_iter()
+    .map(|(x, y)| Vec2::new(x, y))
+    .collect();
+    let edges = refit_arcs(&chamfered);
+    assert_eq!(edges.len(), 6, "{edges:?}");
+    assert!(
+        edges
+            .iter()
+            .all(|e| matches!(e, crate::outline::Edge::Line { .. })),
+        "{edges:?}"
+    );
 }
 
 #[test]
@@ -1354,7 +1376,9 @@ fn rounded_and_chamfered_pads_cut_inward() {
     let frame = Frame { origin: Vec2::ZERO };
     let mut warnings = Vec::new();
     let mut area = |pad| {
-        let edges = crate::copper::pad_outline(&board, frame, pad, &mut warnings).unwrap();
+        let edges = crate::copper::pad_outline(&board, frame, pad, &mut warnings)
+            .unwrap()
+            .outer;
         Loop::new(edges).area().abs()
     };
     let areas = [
@@ -1450,7 +1474,9 @@ fn polygon_point_lists_may_hold_arcs() {
     let board = Board::parse(text.as_bytes()).unwrap();
     let frame = Frame { origin: Vec2::ZERO };
     let mut warnings = Vec::new();
-    let edges = crate::copper::pad_outline(&board, frame, &board.pads[0], &mut warnings).unwrap();
+    let edges = crate::copper::pad_outline(&board, frame, &board.pads[0], &mut warnings)
+        .unwrap()
+        .outer;
     let half_disk = PI * 0.5 * 0.5 / 2.0;
     let area = Loop::new(edges).area().abs();
     assert!((area - (1.0 + half_disk)).abs() < 0.005, "{area}");
@@ -1459,6 +1485,110 @@ fn polygon_point_lists_may_hold_arcs() {
         [board.fills[0].points.start as usize..board.fills[0].points.end as usize];
     assert!(fill.len() > 6);
     assert!((crate::geom::signed_area(fill).abs() - (1.0 + half_disk)).abs() < 0.005);
+}
+
+#[test]
+fn custom_pad_keeps_enclosed_holes_and_curves() {
+    // A stroked square, as a logo's outlined triangle is, and a curve
+    // running out of it to x = 4.
+    let text = parse(&format!(
+        "{}{}",
+        rect_outline(-10.0, -10.0, 10.0, 10.0),
+        r#"(footprint "Lib:Logo" (layer "F.Cu") (at 0 0) (property "Reference" "G1")
+  (pad "" smd custom (at 0 0) (size 0.1 0.1) (layers "F.Cu") (options (clearance outline) (anchor circle))
+    (primitives
+      (gr_line (start 0 0) (end 2 0) (width 0.2))
+      (gr_line (start 2 0) (end 2 2) (width 0.2))
+      (gr_line (start 2 2) (end 0 2) (width 0.2))
+      (gr_line (start 0 2) (end 0 0) (width 0.2))
+      (gr_curve (pts (xy 2 1) (xy 3 0) (xy 3 2) (xy 4 1)) (width 0.2)))))
+"#
+    ));
+    let board = Board::parse(text.as_bytes()).unwrap();
+    let frame = Frame { origin: Vec2::ZERO };
+    let mut warnings = Vec::new();
+    let outline = crate::copper::pad_outline(&board, frame, &board.pads[0], &mut warnings).unwrap();
+    assert!(warnings.is_empty(), "{warnings:?}");
+    assert_eq!(outline.holes.len(), 1);
+    // The square's inside, less half the stroke on each side.
+    let hole = Loop::new(outline.holes[0].clone()).area().abs();
+    assert!((hole - 1.8 * 1.8).abs() < 0.001, "{hole}");
+    let right = outline
+        .outer
+        .iter()
+        .map(|e| e.bbox().1.x)
+        .fold(f64::NEG_INFINITY, f64::max);
+    assert!((right - 4.1).abs() < 0.01, "{right}");
+}
+
+/// A custom pad outlining the square from (-2, -1) to (0, 1) about its
+/// anchor with a 0.2 mm stroke, so the anchor lies on the outline.
+fn outlined_pad(kind: &str, at: &str, extra: &str) -> String {
+    format!(
+        r#"(footprint "Lib:Frame" (layer "F.Cu") (at 0 0) (property "Reference" "G1")
+  (pad "1" {kind} custom (at {at}) (size 0.1 0.1) {extra} (layers "*.Cu") (net "PAD") (options (clearance outline) (anchor rect))
+    (primitives
+      (gr_line (start -2 -1) (end 0 -1) (width 0.2))
+      (gr_line (start 0 -1) (end 0 1) (width 0.2))
+      (gr_line (start 0 1) (end -2 1) (width 0.2))
+      (gr_line (start -2 1) (end -2 -1) (width 0.2)))))
+"#
+    )
+}
+
+#[test]
+fn copper_inside_a_custom_pad_hole_is_kept() {
+    use crate::ImageKind::Copper;
+    // A zone fill of another net inside the pad's hole, touching no
+    // copper of the pad: the pad's cutter must not take it.
+    let text = parse(&format!(
+        "{}{}(zone (net \"SIG\") (layers \"F.Cu\") (filled_polygon (layer \"F.Cu\") (pts (xy -0.5 -0.5) (xy 0.5 -0.5) (xy 0.5 0.5) (xy -0.5 0.5))))\n",
+        rect_outline(-10.0, -10.0, 10.0, 10.0),
+        outlined_pad("smd", "1 0", ""),
+    ));
+    let board = Board::parse(text.as_bytes()).unwrap();
+    let image = crate::board_image(&board, &crate::ImageOptions::default()).unwrap();
+    assert!(image.warnings.is_empty(), "{:?}", image.warnings);
+    let area = image_region(&image, "F.Cu", Copper, "SIG").area();
+    assert!((area - 1.0).abs() < 0.001, "{area}");
+}
+
+#[test]
+fn a_drill_in_a_custom_pad_hole_is_not_a_second_hole() {
+    use crate::scene::{LayerKind, Scene, Shape};
+    // The drill sits in the middle of the pad's hole, the anchor on its
+    // frame: each pad prism has the one square hole.
+    let text = parse(&format!(
+        "{}{}",
+        rect_outline(-10.0, -10.0, 10.0, 10.0),
+        outlined_pad("thru_hole", "0 0", "(drill 0.4 (offset 1 0))"),
+    ));
+    let board = Board::parse(text.as_bytes()).unwrap();
+    let options = crate::Options {
+        components: false,
+        silkscreen: false,
+        soldermask: false,
+        pads: true,
+        ..crate::Options::default()
+    };
+    let scene = Scene::build(&board, &options, &mut Vec::new()).unwrap();
+    let frames: Vec<_> = scene
+        .layers
+        .iter()
+        .filter(|l| l.kind == LayerKind::Pads)
+        .flat_map(|l| match &l.shape {
+            Shape::Solids(prisms) => prisms.iter().collect::<Vec<_>>(),
+            Shape::Faces { .. } => Vec::new(),
+        })
+        .filter(|p| p.solid.outer.area().abs() > 4.0)
+        .collect();
+    assert_eq!(frames.len(), 2, "front and back copper");
+    for frame in frames {
+        let holes: Vec<f64> = frame.solid.holes.iter().map(|h| h.area().abs()).collect();
+        assert_eq!(holes.len(), 1, "{holes:?}");
+        assert!((holes[0] - 1.8 * 1.8).abs() < 0.001, "{holes:?}");
+        assert!(frame.solid.round.is_empty());
+    }
 }
 
 #[test]
@@ -1796,7 +1926,7 @@ fn text_boxes_wrap_and_anchor_like_kicad() {
     assert_eq!(first.knockout, Knockout::No);
     let border = &board.shapes[0];
     assert!((border.width - 0.2).abs() < 1e-12 && !border.filled);
-    let ShapeKind::Poly { points } = border.kind else {
+    let ShapeKind::Poly { points, .. } = border.kind else {
         panic!("border is not a polygon");
     };
     let corners = &board.shape_points[points.0 as usize..points.1 as usize];
@@ -2475,6 +2605,33 @@ fn synthesized_outline_holds_drawn_text() {
     assert!((area - whole_area).abs() < 1e-6, "{area} != {whole_area}");
     assert!((bbox.min.x - whole_bbox.min.x).abs() < 1e-6, "{bbox:?}");
     assert!((bbox.max.x - whole_bbox.max.x).abs() < 1e-6, "{bbox:?}");
+}
+
+#[test]
+fn drawn_curves_are_stroked_open() {
+    use crate::ImageKind::Silkscreen;
+    // A U-shaped curve whose ends lie 4 mm apart: no stroke joins them.
+    let text = parse(&format!(
+        r#"{}(gr_curve (pts (xy 0 0) (xy 0 -4) (xy 4 -4) (xy 4 0)) (stroke (width 0.2) (type solid)) (layer "F.SilkS"))
+"#,
+        rect_outline(-10.0, -10.0, 10.0, 10.0)
+    ));
+    let board = Board::parse(text.as_bytes()).unwrap();
+    let image = crate::board_image(&board, &crate::ImageOptions::default()).unwrap();
+    let area = image_region(&image, "F.SilkS", Silkscreen, "").area();
+    let point = |t: f64| {
+        let u = 1.0 - t;
+        let (x, y) = (
+            3.0 * u * t * t * 4.0 + t * t * t * 4.0,
+            -(3.0 * u * u * t + 3.0 * u * t * t) * 4.0,
+        );
+        Vec2::new(x, y)
+    };
+    let length: f64 = (0..1000)
+        .map(|i| point(i as f64 / 1000.0).distance(point((i + 1) as f64 / 1000.0)))
+        .sum();
+    let expected = length * 0.2 + PI * 0.1 * 0.1;
+    assert!((area - expected).abs() < 0.02, "{area} != {expected}");
 }
 
 #[test]
