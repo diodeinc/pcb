@@ -15,6 +15,11 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - `pcb ipc info --format json` reports nominal copper weights and a named soldermask colour.
 - DFM fails a layout that has no board outline, under every PDK.
 
+### Fixed
+
+- `pcb ipc2581 edit bom` indexes BOM items once instead of scanning the document for every selection; an 858-line BOM on a 64 MB file drops from 8.7 s to 1.6 s.
+- Gerber export tiles balance copper without overlaying the whole panel frame for every 64 cells; a mouse-bite array's Gerbers export in about half the time, byte for byte the same.
+
 ## [0.4.85] - 2026-10-15
 
 ### Added
