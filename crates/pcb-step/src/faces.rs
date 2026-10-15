@@ -866,9 +866,22 @@ pub(crate) fn mask_coverage(
 ) -> Vec<Face> {
     let what = mask_what(front);
     let openings: Vec<Face> = openings.iter().map(face).collect();
+    let boxes: Vec<_> = openings.iter().map(|f| f.outer.bbox()).collect();
+    let grid = BoxGrid::new(&boxes);
     let mut faces = Vec::new();
     for solid in outline {
-        match cut_profile(solid, openings.iter().map(|f| (&f.outer, &f.holes[..]))) {
+        let bounds = solid.outer.bbox();
+        let mut nearby: Vec<_> = grid
+            .near(bounds)
+            .filter(|&i| overlaps(boxes[i], bounds))
+            .collect();
+        nearby.sort_unstable();
+        nearby.dedup();
+        let profiles = nearby.iter().map(|&i| {
+            let f = &openings[i];
+            (&f.outer, &f.holes[..])
+        });
+        match cut_profile(solid, profiles) {
             Ok(profile) => faces.extend(profile.into_iter().map(|s| Face {
                 outer: s.outer,
                 holes: s.holes,

@@ -673,21 +673,25 @@ fn mask_exports_keep_chamfered_tips_and_rounded_arcs() {
 }
 
 #[test]
-fn mask_openings_keep_enclosed_islands_and_clip_to_board_cutouts() {
+fn mask_openings_follow_board_islands_and_cutouts() {
     // A stroked rectangle opens a ring, leaving mask inside it. A second
-    // opening overlaps a board cutout: subtract only the part on the board.
+    // opening overlaps a cutout. A separate board has an enclosed opening
+    // and one across its edge: each board must take only its own cutters.
     let openings = ["F.Mask", "B.Mask"]
         .map(|layer| {
             format!(
                 r#"
 (gr_rect (start 5 5) (end 9 9) (stroke (width 1) (type default)) (fill none) (layer "{layer}"))
-(gr_rect (start 15 6) (end 17 8) (stroke (width 0) (type default)) (fill yes) (layer "{layer}"))"#
+(gr_rect (start 15 6) (end 17 8) (stroke (width 0) (type default)) (fill yes) (layer "{layer}"))
+(gr_rect (start 42 2) (end 44 5) (stroke (width 0) (type default)) (fill yes) (layer "{layer}"))
+(gr_rect (start 49 8) (end 52 10) (stroke (width 0) (type default)) (fill yes) (layer "{layer}"))"#
             )
         })
         .join("\n");
     let text = board(&format!(
         r#"
 (gr_rect (start 14 5) (end 16 9) (stroke (width 0) (type default)) (fill none) (layer "Edge.Cuts"))
+(gr_rect (start 40 0) (end 50 12) (stroke (width 0) (type default)) (fill none) (layer "Edge.Cuts"))
 {openings}"#
     ));
     let options = Options {
@@ -699,7 +703,8 @@ fn mask_openings_keep_enclosed_islands_and_clip_to_board_cutouts() {
     assert!(run.report.warnings.is_empty(), "{:?}", run.report.warnings);
     // Outer opening = 4*4 + 16*0.5 + pi*0.5²; inner island = 3*3.
     // The board cutout is 8 mm²; the overlapping opening adds 2 mm².
-    let area = 600.0 - (24.0 + std::f64::consts::PI * 0.25 - 9.0) - 8.0 - 2.0;
+    // The second board contributes 120 - 6 - 2 mm².
+    let area = 600.0 - (24.0 + std::f64::consts::PI * 0.25 - 9.0) - 8.0 - 2.0 + 120.0 - 6.0 - 2.0;
     let masks: Vec<_> = run.stats["things"]
         .as_array()
         .unwrap()
