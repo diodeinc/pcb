@@ -257,9 +257,11 @@ pub struct AssemblyView {
 }
 
 /// A drilled opening and the termination it serves, as in [`PhysicalHole`].
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct AssemblyHole {
     pub id: HoleId,
+    /// The hole's opening, as in [`PhysicalHole::image`].
+    pub image: ContourSet,
     pub plating: PlatingKind,
     pub termination: Association<PhysicalTerminationId>,
     pub termination_basis: Option<AssociationBasis>,
@@ -440,6 +442,7 @@ impl ImportedDesign {
                 .into_iter()
                 .map(|hole| AssemblyHole {
                     id: hole.id,
+                    image: hole.image,
                     plating: hole.plating,
                     termination: hole.termination,
                     termination_basis: hole.termination_basis,
@@ -1896,6 +1899,7 @@ mod tests {
             .iter()
             .map(|hole| AssemblyHole {
                 id: hole.id,
+                image: hole.image.clone(),
                 plating: hole.plating,
                 termination: hole.termination.clone(),
                 termination_basis: hole.termination_basis,
