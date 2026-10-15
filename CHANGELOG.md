@@ -8,6 +8,8 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+## [0.4.85] - 2026-10-15
+
 ### Added
 
 - `pcb ipc2581 board-array plan` reports the grid, board count, and utilization of each automatic sheet (A7 to A4). With `--quantity` and an optional `--moq`, it also reports the arrays, boards, and surplus each sheet orders, and recommends the sheet that orders the least array area. `--format json` gives the same data to a planner.
@@ -2431,7 +2433,8 @@ Tvs(package="DO-214AA", direction="Unidirectional", reverse_standoff_voltage="24
 - Error on invalid type passed to `io()`
 - Format the auto-generated component .zen files
 
-[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.4.84...HEAD
+[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.4.85...HEAD
+[0.4.85]: https://github.com/diodeinc/pcb/compare/v0.4.84...v0.4.85
 [0.4.84]: https://github.com/diodeinc/pcb/compare/v0.4.83...v0.4.84
 [0.4.83]: https://github.com/diodeinc/pcb/compare/v0.4.82...v0.4.83
 [0.4.82]: https://github.com/diodeinc/pcb/compare/v0.4.81...v0.4.82
