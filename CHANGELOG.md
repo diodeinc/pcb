@@ -12,6 +12,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 - `pcb ipc2581 board-array plan` reports the grid, board count, and utilization of each automatic sheet (A7 to A4). With `--quantity` and an optional `--moq`, it also reports the arrays, boards, and surplus each sheet orders, and recommends the sheet that orders the least array area. `--format json` gives the same data to a planner.
 
+### Changed
+
+- `pcb new board` vendors every DiodeHub dependency (`code.diode.computer/**`), not only the Diode registry, so boards that use a workspace registry still build offline.
+
 ## [0.4.84] - 2026-10-15
 
 ## [0.4.83] - 2026-10-15
