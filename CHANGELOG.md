@@ -8,6 +8,11 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added
+
+- DFM PDKs can check copper weight, board thickness, surface finish, soldermask colour, and board size.
+- `pcb dfm --pdk jlc` selects the JLCPCB profile that fits the board's copper weight, including a new 2 oz profile.
+
 ## [0.4.85] - 2026-10-15
 
 ### Added

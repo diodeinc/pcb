@@ -34,6 +34,7 @@ source = "capabilities"
 
 [profiles.standard.support]
 copper_layers = { minimum = 2, maximum = 10 }
+outer_copper_weight = ["1 oz"]
 
 [profiles.standard.defaults]
 material = "FR-4"
@@ -105,14 +106,45 @@ id = "copper.feature_width"
 cases = [
   { id = "outer-1oz", when = { copper = { position = "outer", weight = "1 oz" } }, limit = { minimum = "0.10 mm" } },
 ]
+
+[[rules.stackup.board_thickness]]
+id = "stackup.board_thickness"
+limit = { nominal = ["0.8 mm", "1.6 mm"], tolerance = "0.1 mm", tolerance_percent = 10 }
+
+[[rules.stackup.copper_weight]]
+id = "stackup.inner_copper_weight"
+select = { position = "inner" }
+limit = { allowed = ["0.5 oz", "1 oz"] }
+
+[[rules.board.surface_finish]]
+id = "board.surface_finish"
+limit = { allowed = ["lead_free_hasl", "enig"] }
+
+[[rules.board.soldermask_color]]
+id = "board.soldermask_color"
+limit = { allowed = ["green", "black"] }
+
+[[rules.board.size]]
+id = "board.size"
+limit = { minimum = ["3 mm", "3 mm"], maximum = ["500 mm", "400 mm"] }
 ```
 
-One PDK file is a kit with named profiles. A built-in name selects both a kit
-and one profile; a custom file runs its `default_profile`. An executable
-profile lowers only rules whose `profiles` list contains it; an omitted list
-means every profile. A `metadata_only` profile fails closed before checking.
-This lets a kit publish a standard taxonomy without claiming that missing
-numeric rules establish compliance.
+One PDK file is a kit with named profiles. A built-in name such as
+`jlcpcb-1oz` selects both a kit and one profile. A built-in name without a
+profile, such as `jlc`, and a custom file select the profile from the design:
+the first executable profile whose `profile.support` the design meets, trying
+`default_profile` first and then the other profiles in name order. The report
+records the selected profile and why each earlier profile did not fit. A kit
+of one executable profile always runs it, and its support rules report what
+the design lacks. When the design meets no profile's support, no profile fits
+and the check stops with an error that lists each profile's reasons. When the
+design does not state what the support of a profile tried earlier reads, the
+default profile runs and its support rules report the missing data as
+`incomplete`. An executable profile lowers only rules whose `profiles` list
+contains it; an omitted list means every profile. A `metadata_only` profile
+fails closed before checking and is never selected automatically. This lets a
+kit publish a standard taxonomy without claiming that missing numeric rules
+establish compliance.
 
 The schema gives each kind of constraint one place:
 
@@ -124,10 +156,28 @@ The schema gives each kind of constraint one place:
   numeric limit. `nonstandard_bottom_rotation` is a warning: it flags
   bottom-side parts whose rotation pcb corrected for a known KiCad 9.0.8–9.0.9
   or 10.0.0–10.0.4 exporter defect.
-- `profile.support` is the hard eligibility envelope for the whole profile.
-  A design outside its copper-layer range fails profile qualification. The
-  engine emits these checks as reserved `profile.support.*` report rules;
-  PDK authors do not write layer-count DFM rules.
+- `profile.support` is the hard eligibility envelope for the whole profile,
+  and the bounds a kit selects its profile by. It accepts `copper_layers`
+  (a count range), `outer_copper_weight` and `inner_copper_weight` (lists of
+  allowed weights), `board_thickness` (a thickness limit as in
+  `rules.stackup.board_thickness`), `surface_finish` and `soldermask_color`
+  (lists of allowed values). A design outside any bound fails profile
+  qualification. The engine emits these checks as reserved
+  `profile.support.*` report rules; PDK authors do not write layer-count DFM
+  rules.
+- `rules.stackup` holds limits on the physical stackup.
+  `board_thickness` lists the fab's `nominal` finished thicknesses; the
+  design conforms when its thickness is within `tolerance` or
+  `tolerance_percent` of the nominal value, whichever is larger, of one of
+  them. `copper_weight` selects an `outer` or `inner` layer position and
+  lists the weights `allowed` there.
+- `rules.board` holds limits on the whole board: `surface_finish` and
+  `soldermask_color` list the values `allowed`, and `size` states a
+  `minimum`, a `maximum`, or both as two board extents.
+  Surface finishes are `hasl` (tin-lead), `lead_free_hasl`, `enig`,
+  `enepig`, `immersion_gold`, `immersion_silver`, `immersion_tin`, `osp`,
+  `hard_gold`, `nickel`, and `bare_copper`. Soldermask colours are names,
+  compared without regard to case or repeated spaces.
 - `select` identifies the physical subjects a rule measures. Hole rules select
   `via`, `pth`, or `npth`; slots select `plated` or `nonplated`; hole-pair rules
   state both classes. Hole-aspect-ratio rules accept only plated `via` or `pth`
@@ -137,7 +187,8 @@ The schema gives each kind of constraint one place:
 - `limit` defines an unconditional dimensional minimum, preferred value, or
   both, or one required aspect-ratio maximum.
 - `cases` defines named conditional limits when one value is not enough. A
-  rule uses either `limit` or `cases`, never both.
+  rule uses either `limit` or `cases`, never both. Stackup and board rules
+  may condition cases only on `copper_layers`.
 - `profile.defaults` records missing-data assumptions. Copper weight defaults
   are used when a weight-conditioned case has no stated stackup weight.
 
@@ -219,6 +270,10 @@ high-level pass is never allowed to suppress a later authoritative failure.
 | Soldermask web | Final composed mask-opening image, medial-axis width of each residue | Guarded closing localizes candidates |
 | V-score and board-edge clearance | Materialized line/profile geometry against final composed copper | Indexed copper boundaries |
 | Board-array spacing | Materialized filled array profiles | Bounding boxes prune pairs already proven clear |
+| Copper weight | Standard weight of each copper layer in the one physical IPC stackup | None |
+| Board thickness | IPC-2581 `overallThickness`, or the sum of physical stackup layers | None |
+| Surface finish and soldermask colour | IPC-2581 stackup specs | None |
+| Board size | Bounding box of the checked layout target's profile | None |
 
 Geometric checks produce an aggregate measurement per subject and retain its
 failing measured sites. Measurements carry the uncertainty of the flattened
@@ -430,6 +485,29 @@ hold wherever it is placed; the report lists those placements once per Step
 - Board-array spacing measures boundary-to-boundary distance between the
   sibling board arrays one Step places, as a fabrication panel does; it
   requires `--layout-target board-array` and at least two arrays.
+- Board-property rules (`rules.stackup`, `rules.board`, and the support
+  bounds other than layer count) judge properties of the whole board. Each
+  permits zero nonconforming properties and reports one finding for each
+  property that is not allowed, with a `count` measurement of 1 against 0.
+  - Copper weight compares standard weights, as weight conditions do. A layer
+    that states no weight or thickness uses the profile's copper-weight
+    default, recorded as an assumption; without one the rule is
+    `incomplete`.
+  - Board thickness is the finished thickness: IPC `overallThickness`
+    includes foil and soldermask. A stackup that states no thickness leaves
+    the rule `incomplete`; the profile thickness default is not used.
+  - Surface finish reads the `SurfaceFinish` spec of each coating layer in
+    the stackup, once per spec; unreferenced specs are ignored. IPC `S` is
+    solder leveling without stated lead content: it conforms when both
+    `hasl` and `lead_free_hasl` are allowed, does not conform when neither
+    is, and leaves the rule `incomplete` when only one is. Soldermask
+    colour reads the colour term or `Color : <name>` property of each
+    soldermask layer's stackup spec. A finish or colour the file does not
+    state (KiCad writes `Not specified`) is left to the fab, so the rule is
+    `not_applicable`. IPC `OTHER` finishes are never allowed.
+  - Board size measures the extents of the checked layout: the board for
+    `--layout-target board`, the array or panel for `board-array`. Extents
+    and limits are both compared long side to long side.
 
 A rule that measures nothing never reports a vacuous `pass`; `skip_reason`
 says why, under one of two statuses:
@@ -457,8 +535,8 @@ synchronizing it first, and checks the canonical board. Use `pcb ipc dfm check`
 to inspect existing manufacturing files.
 
 `--pdk` defaults to `standard` and accepts an exact built-in name or a TOML
-path. `standard`, `jlcpcb-1oz` (`jlc`), and `ipc-1a` through `ipc-3c` are
-bundled. `ipc` selects the opinionated Class 2 / Producibility Level B default.
+path. `standard`, `jlc`, `jlcpcb-1oz`, and `ipc-1a` through
+`ipc-3c` are bundled. `ipc` selects the opinionated Class 2 / Producibility Level B default.
 Use `./standard` to select a same-named file. Both sources use the same parser
 and checks. `--layout-target` accepts
 `board` or `board-array` and defaults to `board-array`.
@@ -466,18 +544,37 @@ and checks. `--layout-target` accepts
 The `standard` PDK prefers 0.40 mm plated and nonplated slot-to-copper
 clearance. Shortfalls produce warnings, not a failed manufacturing verdict.
 This is conservative Diode routing guidance, not a manufacturer capability
-or an IPC requirement. Slot clearance is not enabled in `jlcpcb-1oz` without
+or an IPC requirement. Slot clearance is not enabled in the JLCPCB kit without
 a manufacturer source. It also fails on the same component-data errors that
 make the assembly report incomplete, with one finding per affected component.
 
-The `jlcpcb-1oz` PDK, also available as `jlc`, executes the public rigid FR-4
-capability table for 2-32 copper layers and 1 oz outer copper. It deliberately
-omits the one-layer NPTH-only service, 2 oz rules, local 3 mil BGA exceptions,
-and panel spacing, which depends on the chosen routing, mouse-bite, or V-cut
-process. JLCPCB publishes a 0.10 mm soldermask web for standard colors and 0.13
-mm for black or white. This PDK uses Diode's advisory 0.10 mm preferred web:
-shortfalls produce warnings, not a failed manufacturing verdict. Passing this
-advisory check does not certify the manufacturer's color-specific minimum.
+The JLCPCB kit executes the public rigid FR-4 capability table for 2-32
+copper layers. It has two profiles, selected by finished outer copper weight:
+`one-ounce` (also `jlcpcb-1oz`) and `two-ounce`. `jlc` selects the
+profile the design's stackup qualifies for, and fails when the outer copper
+is neither 1 oz nor 2 oz. Track width and spacing depend on each layer's own
+weight: 0.10 mm (2-layer) or 0.09 mm (multilayer) for 1 oz outer copper,
+0.16 mm or 0.15 mm for 2 oz, 0.09 mm for 0.5 oz and 1 oz inner copper, and
+0.15 mm for 2 oz inner copper. Both profiles check the standard FR-4
+thicknesses 0.4, 0.6, 0.8, 1.0, 1.2, 1.6, and 2.0 mm within ±0.1 mm below
+1 mm and ±10 % from 1 mm; outer copper of 1 or 2 oz and inner copper of 0.5,
+1, or 2 oz; HASL, lead-free HASL, ENIG, or OSP up to 5 layers and ENIG or OSP
+from 6; green, purple, red, yellow, blue, white, or black soldermask; and
+board extents from 3 × 3 mm to 670 × 600 mm (2-layer), 663 × 593 mm (4-layer),
+or 656 × 586 mm (6 layers and more).
+
+The kit deliberately omits the one-layer NPTH-only service, heavier copper,
+thicker boards for 12 or more layers, the smaller size limits of boards
+thinner than 0.8 mm, the HASL exclusion for boards of 0.4 mm and thinner,
+local 3 mil BGA exceptions, dielectric layup templates, and panel spacing,
+which depends on the chosen routing, mouse-bite, or V-cut process. JLCPCB
+publishes a 0.10 mm soldermask web for standard colors and 0.13 mm for black
+or white with 1 oz copper, and 0.20 mm with 2 oz. `one-ounce` uses Diode's
+advisory 0.10 mm preferred web and `two-ounce` an advisory 0.20 mm preferred
+web: shortfalls produce warnings, not a failed manufacturing verdict. Passing
+this advisory check does not certify the manufacturer's color-specific
+minimum. `two-ounce` requires a 0.20 mm PTH annular ring and warns below
+JLCPCB's 0.254 mm 2 oz guidance.
 
 The nine `ipc-1a` through `ipc-3c` built-ins preserve performance Classes 1-3
 crossed with Producibility Levels A-C, but they are executable **partial Diode
@@ -549,8 +646,11 @@ findings or geometry.
 - `input`: original IPC input path, SHA-256, and byte size; see
   [source identity](#source-identity).
 - `pdk`: resolved kit and profile metadata, assumptions, source citation, path,
-  exact TOML `source`, SHA-256, and the selected profile's
-  `support.copper_layers` range (`exact`, `minimum`, and `maximum`).
+  exact TOML `source`, SHA-256, and the selected profile's `support`: the
+  `copper_layers` range (`exact`, `minimum`, and `maximum`) and the other
+  support bounds as the PDK states them. `profile_selection` names the
+  `profile`, its `mode` (`explicit` or `automatic`), and the `rejected`
+  profiles tried before it, each with the `reasons` it does not fit.
 - `summary`: rule counts by status, `findings`, `errors` and `warnings` by
   severity, and `unresolved`, the measurements no rule could decide.
 - `rules`: one result per lowered rule with the fields of the `rules` table
@@ -598,7 +698,8 @@ sqlite3 board.dfm "SELECT rule_id, count(*), min(actual) FROM finding_summary GR
 A direct limit uses its authored id; a named case uses `<id>.<case>`; a
 preferred tier appends `.preferred` to either form. `status` is `pass`,
 `warning`, `fail`, `not_applicable`, or `incomplete`, and `skip_reason` says
-why a rule was not evaluated. `subject`, `quantity`, `method` and `comparison`
+why a rule was not evaluated. A board-property rule's limit is 0 in unit
+`nonconforming`, and `limit_pdk_value` states the values it allows. `subject`, `quantity`, `method` and `comparison`
 (`minimum` or `maximum`) are the measurement contract every finding of the rule
 shares; `finding_title` is what each finding of it says is wrong. `checked`
 counts the subjects decided across the physical layout: each Step's own

@@ -3,6 +3,17 @@ use std::collections::{BTreeMap, HashSet};
 use anyhow::{Result, bail};
 use serde::Deserialize;
 
+/// The report rule ids `profile.support` lowers to, reserved from authored rules.
+pub const SUPPORT_RULE_IDS: &[&str] = &[
+    "profile.support.copper_layers.minimum",
+    "profile.support.copper_layers.maximum",
+    "profile.support.outer_copper_weight",
+    "profile.support.inner_copper_weight",
+    "profile.support.board_thickness",
+    "profile.support.surface_finish",
+    "profile.support.soldermask_color",
+];
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Pdk {
@@ -66,10 +77,10 @@ impl Pdk {
 
     pub fn validate_rule_references(&self) -> Result<()> {
         let mut authored_ids = HashSet::new();
-        let mut configured_ids = HashSet::from([
-            "profile.support.copper_layers.minimum".to_owned(),
-            "profile.support.copper_layers.maximum".to_owned(),
-        ]);
+        let mut configured_ids = SUPPORT_RULE_IDS
+            .iter()
+            .map(|id| (*id).to_owned())
+            .collect::<HashSet<_>>();
         for rule in self.rules.all() {
             let metadata = rule.metadata;
             if metadata.id.trim().is_empty() {
@@ -135,21 +146,273 @@ pub struct Profile {
     pub source: Option<String>,
 }
 
-/// Hard, measurable bounds a design must satisfy to use a profile.
+/// Hard, measurable bounds a design must satisfy to use a profile. A kit
+/// selects among its profiles by these bounds.
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProfileSupport {
     #[serde(default)]
     pub copper_layers: Option<CountRange>,
+    #[serde(default)]
+    pub outer_copper_weight: Option<Vec<CopperWeight>>,
+    #[serde(default)]
+    pub inner_copper_weight: Option<Vec<CopperWeight>>,
+    #[serde(default)]
+    pub board_thickness: Option<ThicknessLimit>,
+    #[serde(default)]
+    pub surface_finish: Option<Vec<SurfaceFinish>>,
+    #[serde(default)]
+    pub soldermask_color: Option<Vec<SoldermaskColor>>,
 }
 
 impl ProfileSupport {
     fn validate(&self, profile: &str) -> Result<()> {
+        let context = |field: &str| format!("profile '{profile}' support.{field}");
         if let Some(range) = &self.copper_layers {
-            range.validate(&format!("profile '{profile}' support.copper_layers"))?;
+            range.validate(&context("copper_layers"))?;
+        }
+        for (field, weights) in [
+            ("outer_copper_weight", &self.outer_copper_weight),
+            ("inner_copper_weight", &self.inner_copper_weight),
+        ] {
+            if let Some(weights) = weights {
+                validate_copper_weights(weights, &context(field))?;
+            }
+        }
+        if let Some(thickness) = &self.board_thickness {
+            thickness.validate(&context("board_thickness"))?;
+        }
+        if let Some(finishes) = &self.surface_finish {
+            validate_allowed(finishes, &context("surface_finish"))?;
+        }
+        if let Some(colors) = &self.soldermask_color {
+            validate_allowed(colors, &context("soldermask_color"))?;
         }
         Ok(())
     }
+}
+
+/// A finished-board thickness the fab produces: one of its nominal
+/// thicknesses, within the larger of an absolute and a relative tolerance.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ThicknessLimit {
+    pub nominal: Vec<Length>,
+    #[serde(default)]
+    pub tolerance: Option<Length>,
+    #[serde(default)]
+    pub tolerance_percent: Option<f64>,
+}
+
+impl ThicknessLimit {
+    fn validate(&self, context: &str) -> Result<()> {
+        validate_allowed(&self.nominal, context)?;
+        if let Some(percent) = self.tolerance_percent
+            && !(percent.is_finite() && percent > 0.0 && percent < 100.0)
+        {
+            bail!("{context}: tolerance_percent must be a positive number below 100");
+        }
+        Ok(())
+    }
+
+    /// The allowed deviation from one nominal thickness, in millimeters.
+    pub fn tolerance_mm(&self, nominal_mm: f64) -> f64 {
+        let absolute = self.tolerance.as_ref().map_or(0.0, Length::millimeters);
+        let relative = self.tolerance_percent.unwrap_or(0.0) / 100.0 * nominal_mm;
+        absolute.max(relative)
+    }
+
+    pub fn describe(&self) -> String {
+        let nominal = self
+            .nominal
+            .iter()
+            .map(Length::original)
+            .collect::<Vec<_>>()
+            .join(", ");
+        let tolerance = match (&self.tolerance, self.tolerance_percent) {
+            (Some(absolute), Some(percent)) => {
+                format!(" ± the larger of {} and {percent}%", absolute.original())
+            }
+            (Some(absolute), None) => format!(" ± {}", absolute.original()),
+            (None, Some(percent)) => format!(" ± {percent}%"),
+            (None, None) => String::new(),
+        };
+        format!("{nominal}{tolerance}")
+    }
+}
+
+/// The board's extents, compared side for side after ordering each pair from
+/// long to short, so a board may be rotated to fit.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SizeLimit {
+    #[serde(default)]
+    pub minimum: Option<[Length; 2]>,
+    #[serde(default)]
+    pub maximum: Option<[Length; 2]>,
+}
+
+impl SizeLimit {
+    fn validate(&self, id: &str) -> Result<()> {
+        if self.minimum.is_none() && self.maximum.is_none() {
+            bail!("rule '{id}': size limit requires a minimum, maximum, or both");
+        }
+        if let (Some(minimum), Some(maximum)) = (self.minimum(), self.maximum())
+            && (minimum[0] > maximum[0] || minimum[1] > maximum[1])
+        {
+            bail!("rule '{id}': minimum size must not exceed maximum size");
+        }
+        Ok(())
+    }
+
+    /// Long side first.
+    fn ordered(extents: &Option<[Length; 2]>) -> Option<[f64; 2]> {
+        let [first, second] = extents.as_ref()?;
+        let (first, second) = (first.millimeters(), second.millimeters());
+        Some([first.max(second), first.min(second)])
+    }
+
+    pub fn minimum(&self) -> Option<[f64; 2]> {
+        Self::ordered(&self.minimum)
+    }
+
+    pub fn maximum(&self) -> Option<[f64; 2]> {
+        Self::ordered(&self.maximum)
+    }
+
+    pub fn describe(&self) -> String {
+        let pair = |extents: &[Length; 2]| {
+            format!("{} × {}", extents[0].original(), extents[1].original())
+        };
+        [("minimum", &self.minimum), ("maximum", &self.maximum)]
+            .into_iter()
+            .filter_map(|(label, extents)| Some(format!("{label} {}", pair(extents.as_ref()?))))
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+}
+
+/// The values a categorical board property may take.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+#[serde(bound(deserialize = "T: Deserialize<'de>"))]
+pub struct AllowedLimit<T> {
+    pub allowed: Vec<T>,
+}
+
+/// A surface finish, by the family a fab quotes. IPC-6012 finish codes map
+/// onto these in [`SurfaceFinish::from_ipc`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SurfaceFinish {
+    /// Tin-lead hot-air solder leveling.
+    Hasl,
+    LeadFreeHasl,
+    Enig,
+    Enepig,
+    ImmersionGold,
+    ImmersionSilver,
+    ImmersionTin,
+    Osp,
+    HardGold,
+    Nickel,
+    BareCopper,
+}
+
+impl SurfaceFinish {
+    /// The family of an IPC-2581 `SurfaceFinish` type. `None` for `OTHER`,
+    /// and for `S`: solder leveling that does not state its lead content.
+    pub fn from_ipc(finish: ipc2581::types::FinishType) -> Option<Self> {
+        use ipc2581::types::FinishType;
+        Some(match finish {
+            FinishType::S | FinishType::Other => return None,
+            FinishType::T | FinishType::X | FinishType::TLU => Self::Hasl,
+            FinishType::EnigN | FinishType::EnigG => Self::Enig,
+            FinishType::EnepigN | FinishType::EnepigG | FinishType::EnepigP => Self::Enepig,
+            FinishType::Dig => Self::ImmersionGold,
+            FinishType::IAg => Self::ImmersionSilver,
+            FinishType::ISn => Self::ImmersionTin,
+            FinishType::Osp | FinishType::HtOsp => Self::Osp,
+            FinishType::G
+            | FinishType::GS
+            | FinishType::GwbOneG
+            | FinishType::GwbOneN
+            | FinishType::GwbTwoG
+            | FinishType::GwbTwoN => Self::HardGold,
+            FinishType::N | FinishType::NB => Self::Nickel,
+            FinishType::C => Self::BareCopper,
+        })
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Hasl => "hasl",
+            Self::LeadFreeHasl => "lead_free_hasl",
+            Self::Enig => "enig",
+            Self::Enepig => "enepig",
+            Self::ImmersionGold => "immersion_gold",
+            Self::ImmersionSilver => "immersion_silver",
+            Self::ImmersionTin => "immersion_tin",
+            Self::Osp => "osp",
+            Self::HardGold => "hard_gold",
+            Self::Nickel => "nickel",
+            Self::BareCopper => "bare_copper",
+        }
+    }
+}
+
+/// A soldermask colour name, compared without regard to case or spacing.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(try_from = "String")]
+pub struct SoldermaskColor(String);
+
+impl SoldermaskColor {
+    pub fn new(name: &str) -> Self {
+        Self(
+            name.split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ")
+                .to_lowercase(),
+        )
+    }
+
+    pub fn name(&self) -> &str {
+        &self.0
+    }
+}
+
+impl TryFrom<String> for SoldermaskColor {
+    type Error = String;
+
+    fn try_from(value: String) -> std::result::Result<Self, Self::Error> {
+        let color = Self::new(&value);
+        if color.0.is_empty() {
+            return Err("soldermask colour must not be empty".to_owned());
+        }
+        Ok(color)
+    }
+}
+
+fn validate_allowed<T: PartialEq>(values: &[T], context: &str) -> Result<()> {
+    if values.is_empty() {
+        bail!("{context} must list at least one value");
+    }
+    for (index, value) in values.iter().enumerate() {
+        if values[..index].contains(value) {
+            bail!("{context} lists a value more than once");
+        }
+    }
+    Ok(())
+}
+
+/// Weights are listed as the standard weights they name, so two entries
+/// naming the same one are a duplicate.
+fn validate_copper_weights(weights: &[CopperWeight], context: &str) -> Result<()> {
+    let classes = weights
+        .iter()
+        .map(|weight| copper_weight_class(weight.ounces()).to_bits())
+        .collect::<Vec<_>>();
+    validate_allowed(&classes, context)
 }
 
 /// An inclusive positive-integer range. `exact` is shorthand for equal bounds.
@@ -298,6 +561,10 @@ pub struct Rules {
     pub soldermask: SoldermaskRules,
     #[serde(default)]
     pub panelization: PanelizationRules,
+    #[serde(default)]
+    pub stackup: StackupRules,
+    #[serde(default)]
+    pub board: BoardRules,
 }
 
 impl Rules {
@@ -356,6 +623,62 @@ impl Rules {
             .chain(lengths(&copper.vscore_clearance, true))
             .chain(lengths(&self.soldermask.web, false))
             .chain(lengths(&self.panelization.board_spacing, false))
+            .chain(properties(&self.stackup.board_thickness, |limit, id| {
+                limit.validate(&format!("rule '{id}' limit"))
+            }))
+            .chain(self.stackup.copper_weight.iter().map(|rule| {
+                property(
+                    &rule.metadata,
+                    rule.limit.as_ref(),
+                    &rule.cases,
+                    |limit, id| {
+                        validate_copper_weights(
+                            &limit.allowed,
+                            &format!("rule '{id}' limit.allowed"),
+                        )
+                    },
+                )
+            }))
+            .chain(properties(&self.board.surface_finish, allowed))
+            .chain(properties(&self.board.soldermask_color, allowed))
+            .chain(properties(&self.board.size, SizeLimit::validate))
+    }
+}
+
+fn allowed<T: PartialEq>(limit: &AllowedLimit<T>, id: &str) -> Result<()> {
+    validate_allowed(&limit.allowed, &format!("rule '{id}' limit.allowed"))
+}
+
+fn properties<Limit>(
+    rules: &[PropertyRule<Limit>],
+    validate: impl Fn(&Limit, &str) -> Result<()> + Copy,
+) -> impl Iterator<Item = RuleDefinition<'_>> {
+    rules
+        .iter()
+        .map(move |rule| property(&rule.metadata, rule.limit.as_ref(), &rule.cases, validate))
+}
+
+/// A board-property rule, validated as it is read: its limits are of many
+/// kinds, but each lowers to one rule under its id or each case's.
+fn property<'a, Limit>(
+    metadata: &'a RuleMetadata,
+    limit: Option<&Limit>,
+    cases: &[Case<Limit>],
+    validate: impl Fn(&Limit, &str) -> Result<()>,
+) -> RuleDefinition<'a> {
+    let ids = match limit {
+        Some(_) => vec![metadata.id.clone()],
+        None => cases
+            .iter()
+            .map(|case| format!("{}.{}", metadata.id, case.id))
+            .collect(),
+    };
+    let validated = validate_limits(metadata, limit, cases, false, validate)
+        .map_err(|error| format!("{error:#}"));
+    RuleDefinition {
+        metadata,
+        limits: Limits::Property(validated, ids),
+        copper_conditions: false,
     }
 }
 
@@ -371,6 +694,8 @@ enum Limits<'a> {
     Categorical,
     Length(Option<&'a LengthLimit>, &'a [LengthCase]),
     Ratio(Option<&'a RatioLimit>, &'a [RatioCase]),
+    /// A board-property rule's validation outcome and the ids it lowers to.
+    Property(std::result::Result<(), String>, Vec<String>),
 }
 
 impl RuleDefinition<'_> {
@@ -384,6 +709,7 @@ impl RuleDefinition<'_> {
             Limits::Ratio(limit, cases) => {
                 validate_limits(metadata, limit, cases, copper, |_, _| Ok(()))
             }
+            Limits::Property(ref validated, _) => validated.clone().map_err(anyhow::Error::msg),
         }
     }
 
@@ -399,6 +725,7 @@ impl RuleDefinition<'_> {
                 .collect(),
             Limits::Ratio(Some(_), _) => vec![id.clone()],
             Limits::Ratio(None, cases) => cases.iter().map(|case| case_id(&case.id)).collect(),
+            Limits::Property(_, ref ids) => ids.clone(),
         }
     }
 }
@@ -485,6 +812,45 @@ pub struct SoldermaskRules {
 pub struct PanelizationRules {
     #[serde(default)]
     pub board_spacing: Vec<LengthRule>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StackupRules {
+    #[serde(default)]
+    pub board_thickness: Vec<PropertyRule<ThicknessLimit>>,
+    #[serde(default)]
+    pub copper_weight: Vec<SelectingRule<PositionSelector, AllowedLimit<CopperWeight>>>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BoardRules {
+    #[serde(default)]
+    pub surface_finish: Vec<PropertyRule<AllowedLimit<SurfaceFinish>>>,
+    #[serde(default)]
+    pub soldermask_color: Vec<PropertyRule<AllowedLimit<SoldermaskColor>>>,
+    #[serde(default)]
+    pub size: Vec<PropertyRule<SizeLimit>>,
+}
+
+/// A rule over one property of the whole board.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+#[serde(bound(deserialize = "Limit: Deserialize<'de>"))]
+pub struct PropertyRule<Limit> {
+    #[serde(flatten)]
+    pub metadata: RuleMetadata,
+    #[serde(default)]
+    pub limit: Option<Limit>,
+    #[serde(default)]
+    pub cases: Vec<Case<Limit>>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PositionSelector {
+    pub position: LayerPosition,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -1024,6 +1390,16 @@ limit = { minimum = "300 mil" }
                 "schema_version = 2",
                 "schema_version = 1",
                 "unsupported PDK schema_version",
+            ),
+            (
+                "copper_layers = { minimum = 2, maximum = 10 }",
+                "copper_layers = { minimum = 2, maximum = 10 }\nouter_copper_weight = [\"1 oz\", \"1.1 oz\"]",
+                "more than once",
+            ),
+            (
+                "copper_layers = { minimum = 2, maximum = 10 }",
+                "board_thickness = { nominal = [\"1.6 mm\"], tolerance_percent = 0 }",
+                "tolerance_percent",
             ),
             ("\"0.2 mm\"", "0.2", ""),
             (

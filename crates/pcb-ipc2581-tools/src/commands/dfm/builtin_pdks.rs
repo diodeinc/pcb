@@ -1,8 +1,9 @@
-/// A bundled process definition, addressable by its exact `name`.
+/// A bundled process definition, addressable by its exact `name`. A name
+/// without a `profile` selects the kit's profile from the design.
 #[derive(serde::Serialize)]
 pub struct BuiltinPdk {
     pub name: &'static str,
-    pub profile: &'static str,
+    pub profile: Option<&'static str>,
     pub source: &'static str,
 }
 
@@ -14,7 +15,14 @@ macro_rules! builtin {
     ($name:literal, $profile:literal, $source:expr) => {
         BuiltinPdk {
             name: $name,
-            profile: $profile,
+            profile: Some($profile),
+            source: $source,
+        }
+    };
+    ($name:literal, $source:expr) => {
+        BuiltinPdk {
+            name: $name,
+            profile: None,
             source: $source,
         }
     };
@@ -23,7 +31,7 @@ macro_rules! builtin {
 pub(super) const BUILTIN_PDKS: &[BuiltinPdk] = &[
     builtin!("standard", "standard", STANDARD),
     builtin!("jlcpcb-1oz", "one-ounce", JLCPCB),
-    builtin!("jlc", "one-ounce", JLCPCB),
+    builtin!("jlc", JLCPCB),
     builtin!("ipc", "2b", IPC),
     builtin!("ipc-1a", "1a", IPC),
     builtin!("ipc-1b", "1b", IPC),
