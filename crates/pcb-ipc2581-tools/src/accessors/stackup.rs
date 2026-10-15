@@ -1,4 +1,5 @@
-use ipc2581::types::{Layer, LayerFunction, Side};
+use ipc2581::Symbol;
+use ipc2581::types::{Layer, LayerFunction, Side, Spec};
 use serde::{Deserialize, Serialize};
 
 use super::IpcAccessor;
@@ -42,18 +43,24 @@ impl StackupDetails {
 /// agree. A layer's side is the source's own statement of where it sits;
 /// its name says nothing outside one exporter's conventions.
 fn uniform_copper_oz(conductors: &[(Option<Side>, Option<f64>)], sides: &[Side]) -> Option<f64> {
-    let mut thicknesses = conductors
+    let mut weights = conductors
         .iter()
         .filter(|(side, _)| side.is_some_and(|side| sides.contains(&side)))
-        .map(|&(_, thickness_mm)| thickness_mm);
-    let first = thicknesses.next()??;
-    thicknesses
-        .all(|thickness| thickness.is_some_and(|thickness| (thickness - first).abs() < 0.001))
-        .then_some(first / COPPER_MM_PER_OZ)
+        .map(|&(_, ounces)| ounces);
+    let first = weights.next()??;
+    weights
+        .all(|ounces| ounces.is_some_and(|ounces| (ounces - first).abs() < 0.03))
+        .then_some(first)
 }
 
-/// Finished thickness of one ounce per square foot of copper.
-const COPPER_MM_PER_OZ: f64 = 0.0348;
+/// The copper weight a stackup layer states, in oz/ft²: its spec's
+/// `Conductor` weight, otherwise its thickness.
+pub(crate) fn stated_copper_oz(spec: Option<&Spec>, thickness_mm: Option<f64>) -> Option<f64> {
+    /// Finished thickness of one ounce per square foot of copper.
+    const COPPER_MM_PER_OZ: f64 = 0.0348;
+    spec.and_then(|spec| spec.copper_weight_oz)
+        .or_else(|| thickness_mm.map(|millimeters| millimeters / COPPER_MM_PER_OZ))
+}
 
 /// The standard foil weight a stated copper weight names, in ounces, or
 /// `None` when it names none.
@@ -173,6 +180,23 @@ const NAMED_COLORS: [(&str, (u8, u8, u8)); 13] = [
 ];
 
 impl ColorInfo {
+    /// The colour a stackup spec states: its colour term or `Color : <name>`
+    /// property, and its RGB.
+    pub(crate) fn of_spec<'a>(spec: &Spec, resolve: impl Fn(Symbol) -> &'a str) -> Self {
+        let named = spec.color_term.map(&resolve);
+        let property = || {
+            spec.properties
+                .iter()
+                .filter_map(|text| resolve(*text).strip_prefix("Color : "))
+                .map(str::trim)
+                .next()
+        };
+        Self {
+            name: named.or_else(property).map(str::to_string),
+            rgb: spec.color_rgb,
+        }
+    }
+
     /// Get RGB values: the stored RGB, a `#rrggbb[aa]` name as KiCad writes
     /// a custom colour, or the RGB a colour name stands for.
     pub fn rgb_color(&self) -> Option<(u8, u8, u8)> {
@@ -336,7 +360,13 @@ impl<'a> IpcAccessor<'a> {
                 _ => StackupLayerType::Other,
             };
             if layer_type == StackupLayerType::Conductor {
-                conductors.push((layer.and_then(|layer| layer.side), stackup_layer.thickness));
+                let spec = stackup_layer
+                    .spec_ref
+                    .and_then(|spec_ref| spec_map.get(self.ipc.resolve(spec_ref)).copied());
+                conductors.push((
+                    layer.and_then(|layer| layer.side),
+                    stated_copper_oz(spec, stackup_layer.thickness),
+                ));
             }
 
             // Get material properties from spec if available
@@ -410,18 +440,7 @@ impl<'a> IpcAccessor<'a> {
             .flat_map(|stackup| &stackup.layers)
             .filter_map(|stackup_layer| {
                 let spec = spec(stackup_layer.spec_ref?)?;
-                let named = spec.color_term.map(|term| self.ipc.resolve(term));
-                let property = || {
-                    let texts = spec.properties.iter().map(|text| self.ipc.resolve(*text));
-                    texts
-                        .filter_map(|text| text.strip_prefix("Color : "))
-                        .map(str::trim)
-                        .next()
-                };
-                let ink = ColorInfo {
-                    name: named.or_else(property).map(str::to_string),
-                    rgb: spec.color_rgb,
-                };
+                let ink = ColorInfo::of_spec(spec, |symbol| self.ipc.resolve(symbol));
                 Some((layer(stackup_layer.layer_ref)?, ink))
             })
             .collect()
@@ -653,7 +672,9 @@ mod tests {
     <FunctionMode mode="FABRICATION"/>
   </Content>
   <Ecad>
-    <CadHeader units="MILLIMETER"/>
+    <CadHeader units="MILLIMETER">
+      <Spec name="ONE_OZ"><Conductor type="WEIGHT"><Property value="1" unit="OZ"/></Conductor></Spec>
+    </CadHeader>
     <CadData>
       <Layer name="PRIMARY" layerFunction="SIGNAL" side="TOP" polarity="POSITIVE"/>
       <Layer name="CORE" layerFunction="DIELCORE" side="INTERNAL" polarity="POSITIVE"/>
@@ -663,9 +684,9 @@ mod tests {
       <Stackup name="Primary" overallThickness="1.6">
         <StackupGroup name="Group">
           <StackupLayer layerOrGroupRef="In_SECONDARY" thickness="0.0696" sequence="5"/>
-          <StackupLayer layerOrGroupRef="GND" thickness="0.0174" sequence="2"/>
+          <StackupLayer layerOrGroupRef="GND" thickness="0.0174" sequence="2"><SpecRef id="ONE_OZ"/></StackupLayer>
           <StackupLayer layerOrGroupRef="CORE" thickness="1.4" sequence="3"/>
-          <StackupLayer layerOrGroupRef="PWR" thickness="0.0174" sequence="4"/>
+          <StackupLayer layerOrGroupRef="PWR" thickness="0.0174" sequence="4"><SpecRef id="ONE_OZ"/></StackupLayer>
           <StackupLayer layerOrGroupRef="PRIMARY" thickness="0.0696" sequence="1"/>
         </StackupGroup>
       </Stackup>
@@ -686,7 +707,8 @@ mod tests {
             ["PRIMARY", "GND", "CORE", "PWR", "In_SECONDARY"]
         );
         assert!((stackup.outer_copper_oz.unwrap() - 2.0).abs() < 1e-9);
-        assert!((stackup.inner_copper_oz.unwrap() - 0.5).abs() < 1e-9);
+        // A stated weight wins over the thickness, as in DFM.
+        assert!((stackup.inner_copper_oz.unwrap() - 1.0).abs() < 1e-9);
         assert_eq!(stackup.outer_copper_weight().unwrap(), "2.00 oz (~2 oz)");
     }
 
@@ -713,8 +735,8 @@ mod tests {
     #[test]
     fn disagreeing_conductors_report_no_common_weight() {
         let conductors = [
-            (Some(Side::Top), Some(0.035)),
-            (Some(Side::Bottom), Some(0.070)),
+            (Some(Side::Top), Some(1.0)),
+            (Some(Side::Bottom), Some(2.0)),
         ];
         assert_eq!(
             uniform_copper_oz(&conductors, &[Side::Top, Side::Bottom]),

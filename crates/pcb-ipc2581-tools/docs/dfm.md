@@ -505,9 +505,9 @@ hold wherever it is placed; the report lists those placements once per Step
     solder leveling without stated lead content: it conforms when both
     `hasl` and `lead_free_hasl` are allowed, does not conform when neither
     is, and leaves the rule `incomplete` when only one is. Soldermask
-    colour reads the colour term or `Color : <name>` property of each
-    soldermask layer's stackup spec; a custom `#rrggbb[aa]` colour, as KiCad
-    writes it, takes the nearest named colour. A finish or colour the file does not
+    colour reads the colour term, `Color : <name>` property, or RGB of each
+    soldermask layer's stackup spec; an RGB or custom `#rrggbb[aa]` colour,
+    as KiCad writes it, takes the nearest named colour. A finish or colour the file does not
     state (KiCad writes `Not specified`) is left to the fab, so the rule is
     `not_applicable`. IPC `OTHER` finishes are never allowed.
   - Board size measures the extents of the checked layout: the board for

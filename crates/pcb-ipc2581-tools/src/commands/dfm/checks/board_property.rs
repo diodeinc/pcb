@@ -269,8 +269,8 @@ fn layer_ref(
     }
 }
 
-/// The colour each soldermask layer's stackup spec gives it, by colour term
-/// or a `Color : <name>` property.
+/// The colour each soldermask layer's stackup spec gives it, by colour term,
+/// `Color : <name>` property, or RGB.
 fn soldermask_color(
     allowed: &[SoldermaskColor],
     allowed_text: &str,
@@ -298,20 +298,9 @@ fn soldermask_color(
             .iter()
             .find(|layer| layer.layer_ref == mask.name)
             .and_then(|layer| imported.specs.get(&layer.spec_ref?));
-        let color = spec.and_then(|spec| {
-            spec.color_term
-                .map(|term| imported.resolve(term))
-                .or_else(|| {
-                    spec.properties
-                        .iter()
-                        .filter_map(|text| imported.resolve(*text).strip_prefix("Color : "))
-                        .next()
-                })
-        });
-        let Some(color) = color
-            .and_then(|color| {
-                let name = Some(color.to_owned());
-                ColorInfo { name, rgb: None }.color_name()
+        let Some(color) = spec
+            .and_then(|spec| {
+                ColorInfo::of_spec(spec, |symbol| imported.resolve(symbol)).color_name()
             })
             .map(|color| SoldermaskColor::new(&color))
         else {

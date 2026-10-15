@@ -1332,6 +1332,11 @@ limit = { minimum = ["10 mm", "5 mm"], maximum = ["40 mm", "25 mm"] }"#,
         // IPC S does not say which of the two lead contents it is.
         assert_eq!(status(&specified("S", "green"), "finish"), "Incomplete");
         assert_eq!(status(&specified("S", "green"), "color"), "Pass");
+        let rgb_only = specified("S", "green").replace(
+            r#"<Property text="Color : green"/>"#,
+            r#"<Color r="0" g="0" b="0"/>"#,
+        );
+        assert_eq!(status(&rgb_only, "color"), "Fail");
         // KiCad writes a custom colour as hex; it is named for the nearest.
         let report = check_with_pdk(&specified("OSP", "#191919e6"), LayoutTarget::Board, &pdk);
         let messages = report
