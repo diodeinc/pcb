@@ -10,10 +10,10 @@ use anyhow::Result;
 
 use super::design::HoleClass;
 use super::pdk::{
-    AssemblyDiagnostic, Case, CopperWeight, HoleKind, LayerPosition, Length, LengthCase,
-    LengthLimit, Pdk, PlatedHoleKind, Profile, ProfileStatus, Ratio, RatioLimit, RuleConditions,
-    RuleMetadata, SelectingRule, SizeLimit, SlotPlating, SoldermaskColor, SurfaceFinish,
-    ThicknessLimit,
+    AssemblyDiagnostic, BOARD_OUTLINE_RULE_ID, Case, CopperWeight, HoleKind, LayerPosition, Length,
+    LengthCase, LengthLimit, Pdk, PlatedHoleKind, Profile, ProfileStatus, Ratio, RatioLimit,
+    RuleConditions, RuleMetadata, SelectingRule, SizeLimit, SlotPlating, SoldermaskColor,
+    SurfaceFinish, ThicknessLimit,
 };
 use super::report::{Severity, ViewRecipe};
 use crate::accessors::nominal_copper_weight;
@@ -229,6 +229,9 @@ pub(super) enum RuleKind {
     SoldermaskColor,
     /// Property: the extents of the checked layout's profile.
     BoardSize,
+    /// Property: the checked layout has a profile to fabricate. Every PDK
+    /// runs it.
+    BoardOutline,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -351,6 +354,7 @@ impl RuleKind {
             Self::SurfaceFinish => ("surface_finish", "Surface finish", &[]),
             Self::SoldermaskColor => ("soldermask_color", "Soldermask color", &[]),
             Self::BoardSize => ("board_size", "Board size", &[]),
+            Self::BoardOutline => ("board_outline", "Board outline", &[]),
         };
         ViewRecipe {
             kind,
@@ -364,6 +368,7 @@ impl RuleKind {
                     | Self::SurfaceFinish
                     | Self::SoldermaskColor
                     | Self::BoardSize
+                    | Self::BoardOutline
             ),
             features: features.to_vec(),
         }
@@ -623,6 +628,15 @@ impl RuleKind {
                 method: "layout_profile_bounding_box",
                 finding_title: "Board size is outside the supported range".to_owned(),
                 quantity_label: "board extents".to_owned(),
+                witness_roles: None,
+                pools: Pools::NONE,
+            },
+            Self::BoardOutline => Semantics {
+                subject: "board",
+                quantity: "missing_board_outline_count",
+                method: "layout_profile_presence",
+                finding_title: "Board has no outline".to_owned(),
+                quantity_label: "missing board outline count".to_owned(),
                 witness_roles: None,
                 pools: Pools::NONE,
             },
@@ -948,6 +962,21 @@ pub(super) fn lower(pdk: &Pdk, selected_profile: Option<&str>) -> Result<Vec<Rul
         ));
     }
     Ok(rules)
+}
+
+/// The check every PDK runs: a layout without an outline is no board to
+/// fabricate.
+pub(super) fn board_outline() -> Rule {
+    Rule {
+        id: BOARD_OUTLINE_RULE_ID.to_owned(),
+        authored_id: BOARD_OUTLINE_RULE_ID.to_owned(),
+        title: "Board outline".to_owned(),
+        severity: Severity::Error,
+        comparison: Comparison::Maximum,
+        limit: LimitValue::Count(0),
+        kind: RuleKind::BoardOutline,
+        conditions: Conditions::default(),
+    }
 }
 
 /// A profile's support envelope as reserved `profile.support.*` rules: the

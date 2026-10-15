@@ -188,6 +188,17 @@ fn copper_weight(
     Ok(evaluation)
 }
 
+/// A layout without a profile has no board to fabricate.
+pub(super) fn outline(design: &Design) -> Evaluation {
+    let layout = design.report_layout();
+    let missing = layout.bounding_box.is_none().then(|| Nonconforming {
+        message: "the selected layout target has no board outline".to_owned(),
+        layers: Vec::new(),
+        subject: subject("board", layout.selected_step.unwrap_or_default()),
+    });
+    judged(1, missing)
+}
+
 /// The surface finish each coating layer's stackup spec states, judged once
 /// per spec, with the coating layers that reference it.
 fn surface_finish(

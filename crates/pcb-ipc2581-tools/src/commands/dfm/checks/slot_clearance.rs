@@ -148,7 +148,7 @@ limit = {{ minimum = "0.20 mm" }}"#
 <StackupLayer layerOrGroupRef="L1" thickness="0.035" tolPlus="0" tolMinus="0" sequence="1"/>
 <StackupLayer layerOrGroupRef="L2" thickness="0.035" tolPlus="0" tolMinus="0" sequence="2"/>
 </StackupGroup></Stackup>
-<Step name="board" type="BOARD"><Datum x="0" y="0"/>
+<Step name="board" type="BOARD"><Datum x="0" y="0"/><Profile><Polygon><PolyBegin x="-50" y="-50"/><PolyStepSegment x="50" y="-50"/><PolyStepSegment x="50" y="50"/><PolyStepSegment x="-50" y="50"/><PolyStepSegment x="-50" y="-50"/></Polygon></Profile>
 <PadStackDef name="land-stack"><PadstackPadDef layerRef="L0" padUse="REGULAR"><Location x="0" y="0"/><StandardPrimitiveRef id="land"/></PadstackPadDef></PadStackDef>
 {copper}
 <LayerFeature layerRef="ROUT"><Set {slot_set}>
@@ -332,7 +332,7 @@ limit = {{ minimum = "0.20 mm" }}"#
         assert!(check(&outside, &source).findings.is_empty());
         let inside = outside.replace("layerRef=\"L2\"", "layerRef=\"L1\"");
         let panel = inside.replace("<StepRef name=\"board\"/>", "<StepRef name=\"panel\"/>")
-            .replace("</CadData>", r#"<Step name="panel" type="PALLET"><StepRepeat stepRef="board" x="10" y="20" nx="2" ny="1" dx="20" dy="0" mirror="true"/></Step></CadData>"#);
+            .replace("</CadData>", r#"<Step name="panel" type="PALLET"><Profile><Polygon><PolyBegin x="-50" y="-50"/><PolyStepSegment x="100" y="-50"/><PolyStepSegment x="100" y="100"/><PolyStepSegment x="-50" y="100"/><PolyStepSegment x="-50" y="-50"/></Polygon></Profile><StepRepeat stepRef="board" x="10" y="20" nx="2" ny="1" dx="20" dy="0" mirror="true"/></Step></CadData>"#);
         let repeated = fixtures::report(&panel, &source, LayoutTarget::BoardArray);
         assert_eq!(repeated.rules[0].checked, 4);
         let [finding] = repeated.findings.as_slice() else {

@@ -165,6 +165,11 @@ The schema gives each kind of constraint one place:
   qualification. The engine emits these checks as reserved
   `profile.support.*` report rules; PDK authors do not write layer-count DFM
   rules.
+- Every check also runs the reserved `board.outline` rule, whatever the PDK:
+  a checked layout with no profile (the board for `--layout-target board`,
+  the array or panel for `board-array`) has nothing to fabricate, so the rule
+  fails with one finding. Rules that measure against the outline, such as
+  board size and board-edge clearance, are then `not_applicable`.
 - `rules.stackup` holds limits on the physical stackup.
   `board_thickness` lists the fab's `nominal` finished thicknesses; the
   design conforms when its thickness is within `tolerance` or
@@ -513,7 +518,8 @@ hold wherever it is placed; the report lists those placements once per Step
   - Board size measures the extents of the checked layout: the board for
     `--layout-target board`, the array or panel for `board-array`. Extents
     and limits are both compared long side to long side. A layout without a
-    profile has nothing to size, so the rule is `not_applicable`.
+    profile has nothing to size, so the rule is `not_applicable`;
+    `board.outline` fails instead.
 
 A rule that measures nothing never reports a vacuous `pass`; `skip_reason`
 says why, under one of two statuses:

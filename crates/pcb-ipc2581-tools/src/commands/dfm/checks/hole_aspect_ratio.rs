@@ -153,6 +153,7 @@ mod tests {
       </StackupGroup>
     </Stackup>
     <Step name="board" type="BOARD">
+      <Profile><Polygon><PolyBegin x="-50" y="-50"/><PolyStepSegment x="50" y="-50"/><PolyStepSegment x="50" y="50"/><PolyStepSegment x="-50" y="50"/><PolyStepSegment x="-50" y="-50"/></Polygon></Profile>
       <LayerFeature layerRef="DRILL"><Set><Hole name="PTH" diameter="0.2" platingStatus="PLATED" x="1" y="1"/></Set></LayerFeature>
       <LayerFeature layerRef="BLIND"><Set><Hole name="BLIND" diameter="0.03" platingStatus="VIA" x="2" y="2"/></Set></LayerFeature>
       <LayerFeature layerRef="BURIED"><Set><Hole name="BURIED" diameter="0.05" platingStatus="VIA" x="3" y="3"/></Set></LayerFeature>
@@ -182,8 +183,11 @@ cases = [
     }
 
     fn only_rule(report: &DfmReport) -> &RuleResult {
-        assert_eq!(report.rules.len(), 1);
-        &report.rules[0]
+        let [rule, outline] = report.rules.as_slice() else {
+            panic!("one rule besides the board outline: {:?}", report.rules);
+        };
+        assert_eq!(outline.id, "board.outline");
+        rule
     }
 
     #[test]

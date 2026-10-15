@@ -5,8 +5,13 @@ use serde::Deserialize;
 
 use crate::accessors::nominal_copper_weight;
 
-/// The report rule ids `profile.support` lowers to, reserved from authored rules.
-pub const SUPPORT_RULE_IDS: &[&str] = &[
+/// The report rule id of the board-outline check every PDK runs.
+pub const BOARD_OUTLINE_RULE_ID: &str = "board.outline";
+
+/// The report rule ids the engine emits itself, reserved from authored
+/// rules: the board-outline check and what `profile.support` lowers to.
+pub const RESERVED_RULE_IDS: &[&str] = &[
+    BOARD_OUTLINE_RULE_ID,
     "profile.support.copper_layers.minimum",
     "profile.support.copper_layers.maximum",
     "profile.support.outer_copper_weight",
@@ -79,7 +84,7 @@ impl Pdk {
 
     pub fn validate_rule_references(&self) -> Result<()> {
         let mut authored_ids = HashSet::new();
-        let mut configured_ids = SUPPORT_RULE_IDS
+        let mut configured_ids = RESERVED_RULE_IDS
             .iter()
             .map(|id| (*id).to_owned())
             .collect::<HashSet<_>>();

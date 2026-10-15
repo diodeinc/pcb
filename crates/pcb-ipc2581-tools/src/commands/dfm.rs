@@ -110,11 +110,12 @@ fn check_with_scene(
         None => select_profile(&pdk, imported, scope, resolution)
             .with_context(|| format!("failed to select a profile of PDK {pdk_path}"))?,
     };
-    let rules = rules::lower(&pdk, Some(&selection.profile))
+    let mut rules = rules::lower(&pdk, Some(&selection.profile))
         .with_context(|| format!("failed to lower PDK {pdk_path}"))?;
     if rules.is_empty() {
         bail!("PDK {pdk_path} configures no DFM rules; add at least one capability");
     }
+    rules.push(rules::board_outline());
     let designs = design::Design::frames(imported, scope, &rules, resolution)?;
     let checked = checks::run(&rules, &designs)?;
     let summary = summarize(&checked);
@@ -1354,13 +1355,16 @@ limit = { minimum = ["10 mm", "5 mm"], maximum = ["40 mm", "25 mm"] }"#,
         assert_eq!(status(BOARD, "size"), "Fail");
         let square = |side: &str| BOARD.replace("\"30\"", &format!("\"{side}\""));
         assert_eq!(status(&square("20"), "size"), "Pass");
-        // A module layout without an outline is not a board to size.
+        // A layout without an outline fails the baseline outline check
+        // once; size has nothing to measure.
         let (start, end) = (
             BOARD.find("<Profile>").unwrap(),
             BOARD.find("</Profile>").unwrap(),
         );
-        let outline = &BOARD[start..end + "</Profile>".len()];
-        assert_eq!(status(&BOARD.replace(outline, ""), "size"), "NotApplicable");
+        let unoutlined = BOARD.replace(&BOARD[start..end + "</Profile>".len()], "");
+        assert_eq!(status(BOARD, "board.outline"), "Pass");
+        assert_eq!(status(&unoutlined, "board.outline"), "Fail");
+        assert_eq!(status(&unoutlined, "size"), "NotApplicable");
     }
 
     #[test]
@@ -1499,6 +1503,7 @@ limit = {{ minimum = \"0.5 mm\" }}
       </Set></LayerFeature>
     </Step>
     <Step name="panel" type="PALLET"><Datum x="0" y="0"/>
+      <Profile><Polygon><PolyBegin x="0" y="0"/><PolyStepSegment x="45" y="0"/><PolyStepSegment x="45" y="20"/><PolyStepSegment x="0" y="20"/><PolyStepSegment x="0" y="0"/></Polygon></Profile>
       <StepRepeat stepRef="cell" x="5" y="5" nx="3" ny="1" dx="12" dy="0" angle="0" mirror="false"/>
       <LayerFeature layerRef="DRILL"><Set polarity="POSITIVE">
         <Hole name="tooling" diameter="1" platingStatus="NONPLATED" x="39.6" y="12"/>

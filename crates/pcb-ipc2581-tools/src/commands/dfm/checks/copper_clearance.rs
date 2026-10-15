@@ -396,6 +396,7 @@ mod tests {
     <CadData>
       <Layer name="TOP" layerFunction="SIGNAL" side="TOP" polarity="POSITIVE"/>
       <Step name="board" type="BOARD">
+        <Profile><Polygon><PolyBegin x="-50" y="-50"/><PolyStepSegment x="50" y="-50"/><PolyStepSegment x="50" y="50"/><PolyStepSegment x="-50" y="50"/><PolyStepSegment x="-50" y="-50"/></Polygon></Profile>
         <PadStackDef name="padstack">
           <PadstackPadDef layerRef="TOP" padUse="REGULAR"><Location x="0" y="0"/><StandardPrimitiveRef id="pad"/></PadstackPadDef>
         </PadStackDef>
