@@ -589,7 +589,7 @@ impl WidthAxis {
             }
             let radius = self.radius_at(t);
             let disk_bounds = BBox::from_point(center).expand(radius + error);
-            if isolated {
+            let clear = if isolated {
                 let vectors = self
                     .contacts
                     .map(|(a, b)| dist::point_segment(center, a, b).1 - center);
@@ -601,15 +601,14 @@ impl WidthAxis {
                         .iter()
                         .filter(|&&(a, b)| BBox::spanning(a, b).intersects(disk_bounds))
                         .all(|&(a, b)| dist::point_segment(center, a, b).0 >= radius - error)
-                    && (inside_first || inside())
             } else {
                 // Tolerant point checks must never certify an open interval:
                 // its membership is constant only for these exact root predicates.
                 radius > 0.0
                     && constraints.iter().all(|&p| value(p, t) >= 0.0)
                     && clearance.iter().all(|wall| wall.contains(t, disk_bounds))
-                    && (inside_first || inside())
-            }
+            };
+            clear && (inside_first || inside())
         })
     }
 

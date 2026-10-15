@@ -14,10 +14,17 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 - `pcb-ir` `ContourSet::area_bounds` bounds the area of the source a region was prepared from, using its recorded uncertainty. Combined with the existing booleans, it bounds the paste area that a set of flattened disks covers or spills.
 - `pcb-ir` `ContourSet::intersection_and_difference` returns exactly `intersection` and `difference` of the same operands from one overlay, about 1.8 times faster than the two calls when splitting copper by mask openings.
+- `pcb-ir` `ContourSet::side_of` tells whether a region lies wholly inside or wholly outside a `PreparedRegion`, without a boolean.
+- `pcb-ir` `AssemblyView::lands` gives the surviving copper lands, as `PhysicalView::lands` does.
 
 ### Changed
 
 - `pcb-ir` erodes curved regions about 400 times faster: a 112-vertex rounded pad erodes in about 50 µs instead of 20–30 ms. Disk dilation at fine accuracy budgets, such as 0.5 mm at 0.25 µm, no longer fails the budget.
+- DFM measures routed slot widths and copper feature widths faster. A slot whose width cannot be measured makes only the slot width rule incomplete; other slot rules keep their findings.
+
+### Fixed
+
+- `pcb gltf export --synthesize-outline` exports an empty board as an empty scene instead of failing.
 
 ### Fixed
 

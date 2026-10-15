@@ -36,7 +36,7 @@ use rayon::prelude::*;
 
 use super::{Evaluation, Measured, MeasuredSite};
 use crate::commands::dfm::design::{
-    CopperConductor, CopperLayer, Design, MaskLayer, MaskOwner, spans,
+    CopperConductor, CopperLayer, Design, MaskLayer, MaskOwner, conductor_index, spans,
 };
 use crate::commands::dfm::report::{Evidence, LayerRef, MeasurementKind, SourceLocator, Subject};
 use crate::commands::dfm::rules::Conditions;
@@ -51,25 +51,13 @@ pub(super) fn copper_feature_width(
         if pieces.is_empty() {
             return Ok(Vec::new());
         }
-        let local_indices;
-        let (boundaries, near) = if let Some(boundaries) = design.conductor_boundaries.get(index) {
-            (boundaries, &design.conductors_near[index])
-        } else {
-            local_indices = (
-                layer
-                    .conductors
-                    .iter()
-                    .map(|owner| owner.image.prepare_query())
-                    .collect::<Vec<_>>(),
-                BBoxIndex::new(
-                    layer
-                        .conductors
-                        .iter()
-                        .map(|owner| owner.image.bbox)
-                        .collect(),
-                ),
-            );
-            (&local_indices.0, &local_indices.1)
+        let local;
+        let (boundaries, near) = match design.conductor_boundaries.get(index) {
+            Some(boundaries) => (boundaries, &design.conductors_near[index]),
+            None => {
+                local = conductor_index(&layer.conductors);
+                (&local.0, &local.1)
+            }
         };
         pieces
             .into_iter()
@@ -233,27 +221,23 @@ fn unique_copper_owner<'a>(
     let mut intersecting = Vec::new();
     for index in near.query(region.bbox) {
         let owner = &owners[index];
-        let boundary = &boundaries[index];
-        let intersection = region.intersection_prepared(&owner.image, boundary)?;
-        if !intersection.is_empty() {
-            // Identical contours prove coverage without a second overlay.
-            // Overlay may rotate a ring's start without changing its shape.
-            let covered = intersection.ring_count() == region.ring_count()
-                && intersection.rings().zip(region.rings()).all(|(a, b)| {
-                    a.len() == b.len()
-                        && a.iter()
-                            .position(|point| point == &b[0])
-                            .is_some_and(|start| {
-                                a.iter().cycle().skip(start).take(a.len()).eq(b.iter())
-                            })
-                });
-            intersecting.push((owner, covered));
-        }
+        let covered = match region.side_of(&boundaries[index]) {
+            Some(true) => true,
+            Some(false) => continue,
+            None => {
+                let (inside, outside) = region.intersection_and_difference(&owner.image)?;
+                if inside.is_empty() {
+                    continue;
+                }
+                outside.is_empty()
+            }
+        };
+        intersecting.push((owner, covered));
     }
-    let [(owner, covered)] = intersecting.as_slice() else {
-        return Ok(None);
-    };
-    Ok((*covered || region.difference(&owner.image)?.is_empty()).then_some(*owner))
+    Ok(match intersecting.as_slice() {
+        [(owner, true)] => Some(*owner),
+        _ => None,
+    })
 }
 
 fn copper_subject(design: &Design, owner: &CopperConductor, layer: &LayerRef) -> Subject {
@@ -387,11 +371,7 @@ mod tests {
         region: &ContourSet,
         owners: &'a [CopperConductor],
     ) -> anyhow::Result<Option<&'a CopperConductor>> {
-        let boundaries = owners
-            .iter()
-            .map(|owner| owner.image.prepare_query())
-            .collect::<Vec<_>>();
-        let near = BBoxIndex::new(owners.iter().map(|owner| owner.image.bbox).collect());
+        let (boundaries, near) = conductor_index(owners);
         super::unique_copper_owner(region, owners, &boundaries, &near)
     }
 
