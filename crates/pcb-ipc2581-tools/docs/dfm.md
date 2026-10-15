@@ -507,7 +507,8 @@ hold wherever it is placed; the report lists those placements once per Step
     `not_applicable`. IPC `OTHER` finishes are never allowed.
   - Board size measures the extents of the checked layout: the board for
     `--layout-target board`, the array or panel for `board-array`. Extents
-    and limits are both compared long side to long side.
+    and limits are both compared long side to long side. A layout without a
+    profile has nothing to size, so the rule is `not_applicable`.
 
 A rule that measures nothing never reports a vacuous `pass`; `skip_reason`
 says why, under one of two statuses:

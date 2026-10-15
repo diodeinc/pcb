@@ -1350,6 +1350,13 @@ limit = { minimum = ["10 mm", "5 mm"], maximum = ["40 mm", "25 mm"] }"#,
         assert_eq!(status(BOARD, "size"), "Fail");
         let square = |side: &str| BOARD.replace("\"30\"", &format!("\"{side}\""));
         assert_eq!(status(&square("20"), "size"), "Pass");
+        // A module layout without an outline is not a board to size.
+        let (start, end) = (
+            BOARD.find("<Profile>").unwrap(),
+            BOARD.find("</Profile>").unwrap(),
+        );
+        let outline = &BOARD[start..end + "</Profile>".len()];
+        assert_eq!(status(&BOARD.replace(outline, ""), "size"), "NotApplicable");
     }
 
     #[test]

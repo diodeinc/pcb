@@ -95,9 +95,12 @@ pub(super) fn evaluate(rule: &Rule, design: &Design) -> Result<Evaluation, Unjud
             soldermask_color(allowed, &allowed_text, design)
         }
         (RuleKind::BoardSize, Allowed::Size(limit)) => {
-            let bounds = design.report_layout().bounding_box.ok_or_else(|| {
-                incomplete("the selected layout target has no board profile to measure")
-            })?;
+            // As for board-edge clearance: a layout without a profile, such
+            // as a module's, is not a board to size.
+            let bounds = design
+                .report_layout()
+                .bounding_box
+                .ok_or_else(|| unstated("the selected layout target has no board profile"))?;
             let (width, height) = (bounds.max.x - bounds.min.x, bounds.max.y - bounds.min.y);
             let extents = [width.max(height), width.min(height)];
             let below = limit.minimum().is_some_and(|minimum| {
