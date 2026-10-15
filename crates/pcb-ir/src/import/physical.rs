@@ -257,9 +257,11 @@ pub struct AssemblyView {
 }
 
 /// A drilled opening and the termination it serves, as in [`PhysicalHole`].
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct AssemblyHole {
     pub id: HoleId,
+    /// The hole's opening, as in [`PhysicalHole::image`].
+    pub image: ContourSet,
     pub plating: PlatingKind,
     pub termination: Association<PhysicalTerminationId>,
     pub termination_basis: Option<AssociationBasis>,
@@ -388,7 +390,7 @@ impl ImportedDesign {
             self.paste_islands(scope, &components, &source_lands, &terminations, resolution)?;
         let mask_openings = self.mask_openings(scope, &lands, resolution)?;
         let mut holes = self.derive_physical_holes(scope, &source_lands, &all, resolution)?;
-        self.attach_hole_terminations(&lands, &terminations, &mut holes)?;
+        self.attach_hole_terminations(&lands, &source_lands, &terminations, &mut holes)?;
         self.attach_hole_protection(scope, &mut holes, resolution)?;
         Ok(PhysicalView {
             source_lands,
@@ -430,7 +432,7 @@ impl ImportedDesign {
             self.paste_islands(scope, &components, &source_lands, &terminations, resolution)?;
         let paste_regions = paste_regions(&paste_islands, &terminations, resolution)?;
         let mut holes = self.derive_physical_holes(scope, &[], &all, resolution)?;
-        self.attach_hole_terminations(&lands, &terminations, &mut holes)?;
+        self.attach_hole_terminations(&lands, &source_lands, &terminations, &mut holes)?;
         Ok(AssemblyView {
             lands,
             terminations,
@@ -440,6 +442,7 @@ impl ImportedDesign {
                 .into_iter()
                 .map(|hole| AssemblyHole {
                     id: hole.id,
+                    image: hole.image,
                     plating: hole.plating,
                     termination: hole.termination,
                     termination_basis: hole.termination_basis,
@@ -748,7 +751,7 @@ impl ImportedDesign {
                     } else {
                         let overlapped = termination_lands
                             .overlapping(&image, board, |land| {
-                                side == Side::None || land.side == side
+                                Ok(side == Side::None || land.side == side)
                             })?
                             .into_iter()
                             .collect::<BTreeSet<_>>();
@@ -954,20 +957,29 @@ impl ImportedDesign {
         Ok(holes)
     }
 
+    /// Link each hole to the termination its evidence names or, without
+    /// evidence, whose copper it reaches. `lands` is surviving copper and
+    /// `source_lands` the same lands before routing and clears.
     fn attach_hole_terminations(
         &self,
         lands: &[PhysicalLand],
+        source_lands: &[PhysicalLand],
         terminations: &[PhysicalTermination],
         holes: &mut [PhysicalHole],
     ) -> Result<()> {
         let stackup = physical_stackup_layers(&self.stackups, &self.layer_definitions)?;
-        let terminations = TerminationIndex::new(self, lands, terminations);
+        let terminations = TerminationIndex::new(self, source_lands, terminations);
+        let surviving = lands
+            .iter()
+            .map(|land| (land.id, land))
+            .collect::<HashMap<_, _>>();
         for hole in holes.iter_mut() {
             let evidence = self.feature_evidence(hole.id.0);
             let (termination, basis) = self.hole_termination_association(
                 hole,
                 &evidence,
                 &terminations,
+                &surviving,
                 stackup.as_deref(),
             )?;
             if let Some(side) = terminations.common_side(&termination) {
@@ -984,6 +996,7 @@ impl ImportedDesign {
         hole: &PhysicalHole,
         evidence: &FeatureEvidence,
         terminations: &TerminationIndex<'_>,
+        surviving: &HashMap<LandId, &PhysicalLand>,
         stackup: Option<&[Symbol]>,
     ) -> Result<(Association<PhysicalTerminationId>, Option<AssociationBasis>)> {
         if !evidence.component_refs.is_empty() || evidence.pin.is_some() {
@@ -997,12 +1010,34 @@ impl ImportedDesign {
             return Ok((association, Some(AssociationBasis::SourceIdentity)));
         }
 
-        let candidates = terminations.overlapping(&hole.image, hole.board, |land| {
-            feature_definitely_spans_layer(
+        let candidates = terminations.overlapping(&hole.image, hole.board, |source| {
+            if !feature_definitely_spans_layer(
                 hole.span,
-                self.layer_definitions[land.layer.0 as usize].name,
+                self.layer_definitions[source.layer.0 as usize].name,
                 stackup,
-            )
+            ) {
+                return Ok(false);
+            }
+            let Some(land) = surviving.get(&source.id) else {
+                return Ok(false);
+            };
+            if land.image.intersection(&hole.image)?.area() > tol::REGION_MM.powi(2) {
+                return Ok(true);
+            }
+            if source.image.intersection(&hole.image)?.area() <= tol::REGION_MM.powi(2) {
+                return Ok(false);
+            }
+            // A slot clears the copper it passes through, so it reaches its
+            // land when every clear that meets it lies within it. A clear
+            // that extends past the opening separates the two.
+            for cleared in source.image.difference(&land.image)?.connected_components() {
+                if cleared.intersection(&hole.image)?.area() > tol::REGION_MM.powi(2)
+                    && cleared.difference(&hole.image)?.area() > tol::REGION_MM.powi(2)
+                {
+                    return Ok(false);
+                }
+            }
+            Ok(true)
         })?;
         Ok(match candidates.as_slice() {
             [] => (Association::Unresolved, None),
@@ -1565,13 +1600,13 @@ impl<'a> TerminationIndex<'a> {
         &self,
         image: &ContourSet,
         board: Option<LayoutOccurrenceId>,
-        keep: impl Fn(&PhysicalLand) -> bool,
+        keep: impl Fn(&PhysicalLand) -> Result<bool>,
     ) -> Result<Vec<PhysicalTerminationId>> {
         let mut terminations = Vec::new();
         for id in self.land_bounds.query(image.bbox()) {
             let TerminationLand { termination, land } = self.lands[id];
             if land.board == board
-                && keep(land)
+                && keep(land)?
                 && land.image.intersection(image)?.area() > tol::REGION_MM.powi(2)
             {
                 terminations.push(termination);
@@ -1822,7 +1857,7 @@ mod tests {
         let mut holes = board_holes(&imported, fine).unwrap();
         holes[0].span = FeatureSpan::ThroughBoard;
         let assembly_error = imported
-            .attach_hole_terminations(&lands, &terminations, &mut holes)
+            .attach_hole_terminations(&lands, &lands, &terminations, &mut holes)
             .unwrap_err();
         for error in [hole_error, mask_error, assembly_error] {
             assert!(
@@ -1896,6 +1931,7 @@ mod tests {
             .iter()
             .map(|hole| AssemblyHole {
                 id: hole.id,
+                image: hole.image.clone(),
                 plating: hole.plating,
                 termination: hole.termination.clone(),
                 termination_basis: hole.termination_basis,
@@ -2009,7 +2045,65 @@ mod tests {
                     .land,
                 Association::Resolved(land)
             );
+            // The slot sits inside its pin's source land, so it serves that
+            // pin even though it clears the copper it overlaps. A wide slot
+            // leaves no surviving copper and so no termination.
+            let termination = view
+                .terminations
+                .iter()
+                .find(|termination| termination.lands.contains(&land))
+                .map(|termination| termination.id);
+            assert_eq!(termination.is_some(), height < 1.0);
+            let expected = termination.map_or(Association::Unresolved, Association::Resolved);
+            assert_eq!(view.holes[0].termination, expected);
+            let assembly = imported
+                .assembly_view(ArtworkScope::Board, Resolution::default())
+                .unwrap();
+            assert_eq!(assembly.holes[0].termination, expected);
         }
+    }
+
+    #[test]
+    fn drill_inside_an_independent_clear_does_not_reach_its_land() {
+        // The clear leaves a ring of U1 pin 1's land around a gap, and the
+        // drill sits in the gap, apart from that copper.
+        let xml = physical_fixture()
+            .replace(
+                "<Layer name=\"DRILL\" layerFunction=\"DRILL\" side=\"ALL\" polarity=\"POSITIVE\"/>",
+                "<Layer name=\"DRILL\" layerFunction=\"DRILL\" side=\"ALL\" polarity=\"POSITIVE\"><Span fromLayer=\"TOP\" toLayer=\"BOTTOM\"/></Layer>",
+            )
+            .replace(
+                r#"<Set net="N2">"#,
+                r#"<Set polarity="NEGATIVE"><Features><Location x="5" y="5"/><StandardPrimitiveRef id="paste"/></Features></Set>
+          <Set net="N2">"#,
+            );
+        Ipc2581::validate(&xml).unwrap();
+        let imported = import(&xml);
+        let scope = ArtworkScope::Board;
+        let view = imported
+            .physical_view(scope, Resolution::default())
+            .unwrap();
+        let pin = view
+            .terminations
+            .iter()
+            .find(|termination| termination.at == Point::new(5.0, 5.0))
+            .expect("the ring keeps the pin's termination");
+        let land = view
+            .lands
+            .iter()
+            .find(|land| land.id == pin.lands[0])
+            .unwrap();
+        assert!(
+            land.image
+                .intersection(&view.holes[0].image)
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(view.holes[0].termination, Association::Unresolved);
+        let assembly = imported
+            .assembly_view(scope, Resolution::default())
+            .unwrap();
+        assert_eq!(assembly.holes[0].termination, Association::Unresolved);
     }
 
     #[test]
