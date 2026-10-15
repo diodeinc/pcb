@@ -16,6 +16,7 @@ alias provides the same commands.
 | `gerber` | Export fabrication layers and drill files. |
 | `view` | Export a filtered IPC-2581 function-mode document. |
 | `board-array create` | Create a rectangular board array. |
+| `board-array plan` | Report boards and utilization per automatic sheet size, and recommend a sheet for an order quantity. |
 | `fab-panel create` | Tile assembly panels into a supported fabrication panel size. |
 | `edit bom` | Add approved alternatives to BOM entries. |
 | `edit population` | Change which BOM designators are populated. |
@@ -98,6 +99,13 @@ Board-array creation balances copper by default; use `--no-copper-balance`
 to disable it. Fabrication-panel creation requires `--copper-balance` to enable
 balancing. Both commands accept either flag, but not both together. See the
 [copper-balancing strategy](docs/copper-balancing.md).
+
+`board-array plan` lists the grid, board count, and utilization that
+`board-array create --sheet` gives on each sheet from A7 to A4. With
+`--quantity` (and an optional `--moq`, the minimum number of arrays per order),
+it adds the arrays, boards, and surplus each sheet orders. It then recommends the
+sheet that orders the least array area. When two sheets tie, it recommends the
+smaller one. `--format json` writes the same report as JSON.
 
 `fab-panel create` supports `--panel-size` values `12x18`, `16x18`, `18x24`
 (default), and `21x24`, in inches. Repeat an input path to request multiple copies:

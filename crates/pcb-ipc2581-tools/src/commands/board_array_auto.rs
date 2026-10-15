@@ -3,7 +3,7 @@ use std::cmp::Ordering;
 use super::board_array::BoardMarginMm;
 use crate::utils::format::fmt_num;
 
-const AUTO_SHEETS: [AutoSheetSize; 4] = [
+pub const AUTO_SHEETS: [AutoSheetSize; 4] = [
     AutoSheetSize::A7,
     AutoSheetSize::A6,
     AutoSheetSize::A5,
@@ -31,7 +31,8 @@ impl AutoSheetSize {
         }
     }
 
-    fn dimensions_mm(self) -> (f64, f64) {
+    /// Short and long side.
+    pub fn dimensions_mm(self) -> (f64, f64) {
         match self {
             Self::A7 => (74.0, 105.0),
             Self::A6 => (105.0, 148.0),
@@ -69,6 +70,18 @@ pub struct AutoBoardArrayPlan {
     pub rows: u32,
     pub board_margin_mm: BoardMarginMm,
     pub edge_rail_mm: BoardMarginMm,
+    /// The per-axis grid limit, not the sheet, stopped a larger grid.
+    pub grid_limited: bool,
+}
+
+impl AutoBoardArrayPlan {
+    pub fn boards(&self) -> u32 {
+        self.columns * self.rows
+    }
+
+    pub fn area_mm2(&self) -> f64 {
+        self.target.width * self.target.height
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -122,6 +135,46 @@ pub fn auto_board_array_plan(
             board_margin_mm,
             sheet: AutoSheetSize::A4,
         })
+}
+
+/// What ordering `quantity` boards on one sheet takes when every order is at
+/// least `moq` arrays.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SheetOrder {
+    pub arrays: u32,
+    pub boards_ordered: u32,
+    pub surplus: u32,
+    pub ordered_area_mm2: f64,
+}
+
+pub fn sheet_order(plan: &AutoBoardArrayPlan, quantity: u32, moq: u32) -> SheetOrder {
+    let arrays = quantity.div_ceil(plan.boards()).max(moq);
+    let boards_ordered = arrays * plan.boards();
+    SheetOrder {
+        arrays,
+        boards_ordered,
+        surplus: boards_ordered - quantity,
+        ordered_area_mm2: arrays as f64 * plan.area_mm2(),
+    }
+}
+
+/// The plan whose order uses the least array area; a tie goes to the smaller
+/// sheet, so a larger sheet wins only by packing better. Plans must be in
+/// ascending sheet size.
+pub fn recommend_sheet(
+    plans: &[AutoBoardArrayPlan],
+    quantity: u32,
+    moq: u32,
+) -> Option<AutoBoardArrayPlan> {
+    plans.iter().copied().fold(None, |best, plan| match best {
+        Some(best)
+            if sheet_order(&best, quantity, moq).ordered_area_mm2
+                <= sheet_order(&plan, quantity, moq).ordered_area_mm2 =>
+        {
+            Some(best)
+        }
+        _ => Some(plan),
+    })
 }
 
 pub fn auto_board_array_plan_for_sheet(
@@ -184,8 +237,8 @@ fn plan_for_target(
     let cell_height = board_height_mm + board_margin_mm.bottom + board_margin_mm.top;
     let usable_width = target.width - 2.0 * AUTO_MIN_EDGE_RAIL_MM;
     let usable_height = target.height - 2.0 * AUTO_MIN_EDGE_RAIL_MM;
-    let columns = axis_count(usable_width, cell_width)?;
-    let rows = axis_count(usable_height, cell_height)?;
+    let (columns, columns_limited) = axis_count(usable_width, cell_width)?;
+    let (rows, rows_limited) = axis_count(usable_height, cell_height)?;
     let rail_x = (target.width - columns as f64 * cell_width) / 2.0;
     let rail_y = (target.height - rows as f64 * cell_height) / 2.0;
 
@@ -201,16 +254,19 @@ fn plan_for_target(
             bottom: rail_y,
             left: rail_x,
         },
+        grid_limited: columns_limited || rows_limited,
     })
 }
 
-fn axis_count(usable_span: f64, cell_span: f64) -> Option<u32> {
+/// How many cells fit along an axis, and whether the grid limit cut it.
+fn axis_count(usable_span: f64, cell_span: f64) -> Option<(u32, bool)> {
     if usable_span < 0.0 || cell_span <= 0.0 {
         return None;
     }
 
-    let count = ((usable_span / cell_span).floor() as u32).min(AUTO_MAX_GRID_COUNT);
-    (count >= 1).then_some(count)
+    let fit = (usable_span / cell_span).floor() as u32;
+    let count = fit.min(AUTO_MAX_GRID_COUNT);
+    (count >= 1).then_some((count, fit > count))
 }
 
 /// Rank plans by board count, then by more balanced edge rails, then by
@@ -280,6 +336,8 @@ mod tests {
     fn a_requested_sheet_is_filled_up_to_the_grid_limit() {
         let plan = auto_board_array_plan_for_sheet(20.0, 10.0, MARGIN, A5).unwrap();
         assert_eq!((plan.sheet, plan.columns, plan.rows), (A5, 4, 10));
+        // Ten rows fill the sheet exactly: the limit cut nothing.
+        assert!(!plan.grid_limited);
         assert_eq!((plan.target.width, plan.target.height), (148.0, 210.0));
         assert_fills_target((20.0, 10.0), &plan);
 
@@ -288,7 +346,42 @@ mod tests {
             (plan.columns, plan.rows),
             (AUTO_MAX_GRID_COUNT, AUTO_MAX_GRID_COUNT)
         );
+        assert!(plan.grid_limited);
         assert_fills_target((1.0, 1.0), &plan);
+    }
+
+    #[test]
+    fn recommends_the_sheet_that_orders_the_least_array_area() {
+        // 50 x 40 mm cells: A7 holds 2, A6 4, A5 12, A4 28. A7 and A6 pack
+        // equally well, so A6 never wins.
+        let plans: Vec<_> = AUTO_SHEETS
+            .into_iter()
+            .map(|sheet| auto_board_array_plan_for_sheet(40.0, 30.0, MARGIN, sheet).unwrap())
+            .collect();
+        assert_eq!(
+            plans.iter().map(|p| p.boards()).collect::<Vec<_>>(),
+            [2, 4, 12, 28]
+        );
+
+        for (quantity, moq, sheet) in [
+            // The minimum order fills more than enough small arrays.
+            (5, 5, A7),
+            (4, 1, A7),
+            (50, 5, A5),
+            (500, 1, A4),
+        ] {
+            let pick = recommend_sheet(&plans, quantity, moq).unwrap();
+            assert_eq!(pick.sheet, sheet, "quantity {quantity}, moq {moq}");
+        }
+
+        let order = sheet_order(&plans[2], 50, 5);
+        assert_eq!(
+            (order.arrays, order.boards_ordered, order.surplus),
+            (5, 60, 10)
+        );
+        assert_eq!(order.ordered_area_mm2, 5.0 * 148.0 * 210.0);
+        assert_eq!(sheet_order(&plans[0], 5, 5).arrays, 5);
+        assert!(recommend_sheet(&[], 5, 1).is_none());
     }
 
     #[test]
