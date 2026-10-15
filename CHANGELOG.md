@@ -17,6 +17,12 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 - `pcb-ir` erodes curved regions about 400 times faster: a 112-vertex rounded pad erodes in about 50 µs instead of 20–30 ms. Disk dilation at fine accuracy budgets, such as 0.5 mm at 0.25 µm, no longer fails the budget.
 
+### Fixed
+
+- STEP and GLB solder mask no longer bulges past a board edge whose corners happen to lie on one circle, such as a chamfered top: straight runs are refitted as arcs only when their chords stay within 0.02 mm of the arc.
+- Custom pads keep the holes their primitives enclose, so an outlined logo is no longer filled solid in copper, mask and paste, and their `gr_curve` primitives are drawn.
+- Curves drawn on silkscreen, mask, paste and copper layers are stroked open, without a stroke joining their ends.
+
 ## [0.4.82] - 2026-10-14
 
 ### Added

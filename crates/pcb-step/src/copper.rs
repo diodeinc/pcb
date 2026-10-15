@@ -18,9 +18,10 @@ use pcb_ir::geom::{
 use rayon::prelude::*;
 
 use crate::board::{
-    Board, Fill, Pad, PadKind, PadShape, Physical, Primitive, Track, Unconnected, Via,
+    BEZIER_SEGMENTS, Board, Fill, Pad, PadKind, PadShape, Physical, Primitive, Track, Unconnected,
+    Via,
 };
-use crate::geom::{KICAD_MAX_ERROR, Vec2, ccw_sweep, circle_center, rotate_kicad};
+use crate::geom::{KICAD_MAX_ERROR, Vec2, bezier_point, ccw_sweep, circle_center, rotate_kicad};
 use crate::outline::{Edge, Frame, Loop, Solid, crosses, orient};
 use crate::rings::{IndexedRing, loops_of, polygons_of};
 
@@ -307,7 +308,8 @@ fn pad_pieces(
     };
     let reach = pad.size.x.max(pad.size.y) * 0.5;
     let hole = drill.map(|(a, b, r)| Loop::stadium(a, b, r));
-    let outline_loop = Loop::new(outline.clone());
+    let outline_loop = Loop::new(outline.outer.clone());
+    let pad_holes: Vec<Loop> = outline.holes.iter().cloned().map(Loop::new).collect();
     let hole_inside = hole.as_ref().is_some_and(|h| h.inside(&outline_loop));
 
     // Only plated through holes leave unconnected layers bare.
@@ -361,6 +363,7 @@ fn pad_pieces(
         if !others.is_empty() {
             let mut all: Vec<&Loop> = others.iter().collect();
             all.extend(hole.iter());
+            all.extend(&pad_holes);
             match subtract(&outline_loop, &all) {
                 Some(solids) => {
                     solids.into_iter().for_each(&mut push);
@@ -375,26 +378,28 @@ fn pad_pieces(
         let solid = match (&hole, hole_inside) {
             (Some(h), true) => Solid {
                 outer: outline_loop.clone(),
-                holes: vec![h.clone()],
+                holes: pad_holes.iter().chain([h]).cloned().collect(),
                 round: Vec::new(),
             },
             (Some(h), false) => {
                 // The drill crosses the pad edge: cut it in 2D.
-                match subtract(&outline_loop, &[h]) {
+                let mut all: Vec<&Loop> = pad_holes.iter().collect();
+                all.push(h);
+                match subtract(&outline_loop, &all) {
                     Some(solids) => {
                         solids.into_iter().for_each(&mut push);
                         continue;
                     }
                     None => Solid {
                         outer: outline_loop.clone(),
-                        holes: Vec::new(),
+                        holes: pad_holes.clone(),
                         round: Vec::new(),
                     },
                 }
             }
             (None, _) => Solid {
                 outer: outline_loop.clone(),
-                holes: Vec::new(),
+                holes: pad_holes.clone(),
                 round: Vec::new(),
             },
         };
@@ -424,16 +429,15 @@ const CUTTER_GROWTH: f64 = 0.0005;
 /// outline grown by a hair. Zone fills run exactly along pad edges, and a
 /// boolean between coincident edges can leave a zero-width seam in its
 /// output; the growth keeps the two apart.
-fn pad_cutter(outline: &[Edge]) -> Vec<ContourBuf> {
-    let exact = contour(outline);
+fn pad_cutter(outline: &PadOutline) -> Vec<ContourBuf> {
+    let exact = outline.contours();
     let resolution = resolution();
-    let grown =
-        ContourSet::from_contours(std::slice::from_ref(&exact), FillRule::NonZero, resolution)
-            .and_then(|set| set.disk_dilate(CUTTER_GROWTH))
-            .map(|set| set.to_contours());
+    let grown = ContourSet::from_contours(&exact, FillRule::NonZero, resolution)
+        .and_then(|set| set.disk_dilate(CUTTER_GROWTH))
+        .map(|set| set.to_contours());
     match grown {
         Ok(contours) if !contours.is_empty() => contours,
-        _ => vec![exact],
+        _ => exact,
     }
 }
 
@@ -473,14 +477,30 @@ fn pad_point(pad: &Pad, frame: Frame, local: Vec2) -> Vec2 {
     frame.point(pad.at + rotate_kicad(local + pad.offset, pad.rotation))
 }
 
-/// The pad's copper outline as counter-clockwise STEP edges. Standard
-/// shapes stay exact; custom pads are unioned from their primitives.
+/// A pad's copper in STEP edges: its outline counter-clockwise and the
+/// holes its custom primitives enclose clockwise.
+pub(crate) struct PadOutline {
+    pub(crate) outer: Vec<Edge>,
+    pub(crate) holes: Vec<Vec<Edge>>,
+}
+
+impl PadOutline {
+    pub(crate) fn contours(&self) -> Vec<ContourBuf> {
+        std::iter::once(&self.outer)
+            .chain(&self.holes)
+            .map(|edges| contour(edges))
+            .collect()
+    }
+}
+
+/// The pad's copper. Standard shapes stay exact; custom pads are unioned
+/// from their primitives.
 pub(crate) fn pad_outline(
     board: &Board,
     frame: Frame,
     pad: &Pad,
     warnings: &mut Vec<String>,
-) -> Option<Vec<Edge>> {
+) -> Option<PadOutline> {
     let (w, h) = (pad.size.x, pad.size.y);
     if w <= 0.0 || h <= 0.0 {
         return None;
@@ -531,7 +551,10 @@ pub(crate) fn pad_outline(
             return custom_pad_outline(board, frame, pad, anchor_circle, warnings);
         }
     };
-    Some(orient(edges, true))
+    Some(PadOutline {
+        outer: orient(edges, true),
+        holes: Vec::new(),
+    })
 }
 
 /// The pad outline grown by `margin` (shrunk when negative) the way
@@ -693,7 +716,7 @@ fn custom_pad_outline(
     pad: &Pad,
     anchor_circle: bool,
     warnings: &mut Vec<String>,
-) -> Option<Vec<Edge>> {
+) -> Option<PadOutline> {
     let (w, h) = (pad.size.x, pad.size.y);
     let anchor = if anchor_circle {
         circle_edges(pad_point(pad, frame, Vec2::ZERO), w.min(h) * 0.5)
@@ -761,6 +784,14 @@ fn custom_pad_outline(
                     .collect();
                 push_polygon(&pts, width, filled, &mut contours);
             }
+            Primitive::Curve { control, width } => {
+                let mut a = local(control[0]);
+                for i in 1..=BEZIER_SEGMENTS {
+                    let b = local(bezier_point(control, i as f64 / BEZIER_SEGMENTS as f64));
+                    contours.extend(stroke_contour(a, a, b, width));
+                    a = b;
+                }
+            }
         }
     }
     let resolution = resolution();
@@ -784,7 +815,10 @@ fn custom_pad_outline(
         ));
     }
     loops.sort_by(|a, b| b.0.area().abs().total_cmp(&a.0.area().abs()));
-    loops.into_iter().next().map(|(outer, _)| outer.edges)
+    loops.into_iter().next().map(|(outer, holes)| PadOutline {
+        outer: outer.edges,
+        holes: holes.into_iter().map(|hole| hole.edges).collect(),
+    })
 }
 
 fn push_polygon(points: &[Vec2], width: f64, filled: bool, contours: &mut Vec<ContourBuf>) {

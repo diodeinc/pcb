@@ -386,7 +386,7 @@ fn synthesize(
     // with a pad is reported when its copper is made.
     for pad in &board.pads {
         let edges = crate::copper::pad_outline(board, frame, pad, &mut Vec::new());
-        points.extend(edges.iter().flatten().flat_map(|e| {
+        points.extend(edges.iter().flat_map(|o| &o.outer).flat_map(|e| {
             let (lo, hi) = e.bbox();
             corners(lo, hi)
         }));
