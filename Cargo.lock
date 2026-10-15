@@ -4132,7 +4132,6 @@ dependencies = [
  "tar",
  "tempfile",
  "termtree 1.0.0",
- "toml",
  "tracing",
  "url",
 ]

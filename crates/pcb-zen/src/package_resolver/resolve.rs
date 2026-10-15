@@ -338,6 +338,17 @@ impl<'a> FrozenResolutionBuilder<'a> {
                     package_root.display()
                 )
             })?;
+            // Sync trusts each dependency's recorded tree; a tree that pins a
+            // lane below what a deeper manifest requests must not build.
+            if selected_version < requested_version {
+                bail!(
+                    "Resolved closure selects {}@{}, below {} required by {}",
+                    dep_id.path,
+                    selected_version,
+                    requested_version,
+                    package_root.display()
+                );
+            }
             let dep_root = self.remote_package_root(&dep_id.path, &selected_version)?;
             resolved.insert(dep_url.clone(), dep_root);
             queue.push_back(PackageNode::Remote {

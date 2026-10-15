@@ -16,6 +16,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ### Changed
 
 - `pcb-ir` erodes curved regions about 400 times faster: a 112-vertex rounded pad erodes in about 50 µs instead of 20–30 ms. Disk dilation at fine accuracy budgets, such as 0.5 mm at 0.25 µm, no longer fails the budget.
+- `pcb sync` reads only direct dependencies' manifests and trusts each to record its complete tree.
 
 ## [0.4.82] - 2026-10-14
 
