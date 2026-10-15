@@ -10,8 +10,8 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Added
 
-- PDK profiles can bound outer and inner copper weight, finished board thickness, surface finish, and soldermask colour in `profile.support`. New `rules.stackup` (board thickness, copper weight per layer position) and `rules.board` (surface finish, soldermask colour, board size) categories check the same properties against the fab's options.
-- `pcb dfm --pdk jlc` and custom PDKs with several profiles select the profile the design qualifies for, report why earlier profiles do not fit, and fail when no profile fits. The JLCPCB kit adds a `two-ounce` profile with JLCPCB's 2 oz track, spacing, annular-ring, and soldermask limits, and checks JLCPCB's thicknesses, copper weights, finishes, soldermask colours, and board sizes.
+- DFM PDKs can check copper weight, board thickness, surface finish, soldermask colour, and board size.
+- `pcb dfm --pdk jlc` selects the JLCPCB profile that fits the board's copper weight, including a new 2 oz profile.
 
 ## [0.4.85] - 2026-10-15
 
