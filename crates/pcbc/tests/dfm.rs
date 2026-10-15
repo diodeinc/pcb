@@ -25,6 +25,16 @@ where
         .expect("pcbc command should execute")
 }
 
+/// Draw a board outline around everything `pcb layout` placed, which draws
+/// none; DFM fails a layout without one.
+fn add_outline(sandbox: &Sandbox, board: &str) {
+    let path = sandbox.default_cwd().join(board);
+    let layout = std::fs::read_to_string(&path).unwrap();
+    let body = layout.trim_end().strip_suffix(')').unwrap();
+    let outline = r#"(gr_rect (start -500 -500) (end 500 500) (stroke (width 0.1) (type default)) (fill no) (layer "Edge.Cuts"))"#;
+    std::fs::write(path, format!("{body}\t{outline}\n)\n")).unwrap();
+}
+
 const PCB_TOML: &str = include_str!("../../pcb-layout/tests/resources/simple/pcb.toml");
 const BOARD_ZEN: &str = include_str!("../../pcb-layout/tests/resources/simple/MyBoard.zen");
 const MODULE_ZEN: &str = include_str!("../../pcb-layout/tests/resources/simple/BMI270.zen");
@@ -121,6 +131,7 @@ fn dfm_with_workspace_root_layout_preserves_sources_and_writes_relative_report()
         "{}",
         String::from_utf8_lossy(&layout.stderr)
     );
+    add_outline(&sandbox, "MyBoard.kicad_pcb");
     let pcb_before = std::fs::read(sandbox.default_cwd().join("MyBoard.kicad_pcb")).unwrap();
     let source_before = std::fs::read(sandbox.default_cwd().join("MyBoard.zen")).unwrap();
 
@@ -160,6 +171,7 @@ fn dfm_checks_kicad_board_and_project_without_a_workspace() {
 
     let layout = run_pcbc(&mut sandbox, ["layout", "MyBoard.zen", "--no-open"]);
     assert!(layout.status.success());
+    add_outline(&sandbox, "build/MyBoard.kicad_pcb");
     let layout_before = std::fs::read(sandbox.default_cwd().join("build/MyBoard.kicad_pcb"))
         .expect("layout command creates the board");
     let project_before =

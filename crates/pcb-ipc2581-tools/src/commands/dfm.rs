@@ -110,11 +110,12 @@ fn check_with_scene(
         None => select_profile(&pdk, imported, scope, resolution)
             .with_context(|| format!("failed to select a profile of PDK {pdk_path}"))?,
     };
-    let rules = rules::lower(&pdk, Some(&selection.profile))
+    let mut rules = rules::lower(&pdk, Some(&selection.profile))
         .with_context(|| format!("failed to lower PDK {pdk_path}"))?;
     if rules.is_empty() {
         bail!("PDK {pdk_path} configures no DFM rules; add at least one capability");
     }
+    rules.push(rules::board_outline());
     let designs = design::Design::frames(imported, scope, &rules, resolution)?;
     let checked = checks::run(&rules, &designs)?;
     let summary = summarize(&checked);
@@ -174,8 +175,8 @@ fn check_with_scene(
 /// the rest in name order. A kit of one profile always runs it, so its
 /// support rules report what the design lacks. When the design cannot be
 /// qualified for a profile considered before one it meets, because what the
-/// support reads is missing, the default runs and its support rules report
-/// the gap; when it meets none, no profile fits and the check cannot run.
+/// support reads is missing, or when it meets none, the default runs and its
+/// support rules report what the design lacks.
 fn select_profile(
     pdk: &pdk::Pdk,
     imported: &ImportedDesign,
@@ -221,15 +222,11 @@ fn select_profile(
                 .collect(),
         });
     }
-    let reasons = rejected
-        .iter()
-        .map(|profile| format!("{}: {}", profile.profile, profile.reasons.join("; ")))
-        .collect::<Vec<_>>();
-    bail!(
-        "no profile of PDK '{}' fits this design ({})",
-        pdk.pdk.id,
-        reasons.join(" | ")
-    )
+    rejected.retain(|profile| profile.profile != pdk.default_profile);
+    Ok(report::ProfileSelection::automatic(
+        &pdk.default_profile,
+        rejected,
+    ))
 }
 
 #[cfg(feature = "cli")]
@@ -1253,14 +1250,16 @@ limit = { minimum = "300 mil" }
         assert!(matches!(support.status, report::RuleStatus::Fail));
         assert_eq!(support.checked, 2);
 
-        let error = check_builtin(&weighted_board("0.105"), "jlc").unwrap_err();
-        let message = format!("{error:#}");
-        assert!(
-            message.contains("no profile of PDK 'jlcpcb-rigid-fr4' fits")
-                && message.contains("one-ounce:")
-                && message.contains("two-ounce:"),
-            "{message}"
-        );
+        // 3 oz fits no profile, so the default runs and its support fails.
+        let unfit = check_builtin(&weighted_board("0.105"), "jlc").unwrap();
+        assert_eq!(unfit.pdk.profile, "one-ounce");
+        let [rejected] = unfit.pdk.profile_selection.rejected.as_slice() else {
+            panic!("two-ounce is rejected besides the default");
+        };
+        assert_eq!(rejected.profile, "two-ounce");
+        let support = rule(&unfit, "profile.support.outer_copper_weight");
+        assert!(matches!(support.status, report::RuleStatus::Fail));
+        assert!(matches!(unfit.verdict, report::Verdict::Fail));
     }
 
     #[test]
@@ -1334,7 +1333,13 @@ limit = { minimum = ["10 mm", "5 mm"], maximum = ["40 mm", "25 mm"] }"#,
         // IPC S does not say which of the two lead contents it is.
         assert_eq!(status(&specified("S", "green"), "finish"), "Incomplete");
         assert_eq!(status(&specified("S", "green"), "color"), "Pass");
-        let report = check_with_pdk(&specified("OSP", "Black"), LayoutTarget::Board, &pdk);
+        let rgb_only = specified("S", "green").replace(
+            r#"<Property text="Color : green"/>"#,
+            r#"<Color r="0" g="0" b="0"/>"#,
+        );
+        assert_eq!(status(&rgb_only, "color"), "Fail");
+        // KiCad writes a custom colour as hex; it is named for the nearest.
+        let report = check_with_pdk(&specified("OSP", "#191919e6"), LayoutTarget::Board, &pdk);
         let messages = report
             .findings
             .iter()
@@ -1350,6 +1355,16 @@ limit = { minimum = ["10 mm", "5 mm"], maximum = ["40 mm", "25 mm"] }"#,
         assert_eq!(status(BOARD, "size"), "Fail");
         let square = |side: &str| BOARD.replace("\"30\"", &format!("\"{side}\""));
         assert_eq!(status(&square("20"), "size"), "Pass");
+        // A layout without an outline fails the baseline outline check
+        // once; size has nothing to measure.
+        let (start, end) = (
+            BOARD.find("<Profile>").unwrap(),
+            BOARD.find("</Profile>").unwrap(),
+        );
+        let unoutlined = BOARD.replace(&BOARD[start..end + "</Profile>".len()], "");
+        assert_eq!(status(BOARD, "board.outline"), "Pass");
+        assert_eq!(status(&unoutlined, "board.outline"), "Fail");
+        assert_eq!(status(&unoutlined, "size"), "NotApplicable");
     }
 
     #[test]
@@ -1488,6 +1503,7 @@ limit = {{ minimum = \"0.5 mm\" }}
       </Set></LayerFeature>
     </Step>
     <Step name="panel" type="PALLET"><Datum x="0" y="0"/>
+      <Profile><Polygon><PolyBegin x="0" y="0"/><PolyStepSegment x="45" y="0"/><PolyStepSegment x="45" y="20"/><PolyStepSegment x="0" y="20"/><PolyStepSegment x="0" y="0"/></Polygon></Profile>
       <StepRepeat stepRef="cell" x="5" y="5" nx="3" ny="1" dx="12" dy="0" angle="0" mirror="false"/>
       <LayerFeature layerRef="DRILL"><Set polarity="POSITIVE">
         <Hole name="tooling" diameter="1" platingStatus="NONPLATED" x="39.6" y="12"/>

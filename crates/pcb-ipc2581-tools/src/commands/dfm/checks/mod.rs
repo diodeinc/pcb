@@ -554,7 +554,8 @@ fn missing_subjects(kind: RuleKind, design: &Design) -> Option<String> {
         | RuleKind::BoardThickness
         | RuleKind::SurfaceFinish
         | RuleKind::SoldermaskColor
-        | RuleKind::BoardSize => {
+        | RuleKind::BoardSize
+        | RuleKind::BoardOutline => {
             (design.placements[0] != LayoutOccurrenceId::Root).then(|| "stackup".to_owned())
         }
         RuleKind::BoardArrayPairClearance if design.scope != ArtworkScope::ArrayFlattened => {
@@ -710,6 +711,7 @@ fn evaluate(rule: &Rule, design: &Design) -> anyhow::Result<RuleEvaluation> {
         | RuleKind::SurfaceFinish
         | RuleKind::SoldermaskColor
         | RuleKind::BoardSize => RuleEvaluation::Property(board_property::evaluate(rule, design)),
+        RuleKind::BoardOutline => RuleEvaluation::Property(Ok(board_property::outline(design))),
     })
 }
 

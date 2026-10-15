@@ -31,6 +31,7 @@ pub use stackup::{
     ColorInfo, ImpedanceControlInfo, MaterialInfo, StackupDetails, StackupLayerInfo,
     StackupLayerType, SurfaceFinishCategory, SurfaceFinishInfo,
 };
+pub(crate) use stackup::{format_ounces, nominal_copper_weight, stated_copper_oz};
 
 /// Main accessor for IPC-2581 data extraction
 ///

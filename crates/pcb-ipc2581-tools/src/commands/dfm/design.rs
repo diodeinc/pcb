@@ -2254,15 +2254,10 @@ fn copper_weight_oz(imported: &ImportedDesign, layer: Symbol) -> Option<f64> {
         .iter()
         .flat_map(|stackup| &stackup.layers)
         .find(|candidate| candidate.layer_ref == layer)?;
-    stackup_layer
+    let spec = stackup_layer
         .spec_ref
-        .and_then(|spec| imported.specs.get(&spec))
-        .and_then(|spec| spec.copper_weight_oz)
-        .or_else(|| {
-            stackup_layer
-                .thickness
-                .map(|millimeters| millimeters / 0.0348)
-        })
+        .and_then(|spec| imported.specs.get(&spec));
+    crate::accessors::stated_copper_oz(spec, stackup_layer.thickness)
 }
 
 fn side_label(side: Side) -> Option<&'static str> {

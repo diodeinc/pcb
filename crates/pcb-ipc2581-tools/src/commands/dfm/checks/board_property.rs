@@ -5,7 +5,7 @@
 //! A property is categorical: it conforms or it does not, so each rule
 //! permits no nonconforming property and reports one finding per property
 //! that is not allowed. Copper weight compares standard weights, as weight
-//! conditions do ([`copper_weight_class`]). Thickness conforms when it lies
+//! conditions do ([`nominal_copper_weight`]). Thickness conforms when it lies
 //! within the tolerance of some nominal thickness. Size compares the
 //! layout's extents long side to long side. A stackup property the file does
 //! not state leaves the rule incomplete; it is never assumed allowed. A
@@ -14,10 +14,9 @@
 
 use ipc2581::types::LayerFunction;
 
+use crate::accessors::{ColorInfo, format_ounces, nominal_copper_weight};
 use crate::commands::dfm::design::Design;
-use crate::commands::dfm::pdk::{
-    CopperWeight, LayerPosition, SoldermaskColor, SurfaceFinish, copper_weight_class,
-};
+use crate::commands::dfm::pdk::{CopperWeight, LayerPosition, SoldermaskColor, SurfaceFinish};
 use crate::commands::dfm::report::{LayerRef, RuleStatus, Subject};
 use crate::commands::dfm::rules::{Allowed, Rule, RuleKind, position_label};
 use crate::layers;
@@ -95,9 +94,12 @@ pub(super) fn evaluate(rule: &Rule, design: &Design) -> Result<Evaluation, Unjud
             soldermask_color(allowed, &allowed_text, design)
         }
         (RuleKind::BoardSize, Allowed::Size(limit)) => {
-            let bounds = design.report_layout().bounding_box.ok_or_else(|| {
-                incomplete("the selected layout target has no board profile to measure")
-            })?;
+            // As for board-edge clearance: a layout without a profile, such
+            // as a module's, is not a board to size.
+            let bounds = design
+                .report_layout()
+                .bounding_box
+                .ok_or_else(|| unstated("the selected layout target has no board profile"))?;
             let (width, height) = (bounds.max.x - bounds.min.x, bounds.max.y - bounds.min.y);
             let extents = [width.max(height), width.min(height)];
             let below = limit.minimum().is_some_and(|minimum| {
@@ -163,17 +165,20 @@ fn copper_weight(
             }
         };
         evaluation.checked += 1;
-        let class = copper_weight_class(ounces);
-        if allowed
+        let nominal = nominal_copper_weight(ounces, position == LayerPosition::Outer);
+        if !allowed
             .iter()
-            .all(|weight| copper_weight_class(weight.ounces()) != class)
+            .any(|weight| Some(weight.ounces()) == nominal)
         {
+            let weight = match nominal {
+                Some(nominal) => format!("{} oz standard weight", format_ounces(nominal)),
+                None => "no standard weight".to_owned(),
+            };
             evaluation.nonconforming.push(Nonconforming {
                 message: format!(
-                    "{} copper layer '{}' is {ounces:.2} oz ({} oz standard weight); the PDK allows {allowed_text}",
+                    "{} copper layer '{}' is {ounces:.2} oz ({weight}); the PDK allows {allowed_text}",
                     position_label(position),
                     layer.name,
-                    format_ounces(class)
                 ),
                 layers: vec![layer.clone()],
                 subject: subject("copper_layer", layer.name.clone()),
@@ -183,9 +188,15 @@ fn copper_weight(
     Ok(evaluation)
 }
 
-fn format_ounces(ounces: f64) -> String {
-    let rounded = (ounces * 1000.0).round() / 1000.0;
-    format!("{rounded}")
+/// A layout without a profile has no board to fabricate.
+pub(super) fn outline(design: &Design) -> Evaluation {
+    let layout = design.report_layout();
+    let missing = layout.bounding_box.is_none().then(|| Nonconforming {
+        message: "the selected layout target has no board outline".to_owned(),
+        layers: Vec::new(),
+        subject: subject("board", layout.selected_step.unwrap_or_default()),
+    });
+    judged(1, missing)
 }
 
 /// The surface finish each coating layer's stackup spec states, judged once
@@ -269,8 +280,8 @@ fn layer_ref(
     }
 }
 
-/// The colour each soldermask layer's stackup spec gives it, by colour term
-/// or a `Color : <name>` property.
+/// The colour each soldermask layer's stackup spec gives it, by colour term,
+/// `Color : <name>` property, or RGB.
 fn soldermask_color(
     allowed: &[SoldermaskColor],
     allowed_text: &str,
@@ -298,30 +309,21 @@ fn soldermask_color(
             .iter()
             .find(|layer| layer.layer_ref == mask.name)
             .and_then(|layer| imported.specs.get(&layer.spec_ref?));
-        let color = spec.and_then(|spec| {
-            spec.color_term
-                .map(|term| imported.resolve(term))
-                .or_else(|| {
-                    spec.properties
-                        .iter()
-                        .filter_map(|text| imported.resolve(*text).strip_prefix("Color : "))
-                        .next()
-                })
-        });
-        // KiCad writes an unset colour as `Not specified`.
-        let Some(color) = color
-            .map(str::trim)
-            .filter(|color| !color.is_empty() && !color.eq_ignore_ascii_case("not specified"))
+        let Some(color) = spec
+            .and_then(|spec| {
+                ColorInfo::of_spec(spec, |symbol| imported.resolve(symbol)).color_name()
+            })
+            .map(|color| SoldermaskColor::new(&color))
         else {
             continue;
         };
         stated += 1;
-        if !allowed.contains(&SoldermaskColor::new(color)) {
+        if !allowed.contains(&color) {
             let layer = layer_ref(imported, mask);
             nonconforming.push(Nonconforming {
                 message: format!(
                     "soldermask layer '{name}' is {}; the PDK allows {allowed_text}",
-                    SoldermaskColor::new(color).name()
+                    color.name()
                 ),
                 layers: vec![layer],
                 subject: subject("soldermask_layer", name),

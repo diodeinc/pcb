@@ -182,7 +182,7 @@ limit = { minimum = "0.2 mm", preferred = "0.3 mm" }"#;
                 <StackupLayer layerOrGroupRef="L2" thickness="0.05" sequence="2"/>
               </StackupGroup>
             </Stackup>
-            <Step name="board" type="BOARD">{artwork}
+            <Step name="board" type="BOARD"><Profile><Polygon><PolyBegin x="-50" y="-50"/><PolyStepSegment x="50" y="-50"/><PolyStepSegment x="50" y="50"/><PolyStepSegment x="-50" y="50"/><PolyStepSegment x="-50" y="-50"/></Polygon></Profile>{artwork}
               <LayerFeature layerRef="ROUT"><Set>
                 <SlotCavity name="S" platingStatus="PLATED">{shape}</SlotCavity>
               </Set></LayerFeature>
