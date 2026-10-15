@@ -8,6 +8,8 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+## [0.4.84] - 2026-10-15
+
 ## [0.4.83] - 2026-10-15
 
 ### Added
@@ -2421,7 +2423,8 @@ Tvs(package="DO-214AA", direction="Unidirectional", reverse_standoff_voltage="24
 - Error on invalid type passed to `io()`
 - Format the auto-generated component .zen files
 
-[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.4.83...HEAD
+[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.4.84...HEAD
+[0.4.84]: https://github.com/diodeinc/pcb/compare/v0.4.83...v0.4.84
 [0.4.83]: https://github.com/diodeinc/pcb/compare/v0.4.82...v0.4.83
 [0.4.82]: https://github.com/diodeinc/pcb/compare/v0.4.81...v0.4.82
 [0.4.81]: https://github.com/diodeinc/pcb/compare/v0.4.80...v0.4.81
