@@ -8,6 +8,8 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+## [0.4.83] - 2026-10-15
+
 ### Added
 
 - `pcb-ir` `ContourSet::area_bounds` bounds the area of the source a region was prepared from, using its recorded uncertainty. Combined with the existing booleans, it bounds the paste area that a set of flattened disks covers or spills.
@@ -2412,7 +2414,8 @@ Tvs(package="DO-214AA", direction="Unidirectional", reverse_standoff_voltage="24
 - Error on invalid type passed to `io()`
 - Format the auto-generated component .zen files
 
-[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.4.82...HEAD
+[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.4.83...HEAD
+[0.4.83]: https://github.com/diodeinc/pcb/compare/v0.4.82...v0.4.83
 [0.4.82]: https://github.com/diodeinc/pcb/compare/v0.4.81...v0.4.82
 [0.4.81]: https://github.com/diodeinc/pcb/compare/v0.4.80...v0.4.81
 [0.4.80]: https://github.com/diodeinc/pcb/compare/v0.4.79...v0.4.80
