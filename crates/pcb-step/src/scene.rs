@@ -323,12 +323,11 @@ impl Scene {
                 .with_max_len(1)
                 .map(|(tech, islands)| {
                     let mut notes = Vec::new();
-                    let islands = if tech.silk() {
-                        islands
+                    let faces = if tech.silk() {
+                        islands.iter().map(faces::face).collect()
                     } else {
-                        faces::mask_coverage(&edge, tech.front(), islands, &mut notes)
+                        faces::mask_coverage(&solids, tech.front(), islands, &mut notes)
                     };
-                    let faces: Vec<Face> = islands.iter().map(faces::face).collect();
                     (tech, faces, notes)
                 })
                 .collect();

@@ -19,7 +19,7 @@ use crate::geom::{
     BoxGrid, KICAD_MAX_ERROR, Vec2, ccw_sweep, circle_center, point_in_polygon, rotate_kicad,
     signed_area,
 };
-use crate::outline::{Edge, Frame, Loop, Solid, flatten, orient};
+use crate::outline::{Edge, Frame, Loop, Solid, cut_profile, flatten, orient};
 use crate::outline_font::Fonts;
 use crate::rings::{IndexedRing, Nested, cleaned, fit, nest, nested_of, raw_islands, rings_of};
 
@@ -855,34 +855,28 @@ fn mask_openings(
     nest(union_rings(openings, &what, warnings))
 }
 
-/// The solder mask of one side: the board less its `openings`. Openings
-/// clear of the board edge are holes as they are; only those meeting it
-/// are taken out of the outline with a boolean.
+/// The solder mask of one side: the board less its `openings`. Restore
+/// the source curves after subtraction so authored straight board edges
+/// cannot become arcs, and small real arcs remain analytic.
 pub(crate) fn mask_coverage(
-    edge: &BoardEdge,
+    outline: &[Solid],
     front: bool,
     openings: Vec<Nested>,
     warnings: &mut Vec<String>,
-) -> Vec<Nested> {
+) -> Vec<Face> {
     let what = mask_what(front);
-    let Some(mut region) = edge.region(warnings) else {
-        return Vec::new();
-    };
-    let mut rings = Vec::new();
-    let mut at_edge = Vec::new();
-    for island in openings {
-        if edge.meets(ring_bbox(&island.outer)) {
-            at_edge.extend(island_contours(&island));
-        } else if edge.contains(island.outer[0]) {
-            rings.push(island.outer);
-            rings.extend(island.holes);
+    let openings: Vec<Face> = openings.iter().map(face).collect();
+    let mut faces = Vec::new();
+    for solid in outline {
+        match cut_profile(solid, openings.iter().map(|f| (&f.outer, &f.holes[..]))) {
+            Ok(profile) => faces.extend(profile.into_iter().map(|s| Face {
+                outer: s.outer,
+                holes: s.holes,
+            })),
+            Err(err) => warnings.push(format!("{what}: {err}")),
         }
     }
-    if !at_edge.is_empty() {
-        region = less(region, &at_edge, &what, warnings);
-    }
-    rings.extend(rings_of(&region.to_contours()));
-    nest(rings)
+    faces
 }
 
 /// Solder paste as KiCad's VRML export draws it, front side first: the
