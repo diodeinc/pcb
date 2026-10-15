@@ -535,7 +535,7 @@ synchronizing it first, and checks the canonical board. Use `pcb ipc dfm check`
 to inspect existing manufacturing files.
 
 `--pdk` defaults to `standard` and accepts an exact built-in name or a TOML
-path. `standard`, `jlc`, `jlcpcb-1oz`, `jlcpcb-2oz`, and `ipc-1a` through
+path. `standard`, `jlc`, `jlcpcb-1oz`, and `ipc-1a` through
 `ipc-3c` are bundled. `ipc` selects the opinionated Class 2 / Producibility Level B default.
 Use `./standard` to select a same-named file. Both sources use the same parser
 and checks. `--layout-target` accepts
@@ -550,7 +550,7 @@ make the assembly report incomplete, with one finding per affected component.
 
 The JLCPCB kit executes the public rigid FR-4 capability table for 2-32
 copper layers. It has two profiles, selected by finished outer copper weight:
-`one-ounce` (`jlcpcb-1oz`) and `two-ounce` (`jlcpcb-2oz`). `jlc` selects the
+`one-ounce` (also `jlcpcb-1oz`) and `two-ounce`. `jlc` selects the
 profile the design's stackup qualifies for, and fails when the outer copper
 is neither 1 oz nor 2 oz. Track width and spacing depend on each layer's own
 weight: 0.10 mm (2-layer) or 0.09 mm (multilayer) for 1 oz outer copper,

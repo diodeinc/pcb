@@ -72,8 +72,8 @@ pcb ipc dfm check fabrication-panel.xml --pdk standard --output panel.dfm
 
 `standard` currently supports 2 through 10 copper layers.
 `jlc` checks JLCPCB's rigid FR-4 service and selects its `one-ounce` or
-`two-ounce` profile from the design's outer copper weight; `jlcpcb-1oz` and
-`jlcpcb-2oz` name one profile. Both check copper weight, board thickness,
+`two-ounce` profile from the design's outer copper weight; `jlcpcb-1oz` always
+runs `one-ounce`. Both profiles check copper weight, board thickness,
 surface finish, soldermask colour, and board size against JLCPCB's options, and
 track width and spacing against each layer's copper weight. They prefer a
 0.10 mm (1 oz) or 0.20 mm (2 oz) soldermask web; shortfalls warn rather than
