@@ -335,11 +335,11 @@ impl ContourSet {
     }
 
     /// Facing-wall axes throughout the filled material, without constructing
-    /// an opening residue. `minimum_mm` must match the downstream radius clip.
+    /// an opening residue. `limit_mm` must match the downstream radius clip.
     /// A limit-free minimum-width query uses the whole region as its candidate.
     pub(crate) fn material_width_components(
         &self,
-        minimum_mm: f64,
+        limit_mm: f64,
     ) -> Result<Vec<TwoSidedResidualComponent>, AccuracyError> {
         if self.is_empty() {
             return Ok(Vec::new());
@@ -348,8 +348,8 @@ impl ContourSet {
         Ok(two_sided_residual_components(
             self,
             self,
-            minimum_mm / 2.0,
-            minimum_mm,
+            limit_mm / 2.0,
+            limit_mm,
         ))
     }
 

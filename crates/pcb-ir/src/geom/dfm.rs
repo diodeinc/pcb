@@ -765,12 +765,12 @@ pub fn min_width_disk(region: &ContourSet) -> Result<Option<WidthDisk>, Accuracy
     // No inscribed disk can be wider than the smaller bounding-box span.
     // Leave room for both boundary uncertainties and the preparation budget
     // so every measurable disk survives the strict radius clip.
-    let maximum_width = region.bbox.width().min(region.bbox.height())
+    let limit_mm = region.bbox.width().min(region.bbox.height())
         + 2.0 * (region.uncertainty_mm + region.budget().max_error_mm());
-    let components = region.material_width_components(maximum_width)?;
+    let components = region.material_width_components(limit_mm)?;
     Ok(components
         .iter()
-        .flat_map(|component| measured_axes(component, maximum_width))
+        .flat_map(|component| measured_axes(component, limit_mm))
         .map(|(_, disk)| disk)
         .min_by(|left, right| left.width.mm.total_cmp(&right.width.mm)))
 }
@@ -779,23 +779,20 @@ fn bits(point: Point) -> [u64; 2] {
     [point.x.to_bits(), point.y.to_bits()]
 }
 
-/// Clip validated axes to measurable radii and measure their minimum disks.
+/// Clip validated axes to radii measurably below `limit_mm` wide and
+/// measure their minimum disks.
 fn measured_axes(
     component: &TwoSidedResidualComponent,
-    minimum_mm: f64,
+    limit_mm: f64,
 ) -> impl Iterator<Item = (WidthAxis, WidthDisk)> + '_ {
     let minimum_radius = component.boundary_uncertainty_mm.next_up();
-    let maximum_radius = ((minimum_mm - 2.0 * component.boundary_uncertainty_mm) / 2.0).next_down();
+    let maximum_radius = ((limit_mm - 2.0 * component.boundary_uncertainty_mm) / 2.0).next_down();
+    let measurable = minimum_radius <= maximum_radius;
     component
         .axis
         .iter()
-        .flat_map(move |axis| {
-            if maximum_radius < minimum_radius {
-                Vec::new()
-            } else {
-                axis.clipped_radius(minimum_radius, maximum_radius)
-            }
-        })
+        .filter(move |_| measurable)
+        .flat_map(move |axis| axis.clipped_radius(minimum_radius, maximum_radius))
         .map(move |axis| {
             let (center, radius_mm, first, second) = axis.minimum();
             let width = Distance::with_uncertainty(

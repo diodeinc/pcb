@@ -42,7 +42,7 @@ pub(super) fn overlay(
     rule: OverlayRule,
     fill_rule: OverlayFillRule,
 ) -> Vec<Shape> {
-    let [shapes] = split_overlay(subject, clip, |mut overlay| {
+    let [shapes] = overlay_on_lattice(subject, clip, true, |mut overlay| {
         [overlay.overlay(rule, fill_rule)]
     });
     shapes
@@ -57,7 +57,7 @@ pub(super) fn overlay_rules<const N: usize>(
     rules: [OverlayRule; N],
     fill_rule: OverlayFillRule,
 ) -> [Vec<Shape>; N] {
-    split_overlay(subject, clip, |mut overlay| {
+    overlay_on_lattice(subject, clip, true, |mut overlay| {
         let mut buffer = BooleanExtractionBuffer::default();
         match overlay.build_graph_view(fill_rule) {
             Some(graph) => rules.map(|rule| graph.extract_shapes(rule, &mut buffer)),
@@ -66,58 +66,43 @@ pub(super) fn overlay_rules<const N: usize>(
     })
 }
 
-/// Overlay operands on their shared lattice, every edge split at the
-/// vertices lying on it.
-fn split_overlay<const N: usize>(
-    subject: &[Ring],
-    clip: &[Ring],
-    extract: impl FnOnce(Overlay<i64>) -> [IntShapes<i64>; N],
-) -> [Vec<Shape>; N] {
-    let bbox = rings_bbox(subject).union(rings_bbox(clip));
-    let vertices = VertexColumns::new(&[subject, clip], bbox);
-    overlay_on_lattice(
-        subject,
-        clip,
-        bbox,
-        |ring, emit| vertices.split(ring, emit),
-        extract,
-    )
-}
-
 /// The region a constructed curve winds positively around, on the lattice
 /// booleans use. Its edges are not split at vertices lying on them: that
 /// cancels seams where source fills were cut along each other, and a curve
 /// built from regularized rings has none.
 pub(super) fn positive_winding(rings: &[Ring]) -> Vec<Ring> {
-    let [shapes] = overlay_on_lattice(
-        rings,
-        &[],
-        rings_bbox(rings),
-        |ring, emit| ring.iter().copied().for_each(emit),
-        |mut overlay| [overlay.overlay(OverlayRule::Subject, OverlayFillRule::Positive)],
-    );
+    let [shapes] = overlay_on_lattice(rings, &[], false, |mut overlay| {
+        [overlay.overlay(OverlayRule::Subject, OverlayFillRule::Positive)]
+    });
     flatten_shapes(shapes)
 }
 
+/// Overlay operands on their shared lattice. With `split`, every edge is
+/// first split at the vertices lying on it.
 fn overlay_on_lattice<const N: usize>(
     subject: &[Ring],
     clip: &[Ring],
-    bbox: BBox,
-    vertices: impl Fn(&[[f64; 2]], &mut dyn FnMut([f64; 2])),
+    split: bool,
     extract: impl FnOnce(Overlay<i64>) -> [IntShapes<i64>; N],
 ) -> [Vec<Shape>; N] {
+    let bbox = rings_bbox(subject).union(rings_bbox(clip));
+    let vertices = split.then(|| VertexColumns::new(&[subject, clip], bbox));
     let scale = lattice_per_mm(bbox);
     let lattice = |rings: &[Ring]| {
         rings
             .iter()
             .map(|ring| {
                 let mut lattice = Vec::with_capacity(ring.len());
-                vertices(ring, &mut |[x, y]| {
+                let mut emit = |[x, y]: [f64; 2]| {
                     lattice.push(IntPoint::new(
                         (x * scale).round() as i64,
                         (y * scale).round() as i64,
                     ));
-                });
+                };
+                match &vertices {
+                    Some(vertices) => vertices.split(ring, &mut emit),
+                    None => ring.iter().copied().for_each(&mut emit),
+                }
                 lattice
             })
             .collect::<Vec<_>>()

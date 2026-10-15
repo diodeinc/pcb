@@ -268,8 +268,11 @@ impl ContourSet {
     /// Every point of the boundary lies within `uncertainty_mm` of the
     /// source boundary, so the two regions differ only within a band that
     /// wide around the edges: each edge's stadium, plus the shoelace sum's
-    /// own rounding per vertex. A source feature thinner than the overlay
-    /// lattice that a boolean erased has no edge left to charge.
+    /// own rounding per vertex.
+    ///
+    /// The bounds exclude a source feature thinner than the overlay lattice
+    /// that a boolean erased: it has no edge left to charge, so its area,
+    /// at most the lattice step times its length, can lie outside them.
     pub fn area_bounds(&self) -> AreaBounds {
         let delta = self.uncertainty_mm;
         let band = self
