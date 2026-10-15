@@ -55,7 +55,7 @@ impl PanelCreation {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize)]
 pub struct EdgeInsetsMm {
     pub top: f64,
     pub right: f64,

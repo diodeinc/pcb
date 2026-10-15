@@ -21,6 +21,33 @@ use pcb_ir::{
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
+/// The board's material: every board outline less its cutouts. Empty when
+/// the board has no Profile.
+pub(super) fn board_substrate(
+    imported: &ImportedDesign,
+    resolution: Resolution,
+) -> Result<ContourSet> {
+    let doc = &imported.geometry;
+    let mut substrate = ContourSet::empty(resolution);
+    for occurrence in profile_occurrences_for(doc, ProfileSet::BoardOutlines) {
+        let mut region = ContourSet::from_contours(
+            &doc.transformed_path_contours(occurrence.profile.outer_path, occurrence.transform),
+            FillRule::EvenOdd,
+            resolution,
+        )?;
+        for cutout in occurrence.profile.cutouts.slice(&doc.profile_cutouts) {
+            let hole = ContourSet::from_contours(
+                &doc.transformed_path_contours(cutout.path, occurrence.transform),
+                FillRule::EvenOdd,
+                resolution,
+            )?;
+            region = region.difference(&hole)?;
+        }
+        substrate = substrate.union(&region)?;
+    }
+    Ok(substrate)
+}
+
 pub(super) struct Evidence {
     pub id: String,
     pub region: ContourSet,
@@ -92,23 +119,7 @@ pub(super) fn prepare(
              outline and export again"
         );
     }
-    let mut substrate = ContourSet::empty(resolution);
-    for occurrence in profiles {
-        let mut region = ContourSet::from_contours(
-            &doc.transformed_path_contours(occurrence.profile.outer_path, occurrence.transform),
-            FillRule::EvenOdd,
-            resolution,
-        )?;
-        for cutout in occurrence.profile.cutouts.slice(&doc.profile_cutouts) {
-            let hole = ContourSet::from_contours(
-                &doc.transformed_path_contours(cutout.path, occurrence.transform),
-                FillRule::EvenOdd,
-                resolution,
-            )?;
-            region = region.difference(&hole)?;
-        }
-        substrate = substrate.union(&region)?;
-    }
+    let substrate = board_substrate(&imported, resolution)?;
     let (mut evidence, ignored_footprints) = courtyard_evidence(&imported, resolution)?;
     evidence.extend(edge_plating_evidence(
         &imported,

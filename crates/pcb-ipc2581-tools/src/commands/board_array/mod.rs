@@ -6,6 +6,7 @@ use std::path::Path;
 pub mod eligibility;
 pub mod mouse_bite;
 pub mod placement;
+pub mod plan;
 
 use super::PanelCreation;
 use super::board_array_auto::{
@@ -33,6 +34,7 @@ use ipc2581::types::{
 use pcb_ir::{
     dialects::ipc::{LayoutStepKind, root_step},
     geom::{BBox, Point},
+    import::ipc2581::{ImportedDesign, import_design},
 };
 
 const EPSILON: f64 = 1e-9;
@@ -307,7 +309,8 @@ fn auto_board_array_options(
     sheet: Option<AutoSheetSize>,
     resolution: Resolution,
 ) -> Result<(BoardArrayCreateOptions, BoardArrayPanelizationMetadata)> {
-    let board_margin = auto_board_margin(ipc, board.bbox, resolution)?;
+    let imported = import_design(ipc, resolution)?;
+    let board_margin = auto_board_margin(ipc, &imported, board.bbox)?;
     let board_width = board.bbox.width();
     let board_height = board.bbox.height();
 
@@ -385,10 +388,10 @@ fn narrowest_rail_mm(options: &BoardArrayCreateOptions, routing_gap_mm: f64) -> 
 
 fn auto_board_margin(
     ipc: &Ipc2581,
+    imported: &ImportedDesign,
     board_bbox: BBox,
-    resolution: Resolution,
 ) -> Result<BoardMarginMm> {
-    let safe_bbox = board_bbox.union(board_courtyard_bbox(ipc, resolution)?);
+    let safe_bbox = board_bbox.union(board_courtyard_bbox(ipc, imported)?);
     Ok(BoardMarginMm {
         top: (safe_bbox.max.y - board_bbox.max.y).max(0.0) + MIN_BOARD_CELL_FIDUCIAL_MARGIN_MM,
         right: (safe_bbox.max.x - board_bbox.max.x).max(0.0) + MIN_BOARD_CELL_FIDUCIAL_MARGIN_MM,
@@ -397,10 +400,8 @@ fn auto_board_margin(
     })
 }
 
-fn board_courtyard_bbox(ipc: &Ipc2581, resolution: Resolution) -> Result<BBox> {
+fn board_courtyard_bbox(ipc: &Ipc2581, imported: &ImportedDesign) -> Result<BBox> {
     let ecad = ipc.ecad().context("IPC-2581 file has no ECAD section")?;
-    // One import serves every courtyard layer.
-    let imported = pcb_ir::import::ipc2581::import_design(ipc, resolution)?;
     let mut bbox = BBox::empty();
 
     for layer in ecad
