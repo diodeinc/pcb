@@ -37,7 +37,7 @@ CREATE TABLE rules (
     finding_title TEXT NOT NULL, severity TEXT NOT NULL, tier TEXT NOT NULL,
     status TEXT NOT NULL, -- pass, warning, fail, not_applicable or incomplete
     comparison TEXT NOT NULL, -- minimum or maximum
-    limit_value REAL NOT NULL, -- in limit_unit: mm, layers, diagnostics or ratio
+    limit_value REAL NOT NULL, -- in limit_unit: mm, layers, diagnostics, nonconforming or ratio
     limit_unit TEXT NOT NULL, limit_pdk_value TEXT NOT NULL, subject TEXT NOT NULL,
     quantity TEXT NOT NULL, method TEXT NOT NULL, checked INTEGER NOT NULL,
     finding_count INTEGER NOT NULL, skip_reason TEXT,

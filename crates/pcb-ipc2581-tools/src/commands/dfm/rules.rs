@@ -12,7 +12,8 @@ use super::design::HoleClass;
 use super::pdk::{
     AssemblyDiagnostic, Case, CopperWeight, HoleKind, LayerPosition, Length, LengthCase,
     LengthLimit, Pdk, PlatedHoleKind, Profile, ProfileStatus, Ratio, RatioLimit, RuleConditions,
-    RuleMetadata, SelectingRule, SlotPlating, copper_weight_class,
+    RuleMetadata, SelectingRule, SizeLimit, SlotPlating, SoldermaskColor, SurfaceFinish,
+    ThicknessLimit, copper_weight_class,
 };
 use super::report::{Severity, ViewRecipe};
 
@@ -103,13 +104,48 @@ pub(super) enum LimitValue {
     Length(Length),
     Count(u32),
     Ratio(Ratio),
+    /// The values a board property may take; the rule permits no
+    /// nonconforming property.
+    Allowed(Allowed),
+}
+
+/// What a board-property rule allows.
+#[derive(Debug, Clone)]
+pub(super) enum Allowed {
+    CopperWeights(Vec<CopperWeight>),
+    Thickness(ThicknessLimit),
+    Finishes(Vec<SurfaceFinish>),
+    Colors(Vec<SoldermaskColor>),
+    Size(SizeLimit),
+}
+
+impl Allowed {
+    /// The limit as the PDK states it.
+    pub fn describe(&self) -> String {
+        match self {
+            Self::CopperWeights(weights) => {
+                let weights = weights.iter().map(CopperWeight::original);
+                weights.collect::<Vec<_>>().join(", ")
+            }
+            Self::Thickness(limit) => limit.describe(),
+            Self::Finishes(finishes) => {
+                let finishes = finishes.iter().map(|finish| finish.label());
+                finishes.collect::<Vec<_>>().join(", ")
+            }
+            Self::Colors(colors) => {
+                let colors = colors.iter().map(SoldermaskColor::name);
+                colors.collect::<Vec<_>>().join(", ")
+            }
+            Self::Size(limit) => limit.describe(),
+        }
+    }
 }
 
 impl LimitValue {
     pub fn length(&self) -> &Length {
         match self {
             Self::Length(length) => length,
-            Self::Count(_) | Self::Ratio(_) => {
+            Self::Count(_) | Self::Ratio(_) | Self::Allowed(_) => {
                 unreachable!("a non-length-valued rule has no length limit")
             }
         }
@@ -118,7 +154,7 @@ impl LimitValue {
     pub fn count(&self) -> u32 {
         match self {
             Self::Count(count) => *count,
-            Self::Length(_) | Self::Ratio(_) => {
+            Self::Length(_) | Self::Ratio(_) | Self::Allowed(_) => {
                 unreachable!("a non-count-valued rule has no count limit")
             }
         }
@@ -127,8 +163,17 @@ impl LimitValue {
     pub fn ratio(&self) -> f64 {
         match self {
             Self::Ratio(ratio) => ratio.value(),
-            Self::Length(_) | Self::Count(_) => {
+            Self::Length(_) | Self::Count(_) | Self::Allowed(_) => {
                 unreachable!("a non-ratio-valued rule has no ratio limit")
+            }
+        }
+    }
+
+    pub fn allowed(&self) -> &Allowed {
+        match self {
+            Self::Allowed(allowed) => allowed,
+            Self::Length(_) | Self::Count(_) | Self::Ratio(_) => {
+                unreachable!("a numeric rule has no allowed values")
             }
         }
     }
@@ -172,6 +217,16 @@ pub(super) enum RuleKind {
     CopperClearance,
     /// Residue: final soldermask material between openings narrower than the limit.
     SoldermaskWeb,
+    /// Property: the standard weight of each copper layer at one position.
+    CopperWeight(LayerPosition),
+    /// Property: the finished board thickness the physical stackup states.
+    BoardThickness,
+    /// Property: the surface finish the stackup specifies.
+    SurfaceFinish,
+    /// Property: the colour of each soldermask layer.
+    SoldermaskColor,
+    /// Property: the extents of the checked layout's profile.
+    BoardSize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -289,11 +344,25 @@ impl RuleKind {
                 "Soldermask web",
                 &["mask_openings", "board_outlines"],
             ),
+            Self::CopperWeight(_) => ("copper_weight", "Copper weight", &["stackup"]),
+            Self::BoardThickness => ("board_thickness", "Board thickness", &["stackup"]),
+            Self::SurfaceFinish => ("surface_finish", "Surface finish", &[]),
+            Self::SoldermaskColor => ("soldermask_color", "Soldermask color", &[]),
+            Self::BoardSize => ("board_size", "Board size", &[]),
         };
         ViewRecipe {
             kind,
             title,
-            spatial: !matches!(self, Self::CopperLayerCount | Self::AssemblyDiagnostic(_)),
+            spatial: !matches!(
+                self,
+                Self::CopperLayerCount
+                    | Self::AssemblyDiagnostic(_)
+                    | Self::CopperWeight(_)
+                    | Self::BoardThickness
+                    | Self::SurfaceFinish
+                    | Self::SoldermaskColor
+                    | Self::BoardSize
+            ),
             features: features.to_vec(),
         }
     }
@@ -507,6 +576,54 @@ impl RuleKind {
                 witness_roles: Some(["first_boundary", "second_boundary"]),
                 pools: Pools::MASKS,
             },
+            Self::CopperWeight(position) => Semantics {
+                subject: "copper_layer",
+                quantity: "copper_weight",
+                method: "physical_stackup_standard_copper_weight",
+                finding_title: format!(
+                    "Copper weight is not supported on an {} layer",
+                    position_label(position)
+                ),
+                quantity_label: format!("{} copper weight", position_label(position)),
+                witness_roles: None,
+                pools: Pools::STACKUP,
+            },
+            Self::BoardThickness => Semantics {
+                subject: "stackup",
+                quantity: "finished_board_thickness",
+                method: "physical_stackup_thickness_against_nominal_tolerance",
+                finding_title: "Board thickness is not a supported finished thickness".to_owned(),
+                quantity_label: "finished board thickness".to_owned(),
+                witness_roles: None,
+                pools: Pools::STACKUP,
+            },
+            Self::SurfaceFinish => Semantics {
+                subject: "board",
+                quantity: "surface_finish",
+                method: "ipc_2581_surface_finish_spec",
+                finding_title: "Surface finish is not supported".to_owned(),
+                quantity_label: "surface finish".to_owned(),
+                witness_roles: None,
+                pools: Pools::NONE,
+            },
+            Self::SoldermaskColor => Semantics {
+                subject: "soldermask_layer",
+                quantity: "soldermask_color",
+                method: "ipc_2581_soldermask_spec_color",
+                finding_title: "Soldermask color is not supported".to_owned(),
+                quantity_label: "soldermask color".to_owned(),
+                witness_roles: None,
+                pools: Pools::NONE,
+            },
+            Self::BoardSize => Semantics {
+                subject: "board",
+                quantity: "board_extents",
+                method: "layout_profile_bounding_box",
+                finding_title: "Board size is outside the supported range".to_owned(),
+                quantity_label: "board extents".to_owned(),
+                witness_roles: None,
+                pools: Pools::NONE,
+            },
         }
     }
 }
@@ -550,6 +667,13 @@ pub(super) fn pools(rules: &[Rule], has_stackup: bool) -> Pools {
         .iter()
         .map(|rule| rule.pools(has_stackup))
         .fold(Pools::NONE, |union, pools| union | pools)
+}
+
+pub(super) fn position_label(position: LayerPosition) -> &'static str {
+    match position {
+        LayerPosition::Outer => "outer",
+        LayerPosition::Inner => "inner",
+    }
 }
 
 fn assembly_title(diagnostic: AssemblyDiagnostic) -> &'static str {
@@ -603,32 +727,7 @@ pub(super) fn lower(pdk: &Pdk, selected_profile: Option<&str>) -> Result<Vec<Rul
                 conditions: Conditions::default(),
             }),
     );
-    if let Some(range) = &profile.support.copper_layers {
-        if let Some(limit) = range.minimum() {
-            rules.push(Rule {
-                id: "profile.support.copper_layers.minimum".to_owned(),
-                authored_id: "profile.support.copper_layers".to_owned(),
-                title: "Profile minimum copper layer count".to_owned(),
-                severity: Severity::Error,
-                comparison: Comparison::Minimum,
-                limit: LimitValue::Count(limit),
-                kind: RuleKind::CopperLayerCount,
-                conditions: Conditions::default(),
-            });
-        }
-        if let Some(limit) = range.maximum() {
-            rules.push(Rule {
-                id: "profile.support.copper_layers.maximum".to_owned(),
-                authored_id: "profile.support.copper_layers".to_owned(),
-                title: "Profile maximum copper layer count".to_owned(),
-                severity: Severity::Error,
-                comparison: Comparison::Maximum,
-                limit: LimitValue::Count(limit),
-                kind: RuleKind::CopperLayerCount,
-                conditions: Conditions::default(),
-            });
-        }
-    }
+    rules.extend(support(profile));
 
     // Every selecting family lowers alike; what a rule selects names its
     // kind and its title.
@@ -798,7 +897,145 @@ pub(super) fn lower(pdk: &Pdk, selected_profile: Option<&str>) -> Result<Vec<Rul
             ));
         }
     }
+
+    let (stackup, board) = (&pdk.rules.stackup, &pdk.rules.board);
+    for rule in &stackup.board_thickness {
+        rules.extend(lower_property(
+            (&rule.metadata, rule.limit.as_ref(), &rule.cases),
+            selected,
+            "Standard finished board thickness",
+            RuleKind::BoardThickness,
+            |limit| Allowed::Thickness(limit.clone()),
+        ));
+    }
+    for rule in &stackup.copper_weight {
+        let position = rule.select.position;
+        rules.extend(lower_property(
+            (&rule.metadata, rule.limit.as_ref(), &rule.cases),
+            selected,
+            &format!("Allowed {} copper weight", position_label(position)),
+            RuleKind::CopperWeight(position),
+            |limit| Allowed::CopperWeights(limit.allowed.clone()),
+        ));
+    }
+    for rule in &board.surface_finish {
+        rules.extend(lower_property(
+            (&rule.metadata, rule.limit.as_ref(), &rule.cases),
+            selected,
+            "Allowed surface finish",
+            RuleKind::SurfaceFinish,
+            |limit| Allowed::Finishes(limit.allowed.clone()),
+        ));
+    }
+    for rule in &board.soldermask_color {
+        rules.extend(lower_property(
+            (&rule.metadata, rule.limit.as_ref(), &rule.cases),
+            selected,
+            "Allowed soldermask color",
+            RuleKind::SoldermaskColor,
+            |limit| Allowed::Colors(limit.allowed.clone()),
+        ));
+    }
+    for rule in &board.size {
+        rules.extend(lower_property(
+            (&rule.metadata, rule.limit.as_ref(), &rule.cases),
+            selected,
+            "Board size",
+            RuleKind::BoardSize,
+            |limit| Allowed::Size(limit.clone()),
+        ));
+    }
     Ok(rules)
+}
+
+/// A profile's support envelope as reserved `profile.support.*` rules: the
+/// rules that decide whether a design qualifies for the profile.
+pub(super) fn support(profile: &Profile) -> Vec<Rule> {
+    let support = &profile.support;
+    let rule = |id: &str, title: &str, comparison, limit, kind| Rule {
+        id: id.to_owned(),
+        authored_id: id
+            .trim_end_matches(".minimum")
+            .trim_end_matches(".maximum")
+            .to_owned(),
+        title: title.to_owned(),
+        severity: Severity::Error,
+        comparison,
+        limit,
+        kind,
+        conditions: conditions(&RuleConditions::default(), profile),
+    };
+    let layers = support.copper_layers.as_ref();
+    let allowed = |id, title, limit: Option<Allowed>, kind| {
+        limit.map(|limit| {
+            rule(
+                id,
+                title,
+                Comparison::Maximum,
+                LimitValue::Allowed(limit),
+                kind,
+            )
+        })
+    };
+    [
+        layers.and_then(|range| range.minimum()).map(|limit| {
+            rule(
+                "profile.support.copper_layers.minimum",
+                "Profile minimum copper layer count",
+                Comparison::Minimum,
+                LimitValue::Count(limit),
+                RuleKind::CopperLayerCount,
+            )
+        }),
+        layers.and_then(|range| range.maximum()).map(|limit| {
+            rule(
+                "profile.support.copper_layers.maximum",
+                "Profile maximum copper layer count",
+                Comparison::Maximum,
+                LimitValue::Count(limit),
+                RuleKind::CopperLayerCount,
+            )
+        }),
+        allowed(
+            "profile.support.outer_copper_weight",
+            "Profile outer copper weight",
+            support
+                .outer_copper_weight
+                .clone()
+                .map(Allowed::CopperWeights),
+            RuleKind::CopperWeight(LayerPosition::Outer),
+        ),
+        allowed(
+            "profile.support.inner_copper_weight",
+            "Profile inner copper weight",
+            support
+                .inner_copper_weight
+                .clone()
+                .map(Allowed::CopperWeights),
+            RuleKind::CopperWeight(LayerPosition::Inner),
+        ),
+        allowed(
+            "profile.support.board_thickness",
+            "Profile finished board thickness",
+            support.board_thickness.clone().map(Allowed::Thickness),
+            RuleKind::BoardThickness,
+        ),
+        allowed(
+            "profile.support.surface_finish",
+            "Profile surface finish",
+            support.surface_finish.clone().map(Allowed::Finishes),
+            RuleKind::SurfaceFinish,
+        ),
+        allowed(
+            "profile.support.soldermask_color",
+            "Profile soldermask color",
+            support.soldermask_color.clone().map(Allowed::Colors),
+            RuleKind::SoldermaskColor,
+        ),
+    ]
+    .into_iter()
+    .flatten()
+    .collect()
 }
 
 /// The rules of one authored rule in a profile it applies to: those of its
@@ -835,6 +1072,29 @@ fn lower_length_rule(
 ) -> Vec<Rule> {
     lower_rule(metadata, limit, cases, profile_name, |id, limit, when| {
         lower_limit(&metadata.id, id, limit, when, profile, title.clone(), kind)
+    })
+}
+
+/// A board-property rule: one error-severity rule per limit or case, which
+/// permits no property outside what it allows.
+fn lower_property<Limit>(
+    (metadata, limit, cases): (&RuleMetadata, Option<&Limit>, &[Case<Limit>]),
+    (profile_name, profile): (&str, &Profile),
+    title: &str,
+    kind: RuleKind,
+    allowed: impl Fn(&Limit) -> Allowed,
+) -> Vec<Rule> {
+    lower_rule(metadata, limit, cases, profile_name, |id, limit, when| {
+        vec![Rule {
+            id: id.to_owned(),
+            authored_id: metadata.id.clone(),
+            title: title.to_owned(),
+            severity: Severity::Error,
+            comparison: Comparison::Maximum,
+            limit: LimitValue::Allowed(allowed(limit)),
+            kind,
+            conditions: conditions(when, profile),
+        }]
     })
 }
 

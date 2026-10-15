@@ -4,14 +4,14 @@ default_profile = "one-ounce"
 [pdk]
 id = "jlcpcb-rigid-fr4"
 name = "JLCPCB rigid FR-4"
-revision = "advisory-mask-2026-09-29"
+revision = "stackup-profiles-2026-10-15"
 manufacturer = "JLCPCB"
-process = "Rigid FR-4, 1 oz outer copper"
+process = "Rigid FR-4, 1 oz or 2 oz outer copper"
 
 [sources.jlc-capabilities]
 title = "JLCPCB PCB Capabilities"
 url = "https://jlcpcb.com/capabilities/pcb-capabilities"
-accessed = "2026-09-01"
+accessed = "2026-10-15"
 note = "Public capability table. Rules use standard service values and exclude special local BGA exceptions."
 
 [sources.diode-mask-guidance]
@@ -23,7 +23,7 @@ note = "Diode prefers a 0.10 mm soldermask web as advisory guidance. Shortfalls 
 name = "1 oz rigid FR-4"
 description = "Standard rigid FR-4 service with advisory 0.10 mm soldermask-web guidance."
 technologies = ["rigid"]
-coverage = ["2-32 copper layers", "1 oz outer copper", "preferred soldermask web at 0.10 mm, warning only"]
+coverage = ["2-32 copper layers", "1 oz outer copper", "standard FR-4 thicknesses 0.4-2.0 mm", "preferred soldermask web at 0.10 mm, warning only"]
 source = "jlc-capabilities"
 
 [profiles.one-ounce.defaults]
@@ -34,6 +34,24 @@ inner_copper_weight = "0.5 oz"
 
 [profiles.one-ounce.support]
 copper_layers = { minimum = 2, maximum = 32 }
+outer_copper_weight = ["1 oz"]
+
+[profiles.two-ounce]
+name = "2 oz rigid FR-4"
+description = "Heavy-copper rigid FR-4 service with 2 oz finished outer copper."
+technologies = ["rigid"]
+coverage = ["2-32 copper layers", "2 oz outer copper", "standard FR-4 thicknesses 0.4-2.0 mm", "preferred soldermask web at 0.20 mm, warning only"]
+source = "jlc-capabilities"
+
+[profiles.two-ounce.defaults]
+material = "FR-4"
+board_thickness = "1.6 mm"
+outer_copper_weight = "2 oz"
+inner_copper_weight = "0.5 oz"
+
+[profiles.two-ounce.support]
+copper_layers = { minimum = 2, maximum = 32 }
+outer_copper_weight = ["2 oz"]
 
 [[rules.drilling.hole_diameter]]
 id = "jlc.drilling.minimum_via_hole_diameter"
@@ -112,6 +130,7 @@ source = "jlc-capabilities"
 
 [[rules.copper.annular_ring]]
 id = "jlc.copper.minimum_pth_annular_ring"
+profiles = ["one-ounce"]
 select = { hole = "pth" }
 cases = [
   { id = "2-layer", when = { copper_layers = { exact = 2 } }, limit = { minimum = "0.18 mm", preferred = "0.25 mm" } },
@@ -119,19 +138,37 @@ cases = [
 ]
 source = "jlc-capabilities"
 
+[[rules.copper.annular_ring]]
+id = "jlc.copper.minimum_pth_annular_ring_2oz"
+profiles = ["two-ounce"]
+select = { hole = "pth" }
+limit = { minimum = "0.20 mm", preferred = "0.254 mm" }
+source = "jlc-capabilities"
+
+# Track width and spacing depend on each layer's own finished copper weight.
 [[rules.copper.feature_width]]
 id = "jlc.copper.minimum_feature_width"
 cases = [
-  { id = "2-layer", when = { copper_layers = { exact = 2 } }, limit = { minimum = "0.10 mm" } },
-  { id = "multilayer", when = { copper_layers = { minimum = 3, maximum = 32 } }, limit = { minimum = "0.09 mm" } },
+  { id = "2-layer-1oz", when = { copper_layers = { exact = 2 }, copper = { position = "outer", weight = "1 oz" } }, limit = { minimum = "0.10 mm" } },
+  { id = "2-layer-2oz", when = { copper_layers = { exact = 2 }, copper = { position = "outer", weight = "2 oz" } }, limit = { minimum = "0.16 mm" } },
+  { id = "multilayer-outer-1oz", when = { copper_layers = { minimum = 3, maximum = 32 }, copper = { position = "outer", weight = "1 oz" } }, limit = { minimum = "0.09 mm" } },
+  { id = "multilayer-outer-2oz", when = { copper_layers = { minimum = 3, maximum = 32 }, copper = { position = "outer", weight = "2 oz" } }, limit = { minimum = "0.15 mm" } },
+  { id = "inner-half-oz", when = { copper = { position = "inner", weight = "0.5 oz" } }, limit = { minimum = "0.09 mm" } },
+  { id = "inner-1oz", when = { copper = { position = "inner", weight = "1 oz" } }, limit = { minimum = "0.09 mm" } },
+  { id = "inner-2oz", when = { copper = { position = "inner", weight = "2 oz" } }, limit = { minimum = "0.15 mm" } },
 ]
 source = "jlc-capabilities"
 
 [[rules.copper.clearance]]
 id = "jlc.copper.minimum_clearance"
 cases = [
-  { id = "2-layer", when = { copper_layers = { exact = 2 } }, limit = { minimum = "0.10 mm" } },
-  { id = "multilayer", when = { copper_layers = { minimum = 3, maximum = 32 } }, limit = { minimum = "0.09 mm" } },
+  { id = "2-layer-1oz", when = { copper_layers = { exact = 2 }, copper = { position = "outer", weight = "1 oz" } }, limit = { minimum = "0.10 mm" } },
+  { id = "2-layer-2oz", when = { copper_layers = { exact = 2 }, copper = { position = "outer", weight = "2 oz" } }, limit = { minimum = "0.16 mm" } },
+  { id = "multilayer-outer-1oz", when = { copper_layers = { minimum = 3, maximum = 32 }, copper = { position = "outer", weight = "1 oz" } }, limit = { minimum = "0.09 mm" } },
+  { id = "multilayer-outer-2oz", when = { copper_layers = { minimum = 3, maximum = 32 }, copper = { position = "outer", weight = "2 oz" } }, limit = { minimum = "0.15 mm" } },
+  { id = "inner-half-oz", when = { copper = { position = "inner", weight = "0.5 oz" } }, limit = { minimum = "0.09 mm" } },
+  { id = "inner-1oz", when = { copper = { position = "inner", weight = "1 oz" } }, limit = { minimum = "0.09 mm" } },
+  { id = "inner-2oz", when = { copper = { position = "inner", weight = "2 oz" } }, limit = { minimum = "0.15 mm" } },
 ]
 source = "jlc-capabilities"
 
@@ -147,5 +184,52 @@ source = "jlc-capabilities"
 
 [[rules.soldermask.web]]
 id = "jlc.soldermask.minimum_web"
+profiles = ["one-ounce"]
 limit = { preferred = "0.10 mm" }
 source = "diode-mask-guidance"
+
+[[rules.soldermask.web]]
+id = "jlc.soldermask.minimum_web_2oz"
+profiles = ["two-ounce"]
+limit = { preferred = "0.20 mm" }
+source = "jlc-capabilities"
+
+# IPC overallThickness includes foil and soldermask, as the finished board does.
+[[rules.stackup.board_thickness]]
+id = "jlc.stackup.board_thickness"
+limit = { nominal = ["0.4 mm", "0.6 mm", "0.8 mm", "1.0 mm", "1.2 mm", "1.6 mm", "2.0 mm"], tolerance = "0.1 mm", tolerance_percent = 10 }
+source = "jlc-capabilities"
+
+[[rules.stackup.copper_weight]]
+id = "jlc.stackup.outer_copper_weight"
+select = { position = "outer" }
+limit = { allowed = ["1 oz", "2 oz"] }
+source = "jlc-capabilities"
+
+[[rules.stackup.copper_weight]]
+id = "jlc.stackup.inner_copper_weight"
+select = { position = "inner" }
+limit = { allowed = ["0.5 oz", "1 oz", "2 oz"] }
+source = "jlc-capabilities"
+
+[[rules.board.surface_finish]]
+id = "jlc.board.surface_finish"
+cases = [
+  { id = "up-to-5-layer", when = { copper_layers = { minimum = 2, maximum = 5 } }, limit = { allowed = ["hasl", "lead_free_hasl", "enig", "osp"] } },
+  { id = "6-layer-and-up", when = { copper_layers = { minimum = 6, maximum = 32 } }, limit = { allowed = ["enig", "osp"] } },
+]
+source = "jlc-capabilities"
+
+[[rules.board.soldermask_color]]
+id = "jlc.board.soldermask_color"
+limit = { allowed = ["green", "purple", "red", "yellow", "blue", "white", "black"] }
+source = "jlc-capabilities"
+
+[[rules.board.size]]
+id = "jlc.board.size"
+cases = [
+  { id = "2-layer", when = { copper_layers = { exact = 2 } }, limit = { minimum = ["3 mm", "3 mm"], maximum = ["670 mm", "600 mm"] } },
+  { id = "4-layer", when = { copper_layers = { minimum = 3, maximum = 5 } }, limit = { minimum = ["3 mm", "3 mm"], maximum = ["663 mm", "593 mm"] } },
+  { id = "6-layer-and-up", when = { copper_layers = { minimum = 6, maximum = 32 } }, limit = { minimum = ["3 mm", "3 mm"], maximum = ["656 mm", "586 mm"] } },
+]
+source = "jlc-capabilities"

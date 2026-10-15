@@ -90,15 +90,11 @@ fn check_with_scene(
     resolution: Resolution,
     scene: bool,
 ) -> Result<DfmReport> {
-    let (pdk_path, pdk_source, selected_profile) = match request.pdk {
+    let (pdk_path, pdk_source, explicit_profile) = match request.pdk {
         PdkSource::Builtin(name) => {
             let pdk = builtin_pdks::find(name)
                 .with_context(|| format!("unknown built-in PDK '{name}'"))?;
-            (
-                format!("builtin:{}", pdk.name),
-                pdk.source,
-                Some(pdk.profile),
-            )
+            (format!("builtin:{}", pdk.name), pdk.source, pdk.profile)
         }
         PdkSource::Toml(source) => (source.path.to_owned(), source.source, None),
     };
@@ -108,17 +104,18 @@ fn check_with_scene(
     );
     let pdk =
         pdk::Pdk::parse(pdk_source).with_context(|| format!("failed to parse PDK {pdk_path}"))?;
-    let rules = rules::lower(&pdk, selected_profile)
+    let scope = request.layout_target.artwork_scope();
+    let selection = match explicit_profile {
+        Some(profile) => report::ProfileSelection::explicit(profile),
+        None => select_profile(&pdk, imported, scope, resolution)
+            .with_context(|| format!("failed to select a profile of PDK {pdk_path}"))?,
+    };
+    let rules = rules::lower(&pdk, Some(&selection.profile))
         .with_context(|| format!("failed to lower PDK {pdk_path}"))?;
     if rules.is_empty() {
         bail!("PDK {pdk_path} configures no DFM rules; add at least one capability");
     }
-    let designs = design::Design::frames(
-        imported,
-        request.layout_target.artwork_scope(),
-        &rules,
-        resolution,
-    )?;
+    let designs = design::Design::frames(imported, scope, &rules, resolution)?;
     let checked = checks::run(&rules, &designs)?;
     let summary = summarize(&checked);
     let layout = designs[0].report_layout();
@@ -152,7 +149,7 @@ fn check_with_scene(
         input: request.input,
         pdk: report::PdkIdentity::from_pdk(
             &pdk,
-            selected_profile,
+            selection,
             pdk_path,
             sha256(pdk_source.as_bytes()),
             pdk_source.to_owned(),
@@ -170,6 +167,66 @@ fn check_with_scene(
         findings: checked.findings,
         scene,
     })
+}
+
+/// The profile a kit applies to a design when no profile is named: the first
+/// executable profile whose support the design meets, the default first and
+/// the rest in name order. A kit of one profile always runs it, so its
+/// support rules report what the design lacks. When the design cannot be
+/// qualified for a profile considered before one it meets, because what the
+/// support reads is missing, the default runs and its support rules report
+/// the gap; when it meets none, no profile fits and the check cannot run.
+fn select_profile(
+    pdk: &pdk::Pdk,
+    imported: &ImportedDesign,
+    scope: pcb_ir::dialects::ipc::ArtworkScope,
+    resolution: Resolution,
+) -> Result<report::ProfileSelection> {
+    let candidates = std::iter::once(pdk.default_profile.as_str())
+        .chain(
+            pdk.profiles
+                .keys()
+                .map(String::as_str)
+                .filter(|name| *name != pdk.default_profile),
+        )
+        .filter(|name| pdk.profiles[*name].status == pdk::ProfileStatus::Executable)
+        .collect::<Vec<_>>();
+    let default = report::ProfileSelection::automatic(&pdk.default_profile, Vec::new());
+    if candidates.len() < 2 {
+        return Ok(default);
+    }
+    let support = candidates
+        .iter()
+        .map(|name| rules::support(&pdk.profiles[*name]))
+        .collect::<Vec<_>>();
+    let designs = design::Design::frames(imported, scope, &support.concat(), resolution)?;
+    let mut rejected = Vec::new();
+    for (name, support) in candidates.into_iter().zip(&support) {
+        let checked = checks::run(support, &designs)?;
+        if checked.rules.iter().any(report::RuleResult::blocks_verdict) {
+            return Ok(default);
+        }
+        if checked.findings.is_empty() {
+            return Ok(report::ProfileSelection::automatic(name, rejected));
+        }
+        rejected.push(report::RejectedProfile {
+            profile: name.to_owned(),
+            reasons: checked
+                .findings
+                .into_iter()
+                .map(|finding| finding.message)
+                .collect(),
+        });
+    }
+    let reasons = rejected
+        .iter()
+        .map(|profile| format!("{}: {}", profile.profile, profile.reasons.join("; ")))
+        .collect::<Vec<_>>();
+    bail!(
+        "no profile of PDK '{}' fits this design ({})",
+        pdk.pdk.id,
+        reasons.join(" | ")
+    )
 }
 
 #[cfg(feature = "cli")]
@@ -250,6 +307,17 @@ pub fn execute_check(
     })?;
 
     let summary = &report.summary;
+    let selection = &report.pdk.profile_selection;
+    for rejected in &selection.rejected {
+        eprintln!(
+            "PDK profile '{}' does not fit: {}",
+            rejected.profile,
+            rejected.reasons.join("; ")
+        );
+    }
+    if !selection.rejected.is_empty() {
+        eprintln!("checking with PDK profile '{}'", selection.profile);
+    }
     // A rule that could not be evaluated is named, never just counted.
     for rule in &report.rules {
         if matches!(rule.status, report::RuleStatus::Incomplete) {
@@ -606,11 +674,7 @@ limit = { minimum = "300 mil" }
     fn loads_embedded_pdks_and_lowers_partial_ipc_baselines() {
         for builtin in builtin_pdks() {
             let parsed = pdk::Pdk::parse(builtin.source).unwrap();
-            assert!(
-                !rules::lower(&parsed, Some(builtin.profile))
-                    .unwrap()
-                    .is_empty()
-            );
+            assert!(!rules::lower(&parsed, builtin.profile).unwrap().is_empty());
         }
 
         let parsed = pdk::Pdk::parse(builtin_pdks::find("ipc").unwrap().source).unwrap();
@@ -666,7 +730,7 @@ limit = { minimum = "300 mil" }
 
         let jlc = builtin_pdks::find("jlcpcb-1oz").unwrap();
         let parsed = pdk::Pdk::parse(jlc.source).unwrap();
-        let rules = rules::lower(&parsed, Some(jlc.profile)).unwrap();
+        let rules = rules::lower(&parsed, jlc.profile).unwrap();
         let mask = rules
             .iter()
             .find(|rule| rule.id == "jlc.soldermask.minimum_web.preferred")
@@ -674,14 +738,14 @@ limit = { minimum = "300 mil" }
         assert_eq!(mask.limit.length().millimeters(), 0.10);
         let two_layer = rules
             .iter()
-            .find(|rule| rule.id == "jlc.copper.minimum_feature_width.2-layer")
+            .find(|rule| rule.id == "jlc.copper.minimum_feature_width.2-layer-1oz")
             .unwrap();
         assert_eq!(two_layer.limit.length().millimeters(), 0.10);
         assert_eq!(two_layer.conditions.minimum_copper_layers, Some(2));
         assert_eq!(two_layer.conditions.maximum_copper_layers, Some(2));
         let multilayer = rules
             .iter()
-            .find(|rule| rule.id == "jlc.copper.minimum_feature_width.multilayer")
+            .find(|rule| rule.id == "jlc.copper.minimum_feature_width.multilayer-outer-1oz")
             .unwrap();
         assert_eq!(multilayer.limit.length().millimeters(), 0.09);
         assert_eq!(multilayer.conditions.minimum_copper_layers, Some(3));
@@ -941,7 +1005,7 @@ limit = { minimum = "300 mil" }
 
         let standard = builtin_pdks::find("standard").unwrap();
         let pdk = pdk::Pdk::parse(standard.source).unwrap();
-        let rules = rules::lower(&pdk, Some(standard.profile)).unwrap();
+        let rules = rules::lower(&pdk, standard.profile).unwrap();
         let designs = design::Design::frames(
             &imported,
             LayoutTarget::BoardArray.artwork_scope(),
@@ -1125,6 +1189,156 @@ limit = { minimum = "300 mil" }
             b"untouched"
         );
         assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 2);
+    }
+
+    /// `BOARD` as a 1.6 mm board with `copper_mm` foil and a 0.12 mm net trace.
+    fn weighted_board(copper_mm: &str) -> String {
+        BOARD
+            .replace("overallThickness=\"0.07\"", "overallThickness=\"1.6\"")
+            .replace("thickness=\"0.035\"", &format!("thickness=\"{copper_mm}\""))
+            .replace("lineWidth=\"0.2\"", "lineWidth=\"0.12\"")
+            .replace(
+                r#"<Set polarity="POSITIVE">"#,
+                r#"<Set polarity="POSITIVE" net="N1">"#,
+            )
+    }
+
+    fn check_builtin(xml: &str, name: &str) -> Result<DfmReport> {
+        super::check(
+            &fixtures::import(xml),
+            CheckRequest {
+                pdk: PdkSource::Builtin(name),
+                ..fixtures::request(xml, "", LayoutTarget::Board)
+            },
+            Resolution::default(),
+        )
+    }
+
+    #[test]
+    fn jlc_checks_a_board_against_the_profile_its_copper_weight_qualifies_for() {
+        let width = |report: &DfmReport, case: &str| {
+            let id = format!("jlc.copper.minimum_feature_width.{case}");
+            rule(report, &id).status == report::RuleStatus::Pass
+        };
+
+        let one_ounce = check_builtin(&weighted_board("0.035"), "jlc").unwrap();
+        assert_eq!(one_ounce.pdk.profile, "one-ounce");
+        assert!(one_ounce.pdk.profile_selection.rejected.is_empty());
+        assert!(width(&one_ounce, "2-layer-1oz"));
+        assert!(matches!(one_ounce.verdict, report::Verdict::Pass));
+
+        // The same 0.12 mm trace in 2 oz copper is below JLC's 0.16 mm.
+        let two_ounce = check_builtin(&weighted_board("0.07"), "jlc").unwrap();
+        assert_eq!(two_ounce.pdk.profile, "two-ounce");
+        let [rejected] = two_ounce.pdk.profile_selection.rejected.as_slice() else {
+            panic!("only the default profile precedes two-ounce");
+        };
+        assert_eq!(rejected.profile, "one-ounce");
+        assert!(
+            rejected
+                .reasons
+                .iter()
+                .any(|reason| reason.contains("'TOP'"))
+        );
+        assert!(!width(&two_ounce, "2-layer-2oz"));
+        assert!(matches!(two_ounce.verdict, report::Verdict::Fail));
+
+        // Naming the 1 oz profile still runs it, and its support fails.
+        let explicit = check_builtin(&weighted_board("0.07"), "jlcpcb-1oz").unwrap();
+        assert_eq!(explicit.pdk.profile_selection.mode, "explicit");
+        let support = rule(&explicit, "profile.support.outer_copper_weight");
+        assert!(matches!(support.status, report::RuleStatus::Fail));
+        assert_eq!(support.checked, 2);
+
+        let error = check_builtin(&weighted_board("0.105"), "jlc").unwrap_err();
+        let message = format!("{error:#}");
+        assert!(
+            message.contains("no profile of PDK 'jlcpcb-rigid-fr4' fits")
+                && message.contains("one-ounce:")
+                && message.contains("two-ounce:"),
+            "{message}"
+        );
+    }
+
+    #[test]
+    fn board_properties_are_judged_against_what_the_pdk_allows() {
+        let pdk = fixtures::pdk(
+            r#"[[rules.stackup.board_thickness]]
+id = "thickness"
+limit = { nominal = ["0.8 mm", "1.6 mm"], tolerance = "0.1 mm", tolerance_percent = 10 }
+
+[[rules.board.surface_finish]]
+id = "finish"
+limit = { allowed = ["hasl", "lead_free_hasl"] }
+
+[[rules.board.soldermask_color]]
+id = "color"
+limit = { allowed = ["Green"] }
+
+[[rules.board.size]]
+id = "size"
+limit = { minimum = ["10 mm", "5 mm"], maximum = ["40 mm", "25 mm"] }"#,
+        );
+        let status = |xml: &str, id: &str| {
+            let report = check_with_pdk(xml, LayoutTarget::Board, &pdk);
+            let status = &rule(&report, id).status;
+            format!("{status:?}")
+        };
+        // Below 1 mm the absolute tolerance governs, above it the relative.
+        for (thickness, verdict) in [
+            ("0.9", "Pass"),
+            ("0.91", "Fail"),
+            ("1.76", "Pass"),
+            ("1.77", "Fail"),
+        ] {
+            let xml = BOARD.replace(
+                "overallThickness=\"0.07\"",
+                &format!("overallThickness=\"{thickness}\""),
+            );
+            assert_eq!(status(&xml, "thickness"), verdict, "{thickness} mm");
+        }
+
+        // An unstated finish or colour is the fab's choice.
+        assert_eq!(status(BOARD, "finish"), "NotApplicable");
+        assert_eq!(status(BOARD, "color"), "NotApplicable");
+        let specified = |finish: &str, color: &str| {
+            BOARD
+                .replace(
+                    "<CadHeader units=\"MILLIMETER\"/>",
+                    &format!(
+                        r#"<CadHeader units="MILLIMETER">
+      <Spec name="MASK"><General type="MATERIAL"><Property text="Color : {color}"/></General></Spec>
+      <Spec name="FINISH"><SurfaceFinish type="{finish}"/></Spec>
+    </CadHeader>"#
+                    ),
+                )
+                .replace(
+                    r#"<StackupLayer layerOrGroupRef="TOP""#,
+                    r#"<StackupLayer layerOrGroupRef="F.Mask" thickness="0.01" sequence="0"><SpecRef id="MASK"/></StackupLayer>
+          <StackupLayer layerOrGroupRef="TOP""#,
+                )
+        };
+        assert_eq!(status(&specified("S", "green"), "finish"), "Pass");
+        assert_eq!(status(&specified("S", "green"), "color"), "Pass");
+        let report = check_with_pdk(&specified("ENIG-N", "Black"), LayoutTarget::Board, &pdk);
+        let messages = report
+            .findings
+            .iter()
+            .map(|finding| (finding.rule_id.as_str(), finding.message.as_str()))
+            .collect::<Vec<_>>();
+        assert!(messages.contains(&(
+            "finish",
+            "surface finish is enig; the PDK allows hasl, lead_free_hasl"
+        )));
+        assert!(messages.contains(&(
+            "color",
+            "soldermask layer 'F.Mask' is black; the PDK allows green"
+        )));
+
+        // The 30 mm square board is wider than 25 mm, however it is turned.
+        assert_eq!(status(BOARD, "size"), "Fail");
+        let square = |side: &str| BOARD.replace("\"30\"", &format!("\"{side}\""));
+        assert_eq!(status(&square("20"), "size"), "Pass");
     }
 
     #[test]

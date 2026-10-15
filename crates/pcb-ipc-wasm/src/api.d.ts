@@ -32,7 +32,8 @@ export interface ExportFile { name: string; mediaType: string; data: Uint8Array<
 /** Names are report labels only. No method reads paths or fetches URLs. */
 export interface TextInput { source: string; name?: string; }
 export type PdkInput = string | TextInput;
-export interface BuiltinPdk { name: string; profile: string; source: string; }
+/** `profile` is null when the kit selects its profile from the design. */
+export interface BuiltinPdk { name: string; profile: string | null; source: string; }
 export interface DfmOptions {
   /** A built-in name (default: standard) or custom TOML. */
   pdk?: PdkInput;
@@ -50,6 +51,16 @@ export interface PdkProfileDefaults {
 }
 export interface PdkProfileSupport {
   copper_layers: null | { exact: number | null; minimum: number | null; maximum: number | null };
+  outer_copper_weight: string[] | null;
+  inner_copper_weight: string[] | null;
+  board_thickness: string | null;
+  surface_finish: string[] | null;
+  soldermask_color: string[] | null;
+}
+export interface ProfileSelection {
+  profile: string;
+  mode: "explicit" | "automatic";
+  rejected: Array<{ profile: string; reasons: string[] }>;
 }
 export interface PdkSourceReference {
   id: string; title: string; url: string;
@@ -64,6 +75,7 @@ export interface PdkIdentity {
   producibility_level: "A" | "B" | "C" | null;
   technologies: Array<"rigid" | "flex" | "rigid_flex" | "hdi">;
   coverage: string[];
+  profile_selection: ProfileSelection;
   support: PdkProfileSupport;
   defaults: PdkProfileDefaults;
   profile_source: PdkSourceReference | null;

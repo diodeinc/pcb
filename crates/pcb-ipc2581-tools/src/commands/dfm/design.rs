@@ -869,6 +869,9 @@ fn step_kind(kind: LayoutStepKind) -> &'static str {
 pub(super) struct PhysicalStackup {
     pub name: String,
     pub copper_layers: Vec<LayerRef>,
+    /// The weight each copper layer states, in oz/ft², indexed like
+    /// `copper_layers`.
+    pub copper_weights_oz: Vec<Option<f64>>,
     overall_thickness_mm: Option<f64>,
     layers: Vec<PhysicalStackupLayer>,
 }
@@ -944,7 +947,9 @@ impl PhysicalStackup {
         }
     }
 
-    fn total_thickness(&self) -> std::result::Result<SpanThickness, String> {
+    /// The finished board thickness: IPC `overallThickness`, or the sum of
+    /// every physical layer.
+    pub fn total_thickness(&self) -> std::result::Result<SpanThickness, String> {
         if let Some(thickness) = self.overall_thickness_mm
             && thickness.is_finite()
             && thickness > 0.0
@@ -1071,6 +1076,10 @@ fn collect_physical_stackup(imported: &ImportedDesign) -> Result<PhysicalStackup
     }
 
     let total = ordered.len();
+    let copper_weights_oz = ordered
+        .iter()
+        .map(|layer| copper_weight_oz(imported, layer.name))
+        .collect();
     let copper_layers = ordered
         .into_iter()
         .enumerate()
@@ -1087,6 +1096,7 @@ fn collect_physical_stackup(imported: &ImportedDesign) -> Result<PhysicalStackup
     Ok(PhysicalStackup {
         name: imported.resolve(stackup.name).to_owned(),
         copper_layers,
+        copper_weights_oz,
         overall_thickness_mm: stackup.overall_thickness,
         layers: physical_layers,
     })

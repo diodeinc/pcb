@@ -3,7 +3,7 @@ use pcb_ir::geom::{BBox, Point, dist};
 use serde::ser::SerializeStruct;
 use serde::{Serialize, Serializer};
 
-use super::pdk::Pdk;
+use super::pdk::{CopperWeight, Pdk};
 use super::rules::{LimitValue, Rule, RuleKind};
 
 pub const REPORT_SCHEMA_VERSION: u32 = 3;
@@ -134,6 +134,8 @@ pub struct PdkIdentity {
     pub producibility_level: Option<&'static str>,
     pub technologies: Vec<&'static str>,
     pub coverage: Vec<String>,
+    /// How the profile was chosen, and why earlier candidates were not.
+    pub profile_selection: ProfileSelection,
     pub support: PdkProfileSupport,
     pub defaults: PdkProfileDefaults,
     pub profile_source: Option<PdkSourceReference>,
@@ -144,8 +146,47 @@ pub struct PdkIdentity {
 }
 
 #[derive(Debug, Serialize)]
+pub struct ProfileSelection {
+    pub profile: String,
+    /// `explicit` when the PDK name states the profile, otherwise `automatic`.
+    pub mode: &'static str,
+    /// Profiles considered before the selected one, whose support the
+    /// design does not meet.
+    pub rejected: Vec<RejectedProfile>,
+}
+
+impl ProfileSelection {
+    pub(super) fn explicit(profile: &str) -> Self {
+        Self {
+            profile: profile.to_owned(),
+            mode: "explicit",
+            rejected: Vec::new(),
+        }
+    }
+
+    pub(super) fn automatic(profile: &str, rejected: Vec<RejectedProfile>) -> Self {
+        Self {
+            profile: profile.to_owned(),
+            mode: "automatic",
+            rejected,
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+pub struct RejectedProfile {
+    pub profile: String,
+    pub reasons: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
 pub struct PdkProfileSupport {
     pub copper_layers: Option<PdkCountRange>,
+    pub outer_copper_weight: Option<Vec<String>>,
+    pub inner_copper_weight: Option<Vec<String>>,
+    pub board_thickness: Option<String>,
+    pub surface_finish: Option<Vec<&'static str>>,
+    pub soldermask_color: Option<Vec<String>>,
 }
 
 #[derive(Debug, Serialize)]
@@ -177,14 +218,21 @@ pub struct PdkSourceReference {
 impl PdkIdentity {
     pub(super) fn from_pdk(
         pdk: &Pdk,
-        selected_profile: Option<&str>,
+        profile_selection: ProfileSelection,
         path: String,
         sha256: String,
         source: String,
     ) -> Self {
         let (profile, definition) = pdk
-            .selected_profile(selected_profile)
+            .selected_profile(Some(&profile_selection.profile))
             .expect("selected profile was validated while lowering rules");
+        let weights = |weights: &Option<Vec<CopperWeight>>| {
+            weights.as_ref().map(|weights| {
+                let weights = weights.iter().map(|weight| weight.original().to_owned());
+                weights.collect()
+            })
+        };
+        let support = &definition.support;
         let profile_source = definition.source.as_ref().and_then(|id| {
             pdk.sources.get(id).map(|source| PdkSourceReference {
                 id: id.clone(),
@@ -213,14 +261,27 @@ impl PdkIdentity {
                 .map(|technology| technology.label())
                 .collect(),
             coverage: definition.coverage.clone(),
+            profile_selection,
             support: PdkProfileSupport {
-                copper_layers: definition.support.copper_layers.as_ref().map(|range| {
-                    PdkCountRange {
-                        exact: range.exact,
-                        minimum: range.minimum,
-                        maximum: range.maximum,
-                    }
+                copper_layers: support.copper_layers.as_ref().map(|range| PdkCountRange {
+                    exact: range.exact,
+                    minimum: range.minimum,
+                    maximum: range.maximum,
                 }),
+                outer_copper_weight: weights(&support.outer_copper_weight),
+                inner_copper_weight: weights(&support.inner_copper_weight),
+                board_thickness: support
+                    .board_thickness
+                    .as_ref()
+                    .map(|limit| limit.describe()),
+                surface_finish: support
+                    .surface_finish
+                    .as_ref()
+                    .map(|finishes| finishes.iter().map(|finish| finish.label()).collect()),
+                soldermask_color: support
+                    .soldermask_color
+                    .as_ref()
+                    .map(|colors| colors.iter().map(|color| color.name().to_owned()).collect()),
             },
             defaults: PdkProfileDefaults {
                 material: definition.defaults.material.clone(),
@@ -474,6 +535,12 @@ impl RuleLimit {
                 pdk_value: ratio.value().to_string(),
                 normalized_value: ratio.value(),
                 normalized_unit: "ratio",
+            },
+            // At most zero properties outside the allowed values.
+            LimitValue::Allowed(allowed) => Self {
+                pdk_value: allowed.describe(),
+                normalized_value: 0.0,
+                normalized_unit: "nonconforming",
             },
         }
     }

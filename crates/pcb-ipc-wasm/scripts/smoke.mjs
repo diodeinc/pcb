@@ -40,6 +40,7 @@ if (!isMainThread) {
     assert.ok(builtins[0].source.includes('[pdk]'));
     assert.equal(builtins.find(pdk => pdk.name === 'jlcpcb-1oz').profile, 'one-ounce');
     assert.equal(builtins.find(pdk => pdk.name === 'ipc').profile, '2b');
+    assert.equal(builtins.find(pdk => pdk.name === 'jlc').profile, null);
     const bom = JSON.parse(text(document.export({ format: 'bom' })[0]));
     assert.equal(bom[0].designator, 'J1');
     assert.equal(bom[0].characteristics.value, 'Connector');

@@ -17,6 +17,7 @@
 mod annular_ring;
 mod assembly;
 mod board_array_spacing;
+mod board_property;
 mod copper_clearance;
 mod drilled_board_edge_clearance;
 mod hole_aspect_ratio;
@@ -141,6 +142,7 @@ enum RuleEvaluation {
     Distance(Vec<(Option<Vec<u32>>, Evaluation)>),
     Count(CountEvaluation),
     Ratio(RatioEvaluation),
+    Property(board_property::Evaluation),
 }
 
 impl From<Evaluation> for RuleEvaluation {
@@ -331,6 +333,37 @@ fn judge_in(
             );
             result.checked += evaluation.checked * design.placements.len();
         }
+        RuleEvaluation::Property(evaluation) => {
+            for assumption in evaluation.assumptions {
+                if !result.assumptions.contains(&assumption) {
+                    result.assumptions.push(assumption);
+                }
+            }
+            if let Some(reason) = evaluation.incomplete_reason {
+                return Ok(Some((RuleStatus::Incomplete, reason)));
+            }
+            if let Some(reason) = evaluation.unstated {
+                return Ok(Some((RuleStatus::NotApplicable, reason)));
+            }
+            findings.extend(
+                evaluation
+                    .nonconforming
+                    .into_iter()
+                    .map(|nonconforming| Finding {
+                        id: String::new(),
+                        rule_id: rule.id.clone(),
+                        severity: rule.severity,
+                        message: nonconforming.message,
+                        measurement: Measurement::maximum_count(1, 0),
+                        location: Location::default(),
+                        layers: nonconforming.layers,
+                        subjects: vec![nonconforming.subject],
+                        sites: Vec::new(),
+                        frame: index,
+                    }),
+            );
+            result.checked += evaluation.checked;
+        }
     }
     Ok(None)
 }
@@ -516,8 +549,14 @@ fn missing_subjects(kind: RuleKind, design: &Design) -> Option<String> {
             .components
             .is_empty()
             .then(|| "assembly components".to_owned()),
-        // The stackup is the layout's: its root Step's design measures it.
-        RuleKind::CopperLayerCount => {
+        // The stackup and the board's properties are the layout's: its root
+        // Step's design measures them.
+        RuleKind::CopperLayerCount
+        | RuleKind::CopperWeight(_)
+        | RuleKind::BoardThickness
+        | RuleKind::SurfaceFinish
+        | RuleKind::SoldermaskColor
+        | RuleKind::BoardSize => {
             (design.placements[0] != LayoutOccurrenceId::Root).then(|| "stackup".to_owned())
         }
         RuleKind::BoardArrayPairClearance if design.scope != ArtworkScope::ArrayFlattened => {
@@ -668,6 +707,11 @@ fn evaluate(rule: &Rule, design: &Design) -> anyhow::Result<RuleEvaluation> {
             copper_clearance::evaluate(limit(), &rule.conditions, design)?.into()
         }
         RuleKind::SoldermaskWeb => thin_regions::soldermask_web(limit(), design)?.into(),
+        RuleKind::CopperWeight(_)
+        | RuleKind::BoardThickness
+        | RuleKind::SurfaceFinish
+        | RuleKind::SoldermaskColor
+        | RuleKind::BoardSize => RuleEvaluation::Property(board_property::evaluate(rule, design)),
     })
 }
 
