@@ -582,6 +582,142 @@ fn a_huge_board_keeps_mask_and_copper_apart_in_depth() {
     assert!(z["soldermask:front"].0 - z["pads:"].1 >= 0.0145, "{z:?}");
 }
 
+#[test]
+fn mask_exports_keep_chamfered_tips_and_rounded_arcs() {
+    // The tip's four co-circular vertices are three authored straight
+    // edges, not a polygonized arc (ENG-4114). The other end is a real
+    // semicircle, including small arcs flattened to just three chords.
+    // The small tip's false arc is within the refitter's sagitta limit.
+    for (scale, radius, notch) in [
+        (1.0, 2.0_f64, false),
+        (0.025, 0.04, false),
+        (0.025, 0.025, false),
+        (0.025, 0.01, false),
+        (1.0, 2.0, true),
+        (0.025, 0.025, true),
+    ] {
+        let (x, flat, y) = (3.35 * scale, 1.6 * scale, 2.85 * scale);
+        let end = 10.0 + radius;
+        let half_width = radius * 0.2;
+        // Cut across the arc on both sides to exercise source restoration
+        // at new line/circle intersections, not just untouched outlines.
+        let openings = if notch {
+            ["F.Mask", "B.Mask"]
+                .map(|layer| format!(r#"(gr_rect (start -{half_width} 9.9) (end {half_width} {end}) (stroke (width 0) (type default)) (fill yes) (layer "{layer}"))"#))
+                .join("\n")
+        } else {
+            String::new()
+        };
+        let text = format!(
+            r#"{HEAD}
+(gr_poly (pts (xy -4 8) (xy -4 6) (xy -{x} {y}) (xy -{flat} 0)
+  (xy {flat} 0) (xy {x} {y}) (xy 4 6) (xy 4 8) (xy {radius} 10)
+  (arc (start {radius} 10) (mid 0 {end}) (end -{radius} 10)))
+  (stroke (width 0) (type default)) (fill none) (layer "Edge.Cuts"))
+{openings})"#
+        );
+        let options = Options {
+            board_body: false,
+            components: false,
+            silkscreen: false,
+            ..Options::default()
+        };
+        let run = export(&text, &options).unwrap();
+        assert!(run.report.warnings.is_empty(), "{:?}", run.report.warnings);
+        let masks: Vec<_> = run.stats["things"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .flat_map(|t| t["primitives"].as_array().unwrap())
+            .filter(|p| p["extras"]["layer"] == "soldermask")
+            .collect();
+        assert_eq!(masks.len(), 2);
+        let top = if notch {
+            10.0 + (radius * radius - half_width * half_width).sqrt()
+        } else {
+            end
+        };
+        for side in ["front", "back"] {
+            let mask = masks.iter().find(|p| p["extras"]["side"] == side).unwrap();
+            // glTF's z is KiCad's y. Quantization is well below a micrometre
+            // here; the false arc extends the full-size tip by about 0.407 mm.
+            near(mask["min"][2].as_f64().unwrap() * 1e3, 0.0, 0.001);
+            // The GLB tessellator allows 0.01 mm chord error on flat layers.
+            near(mask["max"][2].as_f64().unwrap() * 1e3, top, 0.011);
+        }
+
+        let board = Board::parse(text.as_bytes()).unwrap();
+        let mut step = Vec::new();
+        let mut report = Report::default();
+        pcb_step::export(&board, &options, &mut step, &mut report).unwrap();
+        assert!(report.warnings.is_empty(), "{:?}", report.warnings);
+        let step = String::from_utf8(step).unwrap();
+        let radii: Vec<f64> = step
+            .lines()
+            .filter_map(|line| line.split_once(" = CIRCLE("))
+            .map(|(_, args)| {
+                args.rsplit(',')
+                    .next()
+                    .unwrap()
+                    .trim_end_matches(");")
+                    .parse()
+                    .unwrap()
+            })
+            .collect();
+        // Each mask keeps the real semicircle analytic, with no false tip arc.
+        assert_eq!(radii.len(), if notch { 4 } else { 2 }, "{radii:?}");
+        for emitted in radii {
+            near(emitted, radius, 0.001);
+        }
+    }
+}
+
+#[test]
+fn mask_openings_follow_board_islands_and_cutouts() {
+    // A stroked rectangle opens a ring, leaving mask inside it. A second
+    // opening overlaps a cutout. A separate board has an enclosed opening
+    // and one across its edge: each board must take only its own cutters.
+    let openings = ["F.Mask", "B.Mask"]
+        .map(|layer| {
+            format!(
+                r#"
+(gr_rect (start 5 5) (end 9 9) (stroke (width 1) (type default)) (fill none) (layer "{layer}"))
+(gr_rect (start 15 6) (end 17 8) (stroke (width 0) (type default)) (fill yes) (layer "{layer}"))
+(gr_rect (start 42 2) (end 44 5) (stroke (width 0) (type default)) (fill yes) (layer "{layer}"))
+(gr_rect (start 49 8) (end 52 10) (stroke (width 0) (type default)) (fill yes) (layer "{layer}"))"#
+            )
+        })
+        .join("\n");
+    let text = board(&format!(
+        r#"
+(gr_rect (start 14 5) (end 16 9) (stroke (width 0) (type default)) (fill none) (layer "Edge.Cuts"))
+(gr_rect (start 40 0) (end 50 12) (stroke (width 0) (type default)) (fill none) (layer "Edge.Cuts"))
+{openings}"#
+    ));
+    let options = Options {
+        components: false,
+        silkscreen: false,
+        ..Options::default()
+    };
+    let run = export(&text, &options).unwrap();
+    assert!(run.report.warnings.is_empty(), "{:?}", run.report.warnings);
+    // Outer opening = 4*4 + 16*0.5 + pi*0.5²; inner island = 3*3.
+    // The board cutout is 8 mm²; the overlapping opening adds 2 mm².
+    // The second board contributes 120 - 6 - 2 mm².
+    let area = 600.0 - (24.0 + std::f64::consts::PI * 0.25 - 9.0) - 8.0 - 2.0 + 120.0 - 6.0 - 2.0;
+    let masks: Vec<_> = run.stats["things"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|t| t["primitives"].as_array().unwrap())
+        .filter(|p| p["extras"]["layer"] == "soldermask")
+        .collect();
+    assert_eq!(masks.len(), 2);
+    for mask in masks {
+        near(mask["area"].as_f64().unwrap() * 1e6, area, 0.05);
+    }
+}
+
 fn layer_z(run: &Run) -> HashMap<String, (f64, f64)> {
     run.stats["things"]
         .as_array()

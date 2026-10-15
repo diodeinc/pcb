@@ -13,7 +13,9 @@ use pcb_ir::geom::{ContourBuf, ContourSet, FillRule, PathCmd, Point};
 
 use crate::Error;
 use crate::board::{Board, RawEdge};
-use crate::geom::{Vec2, ccw_sweep, chord_count, circle_center, point_in_polygon, signed_area};
+use crate::geom::{
+    BoxGrid, Vec2, ccw_sweep, chord_count, circle_center, point_in_polygon, signed_area,
+};
 use crate::holes::RoundHole;
 use crate::outline_font::Fonts;
 use crate::rings::raw_islands;
@@ -649,7 +651,7 @@ pub(crate) fn cut_holes(
             out.push(solid);
             continue;
         }
-        let profile = match cut_profile(&solid, &cut) {
+        let profile = match cut_profile(&solid, cut.iter().map(|d| (*d, &[][..]))) {
             Ok(p) => p,
             Err(err) => {
                 warnings.push(format!(
@@ -680,9 +682,13 @@ fn overlaps((alo, ahi): (Vec2, Vec2), (blo, bhi): (Vec2, Vec2)) -> bool {
     alo.x <= bhi.x && blo.x <= ahi.x && alo.y <= bhi.y && blo.y <= ahi.y
 }
 
-/// `solid` less `drills`, through pcb-ir, with every ring snapped back
-/// onto the curves it came from.
-fn cut_profile(solid: &Solid, drills: &[&Loop]) -> Result<Vec<Solid>, pcb_ir::geom::AccuracyError> {
+/// `solid` less the cutter profiles, through pcb-ir, with every ring
+/// snapped back onto the source lines and circles. Each cutter has an
+/// outer loop and holes, so its holes remain material in the result.
+pub(crate) fn cut_profile<'a>(
+    solid: &Solid,
+    profiles: impl IntoIterator<Item = (&'a Loop, &'a [Loop])>,
+) -> Result<Vec<Solid>, pcb_ir::geom::AccuracyError> {
     let resolution = crate::copper::resolution();
     let mut prims = Vec::new();
     let mut subject = vec![flat_contour(&solid.outer.edges)];
@@ -691,24 +697,40 @@ fn cut_profile(solid: &Solid, drills: &[&Loop]) -> Result<Vec<Solid>, pcb_ir::ge
         subject.push(flat_contour(&hole.edges));
         prims_of(&hole.edges, &mut prims);
     }
-    let cutters: Vec<ContourBuf> = drills
+    let mut cutters = Vec::new();
+    for (outer, holes) in profiles {
+        for (ring, ccw) in std::iter::once((outer, true)).chain(holes.iter().map(|h| (h, false))) {
+            prims_of(&ring.edges, &mut prims);
+            cutters.push(flat_contour(&orient(ring.edges.clone(), ccw)));
+        }
+    }
+    // A mask can have thousands of openings. Match each output chord only
+    // against nearby source curves, in the same order as a full scan.
+    let boxes: Vec<_> = prims
         .iter()
-        .map(|d| {
-            prims_of(&d.edges, &mut prims);
-            flat_contour(&orient(d.edges.clone(), true))
+        .map(|p| {
+            let (lo, hi) = match p.curve {
+                Curve::Line { a, b } => (a.min(b), a.max(b)),
+                Curve::Circle { c, r } => (c - Vec2::splat(r), c + Vec2::splat(r)),
+            };
+            // Line distance allows ON_CURVE beyond each end and ON_CURVE
+            // away from that extension.
+            let slack = Vec2::splat(2.0 * ON_CURVE);
+            (lo - slack, hi + slack)
         })
         .collect();
+    let grid = BoxGrid::new(&boxes);
     let region = ContourSet::from_contours(&subject, FillRule::NonZero, resolution)?.difference(
         &ContourSet::from_contours(&cutters, FillRule::NonZero, resolution)?,
     )?;
     Ok(raw_islands(&region)
         .iter()
         .map(|island| Solid {
-            outer: Loop::new(orient(snap_ring(&island.outer, &prims), true)),
+            outer: Loop::new(orient(snap_ring(&island.outer, &prims, &grid), true)),
             holes: island
                 .holes
                 .iter()
-                .map(|h| Loop::new(orient(snap_ring(h, &prims), false)))
+                .map(|h| Loop::new(orient(snap_ring(h, &prims, &grid), false)))
                 .collect(),
             round: Vec::new(),
         })
@@ -796,12 +818,13 @@ fn prims_of(edges: &[Edge], out: &mut Vec<Prim>) {
                 r: edge.radius(),
             },
         };
-        let same = out.iter().any(|p| match (p.curve, curve) {
-            (Curve::Circle { c: c1, r: r1 }, Curve::Circle { c: c2, r: r2 }) => {
-                c1.distance(c2) < 1e-6 && (r1 - r2).abs() < 1e-6
-            }
-            _ => false,
-        });
+        let same = matches!(curve, Curve::Circle { .. })
+            && out.iter().any(|p| match (p.curve, curve) {
+                (Curve::Circle { c: c1, r: r1 }, Curve::Circle { c: c2, r: r2 }) => {
+                    c1.distance(c2) < 1e-6 && (r1 - r2).abs() < 1e-6
+                }
+                _ => false,
+            });
         if !same {
             out.push(Prim {
                 curve,
@@ -924,7 +947,7 @@ impl Curve {
 /// Turn a boolean ring back into exact edges: runs of vertices that lie on
 /// one source curve become one line or arc on it, and the vertex where two
 /// runs meet is moved to the curves' exact meeting point.
-fn snap_ring(ring: &[Vec2], prims: &[Prim]) -> Vec<Edge> {
+fn snap_ring(ring: &[Vec2], prims: &[Prim], grid: &BoxGrid) -> Vec<Edge> {
     let n = ring.len();
     let label = |i: usize| -> Option<usize> {
         let (u, v) = (ring[i], ring[(i + 1) % n]);
@@ -935,8 +958,12 @@ fn snap_ring(ring: &[Vec2], prims: &[Prim]) -> Vec<Edge> {
                 && p.distance(v) <= ON_CURVE
                 && p.distance(mid) <= MID_ON_CURVE
         };
-        let line = (0..prims.len()).find(|&k| prims[k].is_line() && fits(k));
-        line.or_else(|| (0..prims.len()).find(|&k| fits(k)))
+        let nearby = grid.at(mid);
+        let line = nearby
+            .iter()
+            .map(|&k| k as usize)
+            .find(|&k| prims[k].is_line() && fits(k));
+        line.or_else(|| nearby.iter().map(|&k| k as usize).find(|&k| fits(k)))
     };
     let labels: Vec<Option<usize>> = (0..n).map(label).collect();
     if let Some(k) = labels[0]

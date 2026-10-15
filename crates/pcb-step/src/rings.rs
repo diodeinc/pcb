@@ -351,7 +351,7 @@ fn split_pinches(points: Vec<Vec2>, out: &mut Vec<Vec<Vec2>>) {
 /// KiCad refits its polygonized copper before writing STEP.
 ///
 /// Only arcs that look like a polygonized arc are taken: a bounded radius,
-/// evenly spaced chords turning the same way, and at least four of them.
+/// evenly spaced chords turning the same way, and at least three of them.
 /// A run is found with a circle through three neighbouring vertices, which
 /// is a poor estimate, then refitted through its ends and middle and
 /// checked tightly, so vertices that merely pass near a circle stay
