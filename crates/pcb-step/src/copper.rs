@@ -336,8 +336,11 @@ fn pad_pieces(
                 solid,
             })
         };
-        cutters.extend(pad_cutter(&outline).into_iter().map(|contour| {
-            let points = contour
+        // One cutter for the outline and its holes together: a hole cut
+        // on its own would take the copper passing through it too.
+        let mut contours = pad_cutter(&outline);
+        let points = |contour: &ContourBuf| -> Vec<Vec2> {
+            contour
                 .cmds
                 .iter()
                 .filter(|k| {
@@ -347,16 +350,20 @@ fn pad_pieces(
                     )
                 })
                 .map(|k| Vec2::new(k.p0.x, k.p0.y))
-                .collect();
-            (
+                .collect()
+        };
+        let area = |contour: &ContourBuf| crate::geom::signed_area(&points(contour)).abs();
+        contours.sort_by(|a, b| area(b).total_cmp(&area(a)));
+        if let Some(outer) = contours.first() {
+            cutters.push((
                 layer,
                 PadCutter {
                     net: pad.net,
-                    points,
-                    contour,
+                    points: points(outer),
+                    contours,
                 },
-            )
-        }));
+            ));
+        }
         // Other drills through the pad (an unplated hole beside it, a via
         // in it) take their bite too.
         let others = drills.through(&outline_loop, drill, layer);
@@ -375,14 +382,15 @@ fn pad_pieces(
                 )),
             }
         }
-        let solid = match (&hole, hole_inside) {
+        let solid = match (&hole, hole_inside && pad_holes.is_empty()) {
             (Some(h), true) => Solid {
                 outer: outline_loop.clone(),
-                holes: pad_holes.iter().chain([h]).cloned().collect(),
+                holes: vec![h.clone()],
                 round: Vec::new(),
             },
             (Some(h), false) => {
-                // The drill crosses the pad edge: cut it in 2D.
+                // The drill crosses the pad edge, or may meet a hole the
+                // pad's primitives enclose: cut it in 2D.
                 let mut all: Vec<&Loop> = pad_holes.iter().collect();
                 all.push(h);
                 match subtract(&outline_loop, &all) {
@@ -1060,11 +1068,12 @@ struct Drill {
     contour: ContourBuf,
 }
 
-/// A pad's grown outline, and its vertices for the overlap test.
+/// A pad's grown outline, outer ring first and then its holes, and the
+/// outer ring's vertices for the overlap test.
 struct PadCutter {
     net: u32,
     points: Vec<Vec2>,
-    contour: ContourBuf,
+    contours: Vec<ContourBuf>,
 }
 
 impl Knockouts {
@@ -1177,7 +1186,7 @@ impl Knockouts {
             if !self.same_net && p.net == net {
                 continue;
             }
-            let b = &p.contour.bbox;
+            let b = &p.contours[0].bbox;
             let (plo, phi) = (Vec2::new(b.min.x, b.min.y), Vec2::new(b.max.x, b.max.y));
             if plo.x > hi.x || lo.x > phi.x || plo.y > hi.y || lo.y > phi.y {
                 continue;
@@ -1199,7 +1208,7 @@ impl Knockouts {
                     })
                 });
             if hit {
-                out.push(p.contour.clone());
+                out.extend(p.contours.iter().cloned());
             }
         }
         out

@@ -1521,6 +1521,76 @@ fn custom_pad_keeps_enclosed_holes_and_curves() {
     assert!((right - 4.1).abs() < 0.01, "{right}");
 }
 
+/// A custom pad outlining the square from (-2, -1) to (0, 1) about its
+/// anchor with a 0.2 mm stroke, so the anchor lies on the outline.
+fn outlined_pad(kind: &str, at: &str, extra: &str) -> String {
+    format!(
+        r#"(footprint "Lib:Frame" (layer "F.Cu") (at 0 0) (property "Reference" "G1")
+  (pad "1" {kind} custom (at {at}) (size 0.1 0.1) {extra} (layers "*.Cu") (net "PAD") (options (clearance outline) (anchor rect))
+    (primitives
+      (gr_line (start -2 -1) (end 0 -1) (width 0.2))
+      (gr_line (start 0 -1) (end 0 1) (width 0.2))
+      (gr_line (start 0 1) (end -2 1) (width 0.2))
+      (gr_line (start -2 1) (end -2 -1) (width 0.2)))))
+"#
+    )
+}
+
+#[test]
+fn copper_inside_a_custom_pad_hole_is_kept() {
+    use crate::ImageKind::Copper;
+    // A zone fill of another net inside the pad's hole, touching no
+    // copper of the pad: the pad's cutter must not take it.
+    let text = parse(&format!(
+        "{}{}(zone (net \"SIG\") (layers \"F.Cu\") (filled_polygon (layer \"F.Cu\") (pts (xy -0.5 -0.5) (xy 0.5 -0.5) (xy 0.5 0.5) (xy -0.5 0.5))))\n",
+        rect_outline(-10.0, -10.0, 10.0, 10.0),
+        outlined_pad("smd", "1 0", ""),
+    ));
+    let board = Board::parse(text.as_bytes()).unwrap();
+    let image = crate::board_image(&board, &crate::ImageOptions::default()).unwrap();
+    assert!(image.warnings.is_empty(), "{:?}", image.warnings);
+    let area = image_region(&image, "F.Cu", Copper, "SIG").area();
+    assert!((area - 1.0).abs() < 0.001, "{area}");
+}
+
+#[test]
+fn a_drill_in_a_custom_pad_hole_is_not_a_second_hole() {
+    use crate::scene::{LayerKind, Scene, Shape};
+    // The drill sits in the middle of the pad's hole, the anchor on its
+    // frame: each pad prism has the one square hole.
+    let text = parse(&format!(
+        "{}{}",
+        rect_outline(-10.0, -10.0, 10.0, 10.0),
+        outlined_pad("thru_hole", "0 0", "(drill 0.4 (offset 1 0))"),
+    ));
+    let board = Board::parse(text.as_bytes()).unwrap();
+    let options = crate::Options {
+        components: false,
+        silkscreen: false,
+        soldermask: false,
+        pads: true,
+        ..crate::Options::default()
+    };
+    let scene = Scene::build(&board, &options, &mut Vec::new()).unwrap();
+    let frames: Vec<_> = scene
+        .layers
+        .iter()
+        .filter(|l| l.kind == LayerKind::Pads)
+        .flat_map(|l| match &l.shape {
+            Shape::Solids(prisms) => prisms.iter().collect::<Vec<_>>(),
+            Shape::Faces { .. } => Vec::new(),
+        })
+        .filter(|p| p.solid.outer.area().abs() > 4.0)
+        .collect();
+    assert_eq!(frames.len(), 2, "front and back copper");
+    for frame in frames {
+        let holes: Vec<f64> = frame.solid.holes.iter().map(|h| h.area().abs()).collect();
+        assert_eq!(holes.len(), 1, "{holes:?}");
+        assert!((holes[0] - 1.8 * 1.8).abs() < 0.001, "{holes:?}");
+        assert!(frame.solid.round.is_empty());
+    }
+}
+
 #[test]
 fn stroke_font_matches_kicad_layout() {
     use crate::font::{TextStyle, strokes};
