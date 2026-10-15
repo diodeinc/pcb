@@ -496,7 +496,11 @@ hold wherever it is placed; the report lists those placements once per Step
   - Board thickness is the finished thickness: IPC `overallThickness`
     includes foil and soldermask. A stackup that states no thickness leaves
     the rule `incomplete`; the profile thickness default is not used.
-  - Surface finish reads every IPC `SurfaceFinish` spec, and soldermask
+  - Surface finish reads the `SurfaceFinish` spec of each coating layer in
+    the stackup, once per spec; unreferenced specs are ignored. IPC `S` is
+    solder leveling without stated lead content: it conforms when both
+    `hasl` and `lead_free_hasl` are allowed, does not conform when neither
+    is, and leaves the rule `incomplete` when only one is. Soldermask
     colour reads the colour term or `Color : <name>` property of each
     soldermask layer's stackup spec. A finish or colour the file does not
     state (KiCad writes `Not specified`) is left to the fab, so the rule is

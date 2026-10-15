@@ -208,38 +208,86 @@ fn format_ounces(ounces: f64) -> String {
     format!("{rounded}")
 }
 
-/// Every surface finish the file's specs state, in spec-name order.
+/// The surface finish each coating layer's stackup spec states, judged once
+/// per spec, with the coating layers that reference it.
 fn surface_finish(allowed: &[SurfaceFinish], design: &Design) -> Evaluation {
+    use ipc2581::types::FinishType;
     let imported = design.imported;
-    let mut specs = imported
-        .specs
-        .values()
-        .filter_map(|spec| Some((imported.resolve(spec.name), spec.surface_finish.as_ref()?)))
-        .collect::<Vec<_>>();
-    if specs.is_empty() {
+    let mut finishes: Vec<(&str, FinishType, Vec<LayerRef>)> = Vec::new();
+    for stackup_layer in imported.stackups.iter().flat_map(|stackup| &stackup.layers) {
+        let Some(coating) = imported.layer_definitions.iter().find(|layer| {
+            layer.name == stackup_layer.layer_ref
+                && matches!(
+                    layer.layer_function,
+                    LayerFunction::CoatingCond | LayerFunction::CoatingNonCond
+                )
+        }) else {
+            continue;
+        };
+        let Some((spec, finish)) = stackup_layer
+            .spec_ref
+            .and_then(|spec| imported.specs.get(&spec))
+            .and_then(|spec| Some((imported.resolve(spec.name), spec.surface_finish.as_ref()?)))
+        else {
+            continue;
+        };
+        let layer = layer_ref(imported, coating);
+        match finishes.iter_mut().find(|(name, ..)| *name == spec) {
+            Some((.., layers)) => layers.push(layer),
+            None => finishes.push((spec, finish.finish_type, vec![layer])),
+        }
+    }
+    if finishes.is_empty() {
         return Evaluation::unstated("the IPC-2581 file states no surface finish");
     }
-    specs.sort_by_key(|(name, _)| *name);
-    let nonconforming = specs
+    let allowed_text = allowed
         .iter()
-        .filter_map(|(name, finish)| {
-            let family = SurfaceFinish::from_ipc(finish.finish_type);
-            if family.is_some_and(|family| allowed.contains(&family)) {
-                return None;
-            }
-            let stated = family.map_or("OTHER", SurfaceFinish::label);
-            let allowed = allowed.iter().map(|finish| finish.label());
-            Some(Nonconforming {
-                message: format!(
-                    "surface finish is {stated}; the PDK allows {}",
-                    allowed.collect::<Vec<_>>().join(", ")
-                ),
-                layers: Vec::new(),
-                subject: subject("surface_finish", *name),
-            })
-        })
-        .collect();
-    Evaluation::judged(specs.len(), nonconforming)
+        .map(|finish| finish.label())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let mut nonconforming = Vec::new();
+    for (spec, finish, layers) in &finishes {
+        let stated = match (finish, SurfaceFinish::from_ipc(*finish)) {
+            (_, Some(family)) if allowed.contains(&family) => continue,
+            (_, Some(family)) => family.label(),
+            // Solder leveling of unstated lead content conforms only where
+            // either lead content would.
+            (FinishType::S, None) => match (
+                allowed.contains(&SurfaceFinish::Hasl),
+                allowed.contains(&SurfaceFinish::LeadFreeHasl),
+            ) {
+                (true, true) => continue,
+                (false, false) => "solder leveling (IPC S)",
+                _ => {
+                    return Evaluation::incomplete(format!(
+                        "surface finish spec '{spec}' states solder leveling (IPC S) without its lead content; the PDK allows {allowed_text}"
+                    ));
+                }
+            },
+            (_, None) => "OTHER",
+        };
+        nonconforming.push(Nonconforming {
+            message: format!("surface finish is {stated}; the PDK allows {allowed_text}"),
+            layers: layers.clone(),
+            subject: subject("surface_finish", *spec),
+        });
+    }
+    Evaluation::judged(finishes.len(), nonconforming)
+}
+
+fn layer_ref(
+    imported: &pcb_ir::import::ipc2581::ImportedDesign,
+    layer: &ipc2581::types::Layer,
+) -> LayerRef {
+    LayerRef {
+        name: imported.resolve(layer.name).to_owned(),
+        function: layer.layer_function.as_str().to_owned(),
+        side: match layers::ir_side(layer.side) {
+            pcb_ir::dialects::Side::Top => Some("top"),
+            pcb_ir::dialects::Side::Bottom => Some("bottom"),
+            _ => None,
+        },
+    }
 }
 
 /// The colour each soldermask layer's stackup spec gives it, by colour term
@@ -288,15 +336,7 @@ fn soldermask_color(allowed: &[SoldermaskColor], design: &Design) -> Evaluation 
         };
         stated += 1;
         if !allowed.contains(&SoldermaskColor::new(color)) {
-            let layer = LayerRef {
-                name: name.to_owned(),
-                function: mask.layer_function.as_str().to_owned(),
-                side: match layers::ir_side(mask.side) {
-                    pcb_ir::dialects::Side::Top => Some("top"),
-                    pcb_ir::dialects::Side::Bottom => Some("bottom"),
-                    _ => None,
-                },
-            };
+            let layer = layer_ref(imported, mask);
             nonconforming.push(Nonconforming {
                 message: format!(
                     "soldermask layer '{name}' is {}; the PDK allows {allowed_text}",

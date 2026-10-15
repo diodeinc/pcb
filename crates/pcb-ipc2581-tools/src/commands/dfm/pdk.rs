@@ -320,12 +320,12 @@ pub enum SurfaceFinish {
 }
 
 impl SurfaceFinish {
-    /// The family of an IPC-2581 `SurfaceFinish` type, or `None` for `OTHER`.
-    /// IPC `S` is solder leveling, which current fabs supply lead-free.
+    /// The family of an IPC-2581 `SurfaceFinish` type. `None` for `OTHER`,
+    /// and for `S`: solder leveling that does not state its lead content.
     pub fn from_ipc(finish: ipc2581::types::FinishType) -> Option<Self> {
         use ipc2581::types::FinishType;
         Some(match finish {
-            FinishType::S => Self::LeadFreeHasl,
+            FinishType::S | FinishType::Other => return None,
             FinishType::T | FinishType::X | FinishType::TLU => Self::Hasl,
             FinishType::EnigN | FinishType::EnigG => Self::Enig,
             FinishType::EnepigN | FinishType::EnepigG | FinishType::EnepigP => Self::Enepig,
@@ -341,7 +341,6 @@ impl SurfaceFinish {
             | FinishType::GwbTwoN => Self::HardGold,
             FinishType::N | FinishType::NB => Self::Nickel,
             FinishType::C => Self::BareCopper,
-            FinishType::Other => return None,
         })
     }
 

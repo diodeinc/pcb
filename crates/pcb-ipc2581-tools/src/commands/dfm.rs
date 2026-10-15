@@ -192,8 +192,11 @@ fn select_profile(
         .filter(|name| pdk.profiles[*name].status == pdk::ProfileStatus::Executable)
         .collect::<Vec<_>>();
     let default = report::ProfileSelection::automatic(&pdk.default_profile, Vec::new());
-    if candidates.len() < 2 {
-        return Ok(default);
+    match candidates.as_slice() {
+        // Lowering reports a kit with no executable profile.
+        [] => return Ok(default),
+        [only] => return Ok(report::ProfileSelection::automatic(only, Vec::new())),
+        _ => {}
     }
     let support = candidates
         .iter()
@@ -1269,7 +1272,7 @@ limit = { nominal = ["0.8 mm", "1.6 mm"], tolerance = "0.1 mm", tolerance_percen
 
 [[rules.board.surface_finish]]
 id = "finish"
-limit = { allowed = ["hasl", "lead_free_hasl"] }
+limit = { allowed = ["hasl", "enig"] }
 
 [[rules.board.soldermask_color]]
 id = "color"
@@ -1309,27 +1312,35 @@ limit = { minimum = ["10 mm", "5 mm"], maximum = ["40 mm", "25 mm"] }"#,
                         r#"<CadHeader units="MILLIMETER">
       <Spec name="MASK"><General type="MATERIAL"><Property text="Color : {color}"/></General></Spec>
       <Spec name="FINISH"><SurfaceFinish type="{finish}"/></Spec>
+      <Spec name="UNUSED"><SurfaceFinish type="OSP"/></Spec>
     </CadHeader>"#
                     ),
                 )
                 .replace(
+                    r#"<Layer name="TOP""#,
+                    r#"<Layer name="COATING_TOP" layerFunction="COATINGCOND" side="TOP" polarity="POSITIVE"/>
+      <Layer name="TOP""#,
+                )
+                .replace(
                     r#"<StackupLayer layerOrGroupRef="TOP""#,
                     r#"<StackupLayer layerOrGroupRef="F.Mask" thickness="0.01" sequence="0"><SpecRef id="MASK"/></StackupLayer>
+          <StackupLayer layerOrGroupRef="COATING_TOP" thickness="0" sequence="0"><SpecRef id="FINISH"/></StackupLayer>
           <StackupLayer layerOrGroupRef="TOP""#,
                 )
         };
-        assert_eq!(status(&specified("S", "green"), "finish"), "Pass");
+        // Only the coating layer's spec states the finish, not the unused OSP.
+        assert_eq!(status(&specified("ENIG-N", "green"), "finish"), "Pass");
+        assert_eq!(status(&specified("T", "green"), "finish"), "Pass");
+        // IPC S does not say which of the two lead contents it is.
+        assert_eq!(status(&specified("S", "green"), "finish"), "Incomplete");
         assert_eq!(status(&specified("S", "green"), "color"), "Pass");
-        let report = check_with_pdk(&specified("ENIG-N", "Black"), LayoutTarget::Board, &pdk);
+        let report = check_with_pdk(&specified("OSP", "Black"), LayoutTarget::Board, &pdk);
         let messages = report
             .findings
             .iter()
             .map(|finding| (finding.rule_id.as_str(), finding.message.as_str()))
             .collect::<Vec<_>>();
-        assert!(messages.contains(&(
-            "finish",
-            "surface finish is enig; the PDK allows hasl, lead_free_hasl"
-        )));
+        assert!(messages.contains(&("finish", "surface finish is osp; the PDK allows hasl, enig")));
         assert!(messages.contains(&(
             "color",
             "soldermask layer 'F.Mask' is black; the PDK allows green"
