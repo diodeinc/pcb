@@ -41,6 +41,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use anyhow::{Context, Result, bail};
 use gerberx2::{escape_attribute_field, trim_decimal};
+use pcb_ir::dialects::nc;
 use pcb_ir::geom::Point;
 
 /// One X2 attribute comment. Construction escapes every field, so whatever
@@ -303,26 +304,38 @@ pub fn write_xnc(doc: &XncDocument) -> Result<String> {
     Ok(out)
 }
 
-/// A drill file as the holes it images.
+/// A drill file as the cuts it makes.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct DrillImage {
     /// The `.FileFunction` attribute's fields, empty when the file has none.
     pub file_function: Vec<String>,
-    pub holes: Vec<DrillHole>,
+    pub holes: Vec<nc::Geometry>,
 }
 
-/// A round hole, or a slot of a round tool's width from `start` to `end`.
+/// Whether `text` reads as a drill file: its first command opens the
+/// Excellon header.
+pub fn is_drill_file(text: &str) -> bool {
+    text.lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty() && !line.starts_with(';'))
+        == Some("M48")
+}
+
+/// How a coordinate-only line moves the tool.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct DrillHole {
-    pub diameter: f64,
-    pub start: Point,
-    pub end: Point,
+enum Motion {
+    /// Drill a hole where it lands.
+    Drill,
+    /// Move the raised tool.
+    Rapid,
+    /// Rout from where the tool is, cutting while it is plunged.
+    Rout,
 }
 
 /// Read an Excellon drill file: the XNC this module writes, and the
 /// decimal Excellon EDA tools export, with slots as `G85` cycles or as
-/// routed `G00`/`M15`/`G01` strokes. Arcs routed with `G02`/`G03` read as
-/// straight slots. Coordinates with suppressed zeros are not supported.
+/// routes (`G00`, `M15`, then `G01` moves). Routed arcs read as straight
+/// slots. Coordinates with suppressed zeros are not supported.
 pub fn read_drill(text: &str) -> Result<DrillImage> {
     let mut image = DrillImage::default();
     let mut tools = HashMap::new();
@@ -331,6 +344,7 @@ pub fn read_drill(text: &str) -> Result<DrillImage> {
     let mut zero_suppression = false;
     let mut tool = None;
     let mut at = Point::new(0.0, 0.0);
+    let mut motion = Motion::Drill;
     let mut plunged = false;
     for (index, line) in text.lines().enumerate() {
         let line = line.trim();
@@ -342,132 +356,140 @@ pub fn read_drill(text: &str) -> Result<DrillImage> {
             continue;
         }
         match line {
-            "" => continue,
-            "M48" => {
-                header = true;
-                continue;
-            }
-            "%" | "M95" => {
-                header = false;
-                continue;
-            }
-            "M15" => {
-                plunged = true;
-                continue;
-            }
-            "M16" | "M17" => {
-                plunged = false;
-                continue;
-            }
+            "" | "G90" => continue,
+            "M48" => header = true,
+            "%" | "M95" => header = false,
+            "M15" => plunged = true,
+            "M16" | "M17" => plunged = false,
             "M30" | "M00" => break,
-            _ => {}
-        }
-        if header {
-            let mut fields = line.split(',');
-            if let Some(unit @ ("METRIC" | "INCH")) = fields.next() {
-                scale = if unit == "INCH" { 25.4 } else { 1.0 };
-                zero_suppression = fields.any(|field| matches!(field, "LZ" | "TZ"));
-                continue;
+            _ if header => {
+                let mut fields = line.split(',');
+                if let Some(unit @ ("METRIC" | "INCH")) = fields.next() {
+                    scale = if unit == "INCH" { 25.4 } else { 1.0 };
+                    zero_suppression = fields.any(|field| matches!(field, "LZ" | "TZ"));
+                } else if let Some((number, diameter)) = tool_definition(line) {
+                    let diameter = diameter.with_context(context)?;
+                    tools.insert(number.with_context(context)?, diameter * scale);
+                }
             }
-        }
-        if let Some(rest) = line.strip_prefix('T') {
-            let digits = rest.len() - rest.trim_start_matches(|c: char| c.is_ascii_digit()).len();
-            let number: u32 = rest[..digits].parse().with_context(context)?;
-            let parameters = &rest[digits..];
-            if let Some(diameter) = parameters.find('C').map(|at| &parameters[at + 1..]) {
-                let end = diameter
-                    .find(|c: char| !(c.is_ascii_digit() || c == '.'))
-                    .unwrap_or(diameter.len());
-                let diameter: f64 = diameter[..end].parse().with_context(context)?;
-                tools.insert(number, diameter * scale);
-            } else if !header {
+            _ if line.starts_with('T') => {
+                let number = tool_definition(line).map(|(number, _)| number);
+                let number = number.unwrap_or_else(|| line[1..].parse().map_err(Into::into));
+                let number = number.with_context(context)?;
                 tool = (number != 0).then_some(number);
             }
-            continue;
-        }
-        if header {
-            continue;
-        }
-        let coordinates = |text: &str, from: Point| -> Result<Point> {
-            let mut point = from;
-            let mut rest = text;
-            while let Some(axis) = rest.chars().next().filter(|axis| matches!(axis, 'X' | 'Y')) {
-                let value = &rest[1..];
-                let end = value
-                    .find(|c: char| !(c.is_ascii_digit() || matches!(c, '.' | '-' | '+')))
-                    .unwrap_or(value.len());
-                let number = &value[..end];
-                if zero_suppression && !number.contains('.') {
-                    bail!(
-                        "{}: coordinates with suppressed zeros are not supported",
-                        context()
-                    );
+            _ => {
+                let point = |text: &str, from: Point| -> Result<Point> {
+                    coordinates(text, from, scale, zero_suppression).with_context(context)
+                };
+                let cut = |geometry: nc::Geometry| -> Result<nc::Geometry> {
+                    let number =
+                        tool.with_context(|| format!("{}: no tool selected", context()))?;
+                    let diameter = *tools.get(&number).with_context(|| {
+                        format!("{}: tool T{number:02} is not defined", context())
+                    })?;
+                    Ok(match geometry {
+                        nc::Geometry::Drill { at, .. } => nc::Geometry::Drill { at, diameter },
+                        nc::Geometry::Slot { start, end, .. } => nc::Geometry::Slot {
+                            start,
+                            end,
+                            diameter,
+                        },
+                    })
+                };
+                let (command, rest) = match line.get(..3) {
+                    Some(code @ ("G00" | "G01" | "G02" | "G03" | "G05")) => {
+                        (Some(code), &line[3..])
+                    }
+                    _ => (None, line),
+                };
+                motion = match command {
+                    Some("G05") => Motion::Drill,
+                    Some("G00") => Motion::Rapid,
+                    Some(_) => Motion::Rout,
+                    None => motion,
+                };
+                if rest.is_empty() {
+                    continue;
                 }
-                let number = number.parse::<f64>().with_context(context)? * scale;
-                if axis == 'X' {
-                    point.x = number;
-                } else {
-                    point.y = number;
+                if let Some((start, end)) = rest.split_once("G85") {
+                    let start = point(start, at)?;
+                    at = point(end, start)?;
+                    image.holes.push(cut(nc::Geometry::Slot {
+                        start,
+                        end: at,
+                        diameter: 0.0,
+                    })?);
+                    continue;
                 }
-                rest = &value[end..];
-            }
-            if !rest.is_empty() {
-                bail!("{}: unexpected '{rest}'", context());
-            }
-            Ok(point)
-        };
-        let mut hole = |start: Point, end: Point| -> Result<()> {
-            let number = tool.with_context(|| format!("{}: no tool selected", context()))?;
-            let diameter = *tools
-                .get(&number)
-                .with_context(|| format!("{}: tool T{number:02} is not defined", context()))?;
-            image.holes.push(DrillHole {
-                diameter,
-                start,
-                end,
-            });
-            Ok(())
-        };
-        let (command, coordinates_text) = match line.get(..3) {
-            Some(code @ ("G00" | "G01" | "G02" | "G03" | "G05" | "G90")) => {
-                (Some(code), &line[3..])
-            }
-            _ => (None, line),
-        };
-        match command {
-            Some("G05" | "G90") => continue,
-            Some("G00") => {
-                at = coordinates(coordinates_text, at)?;
-                plunged = false;
-            }
-            Some(_) => {
-                // A routed move: G01 or an arc, read straight. It cuts only
-                // with the tool plunged.
-                let coordinates_text = coordinates_text
-                    .split_once(['A', 'I'])
-                    .map_or(coordinates_text, |(points, _)| points);
-                let end = coordinates(coordinates_text, at)?;
-                if plunged {
-                    hole(at, end)?;
+                // An arc's centre or radius follows its end point.
+                let end_text = rest
+                    .split_once(['A', 'I', 'J'])
+                    .map_or(rest, |(end, _)| end);
+                let end = point(end_text, at)?;
+                match motion {
+                    Motion::Drill => image.holes.push(cut(nc::Geometry::Drill {
+                        at: end,
+                        diameter: 0.0,
+                    })?),
+                    Motion::Rout if plunged && end.distance_to(at) > 1e-9 => {
+                        image.holes.push(cut(nc::Geometry::Slot {
+                            start: at,
+                            end,
+                            diameter: 0.0,
+                        })?);
+                    }
+                    Motion::Rapid | Motion::Rout => {}
                 }
                 at = end;
             }
-            None if !line.starts_with(['X', 'Y']) => continue,
-            None => match line.split_once("G85") {
-                Some((start, end)) => {
-                    let start = coordinates(start, at)?;
-                    let end = coordinates(end, start)?;
-                    hole(start, end)?;
-                    at = end;
-                }
-                None => {
-                    at = coordinates(line, at)?;
-                    hole(at, at)?;
-                }
-            },
         }
     }
     Ok(image)
+}
+
+/// A `TnnC<diameter>` tool definition's number and diameter; `None` for a
+/// line that defines no diameter.
+fn tool_definition(line: &str) -> Option<(Result<u32>, Result<f64>)> {
+    let rest = line.strip_prefix('T')?;
+    let digits = rest.len() - rest.trim_start_matches(|c: char| c.is_ascii_digit()).len();
+    let parameters = &rest[digits..];
+    let diameter = &parameters[parameters.find('C')? + 1..];
+    let end = diameter
+        .find(|c: char| !(c.is_ascii_digit() || c == '.'))
+        .unwrap_or(diameter.len());
+    Some((
+        rest[..digits].parse().map_err(Into::into),
+        diameter[..end].parse().map_err(Into::into),
+    ))
+}
+
+/// The point `X`/`Y` words in `text` move to from `from`; an axis a line
+/// leaves out keeps its value.
+fn coordinates(text: &str, from: Point, scale: f64, zero_suppression: bool) -> Result<Point> {
+    let mut point = from;
+    let mut rest = text;
+    while let Some(axis) = rest.chars().next().filter(|axis| matches!(axis, 'X' | 'Y')) {
+        let value = &rest[1..];
+        let end = value
+            .find(|c: char| !(c.is_ascii_digit() || matches!(c, '.' | '-' | '+')))
+            .unwrap_or(value.len());
+        let number = &value[..end];
+        if zero_suppression && !number.contains('.') {
+            bail!("coordinates with suppressed zeros are not supported");
+        }
+        let number = number.parse::<f64>()? * scale;
+        if axis == 'X' {
+            point.x = number;
+        } else {
+            point.y = number;
+        }
+        rest = &value[end..];
+    }
+    if !rest.is_empty() {
+        bail!("unexpected '{rest}'");
+    }
+    Ok(point)
 }
 
 impl XncObject {
@@ -559,7 +581,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn written_drills_and_slots_read_back_as_the_holes_they_image() {
+    fn written_drills_and_slots_read_back_as_the_cuts_they_make() {
         let mut builder = XncBuilder::new(vec![XncAttribute::file(
             "FileFunction",
             ["Plated", "1", "4", "PTH"],
@@ -576,34 +598,46 @@ mod tests {
         builder
             .add_drill(0.3, Point::new(-4.25, 7.0), vec![], vec![])
             .unwrap();
-        let image = read_drill(&write_xnc(&builder.finish()).unwrap()).unwrap();
+        let text = format!(
+            "; written by a test\n{}",
+            write_xnc(&builder.finish()).unwrap()
+        );
+        assert!(is_drill_file(&text));
+        let image = read_drill(&text).unwrap();
         assert_eq!(image.file_function, ["Plated", "1", "4", "PTH"]);
-        let hole = |diameter, start, end| DrillHole {
-            diameter,
-            start,
-            end,
-        };
-        let at = Point::new(-4.25, 7.0);
         assert_eq!(
             image.holes,
             [
-                hole(0.3, at, at),
-                hole(0.6, Point::new(1.0, 2.0), Point::new(3.5, 2.0)),
+                nc::Geometry::Drill {
+                    at: Point::new(-4.25, 7.0),
+                    diameter: 0.3
+                },
+                nc::Geometry::Slot {
+                    start: Point::new(1.0, 2.0),
+                    end: Point::new(3.5, 2.0),
+                    diameter: 0.6
+                },
             ]
         );
     }
 
     #[test]
-    fn routed_inch_slots_cut_only_while_plunged() {
-        let text = "M48\nINCH\nT1C0.04\n%\nT1\nG00X1.0Y1.0\nM15\nG01X2.0Y1.0\nM16\nG00X3.0Y3.0\nG01X4.0Y3.0\nM30\n";
-        let image = read_drill(text).unwrap();
+    fn a_route_cuts_every_move_while_plunged_and_none_after() {
+        // Inch units; the second segment continues the modal G01 with bare
+        // coordinates, and the moves after M16 cut nothing.
+        let text = "M48\nINCH\nT1C0.04\n%\nT1\nG00X1.0Y1.0\nM15\nG01X2.0Y1.0\nX2.0Y2.0\nM16\nX3.0Y3.0\nG00X4.0Y4.0\nM30\n";
+        let slot = |start: Point, end: Point| nc::Geometry::Slot {
+            start,
+            end,
+            diameter: 0.04 * 25.4,
+        };
+        let inch = |x: f64, y: f64| Point::new(x * 25.4, y * 25.4);
         assert_eq!(
-            image.holes,
-            [DrillHole {
-                diameter: 0.04 * 25.4,
-                start: Point::new(25.4, 25.4),
-                end: Point::new(50.8, 25.4),
-            }]
+            read_drill(text).unwrap().holes,
+            [
+                slot(inch(1.0, 1.0), inch(2.0, 1.0)),
+                slot(inch(2.0, 1.0), inch(2.0, 2.0)),
+            ]
         );
     }
 

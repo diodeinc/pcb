@@ -169,6 +169,63 @@ pub struct ContourBuf {
     pub uncertainty_mm: f64,
 }
 
+/// Join open runs end to end into closed contours, as an outline drawn a
+/// segment at a time must be: a run continues with any other whose start,
+/// or reversed whose end, lies within `tolerance` of its end. A run that
+/// never closes bounds nothing and is left out; closed runs pass through.
+pub fn join_closed_contours(
+    runs: impl IntoIterator<Item = ContourBuf>,
+    tolerance: f64,
+) -> Vec<ContourBuf> {
+    let mut open = runs
+        .into_iter()
+        .map(|run| {
+            run.cmds
+                .into_iter()
+                .filter(|cmd| cmd.op != PathOp::Close)
+                .collect::<Vec<_>>()
+        })
+        .filter(|cmds| cmds.len() > 1)
+        .collect::<Vec<_>>();
+    let near = |a: Point, b: Point| a.distance_to(b) <= tolerance;
+    let mut closed = Vec::new();
+    while let Some(mut run) = open.pop() {
+        loop {
+            let end = run[run.len() - 1].p0;
+            if near(run[0].p0, end) {
+                closed.push(ContourBuf::new(run));
+                break;
+            }
+            let next = open
+                .iter()
+                .position(|cmds| near(cmds[0].p0, end) || near(cmds[cmds.len() - 1].p0, end));
+            let Some(next) = next else { break };
+            let next = open.swap_remove(next);
+            let next = if near(next[0].p0, end) {
+                next
+            } else {
+                reversed_run(&next)
+            };
+            run.extend_from_slice(&next[1..]);
+        }
+    }
+    closed
+}
+
+/// An open run drawn from its end back to its start: each segment ends
+/// where it began and an arc turns the other way about the same centre.
+fn reversed_run(cmds: &[PathCmd]) -> Vec<PathCmd> {
+    let mut out = vec![PathCmd::move_to(cmds[cmds.len() - 1].p0)];
+    for pair in cmds.windows(2).rev() {
+        out.push(PathCmd {
+            p0: pair[0].p0,
+            clockwise: !pair[1].clockwise,
+            ..pair[1]
+        });
+    }
+    out
+}
+
 impl ContourBuf {
     /// Build from commands, computing the bounding box.
     pub fn new(cmds: Vec<PathCmd>) -> Self {
@@ -521,6 +578,38 @@ pub(crate) fn validate_cmd_points(name: &str, cmds: &[PathCmd]) -> Result<(), St
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_outline_drawn_a_run_at_a_time_joins_into_one_closed_contour() {
+        // A 10 x 4 board whose right end bulges out to x = 12 as a half
+        // circle about (10, 2). The arc is drawn from its far end, so it
+        // joins reversed, and a stray mark closes nothing.
+        let run = |cmds: Vec<PathCmd>| ContourBuf::new(cmds);
+        let line = |from: (f64, f64), to: (f64, f64)| {
+            run(vec![
+                PathCmd::move_to(Point::new(from.0, from.1)),
+                PathCmd::line_to(Point::new(to.0, to.1)),
+            ])
+        };
+        let runs = vec![
+            line((0.0, 0.0), (10.0, 0.0)),
+            run(vec![
+                PathCmd::move_to(Point::new(10.0, 4.0)),
+                PathCmd::arc_to(Point::new(10.0, 0.0), Point::new(10.0, 2.0), true),
+            ]),
+            line((10.0, 4.0), (0.0, 4.0)),
+            line((0.0, 4.0), (0.0, 0.0)),
+            line((20.0, 0.0), (21.0, 0.0)),
+        ];
+        let closed = join_closed_contours(runs, 1e-6);
+        assert_eq!(closed.len(), 1);
+        // Turned the wrong way, the reversed arc would bulge into the board
+        // and the outline would end at x = 10.
+        assert_eq!(
+            closed[0].bbox,
+            BBox::new(Point::new(0.0, 0.0), Point::new(12.0, 4.0))
+        );
+    }
 
     #[test]
     fn segment_commands_preserve_forward_and_reversed_curves() {

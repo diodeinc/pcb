@@ -5,6 +5,7 @@
 //! Mask renders take an already-composed image. Both take a [`RenderOptions`].
 //! The PDF backend writes artwork into a document its caller lays out.
 
+pub mod composite;
 #[cfg(not(target_family = "wasm"))]
 mod pdf;
 mod png;

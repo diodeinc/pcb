@@ -992,6 +992,28 @@ fn flatten_leaf_blocks<LayerMeta, ObjectMeta: Clone>(
     }
 }
 
+/// The closed outlines a layer's dark draws and regions trace, joined end
+/// to end within `tolerance`: a profile layer's board edges, however the
+/// outline was broken into draws. Widths are ignored; the centreline is the
+/// edge.
+pub fn closed_outlines<LayerMeta: Clone, ObjectMeta: Clone>(
+    doc: &Document<LayerMeta, ObjectMeta>,
+    layer: u32,
+    tolerance: f64,
+) -> Vec<ContourBuf> {
+    let flat = expand_instances(doc);
+    let objects = flat.layers[layer as usize].objects.slice(&flat.objects);
+    let runs = objects
+        .iter()
+        .filter(|object| object.polarity == Polarity::Dark)
+        .filter_map(|object| match object.geometry {
+            Geometry::Stroke { path } | Geometry::Region { path } => Some(path),
+            _ => None,
+        })
+        .flat_map(|path| flat.arena.contour_bufs(flat.arena.path(path).contours));
+    crate::geom::path::join_closed_contours(runs, tolerance)
+}
+
 /// Copy `source`'s apertures, paths and blocks into `target`'s tables and
 /// return each source layer's objects as they image there, their metadata
 /// mapped by `meta`. The objects are not placed on any layer: the caller
