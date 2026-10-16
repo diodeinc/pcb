@@ -1,7 +1,7 @@
 use crate::types::*;
 use crate::{GerberError, Result};
 use pcb_ir::geom::Polarity;
-use pcb_ir::geom::region::{Ring, grid_coordinate};
+use pcb_ir::geom::region::grid_coordinate;
 use std::collections::HashMap;
 use std::fmt::Write as _;
 
@@ -155,9 +155,6 @@ pub enum WriterApertureTemplate {
         rotation_degrees: Option<f64>,
         hole_diameter: Option<f64>,
     },
-    /// Filled simple polygons about the flash origin, written as one
-    /// aperture macro of additive outline primitives.
-    Outline { outlines: Vec<Ring> },
 }
 
 /// One ordered graphical object plus the X2 object attributes active while
@@ -190,11 +187,11 @@ impl WriterObject {
 
 /// Format-neutral artwork/object IR for writing one Gerber X2 layer file.
 ///
-/// This is intentionally close to Gerber's object stream: apertures remain
-/// apertures, pads remain flashes, tracks remain draws/arcs, and filled copper
-/// remains regions. IPC-2581 export should lower into this level before writing
-/// Gerber, and use flattened geometry only for validation or unavoidable
-/// fallback regions.
+/// This is intentionally close to Gerber's object stream: standard apertures
+/// remain apertures, compatible pads remain flashes, tracks remain draws/arcs,
+/// and filled copper remains regions. IPC-2581 export should lower into this
+/// level before writing Gerber, and use flattened geometry only for validation
+/// or non-standard flashes that require compatibility fallback regions.
 #[derive(Debug, Clone, PartialEq)]
 pub struct GerberLayer {
     pub unit: Unit,
@@ -311,12 +308,6 @@ impl<'a> Writer<'a> {
         }
 
         for aperture in &self.layer.apertures {
-            if let WriterApertureTemplate::Outline { outlines } = &aperture.template {
-                self.write_outline_macro(aperture.code, outlines)?;
-            }
-        }
-
-        for aperture in &self.layer.apertures {
             let attributes = self.attribute_set(aperture.attributes)?;
             for attr in attributes {
                 self.write_attribute("TA", attr)?;
@@ -330,29 +321,6 @@ impl<'a> Writer<'a> {
         self.write_objects(&self.layer.objects)?;
 
         self.output.push_str("M02*\n");
-        Ok(())
-    }
-
-    /// One additive code-4 outline primitive per polygon.
-    fn write_outline_macro(&mut self, code: i32, outlines: &[Ring]) -> Result<()> {
-        writeln!(self.output, "%AMOUTLINE{code}*").unwrap();
-        for outline in outlines {
-            if outline.len() < 3 {
-                return Err(GerberError::InvalidStructure(
-                    "cannot export a Gerber outline macro with fewer than three vertices"
-                        .to_string(),
-                ));
-            }
-            write!(self.output, "4,1,{}", outline.len()).unwrap();
-            for [x, y] in outline.iter().chain(std::iter::once(&outline[0])) {
-                self.output.push(',');
-                self.write_decimal(*x);
-                self.output.push(',');
-                self.write_decimal(*y);
-            }
-            self.output.push_str(",0*\n");
-        }
-        self.output.push_str("%\n");
         Ok(())
     }
 
@@ -404,10 +372,6 @@ impl<'a> Writer<'a> {
                 let mut parameters = vec![outer_diameter, f64::from(vertices)];
                 parameters.extend(rotation);
                 ('P', parameters, hole_diameter)
-            }
-            WriterApertureTemplate::Outline { .. } => {
-                writeln!(self.output, "%ADD{0}OUTLINE{0}*%", aperture.code).unwrap();
-                return Ok(());
             }
         };
         write!(self.output, "%ADD{}{letter}", aperture.code).unwrap();

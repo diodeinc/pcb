@@ -49,8 +49,8 @@ pub type ArtworkDocument = pcb_ir::dialects::artwork::Document<LayerAttributes, 
 ///
 /// This is the normalize pipeline: extract the parsed layer into artwork,
 /// carry its X2 attributes across, and lower it back to idiomatic Gerber.
-/// Source flashes survive as flashes and step-repeats as step-repeats;
-/// block instances are expanded.
+/// Standard source flashes survive as flashes, non-standard flashes become
+/// regions, and step-repeats remain step-repeats; block instances are expanded.
 pub fn normalize_layer(gerber: &crate::GerberX2, accuracy: GeometryAccuracy) -> Result<String> {
     let annotated =
         annotate_for_export(gerber, crate::geometry::extract_document(gerber, accuracy)?);
@@ -354,11 +354,8 @@ fn lower_artwork_object(
                     )?);
                     continue;
                 }
-                let Some(aperture) = apertures.define(
-                    Aperture::circle(stroke_width),
-                    aperture_function,
-                    accuracy,
-                )?
+                let Some(aperture) =
+                    apertures.define(Aperture::circle(stroke_width), aperture_function)?
                 else {
                     continue;
                 };
@@ -396,20 +393,28 @@ fn lower_artwork_object(
             transform: placement,
         } => {
             let transform = transform.concat(placement);
-            objects.extend(
-                apertures
-                    .flash(layer, aperture, transform, aperture_function, accuracy)?
-                    .map(|aperture| {
-                        WriterObject::new(
-                            ObjectKind::Flash {
-                                at: lower_point(Point::new(transform.m02, transform.m12)),
-                                aperture,
-                            },
-                            polarity,
-                            attributes,
-                        )
-                    }),
-            );
+            match apertures.flash(layer, aperture, transform, aperture_function)? {
+                LoweredFlash::Empty => {}
+                LoweredFlash::Aperture(aperture) => objects.push(WriterObject::new(
+                    ObjectKind::Flash {
+                        at: lower_point(Point::new(transform.m02, transform.m12)),
+                        aperture,
+                    },
+                    polarity,
+                    attributes,
+                )),
+                LoweredFlash::Region {
+                    contours,
+                    fill_rule,
+                } => objects.extend(region_objects(
+                    &contours,
+                    fill_rule,
+                    polarity,
+                    aperture_function,
+                    attributes,
+                    accuracy,
+                )?),
+            }
         }
         ArtworkGeometry::Instance { .. } | ArtworkGeometry::GridInstance { .. } => {
             unreachable!("instance expansion leaves only primitive geometry")
@@ -513,17 +518,28 @@ struct ApertureTable {
     apertures: Vec<WriterAperture>,
 }
 
+enum LoweredFlash {
+    Empty,
+    Aperture(i32),
+    Region {
+        contours: Vec<ContourBuf>,
+        fill_rule: FillRule,
+    },
+}
+
+impl From<Option<i32>> for LoweredFlash {
+    fn from(aperture: Option<i32>) -> Self {
+        aperture.map_or(Self::Empty, Self::Aperture)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 enum ApertureTemplateKey {
     /// A source aperture under one linear basis. The layer is immutable
     /// and the accuracy fixed for this table, so a hit skips all preparation.
-    Source {
-        aperture: u32,
-        basis: [i64; 4],
-    },
+    Source { aperture: u32, basis: [i64; 4] },
     /// A standard template's letter, its parameters and its hole.
     Standard(char, [i64; 3], i64),
-    Outline(Vec<Vec<(i64, i64)>>),
 }
 
 impl ApertureTable {
@@ -539,8 +555,7 @@ impl ApertureTable {
         source: u32,
         transform: Affine2,
         function: u32,
-        accuracy: GeometryAccuracy,
-    ) -> Result<Option<i32>> {
+    ) -> Result<LoweredFlash> {
         let basis = Affine2 {
             m02: 0.0,
             m12: 0.0,
@@ -557,34 +572,63 @@ impl ApertureTable {
             function,
         );
         if let Some(code) = self.by_key.get(&key) {
-            return Ok(Some(*code));
+            return Ok(LoweredFlash::Aperture(*code));
         }
         let aperture = layer.apertures.get(source as usize).ok_or_else(|| {
             GerberError::InvalidStructure(format!(
                 "artwork flash references missing aperture {source}"
             ))
         })?;
-        let code = self.define(bake_aperture_basis(aperture, basis), function, accuracy)?;
-        if let Some(code) = code {
-            self.by_key.insert(key, code);
+        let lowered = self.define_transformed(aperture, transform, function)?;
+        if let LoweredFlash::Aperture(code) = &lowered {
+            self.by_key.insert(key, *code);
         }
-        Ok(code)
+        Ok(lowered)
+    }
+
+    /// Use a standard Gerber flash when the transformed shape remains a
+    /// circle, rectangle, obround or regular polygon. Everything else is an
+    /// explicit region so the file never depends on aperture-macro support.
+    fn define_transformed(
+        &mut self,
+        aperture: &Aperture,
+        transform: Affine2,
+        function: u32,
+    ) -> Result<LoweredFlash> {
+        let bounds = aperture.bbox();
+        if !bounds.is_valid() {
+            return Err(GerberError::InvalidStructure(format!(
+                "cannot export malformed Gerber aperture {:?}",
+                aperture.shape
+            )));
+        }
+        if bounds.is_empty() || bounds.width() == 0.0 || bounds.height() == 0.0 {
+            return Ok(LoweredFlash::Empty);
+        }
+        let basis = Affine2 {
+            m02: 0.0,
+            m12: 0.0,
+            ..transform
+        };
+        let baked = bake_aperture_basis(aperture, basis);
+        match baked.shape {
+            ApertureShape::Circle { .. }
+            | ApertureShape::Rectangle { .. }
+            | ApertureShape::Obround { .. }
+            | ApertureShape::Polygon { .. } => self.define(baked, function).map(Into::into),
+            ApertureShape::RoundRect { .. } | ApertureShape::Contour { .. } => {
+                Ok(region_flash(aperture, transform))
+            }
+        }
     }
 
     /// Define an aperture, reusing an identical definition. An aperture
     /// without area defines nothing: it paints nothing here, as a zero-width
     /// stroke or an empty flash does in every other consumer.
     ///
-    /// The four standard templates stay standard. Every other shape is one
-    /// flattened outline macro: JLCPCB renders primitive 21 rounded
-    /// rectangles oversized, and legacy CAM importers evaluate compound
-    /// macros per flash.
-    fn define(
-        &mut self,
-        aperture: Aperture,
-        function: u32,
-        accuracy: GeometryAccuracy,
-    ) -> Result<Option<i32>> {
+    /// Only Gerber's four standard templates reach this table. Every other
+    /// flash is lowered as a region by the caller.
+    fn define(&mut self, aperture: Aperture, function: u32) -> Result<Option<i32>> {
         let bounds = aperture.bbox();
         if !bounds.is_valid() {
             return Err(GerberError::InvalidStructure(format!(
@@ -641,24 +685,9 @@ impl ApertureTable {
                 },
             ),
             ApertureShape::RoundRect { .. } | ApertureShape::Contour { .. } => {
-                let outlines =
-                    prepare_on_grid(&aperture.contours(), aperture.fill_rule(), accuracy)?;
-                if outlines.is_empty() {
-                    return Ok(None);
-                }
-                (
-                    ApertureTemplateKey::Outline(
-                        outlines
-                            .iter()
-                            .map(|ring| {
-                                ring.iter()
-                                    .map(|[x, y]| (quantize_mm(*x), quantize_mm(*y)))
-                                    .collect()
-                            })
-                            .collect(),
-                    ),
-                    WriterApertureTemplate::Outline { outlines },
-                )
+                return Err(GerberError::InvalidStructure(
+                    "non-standard apertures must lower as Gerber regions".to_string(),
+                ));
             }
         };
         let key = (template_key, function);
@@ -673,6 +702,17 @@ impl ApertureTable {
             attributes: function,
         });
         Ok(Some(code))
+    }
+}
+
+fn region_flash(aperture: &Aperture, transform: Affine2) -> LoweredFlash {
+    LoweredFlash::Region {
+        contours: aperture
+            .contours()
+            .into_iter()
+            .map(|contour| contour.transformed(transform))
+            .collect(),
+        fill_rule: aperture.fill_rule(),
     }
 }
 
@@ -983,14 +1023,15 @@ mod tests {
         (rings, layer)
     }
 
-    fn outlines(layer: &GerberLayer) -> Vec<&Ring> {
+    fn region_vertex_counts(layer: &GerberLayer) -> Vec<usize> {
         layer
-            .apertures
+            .objects
             .iter()
-            .flat_map(|aperture| match &aperture.template {
-                WriterApertureTemplate::Outline { outlines } => outlines.as_slice(),
+            .flat_map(|object| match &object.kind {
+                ObjectKind::Region { contours } => contours.as_slice(),
                 _ => &[],
             })
+            .map(|contour| contour.segments.len())
             .collect()
     }
 
@@ -1087,7 +1128,7 @@ mod tests {
     }
 
     #[test]
-    fn source_contour_reuse_preserves_placement_function_basis_and_errors() {
+    fn source_contour_regions_preserve_placement_function_basis_and_errors() {
         let accuracy = GeometryAccuracy::default();
         let mut artwork = ArtworkDocument::new();
         let outline = rect_payload(1.0, 0.0, 2.0, 0.5);
@@ -1108,31 +1149,56 @@ mod tests {
                 accuracy,
             )
         };
-        let first = lower(&flash, Affine2::IDENTITY, &mut table).unwrap();
-        let ObjectKind::Flash { aperture: code, .. } = first[0].kind else {
-            panic!("expected a flash");
+        let bounds = |objects: &[WriterObject]| {
+            let mut bounds = [
+                f64::INFINITY,
+                f64::INFINITY,
+                f64::NEG_INFINITY,
+                f64::NEG_INFINITY,
+            ];
+            for object in objects {
+                let ObjectKind::Region { contours } = &object.kind else {
+                    panic!("expected only regions");
+                };
+                for segment in contours.iter().flat_map(|contour| &contour.segments) {
+                    let (start, end) = match segment {
+                        ContourSegment::Line { start, end }
+                        | ContourSegment::Arc { start, end, .. } => (start, end),
+                    };
+                    for point in [start, end] {
+                        bounds[0] = bounds[0].min(point.x);
+                        bounds[1] = bounds[1].min(point.y);
+                        bounds[2] = bounds[2].max(point.x);
+                        bounds[3] = bounds[3].max(point.y);
+                    }
+                }
+            }
+            bounds
         };
-        let definitions = table.apertures.len();
+        let first = lower(&flash, Affine2::IDENTITY, &mut table).unwrap();
+        assert_eq!(bounds(&first), [1.0, 0.0, 2.0, 0.5]);
+        assert!(table.apertures.is_empty());
         let translated = lower(
             &flash,
             Affine2::translation(Point::new(100_000.000_3, -10_000.000_2)),
             &mut table,
         )
         .unwrap();
-        assert!(
-            matches!(translated[0].kind, ObjectKind::Flash { aperture, at }
-            if aperture == code && at.x == 100_000.000_3 && at.y == -10_000.000_2)
+        assert_eq!(
+            bounds(&translated),
+            [100_001.000_3, -10_000.000_2, 100_002.000_3, -9_999.500_2]
         );
-        assert_eq!(table.apertures.len(), definitions);
 
-        // Functions remain separate even for the same source geometry.
+        // A region carries the source aperture function directly.
         flash.meta.aperture_function = Some(vec!["SMDPad".into()]);
         let attributed = lower(&flash, Affine2::IDENTITY, &mut table).unwrap();
         assert!(
-            matches!(attributed[0].kind, ObjectKind::Flash { aperture, .. } if aperture != code)
+            attributed
+                .iter()
+                .all(|object| object.aperture_attributes != AttributeSets::EMPTY)
         );
         flash.meta.aperture_function = None;
-        // Every basis is its own definition.
+        // A non-similarity basis is baked directly into each region.
         let scaled = lower(
             &flash,
             Affine2 {
@@ -1142,10 +1208,10 @@ mod tests {
             &mut table,
         )
         .unwrap();
-        assert!(matches!(scaled[0].kind, ObjectKind::Flash { aperture, .. } if aperture != code));
+        assert_eq!(bounds(&scaled), [2.0, 0.0, 4.0, 0.5]);
 
         // A different source ID with the same coordinates must still validate
-        // its inherited uncertainty; failures must not register an alias.
+        // its inherited uncertainty; failures must not register an aperture.
         flash.geometry = ArtworkGeometry::Flash {
             aperture: invalid,
             transform: Affine2::IDENTITY,
@@ -1213,7 +1279,7 @@ mod tests {
     }
 
     #[test]
-    fn lowering_bakes_off_origin_aperture_rotation() {
+    fn lowering_bakes_off_origin_contours_into_attributed_regions() {
         let mut artwork = ArtworkDocument::new();
         let aperture = contour_aperture(
             &mut artwork,
@@ -1246,7 +1312,177 @@ mod tests {
         assert!(!gerber.contains("%LR"));
         assert!(!gerber.contains("%LM"));
         assert!(!gerber.contains("%LS"));
-        assert_eq!(gerber.matches("D03*").count(), 1);
+        assert_eq!(gerber.matches("D03*").count(), 0);
+        assert_eq!(gerber.matches("G36*").count(), 1);
+        assert!(gerber.contains("%TA.AperFunction,SMDPad,CuDef*%"));
+    }
+
+    #[test]
+    fn nonstandard_flashes_use_regions_with_geometry_polarity_and_x2_metadata() {
+        let (mut artwork, layer) = copper_artwork();
+        push_region(
+            &mut artwork,
+            layer,
+            Polarity::Dark,
+            FillRule::NonZero,
+            vec![rect_payload(-8.0, -6.0, 8.0, 6.0)],
+        );
+        let shapes = [
+            ApertureShape::Rectangle {
+                width: 3.0,
+                height: 1.1,
+            },
+            ApertureShape::Obround {
+                width: 3.2,
+                height: 0.8,
+            },
+            ApertureShape::RoundRect {
+                width: 2.8,
+                height: 1.6,
+                radius: 0.3,
+            },
+        ];
+        for (shape, center, rotation, polarity) in [
+            (
+                shapes[0].clone(),
+                Point::new(-4.0, 0.0),
+                37.0,
+                Polarity::Clear,
+            ),
+            (
+                shapes[1].clone(),
+                Point::new(0.0, 0.0),
+                -28.0,
+                Polarity::Clear,
+            ),
+            (
+                shapes[2].clone(),
+                Point::new(4.0, 0.0),
+                17.0,
+                Polarity::Clear,
+            ),
+            (shapes[2].clone(), Point::new(0.0, 3.0), 0.0, Polarity::Dark),
+        ] {
+            let aperture = artwork.push_aperture(Aperture::solid(shape));
+            let mut object = flash(
+                polarity,
+                aperture,
+                Affine2::placement(center, rotation, Mirror::NONE, 1.0),
+            );
+            object.meta.aperture_function = Some(vec!["SMDPad".to_string(), "CuDef".to_string()]);
+            object.meta.net = Some("N1".to_string());
+            artwork.push_object(layer, object);
+        }
+        pcb_ir::dialects::artwork::normalize_bounds(&mut artwork);
+
+        let gerber = lower(&artwork);
+        let (text, parsed) = reread(&gerber);
+        assert_eq!(text.matches("D03*").count(), 0);
+        assert_eq!(text.matches("G36*").count(), 5);
+        assert!(!text.contains("%AM"));
+        assert!(text.contains("%TA.AperFunction,SMDPad,CuDef*%"));
+        assert!(text.contains("%TO.N,N1*%"));
+
+        let difference = image_difference(&artwork, &parsed);
+        assert!(
+            difference < 0.005,
+            "symmetric difference was {difference} mm²"
+        );
+        let source = image(&artwork);
+        let candidate = image(&parsed);
+        for (source, candidate) in [
+            (source.bbox.min.x, candidate.bbox.min.x),
+            (source.bbox.min.y, candidate.bbox.min.y),
+            (source.bbox.max.x, candidate.bbox.max.x),
+            (source.bbox.max.y, candidate.bbox.max.y),
+        ] {
+            assert!((source - candidate).abs() <= 1e-6);
+        }
+    }
+
+    #[test]
+    fn arbitrary_contours_use_attributed_regions_without_macros() {
+        let (mut artwork, layer) = copper_artwork();
+        for (points, center) in [
+            (
+                [
+                    Point::new(-1.0, -0.5),
+                    Point::new(1.2, -0.4),
+                    Point::new(0.1, 0.9),
+                ],
+                Point::new(-3.0, 0.0),
+            ),
+            (
+                [
+                    Point::new(-0.8, -0.7),
+                    Point::new(1.0, -0.2),
+                    Point::new(-0.2, 1.1),
+                ],
+                Point::new(3.0, 0.0),
+            ),
+        ] {
+            let aperture =
+                contour_aperture(&mut artwork, polygon_payload(points), FillRule::NonZero);
+            let mut object = flash(Polarity::Dark, aperture, Affine2::translation(center));
+            object.meta.aperture_function = Some(vec!["SMDPad".into(), "CuDef".into()]);
+            object.meta.net = Some("N1".into());
+            artwork.push_object(layer, object);
+        }
+        pcb_ir::dialects::artwork::normalize_bounds(&mut artwork);
+
+        let gerber = lower(&artwork);
+        let (text, parsed) = reread(&gerber);
+        assert!(gerber.apertures.is_empty());
+        assert_eq!(gerber.objects.len(), 2);
+        assert!(
+            gerber
+                .objects
+                .iter()
+                .all(|object| matches!(object.kind, ObjectKind::Region { .. }))
+        );
+        assert!(!text.contains("%AM"));
+        assert!(!text.contains("D03*"));
+        assert_eq!(text.matches("G36*").count(), 2);
+        assert!(text.contains("%TA.AperFunction,SMDPad,CuDef*%"));
+        assert!(text.contains("%TO.N,N1*%"));
+        let difference = image_difference(&artwork, &parsed);
+        assert!(
+            difference < 1e-6,
+            "symmetric difference was {difference} mm²"
+        );
+    }
+
+    #[test]
+    fn holed_round_rect_uses_an_attributed_region_without_losing_the_hole() {
+        let (mut artwork, layer) = copper_artwork();
+        let aperture = artwork.push_aperture(Aperture {
+            shape: ApertureShape::RoundRect {
+                width: 3.0,
+                height: 2.0,
+                radius: 0.4,
+            },
+            hole_diameter: 0.6,
+        });
+        let mut object = flash(
+            Polarity::Dark,
+            aperture,
+            Affine2::placement(Point::new(4.0, 5.0), 23.0, Mirror::NONE, 1.0),
+        );
+        object.meta.aperture_function = Some(vec!["ComponentPad".into()]);
+        artwork.push_object(layer, object);
+        pcb_ir::dialects::artwork::normalize_bounds(&mut artwork);
+
+        let gerber = lower(&artwork);
+        let (text, parsed) = reread(&gerber);
+        assert!(gerber.apertures.is_empty());
+        assert!(!text.contains("D03*"));
+        assert!(text.contains("G36*"));
+        assert!(text.contains("%TA.AperFunction,ComponentPad*%"));
+        let difference = image_difference(&artwork, &parsed);
+        assert!(
+            difference < 0.005,
+            "symmetric difference was {difference} mm²"
+        );
     }
 
     #[test]
@@ -1361,7 +1597,6 @@ mod tests {
             let aperture = artwork.push_aperture(Aperture::circle(diameter));
             artwork.push_object(layer, flash(Polarity::Dark, aperture, Affine2::IDENTITY));
         }
-
         let gerber = lower(&artwork);
         assert_eq!(gerber.apertures.len(), 1);
         assert!(matches!(
@@ -1371,6 +1606,22 @@ mod tests {
                 ..
             }]
         ));
+
+        let (mut artwork, layer) = copper_artwork();
+        let empty_round_rect = artwork.push_aperture(Aperture::solid(ApertureShape::RoundRect {
+            width: 0.0,
+            height: 1.0,
+            radius: 0.1,
+        }));
+        artwork.push_object(
+            layer,
+            flash(Polarity::Dark, empty_round_rect, Affine2::IDENTITY),
+        );
+
+        let gerber =
+            lower_artwork_layer(&artwork, GeometryAccuracy::new(0.0000001).unwrap()).unwrap();
+        assert!(gerber.apertures.is_empty());
+        assert!(gerber.objects.is_empty());
     }
 
     #[test]
@@ -1646,13 +1897,13 @@ mod tests {
             artwork.push_object(layer, flash(polarity, aperture, transform));
 
             let gerber = lower(&artwork);
-            assert!(outlines(&gerber).len() > 1);
+            assert!(region_vertex_counts(&gerber).len() > 1);
             assert!((parsed_area(&gerber) - expected).abs() < 0.001);
         }
     }
 
     #[test]
-    fn oversized_non_collinear_outline_splits_code4_primitives() {
+    fn oversized_non_collinear_region_splits_contours() {
         let points: Vec<_> = (0..6001)
             .map(|i| {
                 let angle = i as f64 * std::f64::consts::TAU / 6001.0;
@@ -1676,9 +1927,9 @@ mod tests {
         artwork.push_object(layer, flash(Polarity::Dark, aperture, Affine2::IDENTITY));
 
         let gerber = lower(&artwork);
-        let outlines = outlines(&gerber);
-        assert!(outlines.len() > 1);
-        assert!(outlines.iter().all(|outline| outline.len() <= 5000));
+        let counts = region_vertex_counts(&gerber);
+        assert!(counts.len() > 1);
+        assert!(counts.iter().all(|vertices| *vertices <= 5000));
         assert!((parsed_area(&gerber) - expected).abs() < 0.01);
     }
 
