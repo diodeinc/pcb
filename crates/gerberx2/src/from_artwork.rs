@@ -595,6 +595,16 @@ impl ApertureTable {
         transform: Affine2,
         function: u32,
     ) -> Result<LoweredFlash> {
+        let bounds = aperture.bbox();
+        if !bounds.is_valid() {
+            return Err(GerberError::InvalidStructure(format!(
+                "cannot export malformed Gerber aperture {:?}",
+                aperture.shape
+            )));
+        }
+        if bounds.is_empty() || bounds.width() == 0.0 || bounds.height() == 0.0 {
+            return Ok(LoweredFlash::Empty);
+        }
         let basis = Affine2 {
             m02: 0.0,
             m12: 0.0,
@@ -1587,7 +1597,6 @@ mod tests {
             let aperture = artwork.push_aperture(Aperture::circle(diameter));
             artwork.push_object(layer, flash(Polarity::Dark, aperture, Affine2::IDENTITY));
         }
-
         let gerber = lower(&artwork);
         assert_eq!(gerber.apertures.len(), 1);
         assert!(matches!(
@@ -1597,6 +1606,22 @@ mod tests {
                 ..
             }]
         ));
+
+        let (mut artwork, layer) = copper_artwork();
+        let empty_round_rect = artwork.push_aperture(Aperture::solid(ApertureShape::RoundRect {
+            width: 0.0,
+            height: 1.0,
+            radius: 0.1,
+        }));
+        artwork.push_object(
+            layer,
+            flash(Polarity::Dark, empty_round_rect, Affine2::IDENTITY),
+        );
+
+        let gerber =
+            lower_artwork_layer(&artwork, GeometryAccuracy::new(0.0000001).unwrap()).unwrap();
+        assert!(gerber.apertures.is_empty());
+        assert!(gerber.objects.is_empty());
     }
 
     #[test]
