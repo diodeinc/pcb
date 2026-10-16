@@ -321,22 +321,27 @@ pub fn is_drill_file(text: &str) -> bool {
         == Some("M48")
 }
 
-/// How a coordinate-only line moves the tool.
+/// How a line without a motion code moves the tool: as the last one did.
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum Motion {
     /// Drill a hole where it lands.
     Drill,
     /// Move the raised tool.
     Rapid,
-    /// Rout from where the tool is, cutting while it is plunged.
-    Rout,
+    /// Rout a straight line, cutting while the tool is plunged.
+    Line,
+    /// Rout an arc, cutting while the tool is plunged.
+    Arc { clockwise: bool },
 }
 
+/// How far the straight slots a routed arc reads as may stray from it.
+const ARC_TOLERANCE_MM: f64 = 0.001;
+
 /// Read a drill file with decimal coordinates: XNC, and the Excellon EDA
-/// tools export in decimal format, whose `M71`/`M72` units, `G85` slots and
-/// routes continued with bare coordinates XNC leaves out. Routed arcs read
-/// as straight slots. Excellon's implied-decimal formats (`LZ`/`TZ`) are
-/// rejected.
+/// tools export in decimal format, whose `M71`/`M72` units, `G85` slots,
+/// `I`/`J` arc centres and routes continued with bare coordinates XNC
+/// leaves out. A routed arc reads as straight slots along it. Excellon's
+/// implied-decimal formats (`LZ`/`TZ`) are rejected.
 pub fn read_drill(text: &str) -> Result<DrillImage> {
     let mut image = DrillImage::default();
     let mut tools = HashMap::new();
@@ -356,23 +361,12 @@ pub fn read_drill(text: &str) -> Result<DrillImage> {
             continue;
         }
         match line {
-            "" | "G90" => continue,
             "M48" => header = true,
             "%" | "M95" => header = false,
             "M15" => plunged = true,
             "M16" | "M17" => plunged = false,
             "M30" | "M00" => break,
-            _ if line.starts_with('T') => {
-                let (number, diameter) = tool_word(line).with_context(context)?;
-                if let Some(diameter) = diameter {
-                    tools.insert(number, diameter * scale);
-                }
-                // A header defines tools; the body selects them, `T0` none.
-                if !header {
-                    tool = (number != 0).then_some(number);
-                }
-            }
-            _ if header => {
+            _ if header && !line.starts_with('T') => {
                 let mut fields = line.split(',');
                 match fields.next() {
                     Some("METRIC" | "M71") => scale = 1.0,
@@ -387,9 +381,23 @@ pub fn read_drill(text: &str) -> Result<DrillImage> {
                 }
             }
             _ => {
-                let point = |text: &str, from: Point| -> Result<Point> {
-                    coordinates(text, from, scale).with_context(context)
+                let words = words(line).with_context(context)?;
+                let value = |letter: char| {
+                    let word = words.iter().find(|word| word.0 == letter)?;
+                    Some(word.1 * scale)
                 };
+                if let Some(number) = words.iter().find(|word| word.0 == 'T') {
+                    let number = number.1 as u32;
+                    // `C` defines the tool's diameter; outside the header
+                    // the word also selects it, `T0` none.
+                    if let Some(diameter) = value('C') {
+                        tools.insert(number, diameter);
+                    }
+                    if !header {
+                        tool = (number != 0).then_some(number);
+                    }
+                    continue;
+                }
                 let diameter = || -> Result<f64> {
                     let number =
                         tool.with_context(|| format!("{}: no tool selected", context()))?;
@@ -398,24 +406,19 @@ pub fn read_drill(text: &str) -> Result<DrillImage> {
                         .copied()
                         .with_context(|| format!("{}: tool T{number:02} is not defined", context()))
                 };
-                let (command, rest) = match line.get(..3) {
-                    Some(code @ ("G00" | "G01" | "G02" | "G03" | "G05")) => {
-                        (Some(code), &line[3..])
-                    }
-                    _ => (None, line),
+                let point = |words: &[(char, f64)], from: Point| {
+                    words
+                        .iter()
+                        .fold(from, |point, &(letter, value)| match letter {
+                            'X' => Point::new(value * scale, point.y),
+                            'Y' => Point::new(point.x, value * scale),
+                            _ => point,
+                        })
                 };
-                motion = match command {
-                    Some("G05") => Motion::Drill,
-                    Some("G00") => Motion::Rapid,
-                    Some(_) => Motion::Rout,
-                    None => motion,
-                };
-                if rest.is_empty() {
-                    continue;
-                }
-                if let Some((start, end)) = rest.split_once("G85") {
-                    let start = point(start, at)?;
-                    at = point(end, start)?;
+                // A `G85` cycle cuts a slot between the points either side.
+                if let Some(split) = words.iter().position(|&word| word == ('G', 85.0)) {
+                    let start = point(&words[..split], at);
+                    at = point(&words[split + 1..], start);
                     image.holes.push(nc::Geometry::Slot {
                         start,
                         end: at,
@@ -423,24 +426,59 @@ pub fn read_drill(text: &str) -> Result<DrillImage> {
                     });
                     continue;
                 }
-                // An arc's centre or radius follows its end point.
-                let end_text = rest
-                    .split_once(['A', 'I', 'J'])
-                    .map_or(rest, |(end, _)| end);
-                let end = point(end_text, at)?;
-                match motion {
-                    Motion::Drill => image.holes.push(nc::Geometry::Drill {
-                        at: end,
-                        diameter: diameter()?,
-                    }),
-                    Motion::Rout if plunged && end.distance_to(at) > 1e-9 => {
+                for &(letter, code) in &words {
+                    if letter == 'G' {
+                        motion = match code as u32 {
+                            0 => Motion::Rapid,
+                            1 => Motion::Line,
+                            2 => Motion::Arc { clockwise: true },
+                            3 => Motion::Arc { clockwise: false },
+                            5 => Motion::Drill,
+                            90 => motion,
+                            _ => bail!("{}: G{code} is not supported", context()),
+                        };
+                    }
+                }
+                if !words.iter().any(|word| matches!(word.0, 'X' | 'Y')) {
+                    continue;
+                }
+                let end = point(&words, at);
+                let path = match motion {
+                    Motion::Drill => {
+                        image.holes.push(nc::Geometry::Drill {
+                            at: end,
+                            diameter: diameter()?,
+                        });
+                        Vec::new()
+                    }
+                    Motion::Line if plunged => vec![end],
+                    // XNC gives an arc's radius, Excellon its centre
+                    // relative to the start.
+                    Motion::Arc { clockwise } if plunged => {
+                        let center = match value('A') {
+                            Some(radius) => arc_center(at, end, radius, clockwise),
+                            None => {
+                                let offset = Point::new(
+                                    value('I').unwrap_or_default(),
+                                    value('J').unwrap_or_default(),
+                                );
+                                at + offset
+                            }
+                        };
+                        let arc = pcb_ir::geom::Arc::new(at, end, center, clockwise);
+                        arc.chords(ARC_TOLERANCE_MM).0
+                    }
+                    _ => Vec::new(),
+                };
+                for to in path {
+                    if to.distance_to(at) > 1e-9 {
                         image.holes.push(nc::Geometry::Slot {
                             start: at,
-                            end,
+                            end: to,
                             diameter: diameter()?,
                         });
                     }
-                    Motion::Rapid | Motion::Rout => {}
+                    at = to;
                 }
                 at = end;
             }
@@ -449,47 +487,37 @@ pub fn read_drill(text: &str) -> Result<DrillImage> {
     Ok(image)
 }
 
-/// A `Tnn` word's tool number, and the diameter a `C` parameter after it
-/// defines.
-fn tool_word(line: &str) -> Result<(u32, Option<f64>)> {
-    let rest = &line[1..];
-    let digits = rest.len() - rest.trim_start_matches(|c: char| c.is_ascii_digit()).len();
-    let parameters = &rest[digits..];
-    let diameter = parameters
-        .find('C')
-        .map(|at| {
-            let diameter = &parameters[at + 1..];
-            let end = diameter
-                .find(|c: char| !(c.is_ascii_digit() || c == '.'))
-                .unwrap_or(diameter.len());
-            diameter[..end].parse()
-        })
-        .transpose()?;
-    Ok((rest[..digits].parse()?, diameter))
-}
-
-/// The point `X`/`Y` words in `text` move to from `from`; an axis a line
-/// leaves out keeps its value.
-fn coordinates(text: &str, from: Point, scale: f64) -> Result<Point> {
-    let mut point = from;
-    let mut rest = text;
-    while let Some(axis) = rest.chars().next().filter(|axis| matches!(axis, 'X' | 'Y')) {
+/// A line's words: each letter and the number after it, as written.
+fn words(line: &str) -> Result<Vec<(char, f64)>> {
+    let mut words = Vec::new();
+    let mut rest = line;
+    while let Some(letter) = rest.chars().next() {
+        if !letter.is_ascii_uppercase() {
+            bail!("unexpected '{rest}'");
+        }
         let value = &rest[1..];
         let end = value
             .find(|c: char| !(c.is_ascii_digit() || matches!(c, '.' | '-' | '+')))
             .unwrap_or(value.len());
-        let number = value[..end].parse::<f64>()? * scale;
-        if axis == 'X' {
-            point.x = number;
-        } else {
-            point.y = number;
-        }
+        words.push((letter, value[..end].parse()?));
         rest = &value[end..];
     }
-    if !rest.is_empty() {
-        bail!("unexpected '{rest}'");
-    }
-    Ok(point)
+    Ok(words)
+}
+
+/// The centre of an arc of `radius` from `start` to `end`, turning at most
+/// half a circle: to the left of the chord turning counter-clockwise, to
+/// the right turning clockwise.
+fn arc_center(start: Point, end: Point, radius: f64, clockwise: bool) -> Point {
+    let chord = end - start;
+    let length = chord.x.hypot(chord.y);
+    let rise = (radius * radius - length * length / 4.0).max(0.0).sqrt();
+    let left = Point::new(-chord.y / length, chord.x / length);
+    let side = if clockwise { -rise } else { rise };
+    Point::new(
+        (start.x + end.x) / 2.0 + left.x * side,
+        (start.y + end.y) / 2.0 + left.y * side,
+    )
 }
 
 impl XncObject {
@@ -639,6 +667,29 @@ mod tests {
                 slot(inch(2.0, 1.0), inch(2.0, 2.0)),
             ]
         );
+    }
+
+    #[test]
+    fn a_routed_arc_cuts_along_the_circle_its_radius_or_centre_gives() {
+        // The rounded corner of the XNC specification's example rout: a
+        // quarter circle counter-clockwise about (6, 2.6). Taken on the other
+        // side of its chord, the circle would be centred on (5, 1.6).
+        for arc in ["G03X6.0Y1.6A1.0", "G03X6.0Y1.6I1.0J0.0"] {
+            let text = format!("M48\nMETRIC\nT01C0.8\n%\nT01\nG00X5.0Y2.6\nM15\n{arc}\nM16\nM30\n");
+            let holes = read_drill(&text).unwrap().holes;
+            let mut from = Point::new(5.0, 2.6);
+            for hole in &holes {
+                let nc::Geometry::Slot { start, end, .. } = *hole else {
+                    panic!("{arc} cut {hole:?}")
+                };
+                assert_eq!(start, from);
+                let radius = end.distance_to(Point::new(6.0, 2.6));
+                assert!((radius - 1.0).abs() < 1e-9, "{arc} strays to {end:?}");
+                from = end;
+            }
+            assert!(holes.len() > 1);
+            assert_eq!(from, Point::new(6.0, 1.6));
+        }
     }
 
     #[test]
