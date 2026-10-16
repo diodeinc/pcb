@@ -285,7 +285,9 @@ impl ContourSet {
         }
 
         let mut kept = self.clone();
-        while let Some(next) = kept.narrow_gap_trim(gap_radius, filled_radius, guard)? {
+        let mut opened = false;
+        while let Some(next) = kept.narrow_gap_trim(gap_radius, filled_radius, guard, opened)? {
+            opened = true;
             // `next` lies within `kept`, so what the step removed is the area lost.
             if kept.area() - next.area() <= self.tolerance().powi(2) {
                 return Err(GapRegularizationError(format!(
@@ -303,19 +305,67 @@ impl ContourSet {
 
     /// One application of the gap-regularization contraction `T`, or `None`
     /// at its fixed point, where every two-sided void gap already admits the
-    /// rolling disk.
+    /// rolling disk. `opened` asserts `self` is already open by
+    /// `filled_radius`, as every application of `T` leaves it.
     fn narrow_gap_trim(
         &self,
         gap_radius: f64,
         filled_radius: f64,
         guard: f64,
+        opened: bool,
     ) -> Result<Option<Self>, GapRegularizationError> {
         let narrow_voids = self.disk_gap_violations(gap_radius)?;
         if narrow_voids.is_empty() {
             return Ok(None);
         }
         let keep_out = narrow_void_keep_out(self, &narrow_voids, gap_radius + guard)?;
-        Ok(Some(self.difference(&keep_out)?.disk_open(filled_radius)?))
+        let trimmed = self.difference(&keep_out)?;
+        let reopened = if opened {
+            trimmed.reopen_near(&keep_out, filled_radius)?
+        } else {
+            trimmed.disk_open(filled_radius)?
+        };
+        // Where the opening retraces the source boundary, the overlay keeps
+        // both near-coincident copies and every crossing between them as
+        // sub-tolerance vertex clusters. Their edges point anywhere, so the
+        // next closing reads them as opposing walls and finds artifact gaps
+        // beside every cut, and its offsets spike at each one. Absorbing
+        // them inward, within what significance and the remaining budget
+        // allow, keeps the region within what it was.
+        Ok(Some(reopened.decimate_inward_within(self.tolerance())?))
+    }
+
+    /// `open(self, disk(radius))` for `self = S \ cut` with `S` already open
+    /// by `radius`, rebuilt only near `cut`.
+    ///
+    /// A point of `S` farther than `2 radius` from `cut` lies in a disk of
+    /// `S` that misses `cut`, so the opening keeps it; nearer, the disks that
+    /// decide it lie within `4 radius` of `cut`. Reopening only that
+    /// neighbourhood keeps the rest of the boundary verbatim. Reopening the
+    /// whole region would instead overlay its boundary with a rebuilt copy
+    /// of itself, which keeps both and every crossing between them, so each
+    /// trim would compound the boundary until the next offset exhausts
+    /// memory.
+    ///
+    /// The windows only select where to reopen, so they are exact rectangles
+    /// around each piece of `cut` and add no error to the result. The source
+    /// is open only within its error, which the budget bounds.
+    fn reopen_near(&self, cut: &Self, radius: f64) -> Result<Self, AccuracyError> {
+        let slack = self.budget().max_error_mm() + self.tolerance();
+        let pieces = cut.connected_components();
+        let window = |reach: f64| {
+            Self::union_all(
+                self.resolution,
+                pieces
+                    .iter()
+                    .map(|piece| Self::rectangle(piece.bbox().expand(reach), self.resolution)),
+            )
+        };
+        let affected = window(2.0 * radius + slack)?;
+        let neighbourhood = window(4.0 * radius + slack)?;
+        let reopened = self.intersection(&neighbourhood)?.disk_open(radius)?;
+        let removed = self.intersection(&affected)?.difference(&reopened)?;
+        self.difference(&removed)
     }
 
     /// Unfilled material that violates the two-sided void-gap radius.
