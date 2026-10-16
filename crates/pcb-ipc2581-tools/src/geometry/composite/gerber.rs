@@ -8,10 +8,10 @@
 
 use std::collections::HashMap;
 
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{Context, Result, anyhow};
 use gerberx2::geometry::{GerberObjectMeta, extract_document, layer_role, layer_side};
+use pcb_ir::dialects::LayerRole;
 use pcb_ir::dialects::artwork::{Object, closed_outlines, import_layer_objects};
-use pcb_ir::dialects::{LayerRole, Side};
 use pcb_ir::geom::{Polarity, Resolution};
 use pcb_ir::render::composite::{Composite, CompositeStyle, Fabrication, Face};
 
@@ -46,34 +46,36 @@ pub fn gerber_composite(
         .transpose()?
         .unwrap_or_default();
     let mut composite = Composite::new();
-    let mut layers = Vec::new();
+    // Each side's images by role, every file of a role drawn in turn.
+    let mut images = HashMap::<_, Vec<_>>::new();
+    let mut copper_files = 0;
     let mut profile = Vec::new();
+    // Every drill and rout file's function and the holes it cuts.
     let mut drills = Vec::new();
     for file in files.iter().filter(|file| !is_job(&file.name)) {
-        let name = base_name(&file.name);
-        let listed = job.files.get(name);
-        let Ok(text) = std::str::from_utf8(&file.contents) else {
-            if listed.is_some() {
-                bail!("{} is not text", file.name);
+        let listed = job.functions.get(base_name(&file.name));
+        // A file states its own function; the job's names it for files that
+        // cannot.
+        let function = |stated: Vec<String>| {
+            if stated.is_empty() {
+                listed.cloned().unwrap_or_default()
+            } else {
+                stated
             }
-            continue;
         };
-        let is_drill = listed
-            .and_then(|listed| listed.format.as_deref())
-            .map_or_else(
-                || is_drill_file(text),
-                |format| format.eq_ignore_ascii_case("XNC"),
-            );
-        if is_drill {
-            let mut image =
-                read_drill(text).with_context(|| format!("Failed to read {}", file.name))?;
-            if let Some(function) = listed.and_then(|listed| listed.function.clone()) {
-                image.file_function = function;
-            }
-            drills.push(image);
+        // Fabrication files are ASCII; anything else can only be in comments.
+        let text = String::from_utf8_lossy(&file.contents);
+        if is_drill_file(&text) {
+            let image =
+                read_drill(&text).with_context(|| format!("Failed to read {}", file.name))?;
+            let holes = image
+                .holes
+                .iter()
+                .map(|hole| Object::new(Polarity::Dark, hole.to_artwork(&mut composite.artwork)));
+            drills.push((function(image.file_function), holes.collect::<Vec<_>>()));
             continue;
         }
-        let gerber = match gerberx2::GerberX2::parse(text) {
+        let gerber = match gerberx2::GerberX2::parse(&text) {
             Ok(gerber) => gerber,
             // Archives carry readmes and drawings beside the artwork.
             Err(_) if listed.is_none() => continue,
@@ -83,59 +85,49 @@ pub fn gerber_composite(
         };
         let document = extract_document(&gerber, resolution.accuracy)
             .with_context(|| format!("Failed to read {}", file.name))?;
-        let stated = &document.layers[0].meta;
-        let function = listed
-            .and_then(|listed| listed.function.clone())
-            .or_else(|| (!stated.is_empty()).then(|| stated.clone()))
-            .unwrap_or_else(|| function_by_extension(name));
+        let function = function(document.layers[0].meta.clone());
         let role = layer_role(&function);
         if role == LayerRole::Profile {
             profile.extend(closed_outlines(&document, 0, JOIN_TOLERANCE_MM));
+            continue;
         }
-        let mut objects = import_layer_objects(&mut composite.artwork, &document, Clone::clone);
+        let objects = import_layer_objects(&mut composite.artwork, &document, Clone::clone);
+        let objects = objects.into_iter().flatten();
         composite.artwork.diagnostics.extend(document.diagnostics);
-        layers.push(Layer {
-            role,
-            side: layer_side(&function),
-            objects: objects.swap_remove(0),
-        });
+        if matches!(
+            function.first().map(String::as_str),
+            Some("Plated" | "NonPlated")
+        ) {
+            drills.push((function, objects.collect()));
+            continue;
+        }
+        copper_files += usize::from(role == LayerRole::Copper);
+        images
+            .entry((role, layer_side(&function)))
+            .or_default()
+            .extend(objects);
     }
 
     let material = composite
         .material(profile)
         .context("The fabrication files have no profile layer with a closed board outline")?;
-    let copper_layers = job.copper_layers.unwrap_or_else(|| {
-        let copper = layers
-            .iter()
-            .filter(|layer| layer.role == LayerRole::Copper);
-        copper.count().max(2)
-    });
-    let images = |role: LayerRole, side: Side| {
-        layers
-            .iter()
-            .filter(move |layer| layer.role == role && layer.side == side)
-    };
-    let objects = |role: LayerRole, side: Side| {
-        images(role, side)
-            .flat_map(|layer| layer.objects.iter().cloned())
-            .collect::<Vec<_>>()
-    };
+    let copper_layers = job.copper_layers.unwrap_or(copper_files.max(2));
     let mut faces = Vec::new();
     for &side in sides {
         let ir_side = side.ir_side();
+        let image = |role| images.get(&(role, ir_side)).cloned().unwrap_or_default();
         let cutouts = drills
             .iter()
-            .filter(|drill| opens_onto(&drill.file_function, side, copper_layers))
-            .flat_map(|drill| &drill.holes)
-            .map(|hole| Object::new(Polarity::Dark, hole.to_artwork(&mut composite.artwork)))
+            .filter(|(function, _)| opens_onto(function, side, copper_layers))
+            .flat_map(|(_, holes)| holes.iter().cloned())
             .collect();
         faces.push(Face {
             side: ir_side,
             style: job.style(side),
-            copper: objects(LayerRole::Copper, ir_side),
-            masked: images(LayerRole::Soldermask, ir_side).next().is_some(),
-            openings: objects(LayerRole::Soldermask, ir_side),
-            legend: objects(LayerRole::Legend, ir_side),
+            copper: image(LayerRole::Copper),
+            masked: images.contains_key(&(LayerRole::Soldermask, ir_side)),
+            openings: image(LayerRole::Soldermask),
+            legend: image(LayerRole::Legend),
             cutouts,
         });
     }
@@ -145,34 +137,8 @@ pub fn gerber_composite(
     Ok(composite)
 }
 
-/// One Gerber file's artwork in the composite's tables.
-struct Layer {
-    role: LayerRole,
-    side: Side,
-    objects: Vec<Object<GerberObjectMeta>>,
-}
-
 fn base_name(name: &str) -> &str {
     name.rsplit(['/', '\\']).next().unwrap_or(name)
-}
-
-/// The function the common extensions give a file without a
-/// `.FileFunction` attribute.
-fn function_by_extension(name: &str) -> Vec<String> {
-    let extension = name.rsplit('.').next().unwrap_or_default();
-    let function: &[&str] = match extension.to_ascii_lowercase().as_str() {
-        "gtl" => &["Copper", "L1", "Top"],
-        "gbl" => &["Copper", "Bot"],
-        "gts" => &["Soldermask", "Top"],
-        "gbs" => &["Soldermask", "Bot"],
-        "gto" => &["Legend", "Top"],
-        "gbo" => &["Legend", "Bot"],
-        "gtp" => &["Paste", "Top"],
-        "gbp" => &["Paste", "Bot"],
-        "gm1" | "gko" | "gml" | "gm" => &["Profile", "NP"],
-        _ => &[],
-    };
-    function.iter().map(|field| field.to_string()).collect()
 }
 
 /// Whether a drill file of this `.FileFunction` opens onto `side`: its
@@ -192,20 +158,13 @@ fn opens_onto(function: &[String], side: BoardSide, copper_layers: usize) -> boo
 /// What a Gerber job file says of the files beside it.
 #[derive(Debug, Default)]
 struct Job {
-    files: HashMap<String, ListedFile>,
+    /// The function the job gives each file it lists, by name.
+    functions: HashMap<String, Vec<String>>,
     copper_layers: Option<usize>,
     finish: Option<SurfaceFinishInfo>,
     /// Mask and legend colours, top then bottom.
     masks: [Option<String>; 2],
     legends: [Option<String>; 2],
-}
-
-/// A file the job lists, and what it says of it. What it leaves out the
-/// file says itself.
-#[derive(Debug)]
-struct ListedFile {
-    format: Option<String>,
-    function: Option<Vec<String>>,
 }
 
 impl Job {
@@ -215,22 +174,19 @@ impl Job {
             let text = value.get(key)?.as_str()?.trim();
             (!text.is_empty()).then(|| text.to_owned())
         };
-        let files = json["FilesAttributes"]
+        let functions = json["FilesAttributes"]
             .as_array()
             .into_iter()
             .flatten()
             .filter_map(|file| {
-                let listed = ListedFile {
-                    format: text(file, "FileFormat"),
-                    function: text(file, "FileFunction")
-                        .map(|function| function.split(',').map(str::to_owned).collect()),
-                };
-                Some((base_name(&text(file, "Path")?).to_owned(), listed))
+                let function = text(file, "FileFunction")?;
+                let function = function.split(',').map(str::to_owned).collect();
+                Some((base_name(&text(file, "Path")?).to_owned(), function))
             })
             .collect();
         let specs = &json["GeneralSpecs"];
         let mut job = Self {
-            files,
+            functions,
             copper_layers: specs["LayerNumber"].as_u64().map(|count| count as usize),
             finish: text(specs, "Finish").map(|name| SurfaceFinishInfo {
                 name,
@@ -268,14 +224,56 @@ impl Job {
 
     /// The colours the job gives `side`.
     fn style(&self, side: BoardSide) -> CompositeStyle {
-        let ink = |colors: &[Option<String>; 2]| ColorInfo {
-            name: colors[usize::from(side == BoardSide::Bottom)].clone(),
-            rgb: None,
+        let ink = |colors: &[Option<String>; 2]| {
+            colors[usize::from(side == BoardSide::Bottom)]
+                .as_deref()
+                .map(job_ink)
         };
         CompositeStyle::with_colors(
-            mask_color(&ink(&self.masks)),
-            ink(&self.legends).rgb_color().map(rgb),
+            ink(&self.masks).as_ref().and_then(mask_color),
+            ink(&self.legends).and_then(|ink| Some(rgb(ink.rgb_color()?))),
             self.finish.as_ref().map(|finish| rgb(finish.rgb_color())),
         )
+    }
+}
+
+/// A job colour, `(Red|…|Black|R<n>G<n>B<n>)` and an optional gloss after a
+/// comma, as an ink.
+fn job_ink(color: &str) -> ColorInfo {
+    let color = color.split(',').next().unwrap_or_default().trim();
+    let channels = || {
+        let (red, rest) = color.strip_prefix('R')?.split_once('G')?;
+        let (green, blue) = rest.split_once('B')?;
+        Some((red.parse().ok()?, green.parse().ok()?, blue.parse().ok()?))
+    };
+    let rgb = channels();
+    ColorInfo {
+        name: rgb.is_none().then(|| color.to_owned()),
+        rgb,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn job_colours_read_by_name_or_channels_whatever_their_gloss() {
+        let job = Job::parse(
+            br#"{"MaterialStackup": [
+                {"Type": "Legend", "Color": "R10G20B30,Matte"},
+                {"Type": "SolderMask", "Color": "Blue,Gloss"},
+                {"Type": "Copper"},
+                {"Type": "Dielectric"},
+                {"Type": "Copper"},
+                {"Type": "SolderMask", "Color": "Red"}
+            ]}"#,
+        )
+        .unwrap();
+        let (top, bottom) = (job.style(BoardSide::Top), job.style(BoardSide::Bottom));
+        assert_eq!(top.legend.color, 0x0a141e);
+        assert_eq!(Some(top.mask.color), CompositeStyle::mask_ink("blue"));
+        assert_eq!(Some(bottom.mask.color), CompositeStyle::mask_ink("red"));
+        assert_eq!(bottom.legend, CompositeStyle::default().legend);
     }
 }

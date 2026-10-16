@@ -239,22 +239,11 @@ impl<Meta: Clone + Default> Composite<Meta> {
                 Side::Bottom => turned_over,
                 _ => Affine2::IDENTITY,
             };
-            let cuts = std::iter::once(material.outside.clone())
-                .chain(fabrication.removal.iter().cloned())
-                .chain(face.cutouts)
-                .collect();
             self.stack(
                 Affine2::translation(across).concat(view),
-                &face.style,
-                Stack {
-                    sheet: vec![material.sheet.clone()],
-                    cuts,
-                    scores: fabrication.scores.clone(),
-                    copper: face.copper,
-                    masked: face.masked,
-                    openings: face.openings,
-                    legend: face.legend,
-                },
+                material,
+                fabrication,
+                face,
             );
             let placed = BBox::new(bounds.min + across, bounds.max + across);
             self.viewport = self.viewport.union(placed);
@@ -272,7 +261,13 @@ impl<Meta: Clone + Default> Composite<Meta> {
 
     /// Stack one side's six layers under `placement`. Every layer is its
     /// paint, then what the mask opens where that clips it, then the cuts.
-    fn stack(&mut self, placement: Affine2, style: &CompositeStyle, stack: Stack<Meta>) {
+    fn stack(
+        &mut self,
+        placement: Affine2,
+        material: &Material<Meta>,
+        fabrication: &Fabrication<Meta>,
+        face: Face<Meta>,
+    ) {
         let mut place = |objects: Vec<Object<Meta>>, polarity: Option<Polarity>| {
             objects
                 .into_iter()
@@ -284,13 +279,13 @@ impl<Meta: Clone + Default> Composite<Meta> {
                 })
                 .collect::<Vec<_>>()
         };
-        let sheet = place(stack.sheet, None);
-        let copper = place(stack.copper, None);
-        let legend = place(stack.legend, None);
-        let scores = place(stack.scores, None);
+        let sheet = place(vec![material.sheet.clone()], None);
+        let copper = place(face.copper, None);
+        let legend = place(face.legend, None);
+        let scores = place(fabrication.scores.clone(), None);
         // A mask layer images its openings, so they clear whatever they
         // paint.
-        let openings = place(stack.openings, None)
+        let openings = place(face.openings, None)
             .into_iter()
             .map(|opening| Object {
                 polarity: Polarity::Clear.compose(opening.polarity),
@@ -299,24 +294,28 @@ impl<Meta: Clone + Default> Composite<Meta> {
             .collect::<Vec<_>>();
         // A cut clears on every layer, painted or not. Left a final cutout
         // it would image as itself wherever a layer paints nothing under it.
-        let cuts = place(stack.cuts, Some(Polarity::Clear));
+        let cuts = std::iter::once(material.outside.clone())
+            .chain(fabrication.removal.iter().cloned())
+            .chain(face.cutouts)
+            .collect();
+        let cuts = place(cuts, Some(Polarity::Clear));
         // A mask layer lays the mask over the whole sheet, however little it
         // opens, and covers the copper under it. A side without one is bare.
-        let (mask, covered) = if stack.masked {
+        let (mask, covered) = if face.masked {
             (sheet.clone(), copper.clone())
         } else {
             (Vec::new(), Vec::new())
         };
 
-        self.layer("Substrate", style.substrate, [&sheet, &cuts]);
+        self.layer("Substrate", face.style.substrate, [&sheet, &cuts]);
         // All the copper in its finish, then what the mask covers over it:
         // the finish is left showing exactly where the mask opens.
-        self.layer("Finish", style.finish, [&copper, &cuts]);
-        self.layer("Copper", style.copper, [&covered, &openings, &cuts]);
-        self.layer("Mask", style.mask, [&mask, &openings, &cuts]);
+        self.layer("Finish", face.style.finish, [&copper, &cuts]);
+        self.layer("Copper", face.style.copper, [&covered, &openings, &cuts]);
+        self.layer("Mask", face.style.mask, [&mask, &openings, &cuts]);
         // Mask openings cut the legend, as a fabricator clips it off the pads.
-        self.layer("Legend", style.legend, [&legend, &openings, &cuts]);
-        self.layer("Score", style.score, [&scores, &cuts]);
+        self.layer("Legend", face.style.legend, [&legend, &openings, &cuts]);
+        self.layer("Score", face.style.score, [&scores, &cuts]);
     }
 
     /// A layer painting `objects` in order. Every layer is drawn material of
@@ -341,15 +340,4 @@ impl<Meta: Clone + Default> Default for Composite<Meta> {
     fn default() -> Self {
         Self::new()
     }
-}
-
-/// One side's objects in the document's frame, before they are placed.
-struct Stack<Meta> {
-    sheet: Vec<Object<Meta>>,
-    copper: Vec<Object<Meta>>,
-    masked: bool,
-    openings: Vec<Object<Meta>>,
-    legend: Vec<Object<Meta>>,
-    scores: Vec<Object<Meta>>,
-    cuts: Vec<Object<Meta>>,
 }
