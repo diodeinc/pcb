@@ -468,12 +468,19 @@ impl ContourSet {
     pub fn decimate_inward(&self) -> Result<Self, AccuracyError> {
         let inherited = self.uncertainty_mm + numerical_error(self.bbox);
         let deviation_mm = self.budget().allowance(inherited)?;
+        self.decimate_inward_within(deviation_mm)
+    }
+
+    /// Decimate inward within `deviation_mm`, charged to the uncertainty.
+    pub(crate) fn decimate_inward_within(&self, deviation_mm: f64) -> Result<Self, AccuracyError> {
+        let inherited = self.uncertainty_mm + numerical_error(self.bbox);
         let decimated = decimate_rings_inward(self.rings(), deviation_mm);
-        Ok(Self::from_regularized(
+        Self::from_regularized(
             flatten_shapes(regularize(decimated, OverlayFillRule::Positive)),
             self.resolution,
             inherited + deviation_mm,
-        ))
+        )
+        .checked()
     }
 }
 

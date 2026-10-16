@@ -658,6 +658,49 @@ fn disk_gap_regularization_trims_a_close_pair_locally() {
 }
 
 #[test]
+fn disk_gap_regularization_trims_mouse_bite_corners_without_artifacts() {
+    // Drilled holes beside the rounded corners of a routed board, as
+    // mouse-bite tabs leave them. Each corner needs a trim, and one needs a
+    // second. Reopening the whole region on every trim, or keeping the
+    // sub-tolerance vertex clusters an opening leaves where it retraces its
+    // source, made the boundary compound and the closing find artifact gaps
+    // beside every cut, until an offset ran out of memory on a production
+    // panel.
+    let resolution = Resolution::new(0.001, GeometryAccuracy::new(0.05).unwrap());
+    let at = |contour: ContourBuf, [x, y]: [f64; 2]| {
+        contour.transformed(Affine2::translation(Point::new(x, y)))
+    };
+    let board = shapes::rounded_rect(20.0, 20.0, 1.5, shapes::ALL_CORNERS).unwrap();
+    let mut voids = vec![at(board, [20.0, 20.0])];
+    for center in [[9.7, 12.8], [30.21, 12.89], [12.8, 30.3], [27.35, 30.36]] {
+        voids.push(at(shapes::circle(2.5).unwrap(), center));
+    }
+    let voids = ContourSet::from_contours(&voids, FillRule::NonZero, resolution).unwrap();
+    let region = ContourSet::rectangle(rect(0.0, 0.0, 40.0, 40.0), resolution)
+        .difference(&voids)
+        .unwrap()
+        .disk_open(0.5)
+        .unwrap();
+    let vertices = |region: &ContourSet| region.rings().map(<[_]>::len).sum::<usize>();
+
+    let result = region.disk_regularize_gaps(0.5, 0.5, 0.025).unwrap();
+
+    assert!(result.kept.disk_gap_violations(0.5).unwrap().is_empty());
+    assert!(result.kept.difference(&region).unwrap().is_empty());
+    assert!(
+        result.removed.area() < 2.4,
+        "removed {:.9} mm²",
+        result.removed.area()
+    );
+    assert!(
+        2 * vertices(&result.kept) <= 3 * vertices(&region),
+        "{} vertices from {}",
+        vertices(&result.kept),
+        vertices(&region)
+    );
+}
+
+#[test]
 fn disk_gap_regularization_is_symmetric_at_a_three_way_conflict() {
     let lower_left = block(0.0, 0.0, 4.0, 4.0);
     let lower_right = block(4.8, 0.0, 8.8, 4.0);

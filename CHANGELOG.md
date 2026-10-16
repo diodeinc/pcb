@@ -19,6 +19,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 - `pcb ipc2581 edit bom` indexes BOM items once instead of scanning the document for every selection; an 858-line BOM on a 64 MB file drops from 8.7 s to 1.6 s.
 - Gerber export tiles balance copper without overlaying the whole panel frame for every 64 cells; a mouse-bite array's Gerbers export in about half the time, byte for byte the same.
+- `pcb ipc2581 board-array create --mouse-bite` no longer runs out of memory while it balances copper. Each gap-regularization trim after the first reopens only the area near its cut and removes sub-tolerance boundary noise, so the boundary no longer grows from trim to trim and no artifact gaps cause more trims.
 
 ## [0.4.85] - 2026-10-15
 
