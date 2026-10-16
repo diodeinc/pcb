@@ -14,6 +14,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - `pcb dfm --pdk jlc` selects the JLCPCB profile that fits the board's copper weight, including a new 2 oz profile.
 - `pcb ipc info --format json` reports nominal copper weights and a named soldermask colour.
 - DFM fails a layout that has no board outline, under every PDK.
+- `pcb gerber render` takes a directory or zip of Gerber, drill and job files and renders the finished board, top and bottom or one `--side`, as `pcb ipc2581 render` does.
 
 ### Fixed
 

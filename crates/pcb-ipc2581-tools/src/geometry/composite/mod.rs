@@ -21,14 +21,18 @@ use pcb_ir::geom::{
 use pcb_ir::import::ipc2581::{ImportedDesign, LayerId};
 use pcb_ir::render::LayerStyle;
 
-use crate::accessors::{ColorInfo, IpcAccessor};
+use crate::accessors::{ColorInfo, IpcAccessor, SurfaceFinishInfo};
 use crate::geometry::render::layer_objects;
 use crate::geometry::step_artwork::{finish_step_graph_artwork, root_step};
 use crate::layers::{ir_side, layer_role};
 use crate::{BoardSide, LayoutTarget};
 
-pub type CompositeDocument = artwork::Document<(), Option<Symbol>>;
-type CompositeObject = Object<Option<Symbol>>;
+pub mod gerber;
+
+/// A composite drawing's document. Its objects keep whatever metadata their
+/// source gave them, so the default is an IPC-2581 feature's net.
+pub type CompositeDocument<Meta = Option<Symbol>> = artwork::Document<(), Meta>;
+type CompositeObject<Meta = Option<Symbol>> = Object<Meta>;
 
 /// How each physical layer of the stack draws.
 #[derive(Debug, Clone, PartialEq)]
@@ -84,12 +88,6 @@ impl CompositeStyle {
     /// its mask, its legend ink and the board's surface finish. What the
     /// stackup leaves unsaid keeps the default.
     pub fn of_design(accessor: &IpcAccessor<'_>, side: BoardSide) -> Self {
-        let rgb = |(red, green, blue): (u8, u8, u8)| u32::from_be_bytes([0, red, green, blue]);
-        let color = |ink: &ColorInfo| ink.rgb_color().map(rgb);
-        let mask_ink = |ink: &ColorInfo| {
-            let name = ink.name.as_deref()?.to_lowercase();
-            Some(MASK_INKS.iter().find(|(known, _)| *known == name)?.1)
-        };
         let inks = accessor.stackup_inks();
         let ink = |role: LayerRole| {
             let on_side = |layer: &ipc2581::types::Layer| {
@@ -101,10 +99,31 @@ impl CompositeStyle {
         };
         let finish = accessor
             .stackup_details()
-            .and_then(|stackup| Some(rgb(stackup.surface_finish?.rgb_color())));
+            .and_then(|stackup| stackup.surface_finish);
+        Self::of_inks(
+            ink(LayerRole::Soldermask),
+            ink(LayerRole::Legend),
+            finish.as_ref(),
+        )
+    }
+
+    /// The default look in a side's mask and legend inks and the board's
+    /// surface finish. What is not given keeps the default.
+    pub fn of_inks(
+        mask: Option<&ColorInfo>,
+        legend: Option<&ColorInfo>,
+        finish: Option<&SurfaceFinishInfo>,
+    ) -> Self {
+        let rgb = |(red, green, blue): (u8, u8, u8)| u32::from_be_bytes([0, red, green, blue]);
+        let color = |ink: &ColorInfo| ink.rgb_color().map(rgb);
+        let mask_ink = |ink: &ColorInfo| {
+            let name = ink.name.as_deref()?.to_lowercase();
+            Some(MASK_INKS.iter().find(|(known, _)| *known == name)?.1)
+        };
+        let finish = finish.map(|finish| rgb(finish.rgb_color()));
         let default = Self::default();
-        let mask = ink(LayerRole::Soldermask).and_then(|ink| mask_ink(ink).or_else(|| color(ink)));
-        let legend = ink(LayerRole::Legend).and_then(color);
+        let mask = mask.and_then(|ink| mask_ink(ink).or_else(|| color(ink)));
+        let legend = legend.and_then(color);
         Self {
             mask: style(mask.unwrap_or(default.mask.color), default.mask.opacity),
             legend: style(
@@ -122,8 +141,8 @@ impl CompositeStyle {
 
 /// A composite drawing, the style of each of its layers by index, and where
 /// to look at it.
-pub struct Composite {
-    pub artwork: CompositeDocument,
+pub struct Composite<Meta = Option<Symbol>> {
+    pub artwork: CompositeDocument<Meta>,
     pub styles: Vec<LayerStyle>,
     /// The boards drawn and a margin around them. Artwork may reach further;
     /// the picture is of the board.
@@ -152,11 +171,7 @@ pub fn composite_artwork(
     resolution: Resolution,
 ) -> Result<Composite> {
     let board = target == LayoutTarget::Board;
-    let mut composite = Composite {
-        artwork: CompositeDocument::new(),
-        styles: Vec::new(),
-        viewport: BBox::empty(),
-    };
+    let mut composite = Composite::new();
     let material = material_objects(&mut composite.artwork, imported, board)?;
     // An array's fabrication cuts it further and scores it; a board drawn
     // alone has neither, whatever array its file places it in.
@@ -165,55 +180,24 @@ pub fn composite_artwork(
     } else {
         array_objects(&mut composite.artwork, imported, resolution)?
     };
-    let bounds = material.bounds;
-    let turned_over = Affine2 {
-        m00: -1.0,
-        m02: bounds.min.x + bounds.max.x,
-        ..Affine2::IDENTITY
-    };
-    for (index, &side) in sides.iter().enumerate() {
-        let across = Point::new(index as f64 * (bounds.width() + SIDE_GAP_MM), 0.0);
-        let view = match side {
-            BoardSide::Top => Affine2::IDENTITY,
-            BoardSide::Bottom => turned_over,
-        };
-        let surface = surface_objects(&mut composite.artwork, imported, side, board, resolution)?;
-        composite.stack(
-            Affine2::translation(across).concat(view),
-            &CompositeStyle::of_design(accessor, side),
-            Stack {
-                sheet: vec![material.sheet.clone()],
-                cuts: std::iter::once(material.outside.clone())
-                    .chain(removal.iter().cloned())
-                    .chain(surface.cutouts)
-                    .collect(),
-                scores: scores.clone(),
-                copper: surface.copper,
-                masked: surface.masked,
-                openings: surface.openings,
-                legend: surface.legend,
-            },
-        );
-        let placed = BBox::new(bounds.min + across, bounds.max + across);
-        composite.viewport = composite.viewport.union(placed);
-    }
-    composite.viewport = composite.viewport.expand(VIEW_MARGIN_MM);
-
-    finish_step_graph_artwork(&mut composite.artwork)?;
+    composite.draw_sides(sides, &material, &removal, &scores, |artwork, side| {
+        let surface = surface_objects(artwork, imported, side, board, resolution)?;
+        Ok((surface, CompositeStyle::of_design(accessor, side)))
+    })?;
     Ok(composite)
 }
 
 /// What one side of the board carries, as its source layers image it.
-struct Surface {
-    copper: Vec<CompositeObject>,
+struct Surface<Meta = Option<Symbol>> {
+    copper: Vec<CompositeObject<Meta>>,
     /// Whether the side has a mask layer at all. One that opens nothing
     /// still masks the whole side; a side without one is bare.
     masked: bool,
     /// The mask layers' images: where the mask is open.
-    openings: Vec<CompositeObject>,
-    legend: Vec<CompositeObject>,
+    openings: Vec<CompositeObject<Meta>>,
+    legend: Vec<CompositeObject<Meta>>,
     /// Every slot and hole that opens onto this side.
-    cutouts: Vec<CompositeObject>,
+    cutouts: Vec<CompositeObject<Meta>>,
 }
 
 fn surface_objects(
@@ -285,21 +269,79 @@ fn surface_objects(
 }
 
 /// One side's objects in the document's frame, before they are placed.
-struct Stack {
-    sheet: Vec<CompositeObject>,
-    copper: Vec<CompositeObject>,
+struct Stack<Meta> {
+    sheet: Vec<CompositeObject<Meta>>,
+    copper: Vec<CompositeObject<Meta>>,
     masked: bool,
-    openings: Vec<CompositeObject>,
-    legend: Vec<CompositeObject>,
-    scores: Vec<CompositeObject>,
-    cuts: Vec<CompositeObject>,
+    openings: Vec<CompositeObject<Meta>>,
+    legend: Vec<CompositeObject<Meta>>,
+    scores: Vec<CompositeObject<Meta>>,
+    cuts: Vec<CompositeObject<Meta>>,
 }
 
-impl Composite {
+impl<Meta: Clone> Composite<Meta> {
+    fn new() -> Self {
+        Self {
+            artwork: CompositeDocument::new(),
+            styles: Vec::new(),
+            viewport: BBox::empty(),
+        }
+    }
+
+    /// Draw `sides` of the board `material` makes, left to right, each with
+    /// the surface and style `surface` gives it, and frame them. The bottom
+    /// is drawn as it looks turned over about the board's vertical axis.
+    fn draw_sides(
+        &mut self,
+        sides: &[BoardSide],
+        material: &Material<Meta>,
+        removal: &[CompositeObject<Meta>],
+        scores: &[CompositeObject<Meta>],
+        mut surface: impl FnMut(
+            &mut CompositeDocument<Meta>,
+            BoardSide,
+        ) -> Result<(Surface<Meta>, CompositeStyle)>,
+    ) -> Result<()> {
+        let bounds = material.bounds;
+        let turned_over = Affine2 {
+            m00: -1.0,
+            m02: bounds.min.x + bounds.max.x,
+            ..Affine2::IDENTITY
+        };
+        for (index, &side) in sides.iter().enumerate() {
+            let across = Point::new(index as f64 * (bounds.width() + SIDE_GAP_MM), 0.0);
+            let view = match side {
+                BoardSide::Top => Affine2::IDENTITY,
+                BoardSide::Bottom => turned_over,
+            };
+            let (surface, style) = surface(&mut self.artwork, side)?;
+            self.stack(
+                Affine2::translation(across).concat(view),
+                &style,
+                Stack {
+                    sheet: vec![material.sheet.clone()],
+                    cuts: std::iter::once(material.outside.clone())
+                        .chain(removal.iter().cloned())
+                        .chain(surface.cutouts)
+                        .collect(),
+                    scores: scores.to_vec(),
+                    copper: surface.copper,
+                    masked: surface.masked,
+                    openings: surface.openings,
+                    legend: surface.legend,
+                },
+            );
+            let placed = BBox::new(bounds.min + across, bounds.max + across);
+            self.viewport = self.viewport.union(placed);
+        }
+        self.viewport = self.viewport.expand(VIEW_MARGIN_MM);
+        finish_step_graph_artwork(&mut self.artwork)
+    }
+
     /// Stack one side's six layers under `placement`. Every layer is its
     /// paint, then what the mask opens where that clips it, then the cuts.
-    fn stack(&mut self, placement: Affine2, style: &CompositeStyle, stack: Stack) {
-        let mut place = |objects: Vec<CompositeObject>, polarity: Option<Polarity>| {
+    fn stack(&mut self, placement: Affine2, style: &CompositeStyle, stack: Stack<Meta>) {
+        let mut place = |objects: Vec<CompositeObject<Meta>>, polarity: Option<Polarity>| {
             objects
                 .into_iter()
                 .map(|object| CompositeObject {
@@ -351,7 +393,7 @@ impl Composite {
         &mut self,
         name: &str,
         style: LayerStyle,
-        objects: [&Vec<CompositeObject>; N],
+        objects: [&Vec<CompositeObject<Meta>>; N],
     ) {
         self.styles.push(style);
         let layer =
@@ -363,11 +405,11 @@ impl Composite {
     }
 }
 
-fn region(
-    artwork: &mut CompositeDocument,
+fn region<Meta: Default>(
+    artwork: &mut CompositeDocument<Meta>,
     polarity: Polarity,
     contours: impl IntoIterator<Item = ContourBuf>,
-) -> CompositeObject {
+) -> CompositeObject<Meta> {
     let fill = Paint::Fill {
         rule: FillRule::EvenOdd,
     };
@@ -376,14 +418,14 @@ fn region(
 }
 
 /// Where the board is, said once for every layer.
-struct Material {
+struct Material<Meta = Option<Symbol>> {
     /// Bounds of the profile.
     bounds: BBox,
     /// A sheet reaching past all the artwork.
-    sheet: CompositeObject,
+    sheet: CompositeObject<Meta>,
     /// All of the sheet that is not board: around the profile and inside
     /// its cutouts.
-    outside: CompositeObject,
+    outside: CompositeObject<Meta>,
 }
 
 fn material_objects(
@@ -413,6 +455,16 @@ fn material_objects(
             .chain(cutouts.iter().map(|cutout| cutout.path))
             .flat_map(|path| geometry.transformed_path_contours(path, occurrence.transform))
     });
+    Ok(material(artwork, bounds, profile))
+}
+
+/// The board within `bounds` whose edges are the `profile` contours, read
+/// even-odd: its outline and the outlines of what is cut out of it.
+fn material<Meta: Default>(
+    artwork: &mut CompositeDocument<Meta>,
+    bounds: BBox,
+    profile: impl IntoIterator<Item = ContourBuf>,
+) -> Material<Meta> {
     let BBox { min, max } = bounds.expand(SHEET_MARGIN_MM);
     let sheet = ContourBuf::new(vec![
         PathCmd::move_to(min),
@@ -426,11 +478,11 @@ fn material_objects(
     let outside = std::iter::once(sheet.clone())
         .chain(profile)
         .collect::<Vec<_>>();
-    Ok(Material {
+    Material {
         bounds,
         sheet: region(artwork, Polarity::Dark, [sheet]),
         outside: region(artwork, Polarity::Clear, outside),
-    })
+    }
 }
 
 /// What an array's fabrication adds to it: the material it routs away, board

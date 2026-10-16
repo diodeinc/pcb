@@ -39,7 +39,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use gerberx2::{escape_attribute_field, trim_decimal};
 use pcb_ir::geom::Point;
 
@@ -303,6 +303,173 @@ pub fn write_xnc(doc: &XncDocument) -> Result<String> {
     Ok(out)
 }
 
+/// A drill file as the holes it images.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct DrillImage {
+    /// The `.FileFunction` attribute's fields, empty when the file has none.
+    pub file_function: Vec<String>,
+    pub holes: Vec<DrillHole>,
+}
+
+/// A round hole, or a slot of a round tool's width from `start` to `end`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct DrillHole {
+    pub diameter: f64,
+    pub start: Point,
+    pub end: Point,
+}
+
+/// Read an Excellon drill file: the XNC this module writes, and the
+/// decimal Excellon EDA tools export, with slots as `G85` cycles or as
+/// routed `G00`/`M15`/`G01` strokes. Arcs routed with `G02`/`G03` read as
+/// straight slots. Coordinates with suppressed zeros are not supported.
+pub fn read_drill(text: &str) -> Result<DrillImage> {
+    let mut image = DrillImage::default();
+    let mut tools = HashMap::new();
+    let mut header = false;
+    let mut scale = 1.0;
+    let mut zero_suppression = false;
+    let mut tool = None;
+    let mut at = Point::new(0.0, 0.0);
+    let mut plunged = false;
+    for (index, line) in text.lines().enumerate() {
+        let line = line.trim();
+        let context = || format!("drill file line {}: {line}", index + 1);
+        if let Some(comment) = line.strip_prefix(';') {
+            if let Some(fields) = comment.trim().strip_prefix("#@! TF.FileFunction,") {
+                image.file_function = fields.split(',').map(str::to_owned).collect();
+            }
+            continue;
+        }
+        match line {
+            "" => continue,
+            "M48" => {
+                header = true;
+                continue;
+            }
+            "%" | "M95" => {
+                header = false;
+                continue;
+            }
+            "M15" => {
+                plunged = true;
+                continue;
+            }
+            "M16" | "M17" => {
+                plunged = false;
+                continue;
+            }
+            "M30" | "M00" => break,
+            _ => {}
+        }
+        if header {
+            let mut fields = line.split(',');
+            if let Some(unit @ ("METRIC" | "INCH")) = fields.next() {
+                scale = if unit == "INCH" { 25.4 } else { 1.0 };
+                zero_suppression = fields.any(|field| matches!(field, "LZ" | "TZ"));
+                continue;
+            }
+        }
+        if let Some(rest) = line.strip_prefix('T') {
+            let digits = rest.len() - rest.trim_start_matches(|c: char| c.is_ascii_digit()).len();
+            let number: u32 = rest[..digits].parse().with_context(context)?;
+            let parameters = &rest[digits..];
+            if let Some(diameter) = parameters.find('C').map(|at| &parameters[at + 1..]) {
+                let end = diameter
+                    .find(|c: char| !(c.is_ascii_digit() || c == '.'))
+                    .unwrap_or(diameter.len());
+                let diameter: f64 = diameter[..end].parse().with_context(context)?;
+                tools.insert(number, diameter * scale);
+            } else if !header {
+                tool = (number != 0).then_some(number);
+            }
+            continue;
+        }
+        if header {
+            continue;
+        }
+        let coordinates = |text: &str, from: Point| -> Result<Point> {
+            let mut point = from;
+            let mut rest = text;
+            while let Some(axis) = rest.chars().next().filter(|axis| matches!(axis, 'X' | 'Y')) {
+                let value = &rest[1..];
+                let end = value
+                    .find(|c: char| !(c.is_ascii_digit() || matches!(c, '.' | '-' | '+')))
+                    .unwrap_or(value.len());
+                let number = &value[..end];
+                if zero_suppression && !number.contains('.') {
+                    bail!(
+                        "{}: coordinates with suppressed zeros are not supported",
+                        context()
+                    );
+                }
+                let number = number.parse::<f64>().with_context(context)? * scale;
+                if axis == 'X' {
+                    point.x = number;
+                } else {
+                    point.y = number;
+                }
+                rest = &value[end..];
+            }
+            if !rest.is_empty() {
+                bail!("{}: unexpected '{rest}'", context());
+            }
+            Ok(point)
+        };
+        let mut hole = |start: Point, end: Point| -> Result<()> {
+            let number = tool.with_context(|| format!("{}: no tool selected", context()))?;
+            let diameter = *tools
+                .get(&number)
+                .with_context(|| format!("{}: tool T{number:02} is not defined", context()))?;
+            image.holes.push(DrillHole {
+                diameter,
+                start,
+                end,
+            });
+            Ok(())
+        };
+        let (command, coordinates_text) = match line.get(..3) {
+            Some(code @ ("G00" | "G01" | "G02" | "G03" | "G05" | "G90")) => {
+                (Some(code), &line[3..])
+            }
+            _ => (None, line),
+        };
+        match command {
+            Some("G05" | "G90") => continue,
+            Some("G00") => {
+                at = coordinates(coordinates_text, at)?;
+                plunged = false;
+            }
+            Some(_) => {
+                // A routed move: G01 or an arc, read straight. It cuts only
+                // with the tool plunged.
+                let coordinates_text = coordinates_text
+                    .split_once(['A', 'I'])
+                    .map_or(coordinates_text, |(points, _)| points);
+                let end = coordinates(coordinates_text, at)?;
+                if plunged {
+                    hole(at, end)?;
+                }
+                at = end;
+            }
+            None if !line.starts_with(['X', 'Y']) => continue,
+            None => match line.split_once("G85") {
+                Some((start, end)) => {
+                    let start = coordinates(start, at)?;
+                    let end = coordinates(end, start)?;
+                    hole(start, end)?;
+                    at = end;
+                }
+                None => {
+                    at = coordinates(line, at)?;
+                    hole(at, at)?;
+                }
+            },
+        }
+    }
+    Ok(image)
+}
+
 impl XncObject {
     fn tool(&self) -> u8 {
         match self {
@@ -390,6 +557,55 @@ fn format_decimal(value: f64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn written_drills_and_slots_read_back_as_the_holes_they_image() {
+        let mut builder = XncBuilder::new(vec![XncAttribute::file(
+            "FileFunction",
+            ["Plated", "1", "4", "PTH"],
+        )]);
+        builder
+            .add_slot(
+                0.6,
+                Point::new(1.0, 2.0),
+                Point::new(3.5, 2.0),
+                vec![],
+                vec![],
+            )
+            .unwrap();
+        builder
+            .add_drill(0.3, Point::new(-4.25, 7.0), vec![], vec![])
+            .unwrap();
+        let image = read_drill(&write_xnc(&builder.finish()).unwrap()).unwrap();
+        assert_eq!(image.file_function, ["Plated", "1", "4", "PTH"]);
+        let hole = |diameter, start, end| DrillHole {
+            diameter,
+            start,
+            end,
+        };
+        let at = Point::new(-4.25, 7.0);
+        assert_eq!(
+            image.holes,
+            [
+                hole(0.3, at, at),
+                hole(0.6, Point::new(1.0, 2.0), Point::new(3.5, 2.0)),
+            ]
+        );
+    }
+
+    #[test]
+    fn routed_inch_slots_cut_only_while_plunged() {
+        let text = "M48\nINCH\nT1C0.04\n%\nT1\nG00X1.0Y1.0\nM15\nG01X2.0Y1.0\nM16\nG00X3.0Y3.0\nG01X4.0Y3.0\nM30\n";
+        let image = read_drill(text).unwrap();
+        assert_eq!(
+            image.holes,
+            [DrillHole {
+                diameter: 0.04 * 25.4,
+                start: Point::new(25.4, 25.4),
+                end: Point::new(50.8, 25.4),
+            }]
+        );
+    }
 
     #[test]
     fn tools_snap_to_micrometers_and_sort_by_diameter() {

@@ -3,8 +3,9 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 use clap::{Args, Subcommand};
-use pcb_ipc2581_tools::RenderFormat;
 use pcb_ipc2581_tools::commands::render::{RenderTarget, render_artwork};
+use pcb_ipc2581_tools::geometry::composite::gerber::{FabricationFile, gerber_composite};
+use pcb_ipc2581_tools::{BoardSide, RenderFormat};
 
 #[derive(Args)]
 pub struct GerberArgs {
@@ -38,11 +39,15 @@ enum Commands {
         #[arg(short, long, value_hint = clap::ValueHint::FilePath)]
         output: Option<PathBuf>,
     },
-    /// Render a single Gerber X2 layer to SVG, PNG, or terminal graphics
+    /// Render one Gerber X2 layer, or the finished board a directory or zip of
+    /// fabrication files describes, to SVG, PNG, or terminal graphics
     Render {
-        /// Gerber layer file to render
-        #[arg(value_hint = clap::ValueHint::FilePath)]
+        /// Gerber layer file, or a directory or zip of Gerber, drill and job files
+        #[arg(value_hint = clap::ValueHint::AnyPath)]
         file: PathBuf,
+        /// Render only this side of the finished board
+        #[arg(long)]
+        side: Option<BoardSide>,
         /// Output file path. If omitted, auto renders to the terminal when possible.
         #[arg(short, long, value_hint = clap::ValueHint::FilePath)]
         output: Option<PathBuf>,
@@ -71,9 +76,10 @@ pub fn execute(args: GerberArgs, resolution: Resolution) -> Result<()> {
         }
         Commands::Render {
             file,
+            side,
             output,
             format,
-        } => render(&file, output.as_deref(), format, resolution),
+        } => render(&file, side, output.as_deref(), format, resolution),
     }
 }
 
@@ -172,10 +178,20 @@ fn format_bbox(bbox: pcb_ir::geom::BBox) -> String {
 /// draw natively, so viewing a layer never composes it.
 fn render(
     file: &Path,
+    side: Option<BoardSide>,
     output: Option<&Path>,
     format: RenderFormat,
     resolution: Resolution,
 ) -> Result<()> {
+    let is_zip = file
+        .extension()
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("zip"));
+    if file.is_dir() || is_zip {
+        return render_board(file, side, output, format, resolution);
+    }
+    if side.is_some() {
+        bail!("--side renders a finished board; pass a directory or zip of fabrication files");
+    }
     let target = RenderTarget::resolve(output, format, "Gerber layer")?;
     render_artwork(
         &load_geometry(file, resolution.accuracy)?,
@@ -184,6 +200,79 @@ fn render(
         "Gerber layer",
         &pcb_ir::render::RenderOptions::default().with_accuracy(resolution.accuracy),
     )
+}
+
+/// Render the finished board from its fabrication files, as `pcb ipc2581
+/// render` renders it from a design.
+fn render_board(
+    source: &Path,
+    side: Option<BoardSide>,
+    output: Option<&Path>,
+    format: RenderFormat,
+    resolution: Resolution,
+) -> Result<()> {
+    let sides = side.map_or(vec![BoardSide::Top, BoardSide::Bottom], |side| vec![side]);
+    let subject = format!(
+        "Gerber {} view",
+        sides
+            .iter()
+            .map(BoardSide::to_string)
+            .collect::<Vec<_>>()
+            .join(" and ")
+    );
+    let target = RenderTarget::resolve(output, format, &subject)?;
+    let files = read_fabrication_files(source)?;
+    let composite = gerber_composite(&files, &sides, resolution)
+        .with_context(|| format!("Failed to render {}", source.display()))?;
+    let options = pcb_ir::render::RenderOptions::default()
+        .with_accuracy(resolution.accuracy)
+        .with_styles(composite.styles)
+        .with_viewport(composite.viewport);
+    render_artwork(&composite.artwork, target, output, &subject, &options)
+}
+
+/// Every file in a directory, or in a zip archive, by its path within it.
+fn read_fabrication_files(source: &Path) -> Result<Vec<FabricationFile>> {
+    let read = |path: &Path| {
+        std::fs::read(path).with_context(|| format!("Failed to read {}", path.display()))
+    };
+    if source.is_dir() {
+        let mut files = Vec::new();
+        let mut directories = vec![source.to_path_buf()];
+        while let Some(directory) = directories.pop() {
+            let entries = std::fs::read_dir(&directory)
+                .with_context(|| format!("Failed to read {}", directory.display()))?;
+            for entry in entries {
+                let path = entry?.path();
+                if path.is_dir() {
+                    directories.push(path);
+                } else {
+                    files.push(FabricationFile {
+                        name: path.strip_prefix(source)?.to_string_lossy().into_owned(),
+                        contents: read(&path)?,
+                    });
+                }
+            }
+        }
+        return Ok(files);
+    }
+    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(read(source)?))
+        .with_context(|| format!("Failed to open {} as a zip archive", source.display()))?;
+    let mut files = Vec::new();
+    for index in 0..archive.len() {
+        let mut entry = archive.by_index(index)?;
+        if !entry.is_file() {
+            continue;
+        }
+        let mut contents = Vec::new();
+        std::io::Read::read_to_end(&mut entry, &mut contents)
+            .with_context(|| format!("Failed to read {} from the archive", entry.name()))?;
+        files.push(FabricationFile {
+            name: entry.name().to_owned(),
+            contents,
+        });
+    }
+    Ok(files)
 }
 
 fn load_geometry(

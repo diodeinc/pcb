@@ -992,6 +992,87 @@ fn flatten_leaf_blocks<LayerMeta, ObjectMeta: Clone>(
     }
 }
 
+/// Copy `source`'s apertures, paths and blocks into `target`'s tables and
+/// return each source layer's objects as they image there, their metadata
+/// mapped by `meta`. The objects are not placed on any layer: the caller
+/// draws them where it wants them, as it would objects lowered straight
+/// into `target`.
+pub fn import_layer_objects<SourceLayer, SourceObject, TargetLayer, TargetObject>(
+    target: &mut Document<TargetLayer, TargetObject>,
+    source: &Document<SourceLayer, SourceObject>,
+    meta: impl Fn(&SourceObject) -> TargetObject,
+) -> Vec<Vec<Object<TargetObject>>> {
+    let apertures = source
+        .apertures
+        .iter()
+        .map(|aperture| target.push_aperture(aperture.clone()))
+        .collect::<Vec<_>>();
+    let paths = source
+        .arena
+        .paths
+        .iter()
+        .map(|path| {
+            let contours = source.arena.contour_bufs(path.contours);
+            target.push_path(path.paint, contours)
+        })
+        .collect::<Vec<_>>();
+    let first_block = target.blocks.len() as u32;
+    let geometry = |geometry: Geometry| match geometry {
+        Geometry::Flash {
+            aperture,
+            transform,
+        } => Geometry::Flash {
+            aperture: apertures[aperture as usize],
+            transform,
+        },
+        Geometry::Stroke { path } => Geometry::Stroke {
+            path: paths[path as usize],
+        },
+        Geometry::Region { path } => Geometry::Region {
+            path: paths[path as usize],
+        },
+        Geometry::Instance { block, transform } => Geometry::Instance {
+            block: first_block + block,
+            transform,
+        },
+        Geometry::GridInstance {
+            block,
+            transform,
+            repeat,
+        } => Geometry::GridInstance {
+            block: first_block + block,
+            transform,
+            repeat,
+        },
+    };
+    let object = |object: &Object<SourceObject>| Object {
+        polarity: object.polarity,
+        order: object.order,
+        geometry: geometry(object.geometry),
+        bbox: object.bbox,
+        meta: meta(&object.meta),
+    };
+    // Blocks keep their order, so each still references only earlier ones.
+    for block in &source.blocks {
+        let id = target.push_block();
+        for source_object in &block.objects {
+            target.push_block_object(id, object(source_object));
+        }
+    }
+    source
+        .layers
+        .iter()
+        .map(|layer| {
+            layer
+                .objects
+                .slice(&source.objects)
+                .iter()
+                .map(object)
+                .collect()
+        })
+        .collect()
+}
+
 /// `geometry` as it images under `transform`, within one document: a
 /// placement composes with it, a grid's step vectors turn with it, and a
 /// path is copied into the arena transformed.
