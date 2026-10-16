@@ -576,19 +576,19 @@ fn auto_create_allows_large_leftover_edge_rails() {
 }
 
 #[test]
-fn auto_create_falls_back_to_minimum_single_board_panel_when_a4_does_not_fit() {
+fn auto_create_falls_back_to_minimum_single_board_panel_when_a3_does_not_fit() {
     let xml =
-        create_auto_board_array_xml(&board_fixture_with_mask_bbox_mm(278.0, 10.0), None).unwrap();
+        create_auto_board_array_xml(&board_fixture_with_mask_bbox_mm(410.0, 10.0), None).unwrap();
 
     for expected in [
-        r#"<StepRepeat stepRef="board_cell" x="5" y="5" nx="1" ny="1" dx="288" dy="20" angle="0.00" mirror="false"/>"#,
+        r#"<StepRepeat stepRef="board_cell" x="5" y="5" nx="1" ny="1" dx="420" dy="20" angle="0.00" mirror="false"/>"#,
         r#"<StepRepeat stepRef="board" x="5" y="5" nx="1" ny="1" dx="0" dy="0" angle="0.00" mirror="false"/>"#,
         r#"<NonstandardAttribute name="diode.panelize.mode" type="STRING" value="auto_minimum_panel"/>"#,
     ] {
         assert!(xml.contains(expected), "{expected}");
     }
 
-    assert_array(&xml, 298.0, 30.0, 1);
+    assert_array(&xml, 430.0, 30.0, 1);
 }
 
 #[test]
@@ -1552,19 +1552,19 @@ fn rejects_options_outside_their_ranges() {
         ),
         (
             &large,
-            6,
+            7,
             1,
             spaced,
             5.0,
-            "array width must be at most 297 mm; got 400 mm",
+            "array width must be at most 420 mm; got 465 mm",
         ),
         (
             &large,
             1,
-            6,
+            7,
             spaced,
             5.0,
-            "array height must be at most 297 mm; got 400 mm",
+            "array height must be at most 420 mm; got 465 mm",
         ),
     ] {
         let options = options(columns, rows, margin, BoardMarginMm::all(rail));

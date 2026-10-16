@@ -105,7 +105,7 @@ balancing. Both commands accept either flag, but not both together. See the
 [copper-balancing strategy](docs/copper-balancing.md).
 
 `board-array plan` lists the grid, board count, and utilization that
-`board-array create --sheet` gives on each sheet from A7 to A4. With
+`board-array create --sheet` gives on each sheet from A7 to A3. With
 `--quantity` (and an optional `--moq`, the minimum number of arrays per order),
 it adds the arrays, boards, and surplus each sheet orders. It then recommends the
 sheet that orders the least array area. When two sheets tie, it recommends the
