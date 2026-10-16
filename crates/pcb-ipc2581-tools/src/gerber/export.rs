@@ -1278,7 +1278,7 @@ mod tests {
     }
 
     #[test]
-    fn catalogue_pads_flash_through_shared_apertures() {
+    fn nonstandard_catalogue_pads_use_regions_without_macros() {
         let ipc = top_copper_board(
             r#"<RectRound width="2" height="1" radius="0.25" upperRight="true" upperLeft="true" lowerRight="true" lowerLeft="true"/>"#,
             &format!(
@@ -1291,19 +1291,10 @@ mod tests {
             ),
         );
         let copper = &gerber_files(&ipc, ArtworkScope::Board)["F_Cu.gtl"];
-        assert_eq!(copper.matches("D03*").count(), 3);
-        assert!(
-            !copper.contains("G36*"),
-            "catalogue pads must flash, not flatten to regions"
-        );
-        assert!(
-            copper.matches("%ADD").count() <= 2,
-            "repeated orientations share aperture definitions"
-        );
-        assert!(!copper.contains("%AMRoundedRect*"));
-        assert!(!copper.lines().any(|line| line.starts_with("21,")));
+        assert_eq!(copper.matches("D03*").count(), 0);
+        assert_eq!(copper.matches("G36*").count(), 3);
+        assert!(!copper.contains("%AM"));
         assert!(!copper.contains("%LR"));
-        assert!(copper.lines().any(|line| line.starts_with("4,")));
 
         let corner_deficit = 0.25 * 0.25 * (4.0 - std::f64::consts::PI);
         let expected = 3.0 * (2.0 - corner_deficit);

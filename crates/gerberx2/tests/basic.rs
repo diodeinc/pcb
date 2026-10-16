@@ -671,7 +671,7 @@ fn composed_area_follows_polarity_and_paint_order() {
 }
 
 #[test]
-fn macro_flashes_share_one_composed_aperture() {
+fn macro_flashes_extract_shared_then_normalize_as_regions() {
     let accuracy = GeometryAccuracy::default();
     // KiCad's rounded rectangle: an outline, four corner circles and four
     // edge lines, minus an exposure-off hole that only the macro may see.
@@ -697,8 +697,14 @@ fn macro_flashes_share_one_composed_aperture() {
     assert!((area - (16.0 - pad)).abs() < 0.001, "area was {area}");
 
     let normalized = gerberx2::from_artwork::normalize_layer(&gerber, accuracy).unwrap();
-    assert_eq!(normalized.matches("D03*").count(), 4);
-    assert!(!normalized.contains("G36*"));
+    assert_eq!(normalized.matches("D03*").count(), 1);
+    assert!(normalized.contains("G36*"));
+    let normalized = GerberX2::parse(&normalized).unwrap();
+    let normalized_area =
+        pcb_ir::dialects::artwork::compare::summarize(&extract(&normalized), Resolution::default())
+            .unwrap()
+            .area_mm2;
+    assert!((normalized_area - area).abs() < 0.001);
 }
 
 #[test]
