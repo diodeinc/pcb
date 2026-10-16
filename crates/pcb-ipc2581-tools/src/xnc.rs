@@ -415,6 +415,19 @@ pub fn read_drill(text: &str) -> Result<DrillImage> {
                             _ => point,
                         })
                 };
+                for &(letter, code) in &words {
+                    if letter == 'G' {
+                        motion = match code as u32 {
+                            0 => Motion::Rapid,
+                            1 => Motion::Line,
+                            2 => Motion::Arc { clockwise: true },
+                            3 => Motion::Arc { clockwise: false },
+                            5 => Motion::Drill,
+                            85 | 90 => motion,
+                            _ => bail!("{}: G{code} is not supported", context()),
+                        };
+                    }
+                }
                 // A `G85` cycle cuts a slot between the points either side.
                 if let Some(split) = words.iter().position(|&word| word == ('G', 85.0)) {
                     let start = point(&words[..split], at);
@@ -425,19 +438,6 @@ pub fn read_drill(text: &str) -> Result<DrillImage> {
                         diameter: diameter()?,
                     });
                     continue;
-                }
-                for &(letter, code) in &words {
-                    if letter == 'G' {
-                        motion = match code as u32 {
-                            0 => Motion::Rapid,
-                            1 => Motion::Line,
-                            2 => Motion::Arc { clockwise: true },
-                            3 => Motion::Arc { clockwise: false },
-                            5 => Motion::Drill,
-                            90 => motion,
-                            _ => bail!("{}: G{code} is not supported", context()),
-                        };
-                    }
                 }
                 if !words.iter().any(|word| matches!(word.0, 'X' | 'Y')) {
                     continue;
