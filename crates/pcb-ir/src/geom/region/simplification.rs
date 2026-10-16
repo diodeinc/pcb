@@ -466,21 +466,19 @@ impl ContourSet {
     /// nonzero rule would not: a hole left outside its ring by a chord winds
     /// negatively there and would fill.
     pub fn decimate_inward(&self) -> Result<Self, AccuracyError> {
-        let inherited = self.uncertainty_mm + numerical_error(self.bbox);
-        let deviation_mm = self.budget().allowance(inherited)?;
-        self.decimate_inward_within(deviation_mm)
+        self.decimate_inward_within(f64::INFINITY)
     }
 
-    /// Decimate inward within `deviation_mm`, charged to the uncertainty.
+    /// [`Self::decimate_inward`] moving the boundary by at most `deviation_mm`.
     pub(crate) fn decimate_inward_within(&self, deviation_mm: f64) -> Result<Self, AccuracyError> {
         let inherited = self.uncertainty_mm + numerical_error(self.bbox);
+        let deviation_mm = deviation_mm.min(self.budget().allowance(inherited)?);
         let decimated = decimate_rings_inward(self.rings(), deviation_mm);
-        Self::from_regularized(
+        Ok(Self::from_regularized(
             flatten_shapes(regularize(decimated, OverlayFillRule::Positive)),
             self.resolution,
             inherited + deviation_mm,
-        )
-        .checked()
+        ))
     }
 }
 

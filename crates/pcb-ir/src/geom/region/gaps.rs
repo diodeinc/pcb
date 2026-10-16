@@ -330,7 +330,8 @@ impl ContourSet {
         // sub-tolerance vertex clusters. Their edges point anywhere, so the
         // next closing reads them as opposing walls and finds artifact gaps
         // beside every cut, and its offsets spike at each one. Absorbing
-        // them inward keeps the region within what it was.
+        // them inward, within what significance and the remaining budget
+        // allow, keeps the region within what it was.
         Ok(Some(reopened.decimate_inward_within(self.tolerance())?))
     }
 
@@ -345,11 +346,23 @@ impl ContourSet {
     /// of itself, which keeps both and every crossing between them, so each
     /// trim would compound the boundary until the next offset exhausts
     /// memory.
+    ///
+    /// The windows only select where to reopen, so they are exact rectangles
+    /// around each piece of `cut` and add no error to the result. The source
+    /// is open only within its error, which the budget bounds.
     fn reopen_near(&self, cut: &Self, radius: f64) -> Result<Self, AccuracyError> {
-        // Both the source and the windows carry at most the budget's error.
-        let slack = 2.0 * self.budget().max_error_mm() + self.tolerance();
-        let affected = cut.disk_dilate(2.0 * radius + slack)?;
-        let neighbourhood = affected.disk_dilate(2.0 * radius + slack)?;
+        let slack = self.budget().max_error_mm() + self.tolerance();
+        let pieces = cut.connected_components();
+        let window = |reach: f64| {
+            Self::union_all(
+                self.resolution,
+                pieces
+                    .iter()
+                    .map(|piece| Self::rectangle(piece.bbox().expand(reach), self.resolution)),
+            )
+        };
+        let affected = window(2.0 * radius + slack)?;
+        let neighbourhood = window(4.0 * radius + slack)?;
         let reopened = self.intersection(&neighbourhood)?.disk_open(radius)?;
         let removed = self.intersection(&affected)?.difference(&reopened)?;
         self.difference(&removed)

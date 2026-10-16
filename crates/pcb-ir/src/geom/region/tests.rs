@@ -746,6 +746,21 @@ fn disk_gap_regularization_widens_a_same_component_hairpin() {
 }
 
 #[test]
+fn disk_gap_regularization_fits_a_tolerance_coarser_than_its_budget() {
+    // Significance and accuracy are independent: cleaning up a trim must
+    // not spend a tolerance the budget cannot afford.
+    let resolution = Resolution::new(0.02, GeometryAccuracy::new(0.01).unwrap());
+    let outer = ContourSet::rectangle(rect(0.0, 0.0, 10.0, 10.0), resolution);
+    let notch = ContourSet::rectangle(rect(4.6, 3.0, 5.4, 10.0), resolution);
+    let hairpin = outer.difference(&notch).unwrap();
+
+    let result = hairpin.disk_regularize_gaps(0.5, 0.5, 0.0025).unwrap();
+
+    assert!(result.removed.area() > 1.0);
+    assert!(result.kept.disk_gap_violations(0.5).unwrap().is_empty());
+}
+
+#[test]
 fn disk_gap_regularization_widens_a_narrow_internal_void() {
     let outer = block(0.0, 0.0, 10.0, 10.0);
     let narrow_hole = block(4.6, 3.0, 5.4, 7.0);
