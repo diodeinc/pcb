@@ -15,6 +15,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - `pcb ipc info --format json` reports nominal copper weights and a named soldermask colour.
 - DFM fails a layout that has no board outline, under every PDK.
 - `pcb gerber render` takes a directory or zip of Gerber, drill and job files and renders the finished board, top and bottom or one `--side`, as `pcb ipc2581 render` does.
+- `pcb ipc2581 board-array create --auto` tries A3 (297 × 420 mm) after A4, and `--sheet a3` selects it. Board arrays may now be up to 420 mm per side.
 
 ### Fixed
 

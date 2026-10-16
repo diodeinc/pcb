@@ -3,11 +3,12 @@ use std::cmp::Ordering;
 use super::board_array::BoardMarginMm;
 use crate::utils::format::fmt_num;
 
-pub const AUTO_SHEETS: [AutoSheetSize; 4] = [
+pub const AUTO_SHEETS: [AutoSheetSize; 5] = [
     AutoSheetSize::A7,
     AutoSheetSize::A6,
     AutoSheetSize::A5,
     AutoSheetSize::A4,
+    AutoSheetSize::A3,
 ];
 const AUTO_MIN_EDGE_RAIL_MM: f64 = 5.0;
 const AUTO_MAX_GRID_COUNT: u32 = 10;
@@ -19,6 +20,7 @@ pub enum AutoSheetSize {
     A6,
     A5,
     A4,
+    A3,
 }
 
 impl AutoSheetSize {
@@ -28,6 +30,7 @@ impl AutoSheetSize {
             Self::A6 => "A6",
             Self::A5 => "A5",
             Self::A4 => "A4",
+            Self::A3 => "A3",
         }
     }
 
@@ -37,6 +40,7 @@ impl AutoSheetSize {
             Self::A6 => (105.0, 148.0),
             Self::A5 => (148.0, 210.0),
             Self::A4 => (210.0, 297.0),
+            Self::A3 => (297.0, 420.0),
         }
     }
 
@@ -113,7 +117,7 @@ pub fn auto_board_array_plan(
 ) -> Result<AutoBoardArrayPlan, AutoBoardArrayError> {
     // Try sheets in ascending A-series size and keep the first sheet that fits:
     //
-    //   sheets = [A7, A6, A5, A4]
+    //   sheets = [A7, A6, A5, A4, A3]
     //   targets(sheet) = [(long, short), (short, long)]
     //
     // For each target T = (W, H), board bbox B = (w, h), side margins
@@ -132,7 +136,7 @@ pub fn auto_board_array_plan(
             board_width_mm,
             board_height_mm,
             board_margin_mm,
-            sheet: AutoSheetSize::A4,
+            sheet: AutoSheetSize::A3,
         })
 }
 
@@ -294,7 +298,7 @@ fn fmt_margin(margin: BoardMarginMm) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::AutoSheetSize::{A4, A5, A6, A7};
+    use super::AutoSheetSize::{A3, A4, A5, A6, A7};
     use super::*;
 
     const MARGIN: BoardMarginMm = BoardMarginMm::all(5.0);
@@ -317,6 +321,7 @@ mod tests {
             ((70.0, 58.0), A6, (105.0, 148.0), (1, 2)),
             ((120.0, 90.0), A5, (148.0, 210.0), (1, 2)),
             ((190.0, 250.0), A4, (210.0, 297.0), (1, 1)),
+            ((190.0, 330.0), A3, (297.0, 420.0), (1, 1)),
         ] {
             let plan = auto_board_array_plan(board.0, board.1, MARGIN).unwrap();
             assert_eq!(plan.sheet, sheet);
@@ -330,7 +335,7 @@ mod tests {
         assert!(
             error
                 .to_string()
-                .contains("cannot fit in A4 with board margins 5 top / 5 right / 5 bottom / 5 left and 5 mm edge rails")
+                .contains("cannot fit in A3 with board margins 5 top / 5 right / 5 bottom / 5 left and 5 mm edge rails")
         );
     }
 
@@ -354,15 +359,15 @@ mod tests {
 
     #[test]
     fn recommends_the_sheet_that_orders_the_least_array_area() {
-        // 50 x 40 mm cells: A7 holds 2, A6 4, A5 12, A4 28. A7 and A6 pack
-        // equally well, so A6 never wins.
+        // 50 x 40 mm cells: A7 holds 2, A6 4, A5 12, A4 28, A3 56. A7 and A6
+        // pack equally well, so A6 never wins; A3 only ties A4.
         let plans: Vec<_> = AUTO_SHEETS
             .into_iter()
             .map(|sheet| auto_board_array_plan_for_sheet(40.0, 30.0, MARGIN, sheet).unwrap())
             .collect();
         assert_eq!(
             plans.iter().map(|p| p.boards()).collect::<Vec<_>>(),
-            [2, 4, 12, 28]
+            [2, 4, 12, 28, 56]
         );
 
         let order = |quantity, moq| Order { quantity, moq };
