@@ -8,6 +8,8 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+## [0.4.86] - 2026-10-17
+
 ### Added
 
 - DFM PDKs can check copper weight, board thickness, surface finish, soldermask colour, and board size.
@@ -2448,7 +2450,8 @@ Tvs(package="DO-214AA", direction="Unidirectional", reverse_standoff_voltage="24
 - Error on invalid type passed to `io()`
 - Format the auto-generated component .zen files
 
-[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.4.85...HEAD
+[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.4.86...HEAD
+[0.4.86]: https://github.com/diodeinc/pcb/compare/v0.4.85...v0.4.86
 [0.4.85]: https://github.com/diodeinc/pcb/compare/v0.4.84...v0.4.85
 [0.4.84]: https://github.com/diodeinc/pcb/compare/v0.4.83...v0.4.84
 [0.4.83]: https://github.com/diodeinc/pcb/compare/v0.4.82...v0.4.83
