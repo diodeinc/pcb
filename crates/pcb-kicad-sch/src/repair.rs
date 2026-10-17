@@ -95,8 +95,7 @@ impl ConnectivityRepairIntent {
     /// starts from this document and adds connections and no-connect markers.
     pub fn apply_edits(&self, document: &SchDocument) -> Result<SchDocument> {
         let mut repaired = document.clone();
-        remove_items(&mut repaired, &self.removals)?;
-        compose::relocate_symbols(&mut repaired, &self.relocated_symbols)?;
+        compose::apply_repair_edits(&mut repaired, self)?;
         Ok(repaired)
     }
 }
@@ -136,7 +135,10 @@ pub fn plan_connectivity_repair(
         selected_keys,
         forced_removals,
     )?;
-    intent.drivers = compose::plan_net_driver_kinds(document, netlist, &intent.reconnect_nets)?;
+    // The realizer decides drivers after its own pre-driver steps, which can
+    // cut a bridge (a removed sheet-pin label) or restore one (a module
+    // page's hierarchical endpoint); run the same steps to plan them.
+    intent.drivers = compose::plan_repair_driver_kinds(document, netlist, &intent)?;
     Ok(intent)
 }
 

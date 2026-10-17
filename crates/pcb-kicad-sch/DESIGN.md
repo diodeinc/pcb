@@ -11,8 +11,9 @@ generated labels, wires, sheets, and other items do not grant continued
 ownership of those items.
 
 Analysis interprets the schematic as KiCad does. Reconciliation preserves an
-equivalent schematic except to refresh netlist-derived symbol assembly flags
-and prune obsolete generated module sheets as described below.
+equivalent schematic except to refresh netlist-derived symbol assembly flags,
+keep generated module sheets' pins in step with their modules, and prune
+obsolete generated module sheets as described below.
 Otherwise, it makes the smallest repair needed to restore equivalence.
 
 KiCad power symbols are adopted by their exact effective net name and
@@ -23,6 +24,26 @@ an existing equivalent schematic.
 
 Generation may give a new module instance its own child sheet and file. Later
 applications preserve user reorganizations rather than restoring that layout.
+A generated sheet has one pin for each net that leaves its module, under one
+of the net's port names; a net used only inside the module stays local to its
+page. Full reconciliation keeps a generated sheet's pins in step as nets start
+or stop leaving the module and as ports are renamed or removed. A pin is pcb's
+while its id is the generated id for its own name; a pin the user renamed or
+wired on the parent page, and the pins of a sheet whose module still has
+symbols on the parent page, are the user's. pcb removes its own pins that the
+interface no longer has, with the label or net symbol it placed at each on
+the parent page and, once the net no longer leaves the module, the parent
+page's local labels for the net; a label or symbol the user attached at the
+pin stays. pcb knows its driver by the driver's deterministic id or, for a
+label that could not take that id, by a hidden `pcb:sheet_pin` property
+naming the pin; a label written before that property existed is known by a
+collision suffix of its id, at the pin. The module page's hierarchical labels for a
+removed pin become the page's own driver for the net, or go when the port is
+gone. A newly crossing port gets a pin and parent driver where the pin, its
+label and any growth of the sheet clear the page's other items, and the module
+page's local labels for its net become hierarchical. Existing layout never
+moves: a pin that does not fit is left to the connectivity repair, which joins
+the net as it does across a sheet the user organized.
 Full reconciliation removes an obsolete generated subtree only when its page
 filenames, page UUIDs and incoming sheet UUIDs still identify the generated
 module paths and parent-relative filenames, and it contains no live managed

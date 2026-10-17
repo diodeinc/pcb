@@ -3,6 +3,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use anyhow::{Context, Result, bail};
 use pcb_sch::{ATTR_SCHEMATIC_PATH, Instance, InstanceKind, Schematic};
 use pcb_sexpr::Sexpr;
+use petgraph::unionfind::UnionFind;
 
 use crate::{
     CONNECTION_GRID_MM, GEOMETRY_EPS_MM, Label, LabelKind, LabelShape, LabelSpin, NoConnect, Paper,
@@ -36,6 +37,12 @@ const SHEET_MIN_HEIGHT_MM: f64 = 20.32;
 const PLACEMENT_BLOCK_GAP_CELLS: i32 = 4;
 const CONTEXT_LABEL_GAP_CELLS: i32 = 1;
 const CAPACITOR_BANK_BUS_OFFSET_CELLS: f64 = 2.0;
+/// Hidden label property naming the sheet pin whose driver the label is, set
+/// when the label could not take its deterministic id.
+const SHEET_PIN_FIELD: &str = "pcb:sheet_pin";
+/// How far to search the collision suffixes of a sheet pin's driver written
+/// before `SHEET_PIN_FIELD` existed, at least.
+const LEGACY_SUFFIX_SEARCH: usize = 1024;
 
 pub(crate) fn reconcile_document(
     existing: Option<&SchDocument>,
@@ -164,7 +171,17 @@ pub(crate) fn reconcile_document(
         default_page,
         document.pages.len(),
     )?;
-    materialize_hierarchy(&mut document, netlist, &hierarchy)?;
+    let net_symbol_specs = net_symbols::specs(netlist)?;
+    materialize_hierarchy(&mut document, netlist, &net_symbol_specs, &hierarchy)?;
+    if complete {
+        sync_generated_sheet_pins(
+            &mut document,
+            netlist,
+            &net_symbol_specs,
+            &expected_slots,
+            default_page,
+        )?;
+    }
 
     let retained_native_symbols = if complete {
         native_symbol_locations(&document)?
@@ -186,7 +203,6 @@ pub(crate) fn reconcile_document(
                 .with_context(|| format!("placement page '{page_id}' is absent"))
         })
         .transpose()?;
-    let net_symbol_specs = net_symbols::specs(netlist)?;
     for slot in &project_slots {
         let selected = selected_existing.get(slot);
         let page_index = if let Some(selected) = selected {
@@ -863,16 +879,27 @@ fn linked_modules(netlist: &Schematic) -> Result<Vec<hierarchy::LinkedModule>> {
 fn materialize_hierarchy(
     document: &mut SchDocument,
     netlist: &Schematic,
+    net_symbol_specs: &BTreeMap<String, net_symbols::NetSymbolSpec>,
     plan: &hierarchy::HierarchyPlan,
 ) -> Result<()> {
     for sheet_plan in &plan.sheets {
         if document.pages.len() != sheet_plan.child_page {
             bail!("hierarchy planner produced a non-contiguous child page index");
         }
-        let ports = module_ports(netlist, &sheet_plan.instance_ref)?;
+        let ports = module_ports(netlist, &sheet_plan.module_path, &sheet_plan.instance_ref)?;
         let height = SHEET_MIN_HEIGHT_MM.max((ports.len() as f64 + 2.0) * SHEET_PIN_SPACING_MM);
         let size = Point::new(SHEET_MIN_WIDTH_MM, height);
-        let at = place_sheet(document, sheet_plan.parent_page, size)?;
+        // The parent page names each pin's net with a label running outward
+        // from the pin, so reserve that run with the sheet.
+        let label_length = ports
+            .iter()
+            .flat_map(|(net_name, port_name)| [net_name, port_name])
+            .map(|text| estimated_shaped_label_width(text))
+            .fold(0.0, f64::max);
+        let mut footprint = field_autoplace::Bounds::from_points([Point::default(), size])
+            .expect("sheet size defines bounds");
+        footprint.include(Point::new(-label_length, 0.0));
+        let at = place_sheet(document, sheet_plan.parent_page, footprint)?;
         let name = sheet_plan
             .module_path
             .rsplit('.')
@@ -927,6 +954,33 @@ fn materialize_hierarchy(
         child.file_name = Some(child_file_name);
         child.paper = document.pages[sheet_plan.parent_page].paper.clone();
         document.pages.push(child);
+
+        // Name each pin's net on the parent page now, so that later sheets
+        // and symbols are packed around the labels actually drawn there.
+        let page_contexts = page_driver_contexts(document, netlist, plan.root_page())?;
+        for (index, (net_name, port_name)) in ports.iter().enumerate() {
+            upsert_contextual_driver(
+                document,
+                net_symbol_specs,
+                &page_contexts,
+                sheet_plan.parent_page,
+                net_name,
+                (
+                    Point::new(at.x, at.y + (index as f64 + 2.0) * SHEET_PIN_SPACING_MM),
+                    LabelSpin::Left,
+                ),
+                DriverKey {
+                    key: &format!(
+                        "zener:module-parent-driver:{}:{port_name}:{net_name}",
+                        sheet_plan.module_path
+                    ),
+                    sheet_pin: Some(&deterministic_uuid(format!(
+                        "zener:module-sheet-pin:{}:{port_name}",
+                        sheet_plan.module_path
+                    ))),
+                },
+            )?;
+        }
     }
     Ok(())
 }
@@ -957,9 +1011,10 @@ fn generated_sheet_style() -> Vec<Sexpr> {
 
 fn module_ports(
     netlist: &Schematic,
+    module_path: &str,
     module_ref: &pcb_sch::InstanceRef,
 ) -> Result<Vec<(String, String)>> {
-    Ok(root_interface::ports_by_net(netlist, module_ref)?
+    Ok(module_interface(netlist, module_path, module_ref)?
         .into_iter()
         .flat_map(|(net_name, port_names)| {
             port_names
@@ -969,18 +1024,494 @@ fn module_ports(
         .collect())
 }
 
-fn place_sheet(document: &SchDocument, page_index: usize, size: Point) -> Result<Point> {
+/// A linked module's sheet interface: one port name per net that leaves the
+/// module. A net that never leaves it would be a sheet pin with nothing to
+/// connect to on the parent page, so it stays local to the module's own page.
+/// A net exposed under several port names crosses the sheet once, under the
+/// name its drivers use, rather than as several names for one net.
+fn module_interface(
+    netlist: &Schematic,
+    module_path: &str,
+    module_ref: &pcb_sch::InstanceRef,
+) -> Result<BTreeMap<String, BTreeSet<String>>> {
+    let mut root_nets = BTreeSet::new();
+    if let Some(root) = &netlist.root_ref {
+        root_nets.extend(root_interface::ports_by_net(netlist, root)?.into_keys());
+        root_nets.extend(root_interface::symbol_ports_by_net(netlist, root)?.into_keys());
+    }
+    let leaves_module = |net_name: &str| {
+        root_nets.contains(net_name)
+            || netlist.nets.get(net_name).is_some_and(|net| {
+                net.ports.iter().any(|port| {
+                    netlist
+                        .component_ref_for_port(port)
+                        .and_then(|component| {
+                            crate::canonical_component_path(&component.instance_path)
+                        })
+                        .is_some_and(|path| !hierarchy::is_descendant(&path, module_path))
+                })
+            })
+    };
+    Ok(root_interface::ports_by_net(netlist, module_ref)?
+        .into_iter()
+        .filter(|(net_name, _)| leaves_module(net_name))
+        .filter_map(|(net_name, names)| {
+            let name = names.into_iter().next()?;
+            Some((net_name, BTreeSet::from([name])))
+        })
+        .collect())
+}
+
+/// Keep each existing generated module sheet's pins in step with the
+/// module's sheet interface, which changes when a net starts or stops leaving
+/// the module or a port is renamed or removed.
+///
+/// A pin is pcb's while its id is the generated id for its own name; the user
+/// owns a pin they renamed or wired on the parent page, and the pins of a
+/// sheet whose module still has symbols on the parent page. pcb removes its
+/// own pins that the interface no longer has, with the label or net symbol it
+/// placed at each on the parent page and, once the net no longer leaves the
+/// module, the parent page's local labels for the net; a label or symbol the
+/// user attached at the pin stays. The module page's hierarchical
+/// labels for a removed pin become the page's own driver for the net, or go
+/// when the port is gone. A port that newly crosses gets a pin, with its
+/// parent-page driver, where the pin, its label and any growth of the sheet
+/// fit clear of the page's other items; the module page's local labels for
+/// its net become hierarchical labels. Existing layout never moves: a pin
+/// that does not fit is left to the connectivity repair, which joins the net
+/// as it does across a sheet the user organized.
+fn sync_generated_sheet_pins(
+    document: &mut SchDocument,
+    netlist: &Schematic,
+    net_symbol_specs: &BTreeMap<String, net_symbols::NetSymbolSpec>,
+    expected_slots: &BTreeSet<SymbolSlotKey>,
+    root_page: usize,
+) -> Result<()> {
+    let page_contexts = page_driver_contexts(document, netlist, root_page)?;
+    for module in linked_modules(netlist)? {
+        let Some(child_page) = document
+            .pages
+            .iter()
+            .position(|page| page.id == hierarchy::page_id(&module.path))
+        else {
+            continue;
+        };
+        let sheet_id = hierarchy::sheet_id(&module.path);
+        let Some((parent_page, sheet)) =
+            document
+                .pages
+                .iter()
+                .enumerate()
+                .find_map(|(page_index, page)| {
+                    page.items.iter().find_map(|item| match item {
+                        SchItem::Sheet(sheet) if sheet.id == sheet_id => {
+                            Some((page_index, sheet.as_ref().clone()))
+                        }
+                        _ => None,
+                    })
+                })
+        else {
+            continue;
+        };
+        let pin_id = |port_name: &str| {
+            deterministic_uuid(format!(
+                "zener:module-sheet-pin:{}:{port_name}",
+                module.path
+            ))
+        };
+        let ports = root_interface::ports_by_net(netlist, &module.instance_ref)?;
+        let net_of_port = |port_name: &str| {
+            ports
+                .iter()
+                .find(|(_, names)| names.contains(port_name))
+                .map(|(net_name, _)| net_name.clone())
+        };
+        let interface = module_interface(netlist, &module.path, &module.instance_ref)?;
+        let crossing = interface.values().flatten().collect::<BTreeSet<_>>();
+        let child_context = page_contexts.get(&child_page);
+
+        // A module symbol the user moved onto the parent page, and that the
+        // netlist still has, keeps the module's nets there.
+        let parent_holds_module_symbols = document.pages[parent_page].items.iter().any(|item| {
+            let SchItem::Symbol(symbol) = item else {
+                return false;
+            };
+            symbol
+                .field_value("Path")
+                .and_then(|path| SymbolSlotKey::new(path, symbol.unit))
+                .is_some_and(|slot| {
+                    expected_slots.contains(&slot)
+                        && hierarchy::is_descendant(slot.component_path(), &module.path)
+                })
+        });
+
+        // Ports that already have a pin, the user's included.
+        let present = sheet
+            .pins
+            .iter()
+            .flat_map(|pin| {
+                ports
+                    .values()
+                    .flatten()
+                    .filter(|name| pin.name == **name || pin.id == pin_id(name))
+            })
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        let stale = sheet
+            .pins
+            .iter()
+            .filter(|pin| {
+                !parent_holds_module_symbols
+                    && pin.id == pin_id(&pin.name)
+                    && !crossing.contains(&pin.name)
+                    && !page_wired_at(&document.pages[parent_page], pin.at)
+            })
+            .map(|pin| (pin.id.clone(), pin.at, pin.name.clone()))
+            .collect::<Vec<_>>();
+
+        for (id, at, port_name) in stale {
+            if let Some(SchItem::Sheet(sheet)) = document.pages[parent_page]
+                .items
+                .iter_mut()
+                .find(|item| matches!(item, SchItem::Sheet(sheet) if sheet.id == sheet_id))
+            {
+                sheet.pins.retain(|pin| pin.id != id);
+            }
+            let net_name = net_of_port(&port_name);
+            // When the net no longer leaves the module at all, a local label
+            // naming it on the parent page, such as one left by a removed
+            // symbol, names nothing there either.
+            let left_module = net_name
+                .as_ref()
+                .is_some_and(|net_name| !interface.contains_key(net_name));
+            let page = &document.pages[parent_page];
+            // The pin's own driver is the label or net symbol pcb placed for
+            // it: its id is the deterministic id for the pin's port and net
+            // (the port's net when it still has one, else the net the driver
+            // names), or, when that id was taken, a label records the pin.
+            // Anything else attached at the pin is the user's and stays.
+            let generated_driver = |id: &str, named: &str| {
+                net_name
+                    .iter()
+                    .map(String::as_str)
+                    .chain([named])
+                    .any(|net_name| {
+                        id == deterministic_uuid(format!(
+                            "zener:module-parent-driver:{}:{port_name}:{net_name}",
+                            module.path
+                        ))
+                    })
+            };
+            let records_pin = |label: &Label| {
+                label
+                    .fields
+                    .get(SHEET_PIN_FIELD)
+                    .is_some_and(|field| field.value == id)
+            };
+            // Released versions recorded no pin, so a driver label that could
+            // not take its id is known by the replacement `upsert_label`
+            // minted from that id. Only a label at the pin is searched, as far
+            // as any replacement a document of this size, or a far larger one,
+            // could have needed.
+            let suffix_bound = LEGACY_SUFFIX_SEARCH.max(
+                document
+                    .pages
+                    .iter()
+                    .map(|page| page.items.len())
+                    .sum::<usize>(),
+            );
+            let legacy_driver = |label: &Label| {
+                net_name
+                    .iter()
+                    .map(String::as_str)
+                    .chain([label.text.as_str()])
+                    .any(|net_name| {
+                        let id = deterministic_uuid(format!(
+                            "zener:module-parent-driver:{}:{port_name}:{net_name}",
+                            module.path
+                        ));
+                        (0..=suffix_bound as u64)
+                            .any(|index| label.id == deterministic_id_candidate(&id, index))
+                    })
+            };
+            let attached = page
+                .items
+                .iter()
+                .map(|item| match item {
+                    SchItem::Label(label) => {
+                        (points_connect(label.at, at)
+                            && (generated_driver(&label.id, &label.text)
+                                || records_pin(label)
+                                || legacy_driver(label)))
+                            || (left_module
+                                && label.kind == LabelKind::Local
+                                && net_name.as_ref() == Some(&label.text))
+                    }
+                    SchItem::Symbol(symbol) if symbol.field_value("Path").is_none() => {
+                        generated_driver(&symbol.id, symbol.field_value("Value").unwrap_or(""))
+                            && page
+                                .library
+                                .definitions
+                                .get(symbol.library_key())
+                                .and_then(|definition| definition.placed_pins(symbol).ok())
+                                .is_some_and(|pins| {
+                                    pins.iter().any(|pin| points_connect(pin.point, at))
+                                })
+                    }
+                    _ => false,
+                })
+                .collect::<Vec<_>>();
+            let mut attached = attached.into_iter();
+            document.pages[parent_page]
+                .items
+                .retain(|_| !attached.next().expect("one flag per item"));
+
+            let selected = |label: &Label| {
+                matches!(label.kind, LabelKind::Hierarchical { .. }) && label.text == port_name
+            };
+            match &net_name {
+                Some(net_name) => {
+                    let driver = driver_label(
+                        net_name,
+                        child_context.and_then(|context| context.get(net_name)),
+                        false,
+                        String::new(),
+                        Point::default(),
+                    );
+                    relabel(&mut document.pages[child_page], selected, &driver);
+                }
+                None => document.pages[child_page]
+                    .items
+                    .retain(|item| !matches!(item, SchItem::Label(label) if selected(label))),
+            }
+        }
+
+        let parent_context = page_contexts.get(&parent_page);
+        for (net_name, names) in &interface {
+            for port_name in names {
+                if present.contains(port_name) {
+                    continue;
+                }
+                let parent_label = driver_label(
+                    net_name,
+                    parent_context.and_then(|context| context.get(net_name)),
+                    false,
+                    String::new(),
+                    Point::default(),
+                );
+                let Some(at) = add_sheet_pin(
+                    &mut document.pages[parent_page],
+                    &sheet_id,
+                    port_name,
+                    pin_id(port_name),
+                    &parent_label,
+                )?
+                else {
+                    continue;
+                };
+                upsert_contextual_driver(
+                    document,
+                    net_symbol_specs,
+                    &page_contexts,
+                    parent_page,
+                    net_name,
+                    (at, LabelSpin::Left),
+                    DriverKey {
+                        key: &format!(
+                            "zener:module-parent-driver:{}:{port_name}:{net_name}",
+                            module.path
+                        ),
+                        sheet_pin: Some(&pin_id(port_name)),
+                    },
+                )?;
+                let driver = driver_label(net_name, Some(names), false, String::new(), at);
+                relabel(
+                    &mut document.pages[child_page],
+                    |label| label.kind == LabelKind::Local && label.text == *net_name,
+                    &driver,
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Whether wiring on the page meets `at`.
+fn page_wired_at(page: &SchPage, at: Point) -> bool {
+    page.items.iter().any(|item| match item {
+        SchItem::Wire(wire) => point_on_segment(at, wire.a, wire.b),
+        SchItem::Junction(junction) => points_connect(junction.at, at),
+        SchItem::NoConnect(marker) => points_connect(marker.at, at),
+        _ => false,
+    })
+}
+
+/// Give the labels `selected` picks the kind and text of `driver` in place.
+/// A label that would repeat one already at its point is removed instead.
+fn relabel(page: &mut SchPage, selected: impl Fn(&Label) -> bool, driver: &Label) {
+    let same_driver = |label: &Label| {
+        label.text == driver.text
+            && std::mem::discriminant(&label.kind) == std::mem::discriminant(&driver.kind)
+    };
+    let mut driven = page
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            SchItem::Label(label) if !selected(label) && same_driver(label) => Some(label.at),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    page.items.retain_mut(|item| {
+        let SchItem::Label(label) = item else {
+            return true;
+        };
+        if !selected(label) {
+            return true;
+        }
+        if driven.iter().any(|at| points_connect(*at, label.at)) {
+            return false;
+        }
+        label.kind = driver.kind;
+        label.text = driver.text.clone();
+        driven.push(label.at);
+        true
+    });
+}
+
+/// Add a pin to the left side of a sheet in its first free row where the pin's
+/// `label`, and the sheet grown to hold the row, clear every other item on
+/// the page. Returns the pin's point, or `None` when no row fits without
+/// moving existing layout.
+fn add_sheet_pin(
+    page: &mut SchPage,
+    sheet_id: &str,
+    name: &str,
+    id: String,
+    label: &Label,
+) -> Result<Option<Point>> {
+    let Some(sheet) = page.items.iter().find_map(|item| match item {
+        SchItem::Sheet(sheet) if sheet.id == sheet_id => Some(sheet),
+        _ => None,
+    }) else {
+        return Ok(None);
+    };
+    let (Some(at), Some(size)) = (sheet.at, sheet.size) else {
+        return Ok(None);
+    };
+    let taken = sheet
+        .pins
+        .iter()
+        .filter(|pin| pin.rotation == Rotation::Deg180)
+        .map(|pin| pin.at.y)
+        .collect::<Vec<_>>();
+    let obstacles = page_item_bounds(page, sheet_id)?;
+    let clear = |bounds: field_autoplace::Bounds| {
+        !obstacles.iter().any(|other| {
+            bounds.min_x < other.max_x
+                && other.min_x < bounds.max_x
+                && bounds.min_y < other.max_y
+                && other.min_y < bounds.max_y
+        })
+    };
+    let mut row = 2.0;
+    let (point, height) = loop {
+        let point = Point::new(at.x, at.y + row * SHEET_PIN_SPACING_MM);
+        let height = size.y.max((row + 1.0) * SHEET_PIN_SPACING_MM);
+        row += 1.0;
+        if taken.iter().any(|y| (y - point.y).abs() <= GEOMETRY_EPS_MM) {
+            continue;
+        }
+        let mut label = label.clone();
+        label.at = point;
+        label.spin = LabelSpin::Left;
+        let grows = height > size.y + GEOMETRY_EPS_MM;
+        let growth = field_autoplace::Bounds::from_points([
+            Point::new(at.x, at.y + size.y),
+            Point::new(at.x + size.x, at.y + height),
+        ])
+        .expect("two points define bounds");
+        if clear(label_visual_bounds(&label)) && (!grows || clear(growth)) {
+            break (point, height);
+        }
+        if grows {
+            return Ok(None);
+        }
+    };
+    let Some(SchItem::Sheet(sheet)) = page
+        .items
+        .iter_mut()
+        .find(|item| matches!(item, SchItem::Sheet(sheet) if sheet.id == sheet_id))
+    else {
+        unreachable!("the sheet was found above");
+    };
+    if height > size.y + GEOMETRY_EPS_MM {
+        if sheet.file.at.y >= at.y + size.y - GEOMETRY_EPS_MM {
+            sheet.file.at.y += height - size.y;
+        }
+        sheet.size = Some(Point::new(size.x, height));
+    }
+    sheet.pins.push(SheetPin {
+        id,
+        name: name.to_string(),
+        at: point,
+        rotation: Rotation::Deg180,
+        shape: LabelShape::Bidirectional,
+        effects: crate::TextEffects::default(),
+        unsupported: Vec::new(),
+    });
+    Ok(Some(point))
+}
+
+/// The visual bounds of the page's items other than one sheet: symbols,
+/// sheets with their pin labels, labels, wires and graphics.
+fn page_item_bounds(page: &SchPage, except_sheet: &str) -> Result<Vec<field_autoplace::Bounds>> {
+    let mut bounds = Vec::new();
+    for item in &page.items {
+        match item {
+            SchItem::Symbol(symbol) => {
+                if let Some(definition) = page.library.definitions.get(symbol.library_key()) {
+                    bounds.extend(field_autoplace::symbol_visual_bounds(symbol, definition)?);
+                }
+            }
+            SchItem::Sheet(sheet) if sheet.id != except_sheet => {
+                if let Some((min, max)) = sheet.bounds() {
+                    let mut sheet_bounds = field_autoplace::Bounds::from_points([min, max])
+                        .expect("sheet bounds have two corners");
+                    for pin in &sheet.pins {
+                        sheet_bounds.union(estimated_label_bounds(
+                            pin.at,
+                            sheet_pin_spin(pin.rotation),
+                            estimated_shaped_label_width(&pin.name),
+                        ));
+                    }
+                    bounds.push(sheet_bounds);
+                }
+            }
+            SchItem::Label(label) => bounds.push(label_visual_bounds(label)),
+            SchItem::Wire(wire) => {
+                bounds.extend(field_autoplace::Bounds::from_points([wire.a, wire.b]))
+            }
+            SchItem::Graphic(graphic) => bounds.extend(field_autoplace::graphic_bounds(graphic)),
+            _ => {}
+        }
+    }
+    Ok(bounds)
+}
+
+/// Place a sheet whose footprint, relative to its top-left corner, includes
+/// its pin labels.
+fn place_sheet(
+    document: &SchDocument,
+    page_index: usize,
+    footprint: field_autoplace::Bounds,
+) -> Result<Point> {
     let page = document
         .pages
         .get(page_index)
         .context("planned sheet parent page is absent")?;
     let mut packer = GridPacker::for_page(&page.paper)?;
     occupy_page_items(&mut packer, page)?;
-    let relative = GridRect::from_bounds(
-        field_autoplace::Bounds::from_points([Point::default(), size])
-            .expect("sheet size defines bounds"),
-    );
-    Ok(packer.place(relative).to_point())
+    Ok(packer.place(GridRect::from_bounds(footprint)).to_point())
 }
 
 fn pack_generated_symbols(
@@ -1548,8 +2079,17 @@ fn occupy_page_items_except(
             }
             SchItem::Sheet(sheet) => {
                 if let Some((min, max)) = sheet.bounds() {
-                    let bounds = field_autoplace::Bounds::from_points([min, max])
+                    let mut bounds = field_autoplace::Bounds::from_points([min, max])
                         .expect("sheet bounds have two corners");
+                    // Labels already drawn at the pins are occupied as
+                    // labels; keep room for any a pin does not have yet.
+                    for pin in &sheet.pins {
+                        bounds.union(estimated_label_bounds(
+                            pin.at,
+                            sheet_pin_spin(pin.rotation),
+                            estimated_shaped_label_width(&pin.name),
+                        ));
+                    }
                     packer.occupy(GridRect::from_bounds(bounds));
                 }
             }
@@ -1928,7 +2468,9 @@ struct NetDriverIsland {
 
 fn net_driver_islands(
     document: &SchDocument,
+    net_name: &str,
     targets: &[PinTarget],
+    page_contexts: &PageDriverContexts,
     observed: &PhysicalConnectivity,
 ) -> Result<Vec<NetDriverIsland>> {
     let mut targets_by_island = BTreeMap::<IslandRef, Vec<usize>>::new();
@@ -1959,6 +2501,10 @@ fn net_driver_islands(
 
     // A page-scoped driver does not serve an island that remains disconnected
     // from the same net on another page; that island requires a global driver.
+    // The page-scoped drivers give the net's islands on one page the same
+    // name, so they join each other and any island there that already
+    // carries that name, such as the label on a sheet pin that reaches
+    // another page through the hierarchy. Join those before deciding.
     let island_group = |island: &IslandRef| {
         observed.graph.groups.iter().position(|group| {
             group
@@ -1966,10 +2512,52 @@ fn net_driver_islands(
                 .contains(&ConnectionOrigin::KiCadIsland(island.clone()))
         })
     };
-    let island_groups = targets_by_island
+    let group_count = observed.graph.groups.len();
+    let island_nodes = targets_by_island
         .keys()
-        .map(|island| (island.clone(), island_group(island)))
+        .enumerate()
+        .map(|(position, island)| {
+            let node = island_group(island).unwrap_or(group_count + position);
+            (island.clone(), node)
+        })
         .collect::<BTreeMap<_, _>>();
+    let mut joined = UnionFind::new(group_count + island_nodes.len());
+    let mut page_nodes = BTreeMap::<&str, (usize, BTreeSet<usize>)>::new();
+    for (island, target_indices) in &targets_by_island {
+        page_nodes
+            .entry(island.page_id.as_str())
+            .or_insert_with(|| (targets[target_indices[0]].page_index, BTreeSet::new()))
+            .1
+            .insert(island_nodes[island]);
+    }
+    for (page_id, (page_index, nodes)) in &mut page_nodes {
+        let interface_names = page_contexts
+            .get(page_index)
+            .and_then(|context| context.get(net_name));
+        let driver = driver_label(
+            net_name,
+            interface_names,
+            false,
+            String::new(),
+            Point::default(),
+        );
+        nodes.extend(
+            observed
+                .islands
+                .iter()
+                .filter(|(island, provenance)| {
+                    island.page_id == *page_id
+                        && island_has_label(document, *page_index, provenance, &driver)
+                })
+                .filter_map(|(island, _)| island_group(island)),
+        );
+        let mut nodes = nodes.iter();
+        if let Some(first) = nodes.next() {
+            for node in nodes {
+                joined.union(*first, *node);
+            }
+        }
+    }
     let net_page_count = targets
         .iter()
         .map(|target| target.page_index)
@@ -1984,8 +2572,8 @@ fn net_driver_islands(
                 .min_by_key(|index| (&targets[**index].slot, &targets[**index].number))
                 .expect("a terminal island has a target");
             let needs_global = net_page_count > 1
-                && island_groups.iter().any(|(other, group)| {
-                    other.page_id != island.page_id && group != &island_groups[&island]
+                && island_nodes.iter().any(|(other, node)| {
+                    other.page_id != island.page_id && !joined.equiv(*node, island_nodes[&island])
                 });
             NetDriverIsland {
                 island,
@@ -1994,6 +2582,80 @@ fn net_driver_islands(
             }
         })
         .collect())
+}
+
+/// Apply the intent's removals and relocations: the document a realizer adds
+/// the intent's drivers to, and the one their kinds are planned on.
+pub(crate) fn apply_repair_edits(
+    document: &mut SchDocument,
+    intent: &ConnectivityRepairIntent,
+) -> Result<()> {
+    clear_for_repair(document, &mut BTreeMap::new(), intent)
+}
+
+fn clear_for_repair(
+    document: &mut SchDocument,
+    placed: &mut BTreeMap<SymbolSlotKey, PlacedSymbol>,
+    intent: &ConnectivityRepairIntent,
+) -> Result<()> {
+    remove_items(document, &intent.removals)?;
+    for location in &intent.relocated_symbols {
+        relocate_symbol(document, placed, location)?;
+    }
+    Ok(())
+}
+
+/// The repair realizer's steps before it chooses drivers: the intent's edits,
+/// then the driver stage. The planner runs the same steps on a copy, so the
+/// driver kinds it publishes are the realizer's.
+fn stage_repair(
+    document: &mut SchDocument,
+    netlist: &Schematic,
+    placed: &mut BTreeMap<SymbolSlotKey, PlacedSymbol>,
+    net_symbol_specs: &BTreeMap<String, net_symbols::NetSymbolSpec>,
+    root_page: usize,
+    intent: &ConnectivityRepairIntent,
+    reconnect_nets: &BTreeSet<String>,
+) -> Result<DriverStage> {
+    clear_for_repair(document, placed, intent)?;
+    stage_drivers(
+        document,
+        netlist,
+        placed,
+        net_symbol_specs,
+        root_page,
+        reconnect_nets,
+    )
+}
+
+/// The driver kinds the realizer uses for the intent's nets: planned on the
+/// document its pre-driver steps leave, by running those same steps.
+pub(crate) fn plan_repair_driver_kinds(
+    document: &SchDocument,
+    netlist: &Schematic,
+    intent: &ConnectivityRepairIntent,
+) -> Result<BTreeMap<String, BTreeMap<String, NetDriverKind>>> {
+    let mut staged = document.clone();
+    let root_page = staged
+        .root_page_ids
+        .iter()
+        .find_map(|id| staged.pages.iter().position(|page| &page.id == id))
+        .context("KiCad schematic project has no loaded root page")?;
+    let expected_slots = component_slots::component_symbols(netlist)?
+        .into_iter()
+        .map(|(slot, _)| slot)
+        .collect::<BTreeSet<_>>();
+    let mut placed = placed_symbols_from_document(&staged, &expected_slots)?;
+    stage_repair(
+        &mut staged,
+        netlist,
+        &mut placed,
+        &net_symbols::specs(netlist)?,
+        root_page,
+        intent,
+        &intent.reconnect_nets,
+    )?;
+    plan_net_driver_kinds(&staged, netlist, &intent.reconnect_nets)
 }
 
 fn apply_connectivity_repair(
@@ -2005,17 +2667,23 @@ fn apply_connectivity_repair(
     intent: &ConnectivityRepairIntent,
     reconnect_nets: &BTreeSet<String>,
 ) -> Result<()> {
-    remove_items(document, &intent.removals)?;
-    for location in &intent.relocated_symbols {
-        relocate_symbol(document, placed, location)?;
-    }
-    add_connectivity_drivers(
+    let stage = stage_repair(
+        document,
+        netlist,
+        placed,
+        net_symbol_specs,
+        root_page,
+        intent,
+        reconnect_nets,
+    )?;
+    place_drivers(
         document,
         netlist,
         placed,
         net_symbol_specs,
         root_page,
         reconnect_nets,
+        &stage,
     )?;
     for target in &intent.no_connect_additions {
         if document.pages.iter().any(|page| {
@@ -2047,11 +2715,12 @@ fn apply_connectivity_repair(
 
 /// The name driver a realizer must use for each reconnected net on each page
 /// where the net has visible pins or an interface port. Power-symbol nets use
-/// their netlist symbol; an island cut off from the same net on another page
-/// needs a global label; a page whose module interface exposes the net uses a
-/// hierarchical label; a net whose pins span pages without such an interface
-/// needs a global label; everything else is a local label.
-pub(crate) fn plan_net_driver_kinds(
+/// their netlist symbol; an island still cut off from the same net on another
+/// page once the page-scoped drivers join it (the realizer's rule, in
+/// `net_driver_islands`) needs a global label; a page whose module interface
+/// exposes the net uses a hierarchical label; everything else is a local
+/// label.
+fn plan_net_driver_kinds(
     document: &SchDocument,
     netlist: &Schematic,
     nets: &BTreeSet<String>,
@@ -2096,7 +2765,7 @@ pub(crate) fn plan_net_driver_kinds(
         let global_pages = if specs.contains_key(net_name) {
             BTreeSet::new()
         } else {
-            net_driver_islands(document, net_targets, &observed)?
+            net_driver_islands(document, net_name, net_targets, &contexts, &observed)?
                 .into_iter()
                 .filter(|island| island.needs_global)
                 .map(|island| net_targets[island.canonical_target].page_index)
@@ -2115,7 +2784,6 @@ pub(crate) fn plan_net_driver_kinds(
                     .map(|(page_index, _)| *page_index),
             );
         }
-        let spans_pages = pages.len() > 1;
         let per_page = pages
             .into_iter()
             .map(|page_index| {
@@ -2130,8 +2798,6 @@ pub(crate) fn plan_net_driver_kinds(
                     NetDriverKind::Hierarchical {
                         names: names.clone(),
                     }
-                } else if spans_pages {
-                    NetDriverKind::Global
                 } else {
                     NetDriverKind::Local
                 };
@@ -2240,33 +2906,10 @@ fn add_hierarchy_connectivity(
     let page_contexts = page_driver_contexts(document, netlist, plan.root_page())?;
 
     for sheet_plan in &plan.sheets {
-        let ports = module_ports(netlist, &sheet_plan.instance_ref)?;
-        let sheet = document.pages[sheet_plan.parent_page]
-            .items
-            .iter()
-            .find_map(|item| match item {
-                SchItem::Sheet(sheet)
-                    if sheet.id == hierarchy::sheet_id(&sheet_plan.module_path) =>
-                {
-                    Some(sheet)
-                }
-                _ => None,
-            })
-            .context("materialized hierarchy sheet is absent from its parent page")?;
-        let parent_anchors = sheet.pins.iter().map(|pin| pin.at).collect::<Vec<_>>();
-
-        for ((net_name, port_name), parent_pin) in ports.into_iter().zip(parent_anchors) {
+        // The parent page's drivers were placed with the sheet.
+        let ports = module_ports(netlist, &sheet_plan.module_path, &sheet_plan.instance_ref)?;
+        for (net_name, port_name) in ports {
             let key = format!("{}:{port_name}", sheet_plan.module_path);
-            upsert_contextual_driver(
-                document,
-                net_symbol_specs,
-                &page_contexts,
-                sheet_plan.parent_page,
-                &net_name,
-                (parent_pin, LabelSpin::Left),
-                &format!("zener:module-parent-driver:{key}:{net_name}"),
-            )?;
-
             let child_anchor = canonical_target(&targets, &net_name, sheet_plan.child_page)
                 .map(|target| (target.point, target.spin))
                 .unwrap_or((
@@ -2280,7 +2923,10 @@ fn add_hierarchy_connectivity(
                 sheet_plan.child_page,
                 &net_name,
                 child_anchor,
-                &format!("zener:module-child-driver:{key}:{net_name}"),
+                DriverKey {
+                    key: &format!("zener:module-child-driver:{key}:{net_name}"),
+                    sheet_pin: None,
+                },
             )?;
         }
     }
@@ -2295,6 +2941,42 @@ fn add_connectivity_drivers(
     root_page: usize,
     target_nets: &BTreeSet<String>,
 ) -> Result<()> {
+    let stage = stage_drivers(
+        document,
+        netlist,
+        placed,
+        net_symbol_specs,
+        root_page,
+        target_nets,
+    )?;
+    place_drivers(
+        document,
+        netlist,
+        placed,
+        net_symbol_specs,
+        root_page,
+        target_nets,
+        &stage,
+    )
+}
+
+/// What the realizer has settled before it chooses each island's driver.
+struct DriverStage {
+    anchors_by_net: BTreeMap<String, Vec<PinTarget>>,
+    page_contexts: PageDriverContexts,
+}
+
+/// Every step the realizer takes before it chooses drivers: the hierarchy
+/// endpoints each page's interface owes the nets. Driver kinds are decided
+/// on the document this leaves, by the realizer and the repair planner alike.
+fn stage_drivers(
+    document: &mut SchDocument,
+    netlist: &Schematic,
+    placed: &BTreeMap<SymbolSlotKey, PlacedSymbol>,
+    net_symbol_specs: &BTreeMap<String, net_symbols::NetSymbolSpec>,
+    root_page: usize,
+    target_nets: &BTreeSet<String>,
+) -> Result<DriverStage> {
     let anchors_by_net = connectivity_targets(netlist, placed, target_nets)?;
     let page_contexts = page_driver_contexts(document, netlist, root_page)?;
     ensure_context_endpoints(
@@ -2304,17 +2986,33 @@ fn add_connectivity_drivers(
         &page_contexts,
         target_nets,
     )?;
+    Ok(DriverStage {
+        anchors_by_net,
+        page_contexts,
+    })
+}
+
+/// Choose and place each island's driver on a staged document.
+fn place_drivers(
+    document: &mut SchDocument,
+    netlist: &Schematic,
+    placed: &BTreeMap<SymbolSlotKey, PlacedSymbol>,
+    net_symbol_specs: &BTreeMap<String, net_symbols::NetSymbolSpec>,
+    root_page: usize,
+    target_nets: &BTreeSet<String>,
+    stage: &DriverStage,
+) -> Result<()> {
     sync_net_drivers(
         document,
-        &anchors_by_net,
+        &stage.anchors_by_net,
         placed,
         net_symbol_specs,
-        &page_contexts,
+        &stage.page_contexts,
     )?;
     ensure_symbol_root_endpoints(
         document,
         netlist,
-        &anchors_by_net,
+        &stage.anchors_by_net,
         net_symbol_specs,
         root_page,
         target_nets,
@@ -2493,7 +3191,9 @@ fn sync_net_drivers(
         if net_symbol_specs.contains_key(net_name) {
             continue;
         }
-        for driver_island in net_driver_islands(document, targets, &observed)? {
+        for driver_island in
+            net_driver_islands(document, net_name, targets, page_contexts, &observed)?
+        {
             let target = &targets[driver_island.canonical_target];
             let provenance = &observed.islands[&driver_island.island];
             let interface_names = page_contexts
@@ -2626,7 +3326,13 @@ fn plan_net_symbol_runs(
             continue;
         }
 
-        for driver_island in net_driver_islands(document, targets, &observed)? {
+        for driver_island in net_driver_islands(
+            document,
+            net_name,
+            targets,
+            &PageDriverContexts::new(),
+            &observed,
+        )? {
             let target = &targets[driver_island.canonical_target];
             let provenance = &observed.islands[&driver_island.island];
             let has_driver = if driver_island.needs_global {
@@ -2920,30 +3626,22 @@ fn page_driver_contexts(
     // page id) speaks that module's interface. Pages the user created or
     // reorganized carry no interface names, so their drivers fall back to
     // local labels and net symbols — any KiCad organization stays valid.
-    let modules = linked_modules(netlist)?;
-    let mut module_by_page = BTreeMap::<usize, &pcb_sch::InstanceRef>::new();
+    let mut contexts = PageDriverContexts::new();
     if let Some(root) = netlist.root_ref.as_ref() {
-        module_by_page.insert(root_page, root);
+        contexts.insert(root_page, root_interface::ports_by_net(netlist, root)?);
     }
-    for module in &modules {
+    for module in linked_modules(netlist)? {
         if let Some(page_index) = document
             .pages
             .iter()
             .position(|page| page.id == hierarchy::page_id(&module.path))
         {
-            module_by_page.insert(page_index, &module.instance_ref);
+            contexts.insert(
+                page_index,
+                module_interface(netlist, &module.path, &module.instance_ref)?,
+            );
         }
     }
-
-    let mut contexts = module_by_page
-        .into_iter()
-        .map(|(page_index, module_ref)| {
-            Ok((
-                page_index,
-                root_interface::ports_by_net(netlist, module_ref)?,
-            ))
-        })
-        .collect::<Result<PageDriverContexts>>()?;
 
     // A page the user created (subsheet extraction, reorganization) has no
     // module identity of its own: it belongs to the module of the page
@@ -3084,16 +3782,18 @@ fn sheet_pin_anchor(
             .pins
             .iter()
             .find(|pin| interface_names.contains(&pin.name))
-            .map(|pin| {
-                let spin = match pin.rotation {
-                    Rotation::Deg0 => LabelSpin::Right,
-                    Rotation::Deg90 => LabelSpin::Up,
-                    Rotation::Deg180 => LabelSpin::Left,
-                    Rotation::Deg270 => LabelSpin::Bottom,
-                };
-                (pin.at, spin)
-            })
+            .map(|pin| (pin.at, sheet_pin_spin(pin.rotation)))
     })
+}
+
+/// The direction a label at a sheet pin runs: outward from the sheet side.
+fn sheet_pin_spin(rotation: Rotation) -> LabelSpin {
+    match rotation {
+        Rotation::Deg0 => LabelSpin::Right,
+        Rotation::Deg90 => LabelSpin::Up,
+        Rotation::Deg180 => LabelSpin::Left,
+        Rotation::Deg270 => LabelSpin::Bottom,
+    }
 }
 
 fn canonical_target<'a>(
@@ -3108,6 +3808,13 @@ fn canonical_target<'a>(
         .min_by_key(|target| (&target.slot, &target.number))
 }
 
+/// How a contextual driver is identified: its deterministic key and, for a
+/// sheet pin's driver on the parent page, that pin's id.
+struct DriverKey<'a> {
+    key: &'a str,
+    sheet_pin: Option<&'a str>,
+}
+
 fn upsert_contextual_driver(
     document: &mut SchDocument,
     net_symbol_specs: &BTreeMap<String, net_symbols::NetSymbolSpec>,
@@ -3115,9 +3822,10 @@ fn upsert_contextual_driver(
     page_index: usize,
     net_name: &str,
     anchor: (Point, LabelSpin),
-    key: &str,
+    key: DriverKey,
 ) -> Result<()> {
     let (at, spin) = anchor;
+    let DriverKey { key, sheet_pin } = key;
     if let Some(spec) = net_symbol_specs.get(net_name) {
         let symbol = build_net_symbol(spec, net_name, deterministic_uuid(key), at)?;
         return insert_net_symbol(document, page_index, symbol, &spec.definition);
@@ -3135,6 +3843,20 @@ fn upsert_contextual_driver(
         at,
     );
     label.spin = spin;
+    // A sheet pin's driver is known by its deterministic id. One that cannot
+    // take it, because another item already has it, gets a suffixed id that
+    // depends on the document at the time, so it records its pin instead.
+    if let Some(sheet_pin) = sheet_pin
+        && contains_id(document, &label.id)
+        && !document.pages[page_index]
+            .items
+            .iter()
+            .any(|item| matches!(item, SchItem::Label(existing) if existing.id == label.id))
+    {
+        let mut field = SymbolField::new(SHEET_PIN_FIELD, sheet_pin, at);
+        field.hidden = true;
+        label.fields.insert(SHEET_PIN_FIELD.to_string(), field);
+    }
     upsert_label(document, page_index, label)
 }
 
@@ -3195,6 +3917,27 @@ fn island_has_global_driver(
                 _ => false,
             })
         })
+}
+
+/// Whether the island carries a label of the same kind and text as `driver`,
+/// which a new `driver` on the page would join by name.
+fn island_has_label(
+    document: &SchDocument,
+    page_index: usize,
+    provenance: &PhysicalIsland,
+    driver: &Label,
+) -> bool {
+    provenance.items.iter().any(|item| {
+        let ConnectivityItemRef::Label { id, .. } = item else {
+            return false;
+        };
+        document.pages[page_index].items.iter().any(|item| {
+            matches!(item, SchItem::Label(label)
+                if label.id == *id
+                    && label.text == driver.text
+                    && std::mem::discriminant(&label.kind) == std::mem::discriminant(&driver.kind))
+        })
+    })
 }
 
 fn island_has_hierarchical_driver(
@@ -3393,15 +4136,18 @@ fn contains_id(document: &SchDocument, id: &str) -> bool {
 
 fn available_deterministic_id(document: &SchDocument, key: &str) -> String {
     (0_u64..)
-        .map(|index| {
-            deterministic_uuid(if index == 0 {
-                key.to_string()
-            } else {
-                format!("{key}:{index}")
-            })
-        })
+        .map(|index| deterministic_id_candidate(key, index))
         .find(|id| !contains_id(document, id))
         .expect("a finite schematic cannot exhaust deterministic UUIDs")
+}
+
+/// The `index`th id `available_deterministic_id` tries for `key`.
+fn deterministic_id_candidate(key: &str, index: u64) -> String {
+    deterministic_uuid(if index == 0 {
+        key.to_string()
+    } else {
+        format!("{key}:{index}")
+    })
 }
 
 fn upsert_label(document: &mut SchDocument, page_index: usize, mut label: Label) -> Result<()> {
@@ -3926,6 +4672,64 @@ mod tests {
             unsupported: Vec::new(),
         })));
         page
+    }
+
+    #[test]
+    fn sheets_keep_room_for_their_pin_labels() {
+        // A tall sheet right of the page center; its one pin's long label
+        // runs left through the center, where a new sheet would go.
+        let pin_name = "A_LONG_INTERFACE_NAME_ON_THE_LEFT";
+        let mut document = SchDocument {
+            pages: vec![test_page_with_sheet("root")],
+            ..SchDocument::default()
+        };
+        let SchItem::Sheet(existing) = &mut document.pages[0].items[0] else {
+            unreachable!("the test page holds one sheet");
+        };
+        existing.at = Some(Point::new(165.1, 12.7));
+        existing.size = Some(Point::new(50.8, 177.8));
+        existing.pins.push(SheetPin {
+            id: "pin".to_string(),
+            name: pin_name.to_string(),
+            at: Point::new(165.1, 104.14),
+            rotation: Rotation::Deg180,
+            shape: LabelShape::Bidirectional,
+            effects: crate::TextEffects::default(),
+            unsupported: Vec::new(),
+        });
+        let (min, max) = existing.bounds().unwrap();
+        let reserved = [
+            field_autoplace::Bounds::from_points([min, max]).unwrap(),
+            estimated_label_bounds(
+                Point::new(165.1, 104.14),
+                LabelSpin::Left,
+                estimated_shaped_label_width(pin_name),
+            ),
+        ];
+        let overlaps = |a: field_autoplace::Bounds, b: field_autoplace::Bounds| {
+            a.min_x < b.max_x && b.min_x < a.max_x && a.min_y < b.max_y && b.min_y < a.max_y
+        };
+
+        // A new sheet with long pin labels, and a small one with none.
+        for (size, label_length) in [
+            (
+                Point::new(50.8, 50.8),
+                estimated_shaped_label_width(pin_name),
+            ),
+            (Point::new(20.32, 20.32), 0.0),
+        ] {
+            let mut footprint =
+                field_autoplace::Bounds::from_points([Point::default(), size]).unwrap();
+            footprint.include(Point::new(-label_length, 0.0));
+            let at = place_sheet(&document, 0, footprint).unwrap();
+            let placed = footprint.translated(at.x, at.y);
+            for reserved in reserved {
+                assert!(
+                    !overlaps(placed, reserved),
+                    "{placed:?} overlaps the existing sheet or its pin label {reserved:?}"
+                );
+            }
+        }
     }
 
     #[test]

@@ -1,0 +1,14 @@
+"""Root parts beside two linked sheets whose pins carry nets with long names."""
+
+Project(name="LongNetNames", path="kicad", layout=False)
+
+Resistor = Module("@stdlib/generics/Resistor.zen")
+Bus = Module("bus.zen")
+
+NETS = [Net("A_RATHER_LONG_SIGNAL_NAME_{}".format(i)) for i in range(12)]
+
+for i in range(6):
+    Resistor(name="R{}".format(i), value="1kohms", package="0402", P1=NETS[i], P2=NETS[i + 6])
+
+Bus(name="BUS_A", D0=NETS[0], D1=NETS[1], D2=NETS[2], D3=NETS[3], D4=NETS[4], D5=NETS[5])
+Bus(name="BUS_B", D0=NETS[6], D1=NETS[7], D2=NETS[8], D3=NETS[9], D4=NETS[10], D5=NETS[11])

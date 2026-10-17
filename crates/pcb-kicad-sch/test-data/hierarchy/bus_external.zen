@@ -1,0 +1,13 @@
+"""bus_local.zen with a root endpoint on each of the bus nets."""
+
+Project(name="BusSheet", path="kicad", layout=False)
+
+Resistor = Module("@stdlib/generics/Resistor.zen")
+Bus = Module("bus.zen")
+
+NETS = [Net("BUS_NET_{}".format(i)) for i in range(6)]
+
+for i in range(3):
+    Resistor(name="R{}".format(i), value="1kohms", package="0402", P1=NETS[2 * i], P2=NETS[2 * i + 1])
+
+Bus(name="BUS", D0=NETS[0], D1=NETS[1], D2=NETS[2], D3=NETS[3], D4=NETS[4], D5=NETS[5])

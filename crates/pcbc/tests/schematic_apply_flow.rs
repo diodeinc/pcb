@@ -377,7 +377,38 @@ fn apply_removes_deleted_module_sheets_files_and_retained_metadata() {
         assert_eq!(applied.schematic_files.len(), 2);
         assert!(!applied.schematic_files.contains(&child_file));
         assert!(!child_file.exists());
-        assert_eq!(fs::read(&retained_file).unwrap(), retained_source);
+        // FILTER_B keeps its content. Without FILTER_A, its MID input no
+        // longer leaves the module, so its INPUT label names MID locally.
+        let retained_page = |source: &[u8]| {
+            parse_kicad_sch_page(
+                Some("FILTER_B.kicad_sch"),
+                std::str::from_utf8(source).unwrap(),
+            )
+            .unwrap()
+        };
+        let before = retained_page(&retained_source);
+        let after = retained_page(&fs::read(&retained_file).unwrap());
+        let unlabeled = |page: &SchPage| {
+            page.items
+                .iter()
+                .filter(|item| !matches!(item, SchItem::Label(_)))
+                .cloned()
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(unlabeled(&after), unlabeled(&before));
+        let labels = after
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                SchItem::Label(label) => Some((label.text.as_str(), label.kind)),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert!(labels.contains(&("MID", LabelKind::Local)), "{labels:#?}");
+        assert!(
+            labels.iter().all(|(text, _)| *text != "INPUT"),
+            "{labels:#?}"
+        );
         assert_eq!(
             fs::read_to_string(&unrelated_file).unwrap(),
             "unrelated schematic"
