@@ -30,6 +30,7 @@ pub(crate) struct PlannedSheet {
 pub(crate) struct HierarchyPlan {
     pub sheets: Vec<PlannedSheet>,
     root_page: usize,
+    existing_component_pages: BTreeMap<String, BTreeSet<usize>>,
     existing_module_pages: BTreeMap<String, BTreeSet<usize>>,
     linked_modules: Vec<LinkedModule>,
 }
@@ -49,16 +50,54 @@ impl HierarchyPlan {
             return Ok(sheet.child_page);
         }
 
-        let Some(module) = self
-            .linked_modules
-            .iter()
-            .rev()
-            .find(|module| is_descendant(component_path, &module.path))
-        else {
-            return Ok(self.root_page);
-        };
+        let owner = owning_module(component_path, &self.linked_modules);
+        if let Some(page) = self.sibling_page(component_path, owner) {
+            return Ok(page);
+        }
+        match owner {
+            Some(module) => required_module_page(&self.existing_module_pages, &module.path),
+            None => Ok(self.root_page),
+        }
+    }
 
-        required_module_page(&self.existing_module_pages, &module.path)
+    /// The page of the closest placed relatives of a new component.
+    ///
+    /// Only `Project()` modules get generated sheets, but users (and import)
+    /// organize other module instances onto their own sheets too. The managed
+    /// symbols already placed under the component's nearest module ancestor,
+    /// including stale symbols a swap is replacing, show where that module's
+    /// content lives. Ancestors are searched from the component itself
+    /// outward, below its owning linked module, whose page is decided by
+    /// [`required_module_page`]. Components inside a nested linked module are
+    /// not relatives. When relatives span pages, the page holding most of them
+    /// wins, then the earliest page.
+    fn sibling_page(&self, component_path: &str, owner: Option<&LinkedModule>) -> Option<usize> {
+        let mut ancestor = component_path;
+        loop {
+            if owner.is_some_and(|owner| path_depth(ancestor) <= path_depth(&owner.path)) {
+                return None;
+            }
+            let mut counts = BTreeMap::<usize, usize>::new();
+            for (path, pages) in &self.existing_component_pages {
+                if is_descendant(path, ancestor)
+                    && owning_module(path, &self.linked_modules) == owner
+                {
+                    for page in pages {
+                        *counts.entry(*page).or_default() += 1;
+                    }
+                }
+            }
+            if let Some((page, _)) =
+                counts
+                    .into_iter()
+                    .max_by(|(left_page, left), (right_page, right)| {
+                        left.cmp(right).then(right_page.cmp(left_page))
+                    })
+            {
+                return Some(page);
+            }
+            ancestor = ancestor.rsplit_once('.')?.0;
+        }
     }
 }
 
@@ -142,6 +181,7 @@ pub(crate) fn plan(
     Ok(HierarchyPlan {
         sheets,
         root_page,
+        existing_component_pages,
         existing_module_pages,
         linked_modules,
     })
@@ -699,6 +739,70 @@ mod tests {
 
         assert!(plan.sheets.is_empty());
         assert_eq!(plan.page_for_new_component("A.REPLACEMENT").unwrap(), 3);
+    }
+
+    #[test]
+    fn new_parts_of_unlinked_modules_follow_their_closest_placed_relatives() {
+        let plan = plan(
+            Vec::new(),
+            component_pages(&[
+                ("TOP.R1", 0),
+                ("PWR.R1", 2),
+                ("PWR.REG.U1", 3),
+                ("PWR.J_VIN.43045-0207", 2),
+                ("SPLIT.R1", 4),
+                ("SPLIT.R2", 5),
+                ("SPLIT.R3", 5),
+                ("TIE.R1", 7),
+                ("TIE.R2", 6),
+            ]),
+            &[],
+            0,
+            8,
+        )
+        .unwrap();
+
+        // Siblings, including the stale part a swap replaces.
+        assert_eq!(plan.page_for_new_component("PWR.R2").unwrap(), 2);
+        assert_eq!(
+            plan.page_for_new_component("PWR.J_VIN.1054301202").unwrap(),
+            2
+        );
+        // The nearest module ancestor wins, and new nested modules inherit it.
+        assert_eq!(plan.page_for_new_component("PWR.REG.C1").unwrap(), 3);
+        assert_eq!(plan.page_for_new_component("PWR.NEW.LEG.R").unwrap(), 2);
+        // Split relatives choose the page holding most of them, then the first.
+        assert_eq!(plan.page_for_new_component("SPLIT.R4").unwrap(), 5);
+        assert_eq!(plan.page_for_new_component("TIE.R3").unwrap(), 6);
+        // A module without placed relatives, or a top-level part, uses the root.
+        assert_eq!(plan.page_for_new_component("NEW.R1").unwrap(), 0);
+        assert_eq!(plan.page_for_new_component("R9").unwrap(), 0);
+    }
+
+    #[test]
+    fn linked_module_pages_bound_relative_search() {
+        let plan = plan(
+            vec![module("A"), module("A.CHILD"), module("A.SUB.LINKED")],
+            component_pages(&[
+                ("A.R1", 2),
+                ("A.SUB.R1", 3),
+                ("A.SUB.LINKED.R1", 5),
+                ("A.SUB.LINKED.R2", 5),
+                ("A.CHILD.SUB.R1", 4),
+            ]),
+            &[],
+            0,
+            6,
+        )
+        .unwrap();
+
+        // Relatives below a linked module locate its reorganized submodules;
+        // parts of a nested linked module are not relatives.
+        assert_eq!(plan.page_for_new_component("A.SUB.R2").unwrap(), 3);
+        assert_eq!(plan.page_for_new_component("A.CHILD.SUB.R2").unwrap(), 4);
+        assert_eq!(plan.page_for_new_component("A.CHILD.R1").unwrap(), 4);
+        // Without closer relatives, the linked module's own page decides.
+        assert!(plan.page_for_new_component("A.OTHER.R1").is_err());
     }
 
     #[test]
