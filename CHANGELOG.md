@@ -8,6 +8,14 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added
+
+- `pcb ipc2581 board-array create --auto --quantity <N> [--moq <M>]` builds the array on the sheet `board-array plan` recommends for that order.
+
+### Changed
+
+- `pcb ipc2581 board-array plan` recommends A3 only when no smaller sheet fits the board.
+
 ## [0.4.86] - 2026-10-17
 
 ### Added
