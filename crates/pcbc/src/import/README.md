@@ -150,6 +150,9 @@ matches are rejected rather than choosing one footprint's geometry. The matched
 PCB reference also targets its generated sync hooks, so stale references do not
 leave recovered footprints unmanaged. Reference designators do not define the
 generated hierarchy or symbol identities.
+KiCad netlist connections name components only by reference, so import stops
+early on duplicate or unannotated references and asks to annotate in KiCad. A source
+PCB anchor that the netlist assigns to another component is stale and ignored.
 
 ## Footprint de-instancing
 
