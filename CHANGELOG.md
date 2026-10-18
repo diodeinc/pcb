@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added
+
+- `pcb quote <board>.zen` prices the board's current layout and BOM as Diode would build it, without publishing a release: per-quantity cost, lead time, and any issue that blocks ordering. `--route` selects US or global fabrication and assembly; `-f json` prints the full response.
+
 ### Fixed
 
 - `pcb sim` runs ngspice until the simulation finishes instead of killing it after 5 seconds. Save-time simulation in the LSP keeps the 5-second limit and now reports it in the diagnostic.

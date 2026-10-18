@@ -16,7 +16,7 @@ use std::time::Duration;
 
 use crate::WorkspaceContext;
 
-const AUTHENTICATION_FAILED_MESSAGE: &str =
+pub(crate) const AUTHENTICATION_FAILED_MESSAGE: &str =
     "Authentication failed. Run `pcb auth login` to sign in.";
 
 /// Response from creating a release.
@@ -148,7 +148,7 @@ fn create_release(
     })
 }
 
-fn check_response(
+pub(crate) fn check_response(
     resp: Response,
     format_error: impl FnOnce(StatusCode, &str) -> String,
 ) -> Result<Response> {
