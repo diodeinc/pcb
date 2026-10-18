@@ -38,4 +38,3 @@ url = { workspace = true }
 urlencoding = { workspace = true }
 uuid = { workspace = true, features = ["serde"] }
 zip = { workspace = true }
-zstd = { workspace = true }

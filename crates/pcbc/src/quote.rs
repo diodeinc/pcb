@@ -1,12 +1,10 @@
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use clap::{Args, ValueEnum};
 use comfy_table::{Cell, CellAlignment, Table, presets::UTF8_FULL_CONDENSED};
 use pcb_ui::prelude::*;
-use pcb_zen::workspace::{WorkspaceInfoExt, get_workspace_info};
-use pcb_zen_core::DefaultFileProvider;
 use serde::Deserialize;
 
 use crate::config_input::CONFIG_ARG_HELP;
@@ -53,7 +51,8 @@ pub enum QuoteFormat {
 #[command(
     about = "Quote fabrication and assembly of a board's saved layout",
     long_about = "Quote fabrication and assembly of a board's saved layout and current \
-                  source, priced as the Diode order dialog prices a release. Nothing is \
+                  source, priced as the Diode order dialog prices a release on a \
+                  self-service plan: enterprise discounts are not applied. Nothing is \
                   published or ordered."
 )]
 pub struct QuoteArgs {
@@ -89,7 +88,6 @@ pub struct QuoteArgs {
 
 pub fn execute(args: QuoteArgs) -> Result<()> {
     crate::file_walker::require_zen_file(&args.file)?;
-    let (workspace, board) = board_identity(&args.file)?;
     let design = crate::layout::prepare_design(&LayoutArgs {
         file: args.file.clone(),
         config: args.config.clone(),
@@ -105,11 +103,9 @@ pub fn execute(args: QuoteArgs) -> Result<()> {
     let spinner = Spinner::builder(format!("{}: Exporting IPC-2581", design.file_name)).start();
     let (_temporary_dir, ipc_path) = crate::dfm::export_ipc(&pcb_file)?;
     let ipc_xml = std::fs::read_to_string(&ipc_path).context("Failed to read IPC-2581 export")?;
-    spinner.set_message(format!("{}: Quoting {workspace}/{board}", design.file_name));
-    let response = pcb_diode_api::quote_board(
+    spinner.set_message(format!("{}: Quoting", design.file_name));
+    let response = pcb_diode_api::quote(
         &pcb_diode_api::WorkspaceContext::from_path(&args.file),
-        &workspace,
-        &board,
         &pcb_diode_api::QuoteRequest {
             route: args.route.as_str(),
             quantities: &args.quantities,
@@ -128,26 +124,11 @@ pub fn execute(args: QuoteArgs) -> Result<()> {
         QuoteFormat::Table => {
             let quotes: QuoteResponse =
                 serde_json::from_value(response).context("Invalid quote response")?;
-            let report = render_quotes(&quotes, &workspace, &board, args.route);
+            let report = render_quotes(&quotes, &design.file_name, args.route);
             pcb_ui::write_stdout(|w| write!(w, "{report}"))?;
         }
     }
     Ok(())
-}
-
-/// The board's Diode workspace and name, as `pcb publish` resolves them.
-fn board_identity(zen_path: &Path) -> Result<(String, String)> {
-    let start = zen_path
-        .parent()
-        .filter(|path| !path.as_os_str().is_empty())
-        .unwrap_or(Path::new("."));
-    let workspace = get_workspace_info(&DefaultFileProvider::new(), start)?;
-    let name = crate::publish::release_workspace_name(&workspace)?;
-    let board = workspace
-        .board_name_for_zen(zen_path)
-        .or_else(|| Some(zen_path.file_stem()?.to_string_lossy().into_owned()))
-        .context("Unable to determine the board name")?;
-    Ok((name, board))
 }
 
 #[derive(Deserialize, Debug)]
@@ -204,12 +185,7 @@ fn status_meaning(status: &str) -> Option<&'static str> {
     }
 }
 
-fn render_quotes(
-    quotes: &QuoteResponse,
-    workspace: &str,
-    board: &str,
-    route: QuoteRoute,
-) -> String {
+fn render_quotes(quotes: &QuoteResponse, board: &str, route: QuoteRoute) -> String {
     // Section columns in first-seen order, so every row lines up.
     let mut sections: Vec<(&str, &str)> = Vec::new();
     for quote in quotes
@@ -258,7 +234,10 @@ fn render_quotes(
         column.set_cell_alignment(CellAlignment::Right);
     }
 
-    let mut out = format!("{workspace}/{board}: {}\n{table}\n", route.description());
+    let mut out = format!(
+        "{board}: {}, priced as a self-service order\n{table}\n",
+        route.description()
+    );
     let mut statuses: Vec<&str> = Vec::new();
     for result in &quotes.results {
         if !statuses.contains(&result.status.as_str()) {
@@ -347,9 +326,11 @@ mod tests {
         }))
         .unwrap();
 
-        let report = render_quotes(&quotes, "acme", "IP0010", QuoteRoute::Us);
+        let report = render_quotes(&quotes, "IP0010.zen", QuoteRoute::Us);
 
-        assert!(report.starts_with("acme/IP0010: US bare boards, assembled by Diode in the US\n"));
+        assert!(report.starts_with(
+            "IP0010.zen: US bare boards, assembled by Diode in the US, priced as a self-service order\n"
+        ));
         let row = report
             .lines()
             .find(|line| line.contains("orderable"))

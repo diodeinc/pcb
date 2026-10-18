@@ -632,7 +632,7 @@ fn publish_board(zen_path: &Path, args: &PublishArgs) -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn release_workspace_name(workspace: &WorkspaceInfo) -> Result<String> {
+fn release_workspace_name(workspace: &WorkspaceInfo) -> Result<String> {
     if let Some(name) = workspace.config.as_ref().and_then(|config| {
         config
             .workspace
