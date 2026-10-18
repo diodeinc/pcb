@@ -5,7 +5,6 @@ use anyhow::{Context, Result};
 use clap::{Args, ValueEnum};
 use comfy_table::{Cell, CellAlignment, Table, presets::UTF8_FULL_CONDENSED};
 use pcb_ui::prelude::*;
-use pcb_zen::git;
 use pcb_zen::workspace::{WorkspaceInfoExt, get_workspace_info};
 use pcb_zen_core::DefaultFileProvider;
 use serde::Deserialize;
@@ -136,7 +135,7 @@ pub fn execute(args: QuoteArgs) -> Result<()> {
     Ok(())
 }
 
-/// The board's Diode workspace and URL name, as `pcb publish` resolves them.
+/// The board's Diode workspace and name, as `pcb publish` resolves them.
 fn board_identity(zen_path: &Path) -> Result<(String, String)> {
     let start = zen_path
         .parent()
@@ -145,21 +144,10 @@ fn board_identity(zen_path: &Path) -> Result<(String, String)> {
     let workspace = get_workspace_info(&DefaultFileProvider::new(), start)?;
     let name = crate::publish::release_workspace_name(&workspace)?;
     let board = workspace
-        .repository()
-        .and_then(board_slug_from_repository)
-        .or_else(|| workspace.board_name_for_zen(zen_path))
+        .board_name_for_zen(zen_path)
         .or_else(|| Some(zen_path.file_stem()?.to_string_lossy().into_owned()))
         .context("Unable to determine the board name")?;
     Ok((name, board))
-}
-
-/// A Diode board repository `<host>/<workspace>/b/<board>` names its board.
-fn board_slug_from_repository(repository: &str) -> Option<String> {
-    let repository = git::parse_remote_url(repository).unwrap_or_else(|_| repository.trim().into());
-    match repository.split('/').collect::<Vec<_>>().as_slice() {
-        [_, _, "b", board] if !board.is_empty() => Some(board.to_string()),
-        _ => None,
-    }
 }
 
 #[derive(Deserialize, Debug)]
@@ -328,23 +316,6 @@ fn usd(cents: i64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn board_slug_comes_from_diode_board_repositories_only() {
-        assert_eq!(
-            board_slug_from_repository("code.diode.computer/acme/b/IP0010").as_deref(),
-            Some("IP0010")
-        );
-        assert_eq!(
-            board_slug_from_repository("https://code.diode.computer/acme/b/IP0010.git").as_deref(),
-            Some("IP0010")
-        );
-        assert_eq!(board_slug_from_repository("github.com/acme/boards"), None);
-        assert_eq!(
-            board_slug_from_repository("code.diode.computer/acme/registry"),
-            None
-        );
-    }
 
     #[test]
     fn usd_groups_thousands_and_keeps_cents() {
