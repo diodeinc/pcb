@@ -7,7 +7,7 @@ use pcb_ir::geom::Resolution;
 use serde::Serialize;
 
 use super::{BoardMarginMm, auto_board_margin, eligibility, import_design, primary_board_layout};
-use crate::commands::board_array_auto::{AUTO_SHEETS, Order, SheetOrder, plan_for_sheet};
+use crate::commands::board_array_auto::{Order, SheetOrder, auto_board_array_plans};
 
 #[derive(Debug, Clone, Serialize)]
 pub struct PlanReport {
@@ -54,10 +54,7 @@ pub fn plan(xml: &str, order: Option<Order>, resolution: Resolution) -> Result<P
     let outline_area = eligibility::board_substrate(&imported, resolution)?.area();
     let (width, height) = (board.bbox.width(), board.bbox.height());
 
-    let plans: Vec<_> = AUTO_SHEETS
-        .into_iter()
-        .filter_map(|sheet| plan_for_sheet(sheet, width, height, margin))
-        .collect();
+    let plans = auto_board_array_plans(width, height, margin);
     let sheets = plans
         .iter()
         .map(|plan| SheetRow {
