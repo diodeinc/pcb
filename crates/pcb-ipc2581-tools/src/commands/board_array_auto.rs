@@ -140,6 +140,29 @@ pub fn auto_board_array_plan(
         })
 }
 
+/// Every sheet the board fits, smallest first.
+pub fn auto_board_array_plans(
+    board_width_mm: f64,
+    board_height_mm: f64,
+    board_margin_mm: BoardMarginMm,
+) -> Vec<AutoBoardArrayPlan> {
+    AUTO_SHEETS
+        .into_iter()
+        .filter_map(|sheet| plan_for_sheet(sheet, board_width_mm, board_height_mm, board_margin_mm))
+        .collect()
+}
+
+/// How an automatic board array chooses its sheet.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AutoSheetChoice {
+    /// The smallest sheet the board fits.
+    Smallest,
+    /// This sheet, even if a smaller one fits.
+    Sheet(AutoSheetSize),
+    /// The sheet [`Order::recommend`] picks for this order.
+    Order(Order),
+}
+
 /// Boards wanted, and the fewest arrays the fabricator accepts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 pub struct Order {
@@ -171,15 +194,20 @@ impl Order {
         }
     }
 
-    /// The plan that orders the least array area. `min_by` keeps the first of
-    /// equal plans, so with plans in ascending sheet size a larger sheet wins
-    /// only by packing better.
+    /// The plan that orders the least array area. A3 is a candidate only
+    /// when no smaller sheet fits the board. `min_by` keeps the first of equal
+    /// plans, so with plans in ascending sheet size a larger sheet wins only by
+    /// packing better.
     pub fn recommend(self, plans: &[AutoBoardArrayPlan]) -> Option<&AutoBoardArrayPlan> {
-        plans.iter().min_by(|a, b| {
-            self.on(a)
-                .ordered_area_mm2
-                .total_cmp(&self.on(b).ordered_area_mm2)
-        })
+        let smaller_fits = plans.iter().any(|plan| plan.sheet != AutoSheetSize::A3);
+        plans
+            .iter()
+            .filter(|plan| !(smaller_fits && plan.sheet == AutoSheetSize::A3))
+            .min_by(|a, b| {
+                self.on(a)
+                    .ordered_area_mm2
+                    .total_cmp(&self.on(b).ordered_area_mm2)
+            })
     }
 }
 
@@ -361,10 +389,7 @@ mod tests {
     fn recommends_the_sheet_that_orders_the_least_array_area() {
         // 50 x 40 mm cells: A7 holds 2, A6 4, A5 12, A4 28, A3 56. A7 and A6
         // pack equally well, so A6 never wins; A3 only ties A4.
-        let plans: Vec<_> = AUTO_SHEETS
-            .into_iter()
-            .map(|sheet| auto_board_array_plan_for_sheet(40.0, 30.0, MARGIN, sheet).unwrap())
-            .collect();
+        let plans = auto_board_array_plans(40.0, 30.0, MARGIN);
         assert_eq!(
             plans.iter().map(|p| p.boards()).collect::<Vec<_>>(),
             [2, 4, 12, 28, 56]
@@ -381,6 +406,29 @@ mod tests {
             let pick = order(quantity, moq).recommend(&plans).unwrap();
             assert_eq!(pick.sheet, sheet, "quantity {quantity}, moq {moq}");
         }
+
+        // 130 mm square cells: A5 holds 1, A4 2, A3 6. Six boards on one A3
+        // order 2/3 the area of three A4s, but A3 is left out while a smaller
+        // sheet fits; six A5s just undercut three A4s.
+        let plans = auto_board_array_plans(120.0, 120.0, MARGIN);
+        assert_eq!(
+            plans
+                .iter()
+                .map(|p| (p.sheet, p.boards()))
+                .collect::<Vec<_>>(),
+            [(A5, 1), (A4, 2), (A3, 6)]
+        );
+        let area = |plan| order(6, 1).on(plan).ordered_area_mm2;
+        assert!(area(&plans[2]) < area(&plans[0]) && area(&plans[0]) < area(&plans[1]));
+        assert_eq!(order(6, 1).recommend(&plans).unwrap().sheet, A5);
+
+        // Only A3 fits, so it is still recommended.
+        let plans = auto_board_array_plans(190.0, 330.0, MARGIN);
+        assert_eq!(plans.iter().map(|p| p.sheet).collect::<Vec<_>>(), [A3]);
+        assert_eq!(order(50, 5).recommend(&plans).unwrap().sheet, A3);
+        assert_eq!(order(1, 1).recommend(&[]), None);
+
+        let plans = auto_board_array_plans(40.0, 30.0, MARGIN);
 
         let a5 = order(50, 5).on(&plans[2]);
         assert_eq!((a5.arrays, a5.boards_ordered, a5.surplus), (5, 60, 10));
