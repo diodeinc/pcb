@@ -10,7 +10,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Added
 
-- `pcb quote <board>.zen` prices the board's current layout and BOM as a self-service Diode order, without publishing a release: per-quantity cost, lead time, and any issue that blocks ordering. `--route` selects US or global fabrication and assembly; `-f json` prints the full response.
+- `pcb quote <board>.zen` quotes fabrication and assembly of a board's current layout without publishing a release.
 
 ### Fixed
 

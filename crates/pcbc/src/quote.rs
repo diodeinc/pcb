@@ -18,7 +18,7 @@ pub enum QuoteRoute {
     Us,
     /// Global bare boards, assembled by Diode in the US
     GlobalUs,
-    /// Global bare boards and assembly (enterprise plans)
+    /// Global bare boards and assembly
     Global,
 }
 
@@ -51,9 +51,7 @@ pub enum QuoteFormat {
 #[command(
     about = "Quote fabrication and assembly of a board's saved layout",
     long_about = "Quote fabrication and assembly of a board's saved layout and current \
-                  source, priced as the Diode order dialog prices a release on a \
-                  self-service plan: enterprise discounts are not applied. Nothing is \
-                  published or ordered."
+                  source. Nothing is published or ordered."
 )]
 pub struct QuoteArgs {
     /// Board .zen file
@@ -234,10 +232,7 @@ fn render_quotes(quotes: &QuoteResponse, board: &str, route: QuoteRoute) -> Stri
         column.set_cell_alignment(CellAlignment::Right);
     }
 
-    let mut out = format!(
-        "{board}: {}, priced as a self-service order\n{table}\n",
-        route.description()
-    );
+    let mut out = format!("{board}: {}\n{table}\n", route.description());
     let mut statuses: Vec<&str> = Vec::new();
     for result in &quotes.results {
         if !statuses.contains(&result.status.as_str()) {
@@ -328,9 +323,7 @@ mod tests {
 
         let report = render_quotes(&quotes, "IP0010.zen", QuoteRoute::Us);
 
-        assert!(report.starts_with(
-            "IP0010.zen: US bare boards, assembled by Diode in the US, priced as a self-service order\n"
-        ));
+        assert!(report.starts_with("IP0010.zen: US bare boards, assembled by Diode in the US\n"));
         let row = report
             .lines()
             .find(|line| line.contains("orderable"))
