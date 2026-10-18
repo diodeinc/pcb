@@ -152,17 +152,6 @@ pub fn auto_board_array_plans(
         .collect()
 }
 
-/// How an automatic board array chooses its sheet.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AutoSheetChoice {
-    /// The smallest sheet the board fits.
-    Smallest,
-    /// This sheet, even if a smaller one fits.
-    Sheet(AutoSheetSize),
-    /// The sheet [`Order::recommend`] picks for this order.
-    Order(Order),
-}
-
 /// Boards wanted, and the fewest arrays the fabricator accepts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 pub struct Order {

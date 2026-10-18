@@ -354,18 +354,12 @@ enum BoardArrayCommands {
         /// Analyze where mouse-bite tabs would go on the board: writes JSON, not a panel.
         #[arg(long, conflicts_with_all = ["auto", "sheet", "columns", "rows", "board_margin", "edge_rail", "copper_balance", "no_copper_balance"])]
         mouse_bite_placement: bool,
-        /// Choose an A-series board array automatically: the smallest fitting sheet, or with --quantity the sheet `board-array plan` recommends.
+        /// Choose the smallest fitting A-series board array automatically.
         #[arg(long)]
         auto: bool,
         /// Force auto board array generation to one A-series sheet size. Implies --auto.
         #[arg(long)]
         sheet: Option<commands::board_array_auto::AutoSheetSize>,
-        /// Boards to order: --auto picks the sheet `board-array plan` recommends for this quantity.
-        #[arg(long, requires = "auto", conflicts_with_all = ["sheet", "columns", "rows"], value_parser = clap::value_parser!(u32).range(1..))]
-        quantity: Option<u32>,
-        /// Minimum board arrays per order
-        #[arg(long, default_value_t = 1, requires = "quantity", value_parser = clap::value_parser!(u32).range(1..))]
-        moq: u32,
         /// Number of board columns. Must be between 1 and 10. Defaults to 1.
         #[arg(long)]
         columns: Option<u32>,
@@ -633,8 +627,6 @@ pub fn execute(args: Ipc2581Args, resolution: Resolution) -> anyhow::Result<()> 
                 mouse_bite_placement,
                 auto,
                 sheet,
-                quantity,
-                moq,
                 columns,
                 rows,
                 board_margin,
@@ -661,16 +653,10 @@ pub fn execute(args: Ipc2581Args, resolution: Resolution) -> anyhow::Result<()> 
                             "--auto/--sheet cannot be combined with manual board array options"
                         );
                     }
-                    use commands::board_array_auto::{AutoSheetChoice, Order};
-                    let choice = match (sheet, quantity) {
-                        (Some(sheet), _) => AutoSheetChoice::Sheet(sheet),
-                        (None, Some(quantity)) => AutoSheetChoice::Order(Order { quantity, moq }),
-                        (None, None) => AutoSheetChoice::Smallest,
-                    };
                     commands::board_array::execute_auto(
                         &input,
                         &output,
-                        choice,
+                        sheet,
                         copper_balance,
                         separation,
                         resolution,

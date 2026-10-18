@@ -10,8 +10,7 @@ pub mod plan;
 
 use super::PanelCreation;
 use super::board_array_auto::{
-    AutoSheetChoice, AutoSheetSize, TargetSizeMm, auto_board_array_plan,
-    auto_board_array_plan_for_sheet, auto_board_array_plans,
+    AutoSheetSize, TargetSizeMm, auto_board_array_plan, auto_board_array_plan_for_sheet,
 };
 use crate::generated::GeneratedLayerFeature;
 use crate::geometry;
@@ -259,7 +258,7 @@ pub fn execute(
 pub fn execute_auto(
     input: &Path,
     output: &Path,
-    sheet: AutoSheetChoice,
+    sheet: Option<AutoSheetSize>,
     balance_copper: bool,
     separation: Separation,
     resolution: Resolution,
@@ -292,7 +291,7 @@ pub fn create_board_array(
 /// Create an automatically sized board array and return its balance accounting.
 pub fn create_auto_board_array(
     xml: &str,
-    sheet: AutoSheetChoice,
+    sheet: Option<AutoSheetSize>,
     balance_copper: bool,
     separation: Separation,
     resolution: Resolution,
@@ -307,7 +306,7 @@ pub fn create_auto_board_array(
 fn auto_board_array_options(
     ipc: &Ipc2581,
     board: PrimaryBoardLayout,
-    sheet: AutoSheetChoice,
+    sheet: Option<AutoSheetSize>,
     resolution: Resolution,
 ) -> Result<(BoardArrayCreateOptions, BoardArrayPanelizationMetadata)> {
     let imported = import_design(ipc, resolution)?;
@@ -316,20 +315,13 @@ fn auto_board_array_options(
     let board_height = board.bbox.height();
 
     let plan = match sheet {
-        AutoSheetChoice::Sheet(sheet) => Some((
+        Some(sheet) => Some((
             auto_board_array_plan_for_sheet(board_width, board_height, board_margin, sheet)?,
             BoardArrayPanelizationMode::AutoSheet,
         )),
-        AutoSheetChoice::Smallest => auto_board_array_plan(board_width, board_height, board_margin)
+        None => auto_board_array_plan(board_width, board_height, board_margin)
             .ok()
             .map(|plan| (plan, BoardArrayPanelizationMode::Auto)),
-        AutoSheetChoice::Order(order) => order
-            .recommend(&auto_board_array_plans(
-                board_width,
-                board_height,
-                board_margin,
-            ))
-            .map(|&plan| (plan, BoardArrayPanelizationMode::Auto)),
     };
 
     // A board too large for any sheet still gets a minimum single-board panel.

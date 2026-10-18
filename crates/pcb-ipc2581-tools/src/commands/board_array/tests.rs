@@ -4,7 +4,6 @@ use pcb_ir::geom::Resolution;
 use super::balance::{extract_array_support_layers, generate_automatic_board_array_copper_balance};
 use super::*;
 use crate::accessors::IpcAccessor;
-use crate::commands::board_array_auto::Order;
 use crate::ipc2581::types::LayerFunction;
 use crate::manufacturing::{
     ManufacturingExportOptions, ManufacturingPackage, build_manufacturing_package,
@@ -88,7 +87,7 @@ fn create_board_array_xml(xml: &str, options: &BoardArrayCreateOptions) -> Resul
     .xml)
 }
 
-fn create_auto_board_array_xml(xml: &str, sheet: AutoSheetChoice) -> Result<String> {
+fn create_auto_board_array_xml(xml: &str, sheet: Option<AutoSheetSize>) -> Result<String> {
     Ok(create_auto_board_array(xml, sheet, false, Separation::VScore, Resolution::default())?.xml)
 }
 
@@ -229,11 +228,8 @@ fn creates_rounded_panel_step_from_board_bbox() {
 fn generated_board_array_has_a_certified_safe_balancing_region() {
     // Safe-region discovery runs on the completed but not-yet-balanced array;
     // otherwise the generated balance copper becomes its own obstacle.
-    let xml = create_auto_board_array_xml(
-        &board_fixture_with_mask_bbox_mm(13.0, 10.0),
-        AutoSheetChoice::Smallest,
-    )
-    .unwrap();
+    let xml =
+        create_auto_board_array_xml(&board_fixture_with_mask_bbox_mm(13.0, 10.0), None).unwrap();
     let (collection, copper_layers) = balancing_collection(&Ipc2581::parse(&xml).unwrap());
     let input = collection.input_for_layer(copper_layers[0].name).unwrap();
     let result = board_array_balancing_region(&input, BalancingRegionOptions::default()).unwrap();
@@ -266,11 +262,8 @@ fn two_layer_board_xml() -> String {
 fn board_array_balancing_solves_every_copper_layer() {
     let resolution = Resolution::default();
 
-    let provisional_xml = create_auto_board_array_xml(
-        &two_layer_board_xml(),
-        AutoSheetChoice::Sheet(AutoSheetSize::A7),
-    )
-    .unwrap();
+    let provisional_xml =
+        create_auto_board_array_xml(&two_layer_board_xml(), Some(AutoSheetSize::A7)).unwrap();
     let provisional = Ipc2581::parse(&provisional_xml).unwrap();
     let balance =
         generate_automatic_board_array_copper_balance(&provisional, resolution.tolerance_mm)
@@ -329,7 +322,7 @@ fn board_array_creation_reports_and_emits_the_balance() {
     let input = two_layer_board_xml();
     let creation = create_auto_board_array(
         &input,
-        AutoSheetChoice::Sheet(AutoSheetSize::A7),
+        Some(AutoSheetSize::A7),
         true,
         Separation::VScore,
         resolution,
@@ -338,7 +331,7 @@ fn board_array_creation_reports_and_emits_the_balance() {
     let copper_balance = creation.copper_balance.as_ref().unwrap();
     let coarser = create_auto_board_array(
         &input,
-        AutoSheetChoice::Sheet(AutoSheetSize::A7),
+        Some(AutoSheetSize::A7),
         true,
         Separation::VScore,
         resolution.with_accuracy(pcb_ir::geom::GeometryAccuracy::micrometres(30)),
@@ -399,7 +392,7 @@ fn automatic_balancing_regions_scope_panel_fiducials_to_both_surface_copper_laye
     // how much panel surrounds it.
     let xml = create_auto_board_array_xml(
         &board_fixture_with_mask_bbox_mm(60.0, 60.0),
-        AutoSheetChoice::Sheet(AutoSheetSize::A6),
+        Some(AutoSheetSize::A6),
     )
     .unwrap();
     let provisional = Ipc2581::parse(&xml).unwrap();
@@ -488,7 +481,7 @@ fn board_arrays_carry_the_recorded_provenance() {
 }
 
 #[test]
-fn auto_create_projects_board_to_the_smallest_requested_or_ordered_sheet() {
+fn auto_create_projects_board_to_the_smallest_or_the_requested_sheet() {
     let attribute = |name: &str, kind: &str, value: &str| {
         format!(
             r#"<NonstandardAttribute name="diode.panelize.{name}" type="{kind}" value="{value}"/>"#
@@ -496,7 +489,7 @@ fn auto_create_projects_board_to_the_smallest_requested_or_ordered_sheet() {
     };
     for (sheet, mode, name, (width, height), repeat, rails, boards) in [
         (
-            AutoSheetChoice::Smallest,
+            None,
             "auto",
             "A7",
             (105.0, 74.0),
@@ -505,21 +498,8 @@ fn auto_create_projects_board_to_the_smallest_requested_or_ordered_sheet() {
             12,
         ),
         (
-            AutoSheetChoice::Sheet(AutoSheetSize::A5),
+            Some(AutoSheetSize::A5),
             "auto_sheet",
-            "A5",
-            (148.0, 210.0),
-            r#"x="5" y="5" nx="6" ny="10""#,
-            ("5", "5"),
-            60,
-        ),
-        // One full A5 orders less area than five A7s.
-        (
-            AutoSheetChoice::Order(Order {
-                quantity: 60,
-                moq: 1,
-            }),
-            "auto",
             "A5",
             (148.0, 210.0),
             r#"x="5" y="5" nx="6" ny="10""#,
@@ -574,7 +554,7 @@ fn auto_create_derives_board_margin_from_courtyard_overhang() {
         let margin = auto_board_margin(&ipc, &imported, board.bbox).unwrap();
         assert_eq!(margin, expected);
 
-        let xml = create_auto_board_array_xml(&courtyard, AutoSheetChoice::Smallest).unwrap();
+        let xml = create_auto_board_array_xml(&courtyard, None).unwrap();
         for repeat in repeats {
             assert!(xml.contains(&format!("<StepRepeat {repeat}")), "{repeat}");
         }
@@ -585,11 +565,8 @@ fn auto_create_derives_board_margin_from_courtyard_overhang() {
 
 #[test]
 fn auto_create_allows_large_leftover_edge_rails() {
-    let xml = create_auto_board_array_xml(
-        &board_fixture_with_mask_bbox_mm(124.0, 110.0),
-        AutoSheetChoice::Smallest,
-    )
-    .unwrap();
+    let xml =
+        create_auto_board_array_xml(&board_fixture_with_mask_bbox_mm(124.0, 110.0), None).unwrap();
 
     assert!(xml.contains(
         r#"<StepRepeat stepRef="board_cell" x="38" y="14" nx="1" ny="1" dx="134" dy="120" angle="0.00" mirror="false"/>"#
@@ -600,11 +577,8 @@ fn auto_create_allows_large_leftover_edge_rails() {
 
 #[test]
 fn auto_create_falls_back_to_minimum_single_board_panel_when_a3_does_not_fit() {
-    let xml = create_auto_board_array_xml(
-        &board_fixture_with_mask_bbox_mm(410.0, 10.0),
-        AutoSheetChoice::Smallest,
-    )
-    .unwrap();
+    let xml =
+        create_auto_board_array_xml(&board_fixture_with_mask_bbox_mm(410.0, 10.0), None).unwrap();
 
     for expected in [
         r#"<StepRepeat stepRef="board_cell" x="5" y="5" nx="1" ny="1" dx="420" dy="20" angle="0.00" mirror="false"/>"#,
@@ -621,7 +595,7 @@ fn auto_create_falls_back_to_minimum_single_board_panel_when_a3_does_not_fit() {
 fn auto_create_requested_sheet_still_errors_when_sheet_does_not_fit() {
     let error = create_auto_board_array_xml(
         &board_fixture_with_mask_bbox_mm(278.0, 278.0),
-        AutoSheetChoice::Sheet(AutoSheetSize::A4),
+        Some(AutoSheetSize::A4),
     )
     .unwrap_err();
 
@@ -1307,7 +1281,7 @@ fn board_array_tooling_falls_back_to_the_other_rail_pair() {
 #[test]
 fn auto_create_errors_when_rail_tooling_cannot_fit() {
     let input = board_fixture_with_mask_bbox_mm(10.0, 10.0);
-    let error = create_auto_board_array_xml(&input, AutoSheetChoice::Smallest).unwrap_err();
+    let error = create_auto_board_array_xml(&input, None).unwrap_err();
     assert!(
         format!("{error:#}").contains("cannot fit rail fiducials and tooling holes"),
         "{error:#}"
