@@ -264,9 +264,6 @@ impl ContourSet {
     /// nominal test. An opening lies within what it opens, so `T` only removes
     /// material and iterating from the source converges; a step that removes
     /// almost nothing is reported as an error instead of a silent stall.
-    ///
-    /// `self` must already be open by `filled_radius`, as every application
-    /// of `T` leaves it, so each step reopens only near its cut.
     pub fn disk_regularize_gaps(
         &self,
         gap_radius: f64,
@@ -289,7 +286,9 @@ impl ContourSet {
         }
 
         let mut kept = self.clone();
-        while let Some(next) = kept.narrow_gap_trim(gap_radius, filled_radius, guard)? {
+        let mut opened = false;
+        while let Some(next) = kept.narrow_gap_trim(gap_radius, filled_radius, guard, opened)? {
+            opened = true;
             // `next` lies within `kept`, so what the step removed is the area lost.
             if kept.area() - next.area() <= self.tolerance().powi(2) {
                 return Err(GapRegularizationError(format!(
@@ -307,21 +306,26 @@ impl ContourSet {
 
     /// One application of the gap-regularization contraction `T`, or `None`
     /// at its fixed point, where every two-sided void gap already admits the
-    /// rolling disk.
+    /// rolling disk. `opened` asserts `self` is already open by
+    /// `filled_radius`, as every application of `T` leaves it.
     fn narrow_gap_trim(
         &self,
         gap_radius: f64,
         filled_radius: f64,
         guard: f64,
+        opened: bool,
     ) -> Result<Option<Self>, GapRegularizationError> {
         let narrow_voids = self.disk_gap_violations(gap_radius)?;
         if narrow_voids.is_empty() {
             return Ok(None);
         }
         let keep_out = narrow_void_keep_out(self, &narrow_voids, gap_radius + guard)?;
-        let reopened = self
-            .difference(&keep_out)?
-            .reopen_near(&keep_out, filled_radius)?;
+        let trimmed = self.difference(&keep_out)?;
+        let reopened = if opened {
+            trimmed.reopen_near(&keep_out, filled_radius)?
+        } else {
+            trimmed.disk_open(filled_radius)?
+        };
         // Where the opening retraces the source boundary, the overlay keeps
         // both near-coincident copies and every crossing between them as
         // sub-tolerance vertex clusters. Their edges point anywhere, so the
