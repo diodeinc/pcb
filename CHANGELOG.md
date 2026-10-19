@@ -8,6 +8,8 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+## [0.4.88] - 2026-10-19
+
 ### Fixed
 
 - Board-array copper balancing no longer stalls on routed (mouse-bite) panels: disk offsets ignore the nanometre vertex clusters overlays leave, which each turned into a full-radius spike. An A4 mouse-bite panel of a 90 × 62 mm board drops from 153 s and 3.6 GB to under 6 s and 0.4 GB, and every board array balances in less memory.
@@ -2460,7 +2462,8 @@ Tvs(package="DO-214AA", direction="Unidirectional", reverse_standoff_voltage="24
 - Error on invalid type passed to `io()`
 - Format the auto-generated component .zen files
 
-[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.4.87...HEAD
+[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.4.88...HEAD
+[0.4.88]: https://github.com/diodeinc/pcb/compare/v0.4.87...v0.4.88
 [0.4.87]: https://github.com/diodeinc/pcb/compare/v0.4.86...v0.4.87
 [0.4.86]: https://github.com/diodeinc/pcb/compare/v0.4.85...v0.4.86
 [0.4.85]: https://github.com/diodeinc/pcb/compare/v0.4.84...v0.4.85
