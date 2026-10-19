@@ -11,6 +11,7 @@ use crate::geom::dist;
 use crate::geom::path::{ContourBuf, PathCmd};
 use crate::geom::store::PathArena;
 use crate::geom::{AccuracyError, BBox, FillRule, Paint, Point, tol};
+use rayon::prelude::*;
 use std::fmt;
 
 use boostvoronoi::prelude::{
@@ -679,16 +680,13 @@ fn two_sided_residual_components(
     };
     // Components are independent: each measures its own medial axis against
     // shared read-only indexes. Parallel iteration preserves component order,
-    // so reports are identical to the sequential run on wasm, which has no
-    // threads.
-    #[cfg(not(target_family = "wasm"))]
-    use rayon::prelude::*;
-    let components = residual.connected_components();
-    #[cfg(not(target_family = "wasm"))]
-    let components = components.into_par_iter();
-    #[cfg(target_family = "wasm")]
-    let components = components.into_iter();
-    components.filter_map(measure).collect()
+    // so reports are identical to the sequential run rayon falls back to on
+    // wasm, which has no threads.
+    residual
+        .connected_components()
+        .into_par_iter()
+        .filter_map(measure)
+        .collect()
 }
 
 /// Enumerate exact bisectors of every reachable pair of facing walls,
@@ -773,18 +771,14 @@ fn component_axis(
             })
             .collect::<Vec<_>>()
     };
-    #[cfg(not(target_family = "wasm"))]
-    let validated = {
-        use rayon::prelude::*;
-        sites
-            .par_iter()
-            .enumerate()
-            .map(validate)
-            .collect::<Vec<_>>()
-    };
-    #[cfg(target_family = "wasm")]
-    let validated = sites.iter().enumerate().map(validate).collect::<Vec<_>>();
-    validated.into_iter().flatten().collect()
+    sites
+        .par_iter()
+        .enumerate()
+        .map(validate)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .flatten()
+        .collect()
 }
 
 /// The closing residue kept only where two distinct source-boundary
