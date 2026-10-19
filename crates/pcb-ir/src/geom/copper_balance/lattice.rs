@@ -125,12 +125,27 @@ impl LatticeCandidates {
             disk_center_region,
             edge_area_by_level_mm2: Vec::new(),
         };
-        // Levels run one at a time: each clips every edge void against the
-        // whole region, and the layers around them already run in parallel.
+        // A void grows with its level about its own center, so every level's
+        // edge voids lie inside the top level's. Clipping the region to those
+        // once leaves each level only that band along the boundary to clip.
+        let top = profile.void_area_level(profile.void_area_levels - 1).sqrt();
+        let reach = candidates.void_candidates(top, profile);
+        let band = hexagon_set_with_radii(&reach, voidable.resolution)?.intersection(voidable)?;
+        let center_band = placed_templates(&reach, voidable.resolution, |radius| {
+            minimum_disk_centers(radius, profile)
+        })?
+        .intersection(&candidates.disk_center_region)?;
         candidates.edge_area_by_level_mm2 = (0..profile.void_area_levels)
             .map(|level| {
                 let radius = profile.void_area_level(level).sqrt();
-                Ok(candidates.partial_voids(voidable, radius, profile)?.area())
+                Ok(clipped_partial_voids(
+                    &band,
+                    &center_band,
+                    &candidates.void_candidates(radius, profile),
+                    &candidates.edge_center_depths_mm,
+                    profile,
+                )?
+                .area())
             })
             .collect::<Result<_, AccuracyError>>()?;
         Ok(candidates)
@@ -158,22 +173,13 @@ impl LatticeCandidates {
             .collect()
     }
 
-    fn partial_voids(
+    fn void_candidates(
         &self,
-        voidable: &ContourSet,
         radius: f64,
         profile: DenseCopperBalanceProfile,
-    ) -> Result<ContourSet, AccuracyError> {
-        let candidates = self
-            .lattice
-            .void_candidates(&self.edge_voids(radius, profile));
-        clipped_partial_voids(
-            voidable,
-            &self.disk_center_region,
-            &candidates,
-            &self.edge_center_depths_mm,
-            profile,
-        )
+    ) -> Vec<(Point, f64)> {
+        self.lattice
+            .void_candidates(&self.edge_voids(radius, profile))
     }
 
     /// Total void area at one nominal radius: analytic interior hexagons plus
