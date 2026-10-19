@@ -6,6 +6,7 @@
 //! semantics live with the callers.
 
 use crate::geom::{AccuracyError, BBox, ContourSet, GeometryAccuracy, Point};
+use rayon::prelude::*;
 
 mod lattice;
 mod spatial;
@@ -26,31 +27,15 @@ const NUMERIC_EPSILON: f64 = 1e-9;
 const CONTAINMENT_AREA_TOLERANCE_MM2: f64 = 1e-3;
 const SQRT_3: f64 = 1.732_050_807_568_877_2;
 
-/// Independent per-layer work, in source order. Browsers cannot spawn native
-/// threads; use the identical solve serially there, without requiring workers
-/// or shared WebAssembly memory. Native builds retain per-layer concurrency.
+/// Independent per-layer work, in source order, on rayon's pool: a
+/// many-layer stackup never holds more solves in memory than there are cores,
+/// and wasm, which has no threads, runs the same solves in turn.
 pub fn map_layers<T: Send, R: Send>(
     items: impl IntoIterator<Item = T>,
     solve: impl Fn(T) -> R + Sync,
 ) -> Vec<R> {
-    #[cfg(target_family = "wasm")]
-    {
-        items.into_iter().map(solve).collect()
-    }
-    #[cfg(not(target_family = "wasm"))]
-    {
-        std::thread::scope(|scope| {
-            let solve = &solve;
-            let handles = items
-                .into_iter()
-                .map(|item| scope.spawn(move || solve(item)))
-                .collect::<Vec<_>>();
-            handles
-                .into_iter()
-                .map(|handle| handle.join().expect("copper-balance solve panicked"))
-                .collect()
-        })
-    }
+    let items = items.into_iter().collect::<Vec<_>>();
+    items.into_par_iter().map(&solve).collect()
 }
 
 /// Fixed geometry constraints for a dense perforated copper plane.

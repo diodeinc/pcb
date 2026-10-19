@@ -781,6 +781,40 @@ fn disk_gap_regularization_widens_a_narrow_internal_void() {
 }
 
 #[test]
+fn offsets_read_through_sub_tolerance_vertex_clusters() {
+    // A nanometre zigzag on one edge, as an overlay leaves where it resolves
+    // near-coincident boundaries. Offset edge by edge, every vertex of it
+    // joins through a full-radius spike or arc in an arbitrary direction,
+    // which cost a production panel minutes and gigabytes per closing.
+    let mut ring = vec![[0.0, 0.0]];
+    ring.extend((0..200).map(|k| [5.0 + k as f64 * 1e-8, if k % 2 == 0 { 1e-6 } else { -1e-6 }]));
+    ring.extend([[10.0, 0.0], [10.0, 10.0], [0.0, 10.0]]);
+    let zigzag = ContourSet::from_regularized(vec![ring], res(tol::REGION_MM), 0.0);
+    let square = block(0.0, 0.0, 10.0, 10.0);
+    let vertices = |region: &ContourSet| region.rings().map(<[_]>::len).sum::<usize>();
+
+    for (offset, expected) in [
+        (
+            zigzag.disk_erode(0.5).unwrap(),
+            square.disk_erode(0.5).unwrap(),
+        ),
+        (
+            zigzag.disk_dilate(0.5).unwrap(),
+            square.disk_dilate(0.5).unwrap(),
+        ),
+    ] {
+        assert!(
+            vertices(&offset) <= vertices(&expected) + 2,
+            "{} vertices where a clean edge offsets to {}",
+            vertices(&offset),
+            vertices(&expected)
+        );
+        assert!(offset.difference(&expected).unwrap().area() <= 1e-6);
+        assert!(expected.difference(&offset).unwrap().area() <= 1e-6);
+    }
+}
+
+#[test]
 fn dilation_shrinks_but_preserves_a_large_hole() {
     let outer = block(0.0, 0.0, 10.0, 10.0);
     let hole = block(3.0, 3.0, 7.0, 7.0);
