@@ -320,16 +320,6 @@ impl BoardArrayBalancingCollection {
                 .collect::<Result<Vec<_>, _>>()?,
         )
     }
-
-    /// Whether two copper layers select the same canonical support-obstacle
-    /// buckets. The remaining balancing input is common to every layer, so an
-    /// equal scope produces the same safe region without comparing geometry.
-    pub fn has_same_support_scope(&self, left: Symbol, right: Symbol) -> bool {
-        self.support_layers
-            .iter()
-            .flat_map(|source| &source.obstacles)
-            .all(|obstacle| obstacle.reach.includes(left) == obstacle.reach.includes(right))
-    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -1041,8 +1031,6 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
-        assert!(!collection.has_same_support_scope(sym(100), sym(200)));
-        assert!(collection.has_same_support_scope(sym(200), sym(300)));
     }
 
     #[test]

@@ -28,7 +28,8 @@ const SQRT_3: f64 = 1.732_050_807_568_877_2;
 
 /// Independent per-layer work, in source order. Browsers cannot spawn native
 /// threads; use the identical solve serially there, without requiring workers
-/// or shared WebAssembly memory. Native builds retain per-layer concurrency.
+/// or shared WebAssembly memory. Native builds run on rayon's pool, so a
+/// many-layer stackup never holds more solves in memory than there are cores.
 pub fn map_layers<T: Send, R: Send>(
     items: impl IntoIterator<Item = T>,
     solve: impl Fn(T) -> R + Sync,
@@ -39,17 +40,9 @@ pub fn map_layers<T: Send, R: Send>(
     }
     #[cfg(not(target_family = "wasm"))]
     {
-        std::thread::scope(|scope| {
-            let solve = &solve;
-            let handles = items
-                .into_iter()
-                .map(|item| scope.spawn(move || solve(item)))
-                .collect::<Vec<_>>();
-            handles
-                .into_iter()
-                .map(|handle| handle.join().expect("copper-balance solve panicked"))
-                .collect()
-        })
+        use rayon::prelude::*;
+        let items = items.into_iter().collect::<Vec<_>>();
+        items.into_par_iter().map(&solve).collect()
     }
 }
 

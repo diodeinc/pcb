@@ -51,12 +51,13 @@ pub fn generate_automatic_board_array_copper_balance(
             .context("failed to derive board-array fabrication profile for copper balancing")?;
     let ecad = ipc.ecad().context("IPC-2581 file has no ECAD section")?;
     let copper_layers = crate::layers::copper_layers(ecad);
-    let support_layers = extract_array_support_layers(&imported)?;
+    // Every layer's array-support view copies the whole layout, so the views
+    // live only as long as this statement reads them.
     let collection = collect_board_array_balancing_input(
         layout,
         &fabrication_profile,
         &copper_layers,
-        support_layers
+        extract_array_support_layers(&imported)?
             .iter()
             .map(|source| BoardArraySupportDocument::new(&source.document, source.policy)),
         resolution,
@@ -76,24 +77,20 @@ pub fn generate_automatic_board_array_copper_balance(
         .iter()
         .map(|copper| copper.difference(board_footprints))
         .collect::<Result<Vec<_>, _>>()?;
-    // Layers with no frame copper and the same support scope share a region.
-    let mut inputs = Vec::new();
+    // Every input but the obstacles is common to all layers, so layers whose
+    // obstacles coincide share one safe region.
+    let mut inputs: Vec<(&str, BoardArrayBalancingInput)> = Vec::new();
     let mut region_of = Vec::with_capacity(copper_layers.len());
-    for (index, layer) in copper_layers.iter().enumerate() {
-        let representative = (0..index).find(|&earlier| {
-            frame[index].is_empty()
-                && frame[earlier].is_empty()
-                && collection.has_same_support_scope(copper_layers[earlier].name, layer.name)
+    for ((layer, layer_name), frame) in copper_layers.iter().zip(&layer_names).zip(&frame) {
+        let mut input = collection.input_for_layer(layer.name)?;
+        input.support_features = input.support_features.union(frame)?;
+        let shared = inputs.iter().position(|(_, earlier)| {
+            earlier.support_features.rings == input.support_features.rings
         });
-        region_of.push(match representative {
-            Some(earlier) => region_of[earlier],
-            None => {
-                let mut input = collection.input_for_layer(layer.name)?;
-                input.support_features = input.support_features.union(&frame[index])?;
-                inputs.push((layer_names[index].as_str(), input));
-                inputs.len() - 1
-            }
-        });
+        region_of.push(shared.unwrap_or_else(|| {
+            inputs.push((layer_name, input));
+            inputs.len() - 1
+        }));
     }
     let regions = map_layers(inputs, |(layer_name, input)| {
         certified_safe_region(&input, &format!("board-array layer '{layer_name}'"))

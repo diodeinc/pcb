@@ -54,7 +54,17 @@ impl ContourSet {
         }
         let numeric = numerical_error(self.bbox.expand(offset.abs()));
         let inherited = self.uncertainty_mm + numeric;
-        let remaining = accuracy.allowance(inherited)?;
+        let allowance = accuracy.allowance(inherited)?;
+        // Overlays leave clusters of vertices nanometres apart where they
+        // resolve near-coincident boundaries, and every edge between them
+        // points anywhere. Offsetting each as an edge joins the cluster
+        // through a full-radius spike or arc in an arbitrary direction, and
+        // the overlay then resolves thousands of them crossing one another.
+        // An edge below significance has no direction, so the offset reads
+        // the ring through vertices at least that far apart and charges the
+        // shift to its budget.
+        let merge = self.tolerance().min(allowance / 2.0);
+        let remaining = allowance - merge;
         let join_angle = (2.0 * (remaining / (2.0 * offset.abs())).min(1.0).sqrt().asin())
             .clamp(0.01 * std::f64::consts::PI, std::f64::consts::FRAC_PI_4);
         // A ring narrower than the disk on the side the offset shrinks
@@ -75,6 +85,7 @@ impl ContourSet {
             let (rings, sag) = offset_group(
                 &untagged(group),
                 offset,
+                merge,
                 join_angle,
                 remaining,
                 numeric,
@@ -88,7 +99,7 @@ impl ContourSet {
         Self::from_regularized(
             decimate_rings_inward(rings.iter().map(Vec::as_slice), numeric),
             self.resolution,
-            inherited + added + numeric,
+            inherited + merge + added + numeric,
         )
         .checked()
     }
@@ -108,6 +119,7 @@ impl ContourSet {
 fn offset_group(
     rings: &[Ring],
     offset: f64,
+    merge: f64,
     join_angle: f64,
     allowance: f64,
     numeric: f64,
@@ -116,7 +128,8 @@ fn offset_group(
     let offset_rings = |direct: bool| {
         let (mut raw, mut sag, mut crossed) = (Vec::with_capacity(rings.len()), 0.0, false);
         for ring in rings {
-            let (ring, ring_sag, ring_crossed) = raw_offset(ring, offset, join_angle, direct);
+            let (ring, ring_sag, ring_crossed) =
+                raw_offset(ring, offset, merge, join_angle, direct);
             raw.push(ring);
             sag = f64::max(sag, ring_sag);
             crossed |= ring_crossed;
@@ -150,7 +163,9 @@ const SMOOTH_TURN: f64 = std::f64::consts::FRAC_PI_8;
 
 /// The raw offset curve of one ring, the sag of its round joins, and whether
 /// it crossed or directly joined any corner: every edge moved `offset` to its
-/// right, away from the material on its left, joined corner by corner.
+/// right, away from the material on its left, joined corner by corner. The
+/// ring is read through vertices more than `merge` from the last one kept,
+/// which moves no point of it farther than `merge`.
 ///
 /// Where the offset edges part, a round join of chords within `join_angle`
 /// fills the gap. Where they overlap, they join through the corner; with
@@ -162,9 +177,29 @@ const SMOOTH_TURN: f64 = std::f64::consts::FRAC_PI_8;
 /// corner of a flattened curve cross each other near its centre once the
 /// offset nears its radius, and resolving those crossings costs the overlay
 /// a hundred times what crossing joins do.
-fn raw_offset(ring: &[[f64; 2]], offset: f64, join_angle: f64, direct: bool) -> (Ring, f64, bool) {
-    let edges = edges_of(ring)
-        .filter_map(|(start, end)| {
+fn raw_offset(
+    ring: &[[f64; 2]],
+    offset: f64,
+    merge: f64,
+    join_angle: f64,
+    direct: bool,
+) -> (Ring, f64, bool) {
+    let mut corners: Vec<Point> = Vec::with_capacity(ring.len());
+    for &[x, y] in ring {
+        let point = Point::new(x, y);
+        if corners
+            .last()
+            .is_none_or(|last| last.distance_to(point) > merge)
+        {
+            corners.push(point);
+        }
+    }
+    while corners.len() > 1 && corners[0].distance_to(corners[corners.len() - 1]) <= merge {
+        corners.pop();
+    }
+    let edges = (0..corners.len())
+        .filter_map(|index| {
+            let (start, end) = (corners[index], corners[(index + 1) % corners.len()]);
             let length = (end - start).length();
             (length > 0.0).then(|| (end, (end - start) / length, length))
         })

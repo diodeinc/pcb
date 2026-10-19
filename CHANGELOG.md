@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Fixed
+
+- Board-array copper balancing no longer stalls on routed (mouse-bite) panels: disk offsets ignore the nanometre vertex clusters overlays leave, which each turned into a full-radius spike. An A4 mouse-bite panel of a 90 × 62 mm board drops from 153 s and 3.6 GB to under 6 s and 0.4 GB, and every board array balances in less memory.
+
 ## [0.4.87] - 2026-10-18
 
 ### Changed

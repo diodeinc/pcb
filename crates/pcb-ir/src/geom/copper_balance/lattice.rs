@@ -6,7 +6,6 @@ use std::f64::consts::PI;
 
 use super::{
     DenseCopperBalanceProfile, DenseCopperLattice, DenseCopperLatticeSite, DenseCopperVoid, SQRT_3,
-    map_layers,
 };
 use crate::geom::accuracy::numerical_error;
 use crate::geom::region::rings_bbox;
@@ -126,12 +125,14 @@ impl LatticeCandidates {
             disk_center_region,
             edge_area_by_level_mm2: Vec::new(),
         };
-        candidates.edge_area_by_level_mm2 = map_layers(0..profile.void_area_levels, |level| {
-            let radius = profile.void_area_level(level).sqrt();
-            Ok(candidates.partial_voids(voidable, radius, profile)?.area())
-        })
-        .into_iter()
-        .collect::<Result<_, AccuracyError>>()?;
+        // Levels run one at a time: each clips every edge void against the
+        // whole region, and the layers around them already run in parallel.
+        candidates.edge_area_by_level_mm2 = (0..profile.void_area_levels)
+            .map(|level| {
+                let radius = profile.void_area_level(level).sqrt();
+                Ok(candidates.partial_voids(voidable, radius, profile)?.area())
+            })
+            .collect::<Result<_, AccuracyError>>()?;
         Ok(candidates)
     }
 
