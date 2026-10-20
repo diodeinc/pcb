@@ -7,6 +7,7 @@ pub mod bom;
 pub mod datasheet;
 mod endpoint;
 mod git_auth;
+pub mod quote;
 pub mod release;
 pub mod sandbox;
 pub mod scan;
@@ -15,6 +16,7 @@ pub use auth::{AuthArgs, AuthCommand, AuthTokens, execute as execute_auth};
 pub use bom::match_bom_with_context;
 pub use endpoint::WorkspaceContext;
 pub use pcb_diode_uri::{DiodeUri, DiodeUriParseError, SandboxFileUri, is_diode_uri};
+pub use quote::{QuoteRequest, quote};
 pub use release::upload_release;
 pub use sandbox::{
     ExecSyncOutput, ExecSyncRequest, SandboxClient, SandboxDirEntry, SandboxListResponse,

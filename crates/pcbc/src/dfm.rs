@@ -78,22 +78,28 @@ fn export_layout(args: &DfmArgs) -> Result<(tempfile::TempDir, PathBuf)> {
         ..Default::default()
     };
     let design = crate::layout::prepare_design(&layout_args)?;
-    let layout = crate::layout::resolve_existing_layout(&args.file, &design.schematic)
-        .with_context(|| {
-            format!(
-                "Could not find the existing layout. Run 'pcb layout {}' to generate it.",
-                args.file.display()
-            )
-        })?;
-    let pcb_file = layout
-        .pcb_file_abs
-        .as_deref()
-        .with_context(|| format!("{} does not declare a layout", args.file.display()))?;
-    export_ipc(pcb_file)
+    export_ipc(&saved_layout(&args.file, &design.schematic)?)
 }
 
-/// Export a board file to a temporary IPC-2581 document for checking.
-fn export_ipc(pcb_file: &std::path::Path) -> Result<(tempfile::TempDir, PathBuf)> {
+/// The board's saved `.kicad_pcb`, without syncing it from source.
+pub(crate) fn saved_layout(
+    zen_path: &std::path::Path,
+    schematic: &pcb_sch::Schematic,
+) -> Result<PathBuf> {
+    let layout =
+        crate::layout::resolve_existing_layout(zen_path, schematic).with_context(|| {
+            format!(
+                "Could not find the existing layout. Run 'pcb layout {}' to generate it.",
+                zen_path.display()
+            )
+        })?;
+    layout
+        .pcb_file_abs
+        .with_context(|| format!("{} does not declare a layout", zen_path.display()))
+}
+
+/// Export a board file to a temporary IPC-2581 document.
+pub(crate) fn export_ipc(pcb_file: &std::path::Path) -> Result<(tempfile::TempDir, PathBuf)> {
     anyhow::ensure!(
         pcb_file.is_file(),
         "Layout file not found: {}",

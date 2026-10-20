@@ -44,6 +44,7 @@ mod open;
 #[path = "mod/mod.rs"]
 mod pcb_mod;
 mod publish;
+mod quote;
 mod recovery_dialog;
 mod release;
 mod remote_sandbox;
@@ -142,6 +143,9 @@ enum Commands {
 
     /// Run DFM checks for a .zen board
     Dfm(dfm::DfmArgs),
+
+    /// Quote fabrication and assembly of a board's saved layout
+    Quote(quote::QuoteArgs),
 
     /// Format .zen files
     Fmt(fmt::FmtArgs),
@@ -256,6 +260,7 @@ fn run() -> anyhow::Result<()> {
         Commands::Changelog(args) => changelog::execute(args),
         Commands::Layout(args) => layout::execute(args),
         Commands::Dfm(args) => dfm::execute(args),
+        Commands::Quote(args) => quote::execute(args),
         Commands::Fmt(args) => fmt::execute(args),
         Commands::Fix(args) => fix::execute(args),
         Commands::Lsp(args) => lsp::execute(args),
