@@ -8,6 +8,8 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+## [0.4.89] - 2026-10-20
+
 ### Added
 
 - `pcb quote <board>.zen` quotes fabrication and assembly of a board's current layout without publishing a release.
@@ -2470,7 +2472,8 @@ Tvs(package="DO-214AA", direction="Unidirectional", reverse_standoff_voltage="24
 - Error on invalid type passed to `io()`
 - Format the auto-generated component .zen files
 
-[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.4.88...HEAD
+[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.4.89...HEAD
+[0.4.89]: https://github.com/diodeinc/pcb/compare/v0.4.88...v0.4.89
 [0.4.88]: https://github.com/diodeinc/pcb/compare/v0.4.87...v0.4.88
 [0.4.87]: https://github.com/diodeinc/pcb/compare/v0.4.86...v0.4.87
 [0.4.86]: https://github.com/diodeinc/pcb/compare/v0.4.85...v0.4.86
