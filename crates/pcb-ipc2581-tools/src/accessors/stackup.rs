@@ -206,6 +206,10 @@ impl ColorInfo {
                 .strip_prefix('#')
                 .filter(|hex| matches!(hex.len(), 6 | 8))
             {
+                // Every pair, alpha included, must be hex.
+                if !hex.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+                    return None;
+                }
                 let channel = |at: usize| u8::from_str_radix(hex.get(at..at + 2)?, 16).ok();
                 return Some((channel(0)?, channel(2)?, channel(4)?));
             }
@@ -216,34 +220,68 @@ impl ColorInfo {
         })
     }
 
-    /// The colour's name, lowercase. A colour stated only as RGB is named
-    /// for the nearest named colour. KiCad writes an unset colour as
-    /// `Not specified`, which names none.
+    /// The stated colour text, without KiCad's `Not specified` placeholder.
+    fn stated_name(&self) -> Option<&str> {
+        self.name
+            .as_deref()
+            .map(str::trim)
+            .filter(|name| !name.is_empty() && !name.eq_ignore_ascii_case("not specified"))
+    }
+
+    /// Whether the spec states a colour at all, recognized or not.
+    pub fn is_stated(&self) -> bool {
+        self.stated_name().is_some() || self.rgb.is_some()
+    }
+
+    /// The colour's name, lowercase: a stated name as written, otherwise the
+    /// ink colour its RGB or `#rrggbb` value falls within. None when no colour
+    /// is stated or its RGB falls outside every ink colour's bounds.
     pub fn color_name(&self) -> Option<String> {
-        let name = self.name.as_deref().map(str::trim).unwrap_or_default();
-        if name.eq_ignore_ascii_case("not specified") {
-            return None;
+        match self.stated_name() {
+            Some(name) if !name.starts_with('#') => Some(name.to_lowercase()),
+            _ => ink_color(self.rgb_color()?).map(str::to_owned),
         }
-        if !name.is_empty() && !name.starts_with('#') {
-            return Some(name.to_lowercase());
-        }
-        let (r, g, b) = self.rgb_color()?;
-        let distance = |(nr, ng, nb): (u8, u8, u8)| {
-            [(r, nr), (g, ng), (b, nb)]
-                .map(|(left, right)| (i32::from(left) - i32::from(right)).pow(2))
-                .iter()
-                .sum::<i32>()
-        };
-        NAMED_COLORS
-            .iter()
-            .min_by_key(|(_, rgb)| distance(*rgb))
-            .map(|(named, _)| (*named).to_owned())
     }
 
     /// Get hex color string (e.g., "#FF0000")
     pub fn hex_color(&self) -> Option<String> {
         self.rgb_color()
             .map(|(r, g, b)| format!("#{:02X}{:02X}{:02X}", r, g, b))
+    }
+}
+
+/// The ink colour an RGB value falls within, by brightness, chroma and hue.
+/// The bounds are strict: greys, oranges, pinks and cyans match no ink rather
+/// than the nearest one.
+fn ink_color((r, g, b): (u8, u8, u8)) -> Option<&'static str> {
+    let (r, g, b) = (f64::from(r), f64::from(g), f64::from(b));
+    let max = r.max(g).max(b);
+    let min = r.min(g).min(b);
+    let chroma = max - min;
+    if max <= 64.0 && chroma <= 24.0 {
+        return Some("black");
+    }
+    if min >= 200.0 && chroma <= 40.0 {
+        return Some("white");
+    }
+    if chroma < 24.0 {
+        return None;
+    }
+    let hue = if max == r {
+        60.0 * (g - b) / chroma
+    } else if max == g {
+        60.0 * (b - r) / chroma + 120.0
+    } else {
+        60.0 * (r - g) / chroma + 240.0
+    }
+    .rem_euclid(360.0);
+    match hue {
+        h if !(15.0..345.0).contains(&h) && min <= 120.0 => Some("red"),
+        h if (40.0..70.0).contains(&h) && max >= 150.0 => Some("yellow"),
+        h if (75.0..165.0).contains(&h) => Some("green"),
+        h if (190.0..250.0).contains(&h) => Some("blue"),
+        h if (260.0..320.0).contains(&h) => Some("purple"),
+        _ => None,
     }
 }
 
@@ -661,6 +699,38 @@ fn format_finish_type(finish_type: ipc2581::types::FinishType) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn ink_colors_have_strict_bounds() {
+        let named = |hex: &str| {
+            super::ColorInfo {
+                name: Some(hex.to_owned()),
+                rgb: None,
+            }
+            .color_name()
+        };
+        // KiCad's mask presets, and the DO-AH42D dictionary green.
+        for (hex, expected) in [
+            ("#3C9650", "green"),
+            ("#006400", "green"),
+            ("#191919E6", "black"),
+            ("#000000", "black"),
+            ("#FFFFFF", "white"),
+            ("#D4DBDE", "white"),
+            ("#800000", "red"),
+            ("#1974AB", "blue"),
+            ("#4D1B6B", "purple"),
+            ("#FFCC00", "yellow"),
+        ] {
+            assert_eq!(named(hex).as_deref(), Some(expected), "{hex}");
+        }
+        // Greys, oranges, pinks and cyans are no ink, not the nearest one.
+        for hex in ["#808080", "#FF8C00", "#FFC0CB", "#00CED1", "#8B4513"] {
+            assert_eq!(named(hex), None, "{hex}");
+        }
+        assert_eq!(named("#006400ZZ"), None);
+        assert_eq!(named("Not specified"), None);
+        assert_eq!(named("Green").as_deref(), Some("green"));
+    }
     use super::*;
 
     #[test]

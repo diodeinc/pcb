@@ -8,6 +8,11 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Changed
+
+- The `standard` DFM PDK allows only green and black soldermask.
+- RGB and hex soldermask colours map to a colour only within strict bounds; anything else is unrecognized and fails a soldermask colour rule. `pcb ipc info` drops the per-side `approximate` flag.
+
 ## [0.4.90] - 2026-10-20
 
 ### Added

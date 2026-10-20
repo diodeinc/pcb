@@ -309,21 +309,29 @@ fn soldermask_color(
             .iter()
             .find(|layer| layer.layer_ref == mask.name)
             .and_then(|layer| imported.specs.get(&layer.spec_ref?));
-        let Some(color) = spec
-            .and_then(|spec| {
-                ColorInfo::of_spec(spec, |symbol| imported.resolve(symbol)).color_name()
-            })
-            .map(|color| SoldermaskColor::new(&color))
+        let Some(ink) = spec
+            .map(|spec| ColorInfo::of_spec(spec, |symbol| imported.resolve(symbol)))
+            .filter(ColorInfo::is_stated)
         else {
             continue;
         };
         stated += 1;
-        if !allowed.contains(&color) {
+        // A stated colour no ink colour recognizes is not an allowed one.
+        let color = ink.color_name().map(|color| SoldermaskColor::new(&color));
+        if !color.as_ref().is_some_and(|color| allowed.contains(color)) {
             let layer = layer_ref(imported, mask);
+            let stated = match &color {
+                Some(color) => color.name().to_owned(),
+                None => format!(
+                    "an unrecognized colour ({})",
+                    ink.hex_color()
+                        .or_else(|| ink.name.clone())
+                        .unwrap_or_default()
+                ),
+            };
             nonconforming.push(Nonconforming {
                 message: format!(
-                    "soldermask layer '{name}' is {}; the PDK allows {allowed_text}",
-                    color.name()
+                    "soldermask layer '{name}' is {stated}; the PDK allows {allowed_text}"
                 ),
                 layers: vec![layer],
                 subject: subject("soldermask_layer", name),
