@@ -695,7 +695,6 @@ fn format_finish_type(finish_type: ipc2581::types::FinishType) -> String {
 
 #[cfg(test)]
 mod tests {
-
     #[test]
     fn ink_colors_have_strict_bounds() {
         let named = |hex: &str| {

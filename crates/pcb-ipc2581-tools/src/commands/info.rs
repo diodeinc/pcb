@@ -127,10 +127,8 @@ fn map_layer_side(side: Option<ipc2581::types::Side>) -> ComponentSide {
     }
 }
 
-/// The soldermask the file states for one side: the stated text, its colour
-/// name, the RGB it states, and whether the name was inferred from that RGB.
-/// A colour stated only as RGB outside every ink colour's bounds has a null
-/// colour, as an unstated one does; `name` and `hex` tell them apart.
+/// The soldermask the file states for one side: the stated text, its ink
+/// colour, and its RGB. The colour is null when unstated or unrecognized.
 /// Null when the side has no mask layer; a mask without ink has null fields.
 fn soldermask_side_json(accessor: &IpcAccessor, side: ipc2581::types::Side) -> serde_json::Value {
     let is_mask = |layer: &ipc2581::types::Layer| {
@@ -156,19 +154,14 @@ fn soldermask_side_json(accessor: &IpcAccessor, side: ipc2581::types::Side) -> s
         }
         None => return serde_json::Value::Null,
     };
-    let stated = ink.name.as_deref().map(str::trim).unwrap_or_default();
-    let named = !stated.is_empty()
-        && !stated.starts_with('#')
-        && !stated.eq_ignore_ascii_case("not specified");
-    let color = ink.color_name();
+    let stated_hex = ink
+        .name
+        .as_deref()
+        .is_some_and(|name| name.trim().starts_with('#'));
     json!({
         "name": ink.name,
-        "approximate": color.is_some() && !named,
-        "color": color,
-        "hex": ink
-            .rgb
-            .map(|(r, g, b)| format!("#{r:02X}{g:02X}{b:02X}"))
-            .or_else(|| stated.starts_with('#').then(|| ink.hex_color()).flatten()),
+        "color": ink.color_name(),
+        "hex": if ink.rgb.is_some() || stated_hex { ink.hex_color() } else { None },
     })
 }
 
@@ -1107,11 +1100,11 @@ mod tests {
 
         assert_eq!(
             mask["top"],
-            json!({"name": "Red", "color": "red", "hex": null, "approximate": false})
+            json!({"name": "Red", "color": "red", "hex": null})
         );
         assert_eq!(mask["bottom"]["name"], "#1974AB");
         assert_eq!(mask["bottom"]["hex"], "#1974AB");
-        assert_eq!(mask["bottom"]["approximate"], true);
+        assert_eq!(mask["bottom"]["color"], "blue");
     }
 
     #[test]
@@ -1138,11 +1131,11 @@ mod tests {
 
         assert_eq!(
             mask["top"],
-            json!({"name": "Not specified", "color": "green", "hex": "#006400", "approximate": true})
+            json!({"name": "Not specified", "color": "green", "hex": "#006400"})
         );
         assert_eq!(
             mask["bottom"],
-            json!({"name": null, "color": null, "hex": null, "approximate": false})
+            json!({"name": null, "color": null, "hex": null})
         );
     }
 
