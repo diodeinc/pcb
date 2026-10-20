@@ -8,6 +8,8 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+## [0.4.91] - 2026-10-20
+
 ### Changed
 
 - The `standard` DFM PDK allows only green and black soldermask.
@@ -2485,7 +2487,8 @@ Tvs(package="DO-214AA", direction="Unidirectional", reverse_standoff_voltage="24
 - Error on invalid type passed to `io()`
 - Format the auto-generated component .zen files
 
-[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.4.90...HEAD
+[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.4.91...HEAD
+[0.4.91]: https://github.com/diodeinc/pcb/compare/v0.4.90...v0.4.91
 [0.4.90]: https://github.com/diodeinc/pcb/compare/v0.4.89...v0.4.90
 [0.4.89]: https://github.com/diodeinc/pcb/compare/v0.4.88...v0.4.89
 [0.4.88]: https://github.com/diodeinc/pcb/compare/v0.4.87...v0.4.88
