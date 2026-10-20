@@ -11,6 +11,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ### Added
 
 - `pcb ipc info` JSON reports the top and bottom soldermask colours separately.
+- `pcb ipc info` JSON reports `drills.via_profiles`: via counts by hole and outer pad diameter.
 
 ## [0.4.89] - 2026-10-20
 
