@@ -127,6 +127,61 @@ fn map_layer_side(side: Option<ipc2581::types::Side>) -> ComponentSide {
     }
 }
 
+/// The soldermask the file states for one side: the stated text, its colour
+/// name, the RGB it states, and whether the name was inferred from that RGB.
+/// Null when the side has no mask layer; a mask without ink has null fields.
+fn soldermask_side_json(accessor: &IpcAccessor, side: ipc2581::types::Side) -> serde_json::Value {
+    let is_mask = |layer: &ipc2581::types::Layer| {
+        layer.layer_function == ipc2581::types::LayerFunction::Soldermask
+            && layer.side == Some(side)
+    };
+    // Prefer a mask with ink; a side whose masks have none still has a mask.
+    let inked = accessor
+        .stackup_inks()
+        .into_iter()
+        .find(|(layer, _)| is_mask(layer));
+    let ink = match inked {
+        Some((_, ink)) => ink,
+        None if accessor
+            .ipc()
+            .ecad()
+            .is_some_and(|ecad| ecad.cad_data.layers.iter().any(is_mask)) =>
+        {
+            ColorInfo {
+                name: None,
+                rgb: None,
+            }
+        }
+        None => return serde_json::Value::Null,
+    };
+    // KiCad's `Not specified` states no name, so a stated RGB still names one.
+    let stated = ink
+        .name
+        .as_deref()
+        .map(str::trim)
+        .filter(|name| !name.eq_ignore_ascii_case("not specified"))
+        .unwrap_or_default();
+    let stated_hex = stated.starts_with('#');
+    let color = if stated.is_empty() {
+        ColorInfo {
+            name: None,
+            rgb: ink.rgb,
+        }
+        .color_name()
+    } else {
+        ink.color_name()
+    };
+    json!({
+        "name": ink.name,
+        "approximate": color.is_some() && (stated.is_empty() || stated_hex),
+        "color": color,
+        "hex": ink
+            .rgb
+            .map(|(r, g, b)| format!("#{r:02X}{g:02X}{b:02X}"))
+            .or_else(|| stated_hex.then(|| ink.hex_color()).flatten()),
+    })
+}
+
 fn canonical_soldermask_kind(color: Option<&ColorInfo>) -> SoldermaskKind {
     match color.and_then(ColorInfo::color_name).as_deref() {
         Some("black") => SoldermaskKind::Black,
@@ -853,6 +908,10 @@ pub fn info_json(
                 .as_ref()
                 .and_then(ColorInfo::color_name),
             "soldermask_kind": canonical_soldermask_kind(stackup_details.soldermask_color.as_ref()),
+            "soldermask": {
+                "top": soldermask_side_json(accessor, ipc2581::types::Side::Top),
+                "bottom": soldermask_side_json(accessor, ipc2581::types::Side::Bottom),
+            },
             "outer_copper_oz": stackup_details.outer_copper_oz,
             "inner_copper_oz": stackup_details.inner_copper_oz,
             "outer_copper_nominal_oz": stackup_details
@@ -1027,6 +1086,72 @@ mod tests {
                     "df": null,
                 },
             ])
+        );
+    }
+
+    #[test]
+    fn soldermask_reports_each_side_as_stated() {
+        let source = include_str!("dfm/fixtures/antenna.xml")
+            .replacen("Color : Not specified", "Color : Red", 2)
+            .replacen("Color : Red", "Color : Not specified", 1)
+            .replace(
+                "    </CadHeader>",
+                r##"      <Spec name="B.Mask_1"><General type="MATERIAL"><Property text="Color : #1974AB"/></General></Spec>
+    </CadHeader>"##,
+            )
+            .replace(
+                r#"<Layer name="Edge.Cuts""#,
+                r#"<Layer name="B.Mask" layerFunction="SOLDERMASK" polarity="POSITIVE" side="BOTTOM"/>
+      <Layer name="Edge.Cuts""#,
+            )
+            .replace(
+                "        </StackupGroup>",
+                r#"          <StackupLayer layerOrGroupRef="B.Mask" thickness="0.010" sequence="5"><SpecRef id="B.Mask_1"/></StackupLayer>
+        </StackupGroup>"#,
+            );
+        let ipc = ipc2581::Ipc2581::parse(&source).unwrap();
+        let imported = import_design(&ipc, Resolution::default()).unwrap();
+        let info = info_json(&IpcAccessor::new(&ipc), &imported).unwrap();
+        let mask = &info["stackup_details"]["soldermask"];
+
+        assert_eq!(
+            mask["top"],
+            json!({"name": "Red", "color": "red", "hex": null, "approximate": false})
+        );
+        assert_eq!(mask["bottom"]["name"], "#1974AB");
+        assert_eq!(mask["bottom"]["hex"], "#1974AB");
+        assert_eq!(mask["bottom"]["approximate"], true);
+    }
+
+    #[test]
+    fn soldermask_infers_unnamed_rgb_and_keeps_inkless_masks() {
+        let source = include_str!("dfm/fixtures/antenna.xml")
+            .replace(
+                r#"<Property text="SOLDERMASK"/>"#,
+                r#"<Property text="SOLDERMASK"/><Color r="0" g="100" b="0"/>"#,
+            )
+            .replace(
+                r#"<Layer name="F.Mask""#,
+                r#"<Layer name="F.Clear" layerFunction="SOLDERMASK" polarity="POSITIVE" side="TOP"/>
+      <Layer name="F.Mask""#,
+            )
+            .replace(
+                r#"<Layer name="Edge.Cuts""#,
+                r#"<Layer name="B.Mask" layerFunction="SOLDERMASK" polarity="POSITIVE" side="BOTTOM"/>
+      <Layer name="Edge.Cuts""#,
+            );
+        let ipc = ipc2581::Ipc2581::parse(&source).unwrap();
+        let imported = import_design(&ipc, Resolution::default()).unwrap();
+        let info = info_json(&IpcAccessor::new(&ipc), &imported).unwrap();
+        let mask = &info["stackup_details"]["soldermask"];
+
+        assert_eq!(
+            mask["top"],
+            json!({"name": "Not specified", "color": "green", "hex": "#006400", "approximate": true})
+        );
+        assert_eq!(
+            mask["bottom"],
+            json!({"name": null, "color": null, "hex": null, "approximate": false})
         );
     }
 

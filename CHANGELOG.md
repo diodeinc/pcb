@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added
+
+- `pcb ipc info` JSON reports the top and bottom soldermask colours separately.
+
 ## [0.4.89] - 2026-10-20
 
 ### Added
