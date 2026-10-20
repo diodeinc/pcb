@@ -53,22 +53,26 @@ pub struct DrillSize {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ViaProfile {
     pub hole_mm: f64,
-    /// The smallest copper pad centred on the hole, taken over the top and
-    /// bottom faces (its narrower extent); `None` unless both faces have one,
-    /// as for blind and buried vias.
+    /// The via's own land: the narrower extent of the smaller of its top and
+    /// bottom pads. Component pads it sits in are ignored. `None` unless both
+    /// faces have a land, as for blind, buried and padless vias.
     pub pad_mm: Option<f64>,
     pub count: usize,
 }
 
 /// Every via of one board grouped by hole and outer pad size, sorted by hole
 /// then pad. A fab's small-via pricing depends on both, not the hole alone.
-/// Sizes and centres are compared on a 1 µm grid; pads and holes are never
-/// in IPC placement groups, so their centres are in layer space.
+/// A via's land is a pad at its centre on the padstack its drill names (the
+/// hole's Set `geometry`, the pad's `padstackDefRef`), so component pads it
+/// sits in are not mistaken for it. Sizes and centres are compared on a 1 µm
+/// grid; pads and holes are never in IPC placement groups, so their centres
+/// are in layer space.
 pub fn via_profiles(imported: &ImportedDesign) -> anyhow::Result<Vec<ViaProfile>> {
     let um = |mm: f64| (mm * 1000.0).round() as i64;
     let mut holes = Vec::new();
-    // Smallest pad per centre on each face; `None` for a face with no copper.
-    let mut faces: [Option<HashMap<(i64, i64), i64>>; 2] = [None, None];
+    // Smallest pad per centre and padstack on each face; `None` for a face
+    // with no copper.
+    let mut faces: [Option<HashMap<_, i64>>; 2] = [None, None];
     for (index, layer) in imported.layer_definitions.iter().enumerate() {
         let face = match layer.side {
             Some(Side::Top) if is_copper(layer.layer_function) => Some(0),
@@ -84,7 +88,11 @@ pub fn via_profiles(imported: &ImportedDesign) -> anyhow::Result<Vec<ViaProfile>
             .iter()
             .flat_map(|layer| layer.features.slice(&doc.features))
         {
-            let at = (um(feature.center.x), um(feature.center.y));
+            let at = (
+                um(feature.center.x),
+                um(feature.center.y),
+                feature.padstack_ref,
+            );
             if let Some(face) = face {
                 if feature.kind == FeatureKind::Padstack && feature.polarity == Polarity::Dark {
                     let size = um(feature.bbox.width().min(feature.bbox.height()));
@@ -230,14 +238,15 @@ fn drill_hole_type(plating: PlatingKind) -> DrillHoleType {
 mod tests {
     use super::*;
 
-    /// Two boards in an array; vias `a`-`c` and a plated hole on each.
+    /// Two boards in an array; vias `a`-`c` and a plated hole on each. Via
+    /// `b` also sits in a narrower component pad, which is not its land.
     fn via_board(bottom_copper: bool) -> ImportedDesign {
         let (bottom_layer, bottom_pads) = if bottom_copper {
             (
                 r#"<Layer name="B.Cu" layerFunction="SIGNAL" side="BOTTOM" polarity="POSITIVE"/>"#,
                 r#"<LayerFeature layerRef="B.Cu">
-          <Set><Pad x="1" y="1"><StandardPrimitiveRef id="C40"/></Pad></Set>
-          <Set><Pad x="3" y="1"><StandardPrimitiveRef id="C45"/></Pad></Set>
+          <Set><Pad padstackDefRef="VIA" x="1" y="1"><StandardPrimitiveRef id="C40"/></Pad></Set>
+          <Set><Pad padstackDefRef="VIA" x="3" y="1"><StandardPrimitiveRef id="C45"/></Pad></Set>
         </LayerFeature>"#,
             )
         } else {
@@ -253,6 +262,7 @@ mod tests {
       <EntryStandard id="C40"><Circle diameter="0.4"/></EntryStandard>
       <EntryStandard id="C45"><Circle diameter="0.45"/></EntryStandard>
       <EntryStandard id="C50"><Circle diameter="0.5"/></EntryStandard>
+      <EntryStandard id="R30"><RectCenter width="0.3" height="1"/></EntryStandard>
     </DictionaryStandard>
   </Content>
   <Ecad>
@@ -270,16 +280,20 @@ mod tests {
             <PolyStepSegment x="0" y="5"/>
           </Polygon>
         </Profile>
+        <PadStackDef name="VIA">
+          <PadstackHoleDef name="H" diameter="0.2" platingStatus="VIA" plusTol="0" minusTol="0" x="0" y="0"/>
+        </PadStackDef>
         <LayerFeature layerRef="F.Cu">
-          <Set><Pad x="1" y="1"><StandardPrimitiveRef id="C50"/></Pad></Set>
-          <Set><Pad x="3" y="1"><StandardPrimitiveRef id="C45"/></Pad></Set>
-          <Set><Pad x="5" y="1"><StandardPrimitiveRef id="C45"/></Pad></Set>
+          <Set><Pad padstackDefRef="VIA" x="1" y="1"><StandardPrimitiveRef id="C50"/></Pad></Set>
+          <Set><Pad padstackDefRef="VIA" x="3" y="1"><StandardPrimitiveRef id="C45"/></Pad></Set>
+          <Set><Pad padstackDefRef="VIA" x="5" y="1"><StandardPrimitiveRef id="C45"/></Pad></Set>
+          <Set><Pad x="3" y="1"><StandardPrimitiveRef id="R30"/></Pad></Set>
         </LayerFeature>
         {bottom_pads}
         <LayerFeature layerRef="Drill">
-          <Set><Hole name="a" diameter="0.2" platingStatus="VIA" x="1" y="1"/></Set>
-          <Set><Hole name="b" diameter="0.2" platingStatus="VIA" x="3" y="1"/></Set>
-          <Set><Hole name="c" diameter="0.2" platingStatus="VIA" x="5" y="1"/></Set>
+          <Set geometry="VIA"><Hole name="a" diameter="0.2" platingStatus="VIA" x="1" y="1"/></Set>
+          <Set geometry="VIA"><Hole name="b" diameter="0.2" platingStatus="VIA" x="3" y="1"/></Set>
+          <Set geometry="VIA"><Hole name="c" diameter="0.2" platingStatus="VIA" x="5" y="1"/></Set>
           <Set><Hole name="pth" diameter="0.2" platingStatus="PLATED" x="7" y="1"/></Set>
         </LayerFeature>
       </Step>
@@ -309,7 +323,8 @@ mod tests {
             pad_mm,
             count,
         };
-        // The smaller bottom land decides `a`; `c` has no bottom land; the
+        // The smaller bottom land decides `a`; `b` ignores the component pad;
+        // `c` has no bottom land; the
         // plated hole is not a via; the array's second board is not counted.
         assert_eq!(
             via_profiles(&via_board(true)).unwrap(),
