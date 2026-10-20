@@ -563,8 +563,8 @@ fn push_recovered_arcs(points: &[Point], tolerance: f64, cmds: &mut Vec<PathCmd>
 
 /// The circle through the ends and middle of `points`, its direction, and
 /// how far its arc strays from the polyline, when every vertex lies within
-/// `tolerance` of it in order around less than a full turn and every chord
-/// within `tolerance` of it.
+/// `tolerance` of it in order around less than a full turn, every chord
+/// within `tolerance` of it, and the circle is wider than an accuracy budget.
 fn fit_arc(points: &[Point], tolerance: f64) -> Option<(Point, bool, f64)> {
     let first = points[0];
     let (to_middle, to_last) = (
@@ -596,7 +596,10 @@ fn fit_arc(points: &[Point], tolerance: f64) -> Option<(Point, bool, f64)> {
         let sagitta = radius - (radius * radius - half_chord * half_chord).max(0.0).sqrt();
         strayed = strayed.max((to.length() - radius).abs() + sagitta);
     }
-    (strayed <= tolerance && sweep < 1.9 * std::f64::consts::PI && radius.is_finite())
+    // An arc no wider than the default accuracy budget would flatten again
+    // into fewer chords than its source and lose its shape; it stays chords.
+    let wide = radius > GeometryAccuracy::default().max_error_mm();
+    (strayed <= tolerance && sweep < 1.9 * std::f64::consts::PI && wide && radius.is_finite())
         .then_some((center, clockwise, strayed))
 }
 
@@ -608,9 +611,10 @@ fn bows(points: &[Point], center: Point, clockwise: bool, tolerance: f64) -> boo
     let side = cross(last - first, center - first);
     let half_chord = first.distance_to(last) / 2.0;
     let rise = (radius * radius - half_chord * half_chord).max(0.0).sqrt();
-    // The arc leaves the chord on the side away from a center it turns
-    // about, by less than the radius when the center is beyond the chord.
-    let sagitta = if (side > 0.0) != clockwise {
+    // A minor arc's center lies on the side a counter-clockwise arc turns
+    // toward (left of its chord), so it bows by the radius less the rise;
+    // a major arc's center lies on the other side and it bows by more.
+    let sagitta = if (side > 0.0) == clockwise {
         radius + rise
     } else {
         radius - rise
@@ -773,6 +777,20 @@ mod tests {
         let kept = contour(&notched).with_recovered_arcs(1e-4);
         assert_eq!(kept.cmds, contour(&notched).cmds);
         assert_eq!(kept.uncertainty_mm, 0.0);
+
+        // Chords over 0.01 rad of a 1 mm circle rise 12.5 nm from their
+        // chord, below the tolerance: a straight edge, in either direction.
+        let shallow = (0..=8)
+            .map(|step| {
+                let angle = 0.01 * (step as f64 / 8.0 - 0.5);
+                Point::new(angle.cos(), angle.sin())
+            })
+            .chain([Point::new(0.0, 0.5)])
+            .collect::<Vec<_>>();
+        for points in [shallow.clone(), shallow.into_iter().rev().collect()] {
+            let kept = contour(&points).with_recovered_arcs(1e-4);
+            assert_eq!(kept.cmds, contour(&points).cmds);
+        }
     }
 
     #[test]
