@@ -127,6 +127,30 @@ fn map_layer_side(side: Option<ipc2581::types::Side>) -> ComponentSide {
     }
 }
 
+/// The soldermask the file states for one side: the stated text, its colour
+/// name, the RGB it states, and whether the name was inferred from that RGB.
+fn soldermask_side_json(accessor: &IpcAccessor, side: ipc2581::types::Side) -> serde_json::Value {
+    let inks = accessor.stackup_inks();
+    let Some((_, ink)) = inks.iter().find(|(layer, _)| {
+        layer.layer_function == ipc2581::types::LayerFunction::Soldermask
+            && layer.side == Some(side)
+    }) else {
+        return serde_json::Value::Null;
+    };
+    let stated = ink.name.as_deref().map(str::trim).unwrap_or_default();
+    let stated_hex = stated.starts_with('#');
+    let color = ink.color_name();
+    json!({
+        "name": ink.name,
+        "approximate": color.is_some() && (stated.is_empty() || stated_hex),
+        "color": color,
+        "hex": ink
+            .rgb
+            .map(|(r, g, b)| format!("#{r:02X}{g:02X}{b:02X}"))
+            .or_else(|| stated_hex.then(|| ink.hex_color()).flatten()),
+    })
+}
+
 fn canonical_soldermask_kind(color: Option<&ColorInfo>) -> SoldermaskKind {
     match color.and_then(ColorInfo::color_name).as_deref() {
         Some("black") => SoldermaskKind::Black,
@@ -853,6 +877,10 @@ pub fn info_json(
                 .as_ref()
                 .and_then(ColorInfo::color_name),
             "soldermask_kind": canonical_soldermask_kind(stackup_details.soldermask_color.as_ref()),
+            "soldermask": {
+                "top": soldermask_side_json(accessor, ipc2581::types::Side::Top),
+                "bottom": soldermask_side_json(accessor, ipc2581::types::Side::Bottom),
+            },
             "outer_copper_oz": stackup_details.outer_copper_oz,
             "inner_copper_oz": stackup_details.inner_copper_oz,
             "outer_copper_nominal_oz": stackup_details
@@ -1028,6 +1056,40 @@ mod tests {
                 },
             ])
         );
+    }
+
+    #[test]
+    fn soldermask_reports_each_side_as_stated() {
+        let source = include_str!("dfm/fixtures/antenna.xml")
+            .replacen("Color : Not specified", "Color : Red", 2)
+            .replacen("Color : Red", "Color : Not specified", 1)
+            .replace(
+                "    </CadHeader>",
+                r##"      <Spec name="B.Mask_1"><General type="MATERIAL"><Property text="Color : #1974AB"/></General></Spec>
+    </CadHeader>"##,
+            )
+            .replace(
+                r#"<Layer name="Edge.Cuts""#,
+                r#"<Layer name="B.Mask" layerFunction="SOLDERMASK" polarity="POSITIVE" side="BOTTOM"/>
+      <Layer name="Edge.Cuts""#,
+            )
+            .replace(
+                "        </StackupGroup>",
+                r#"          <StackupLayer layerOrGroupRef="B.Mask" thickness="0.010" sequence="5"><SpecRef id="B.Mask_1"/></StackupLayer>
+        </StackupGroup>"#,
+            );
+        let ipc = ipc2581::Ipc2581::parse(&source).unwrap();
+        let imported = import_design(&ipc, Resolution::default()).unwrap();
+        let info = info_json(&IpcAccessor::new(&ipc), &imported).unwrap();
+        let mask = &info["stackup_details"]["soldermask"];
+
+        assert_eq!(
+            mask["top"],
+            json!({"name": "Red", "color": "red", "hex": null, "approximate": false})
+        );
+        assert_eq!(mask["bottom"]["name"], "#1974AB");
+        assert_eq!(mask["bottom"]["hex"], "#1974AB");
+        assert_eq!(mask["bottom"]["approximate"], true);
     }
 
     #[test]

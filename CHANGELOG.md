@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added
+
+- `pcb ipc info --format json` reports each side's soldermask under `stackup_details.soldermask`: the stated name, its colour, its RGB, and whether the colour was inferred from RGB.
+
 ## [0.4.89] - 2026-10-20
 
 ### Added
