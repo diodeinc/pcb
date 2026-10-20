@@ -131,25 +131,29 @@ fn map_layer_side(side: Option<ipc2581::types::Side>) -> ComponentSide {
 /// name, the RGB it states, and whether the name was inferred from that RGB.
 /// Null when the side has no mask layer; a mask without ink has null fields.
 fn soldermask_side_json(accessor: &IpcAccessor, side: ipc2581::types::Side) -> serde_json::Value {
-    let Some(mask) = accessor.ipc().ecad().and_then(|ecad| {
-        ecad.cad_data.layers.iter().find(|layer| {
-            layer.layer_function == ipc2581::types::LayerFunction::Soldermask
-                && layer.side == Some(side)
-        })
-    }) else {
-        return serde_json::Value::Null;
+    let is_mask = |layer: &ipc2581::types::Layer| {
+        layer.layer_function == ipc2581::types::LayerFunction::Soldermask
+            && layer.side == Some(side)
     };
-    let ink = accessor
+    // Prefer a mask with ink; a side whose masks have none still has a mask.
+    let inked = accessor
         .stackup_inks()
         .into_iter()
-        .find(|(layer, _)| layer.name == mask.name)
-        .map_or(
+        .find(|(layer, _)| is_mask(layer));
+    let ink = match inked {
+        Some((_, ink)) => ink,
+        None if accessor
+            .ipc()
+            .ecad()
+            .is_some_and(|ecad| ecad.cad_data.layers.iter().any(is_mask)) =>
+        {
             ColorInfo {
                 name: None,
                 rgb: None,
-            },
-            |(_, ink)| ink,
-        );
+            }
+        }
+        None => return serde_json::Value::Null,
+    };
     // KiCad's `Not specified` states no name, so a stated RGB still names one.
     let stated = ink
         .name
@@ -1125,6 +1129,11 @@ mod tests {
             .replace(
                 r#"<Property text="SOLDERMASK"/>"#,
                 r#"<Property text="SOLDERMASK"/><Color r="0" g="100" b="0"/>"#,
+            )
+            .replace(
+                r#"<Layer name="F.Mask""#,
+                r#"<Layer name="F.Clear" layerFunction="SOLDERMASK" polarity="POSITIVE" side="TOP"/>
+      <Layer name="F.Mask""#,
             )
             .replace(
                 r#"<Layer name="Edge.Cuts""#,
