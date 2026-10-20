@@ -8,6 +8,8 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+## [0.4.90] - 2026-10-20
+
 ### Added
 
 - `pcb ipc info` JSON reports the top and bottom soldermask colours separately.
@@ -2477,7 +2479,8 @@ Tvs(package="DO-214AA", direction="Unidirectional", reverse_standoff_voltage="24
 - Error on invalid type passed to `io()`
 - Format the auto-generated component .zen files
 
-[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.4.89...HEAD
+[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.4.90...HEAD
+[0.4.90]: https://github.com/diodeinc/pcb/compare/v0.4.89...v0.4.90
 [0.4.89]: https://github.com/diodeinc/pcb/compare/v0.4.88...v0.4.89
 [0.4.88]: https://github.com/diodeinc/pcb/compare/v0.4.87...v0.4.88
 [0.4.87]: https://github.com/diodeinc/pcb/compare/v0.4.86...v0.4.87
