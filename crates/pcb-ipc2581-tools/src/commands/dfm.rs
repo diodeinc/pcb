@@ -1350,6 +1350,13 @@ limit = { minimum = ["10 mm", "5 mm"], maximum = ["40 mm", "25 mm"] }"#,
             "color",
             "soldermask layer 'F.Mask' is black; the PDK allows green"
         )));
+        // A hex colour within an ink colour's bounds is that colour; one
+        // outside every ink's bounds is unrecognized, so not allowed.
+        assert_eq!(status(&specified("OSP", "#3C9650"), "color"), "Pass");
+        let report = check_with_pdk(&specified("OSP", "#FF8C00"), LayoutTarget::Board, &pdk);
+        assert!(report.findings.iter().any(|finding| finding.rule_id == "color"
+            && finding.message
+                == "soldermask layer 'F.Mask' is an unrecognized colour (#FF8C00); the PDK allows green"));
 
         // The 30 mm square board is wider than 25 mm, however it is turned.
         assert_eq!(status(BOARD, "size"), "Fail");

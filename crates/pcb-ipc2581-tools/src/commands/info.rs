@@ -129,6 +129,8 @@ fn map_layer_side(side: Option<ipc2581::types::Side>) -> ComponentSide {
 
 /// The soldermask the file states for one side: the stated text, its colour
 /// name, the RGB it states, and whether the name was inferred from that RGB.
+/// A colour stated only as RGB outside every ink colour's bounds has a null
+/// colour, as an unstated one does; `name` and `hex` tell them apart.
 /// Null when the side has no mask layer; a mask without ink has null fields.
 fn soldermask_side_json(accessor: &IpcAccessor, side: ipc2581::types::Side) -> serde_json::Value {
     let is_mask = |layer: &ipc2581::types::Layer| {
@@ -154,31 +156,19 @@ fn soldermask_side_json(accessor: &IpcAccessor, side: ipc2581::types::Side) -> s
         }
         None => return serde_json::Value::Null,
     };
-    // KiCad's `Not specified` states no name, so a stated RGB still names one.
-    let stated = ink
-        .name
-        .as_deref()
-        .map(str::trim)
-        .filter(|name| !name.eq_ignore_ascii_case("not specified"))
-        .unwrap_or_default();
-    let stated_hex = stated.starts_with('#');
-    let color = if stated.is_empty() {
-        ColorInfo {
-            name: None,
-            rgb: ink.rgb,
-        }
-        .color_name()
-    } else {
-        ink.color_name()
-    };
+    let stated = ink.name.as_deref().map(str::trim).unwrap_or_default();
+    let named = !stated.is_empty()
+        && !stated.starts_with('#')
+        && !stated.eq_ignore_ascii_case("not specified");
+    let color = ink.color_name();
     json!({
         "name": ink.name,
-        "approximate": color.is_some() && (stated.is_empty() || stated_hex),
+        "approximate": color.is_some() && !named,
         "color": color,
         "hex": ink
             .rgb
             .map(|(r, g, b)| format!("#{r:02X}{g:02X}{b:02X}"))
-            .or_else(|| stated_hex.then(|| ink.hex_color()).flatten()),
+            .or_else(|| stated.starts_with('#').then(|| ink.hex_color()).flatten()),
     })
 }
 
