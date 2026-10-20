@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, HashMap};
 
 use ipc2581::types::{LayerFunction, Side};
 use pcb_ir::dialects::ipc::{ArtworkScope, FeatureKind, PlatingKind};
-use pcb_ir::geom::{Point, Polarity};
+use pcb_ir::geom::Polarity;
 use pcb_ir::import::ipc2581::{GeometryDocument, ImportedDesign, LayerId, is_copper};
 use serde::{Deserialize, Serialize};
 
@@ -53,88 +53,73 @@ pub struct DrillSize {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ViaProfile {
     pub hole_mm: f64,
-    /// The smallest copper pad centred on the hole across the top and bottom
-    /// copper layers (its narrower extent); `None` when either outer layer
-    /// has no pad there, as for blind and buried vias.
+    /// The smallest copper pad centred on the hole, taken over the top and
+    /// bottom faces (its narrower extent); `None` unless both faces have one,
+    /// as for blind and buried vias.
     pub pad_mm: Option<f64>,
     pub count: usize,
 }
 
 /// Every via of one board grouped by hole and outer pad size, sorted by hole
 /// then pad. A fab's small-via pricing depends on both, not the hole alone.
+/// Sizes and centres are compared on a 1 µm grid; pads and holes are never
+/// in IPC placement groups, so their centres are in layer space.
 pub fn via_profiles(imported: &ImportedDesign) -> anyhow::Result<Vec<ViaProfile>> {
-    let scope = ArtworkScope::Board;
-    let layers = imported.layer_definitions.iter().enumerate();
+    let um = |mm: f64| (mm * 1000.0).round() as i64;
     let mut holes = Vec::new();
-    // Smallest pad at each centre on the top and bottom faces; `None` when
-    // the board declares no copper layer on that face.
-    let mut faces: [Option<HashMap<(i64, i64), f64>>; 2] = [None, None];
-    for (index, layer) in layers {
+    // Smallest pad per centre on each face; `None` for a face with no copper.
+    let mut faces: [Option<HashMap<(i64, i64), i64>>; 2] = [None, None];
+    for (index, layer) in imported.layer_definitions.iter().enumerate() {
         let face = match layer.side {
-            Some(Side::Top) => Some(0),
-            Some(Side::Bottom) => Some(1),
+            Some(Side::Top) if is_copper(layer.layer_function) => Some(0),
+            Some(Side::Bottom) if is_copper(layer.layer_function) => Some(1),
             _ => None,
-        }
-        .filter(|_| is_copper(layer.layer_function));
-        let is_drill = layer.layer_function == LayerFunction::Drill;
-        if !is_drill && face.is_none() {
+        };
+        if face.is_none() && layer.layer_function != LayerFunction::Drill {
             continue;
         }
-        let doc = imported.materialize_layer(LayerId(index as u32), scope)?;
-        // Pads and holes are never in IPC placement groups, so they are in
-        // layer space already.
-        let features = doc
+        let doc = imported.materialize_layer(LayerId(index as u32), ArtworkScope::Board)?;
+        for feature in doc
             .layers
             .iter()
-            .flat_map(|layer| layer.features.slice(&doc.features));
-        if let Some(face) = face {
-            let pads = faces[face].get_or_insert_default();
-            for feature in features.filter(|feature| {
-                feature.kind == FeatureKind::Padstack && feature.polarity == Polarity::Dark
-            }) {
-                let size = feature.bbox.width().min(feature.bbox.height());
-                pads.entry(center_key(feature.center))
-                    .and_modify(|pad| *pad = pad.min(size))
-                    .or_insert(size);
+            .flat_map(|layer| layer.features.slice(&doc.features))
+        {
+            let at = (um(feature.center.x), um(feature.center.y));
+            if let Some(face) = face {
+                if feature.kind == FeatureKind::Padstack && feature.polarity == Polarity::Dark {
+                    let size = um(feature.bbox.width().min(feature.bbox.height()));
+                    let pad = faces[face]
+                        .get_or_insert_default()
+                        .entry(at)
+                        .or_insert(size);
+                    *pad = (*pad).min(size);
+                }
+            } else if let Some((diameter, DrillHoleType::Via)) = drill_hole(feature) {
+                holes.push((at, um(diameter)));
             }
-        } else {
-            holes.extend(features.filter_map(|feature| match drill_hole(feature)? {
-                (diameter, DrillHoleType::Via) => Some((center_key(feature.center), diameter)),
-                _ => None,
-            }));
         }
     }
 
-    let mut profiles = BTreeMap::<(i64, Option<i64>), ViaProfile>::new();
-    for (at, hole_mm) in holes {
-        let pad_mm = faces
-            .iter()
-            .map(|pads| pads.as_ref()?.get(&at).copied())
-            .try_fold(f64::INFINITY, |min, pad| pad.map(|pad| min.min(pad)));
-        profiles
-            .entry((to_um(hole_mm), pad_mm.map(to_um)))
-            .or_insert(ViaProfile {
-                hole_mm: um(hole_mm),
-                pad_mm: pad_mm.map(um),
-                count: 0,
-            })
-            .count += 1;
+    let mut profiles = BTreeMap::<_, usize>::new();
+    for (at, hole) in holes {
+        let [top, bottom] = &faces;
+        let pad = top
+            .as_ref()
+            .and_then(|pads| pads.get(&at))
+            .zip(bottom.as_ref().and_then(|pads| pads.get(&at)));
+        *profiles
+            .entry((hole, pad.map(|(top, bottom)| *top.min(bottom))))
+            .or_default() += 1;
     }
-    Ok(profiles.into_values().collect())
-}
-
-/// Hole and land centres from one source location agree exactly; a 1 µm grid
-/// absorbs float noise from placement transforms.
-fn center_key(point: Point) -> (i64, i64) {
-    (to_um(point.x), to_um(point.y))
-}
-
-fn to_um(mm: f64) -> i64 {
-    (mm * 1000.0).round() as i64
-}
-
-fn um(mm: f64) -> f64 {
-    to_um(mm) as f64 / 1000.0
+    let mm = |um: i64| um as f64 / 1000.0;
+    Ok(profiles
+        .into_iter()
+        .map(|((hole, pad), count)| ViaProfile {
+            hole_mm: mm(hole),
+            pad_mm: pad.map(mm),
+            count,
+        })
+        .collect())
 }
 
 /// Drill hole statistics with per-type distribution for one artwork scope:
@@ -245,17 +230,25 @@ fn drill_hole_type(plating: PlatingKind) -> DrillHoleType {
 mod tests {
     use super::*;
 
-    #[test]
-    fn via_profiles_pair_each_hole_with_its_smallest_outer_pad() {
-        let ipc = ipc2581::Ipc2581::parse(
+    /// Two boards in an array; vias `a`-`c` and a plated hole on each.
+    fn via_board(bottom_copper: bool) -> ImportedDesign {
+        let (bottom_layer, bottom_pads) = if bottom_copper {
+            (
+                r#"<Layer name="B.Cu" layerFunction="SIGNAL" side="BOTTOM" polarity="POSITIVE"/>"#,
+                r#"<LayerFeature layerRef="B.Cu">
+          <Set><Pad x="1" y="1"><StandardPrimitiveRef id="C40"/></Pad></Set>
+          <Set><Pad x="3" y="1"><StandardPrimitiveRef id="C45"/></Pad></Set>
+        </LayerFeature>"#,
+            )
+        } else {
+            ("", "")
+        };
+        let ipc = ipc2581::Ipc2581::parse(&format!(
             r#"<?xml version="1.0" encoding="UTF-8"?>
 <IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
   <Content roleRef="owner">
     <FunctionMode mode="FABRICATION"/>
     <StepRef name="array"/>
-    <LayerRef name="F.Cu"/>
-    <LayerRef name="B.Cu"/>
-    <LayerRef name="Drill"/>
     <DictionaryStandard units="MILLIMETER">
       <EntryStandard id="C40"><Circle diameter="0.4"/></EntryStandard>
       <EntryStandard id="C45"><Circle diameter="0.45"/></EntryStandard>
@@ -266,7 +259,7 @@ mod tests {
     <CadHeader units="MILLIMETER"/>
     <CadData>
       <Layer name="F.Cu" layerFunction="SIGNAL" side="TOP" polarity="POSITIVE"/>
-      <Layer name="B.Cu" layerFunction="SIGNAL" side="BOTTOM" polarity="POSITIVE"/>
+      {bottom_layer}
       <Layer name="Drill" layerFunction="DRILL" side="ALL" polarity="POSITIVE"/>
       <Step name="board" type="BOARD">
         <Profile>
@@ -282,10 +275,7 @@ mod tests {
           <Set><Pad x="3" y="1"><StandardPrimitiveRef id="C45"/></Pad></Set>
           <Set><Pad x="5" y="1"><StandardPrimitiveRef id="C45"/></Pad></Set>
         </LayerFeature>
-        <LayerFeature layerRef="B.Cu">
-          <Set><Pad x="1" y="1"><StandardPrimitiveRef id="C40"/></Pad></Set>
-          <Set><Pad x="3" y="1"><StandardPrimitiveRef id="C45"/></Pad></Set>
-        </LayerFeature>
+        {bottom_pads}
         <LayerFeature layerRef="Drill">
           <Set><Hole name="a" diameter="0.2" platingStatus="VIA" x="1" y="1"/></Set>
           <Set><Hole name="b" diameter="0.2" platingStatus="VIA" x="3" y="1"/></Set>
@@ -306,63 +296,6 @@ mod tests {
       </Step>
     </CadData>
   </Ecad>
-</IPC-2581>"#,
-        )
-        .unwrap();
-        let imported =
-            pcb_ir::import::ipc2581::import_design(&ipc, pcb_ir::geom::Resolution::default())
-                .unwrap();
-
-        let profile = |hole_mm, pad_mm| ViaProfile {
-            hole_mm,
-            pad_mm,
-            count: 1,
-        };
-        // The smaller bottom land decides `a`; `c` has no bottom land; the
-        // plated hole is not a via; the array's second board is not counted.
-        assert_eq!(
-            via_profiles(&imported).unwrap(),
-            vec![
-                profile(0.2, None),
-                profile(0.2, Some(0.4)),
-                profile(0.2, Some(0.45)),
-            ]
-        );
-    }
-
-    fn single_board(layers: &str, features: &str) -> ImportedDesign {
-        let ipc = ipc2581::Ipc2581::parse(&format!(
-            r#"<?xml version="1.0" encoding="UTF-8"?>
-<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
-  <Content roleRef="owner">
-    <FunctionMode mode="FABRICATION"/>
-    <StepRef name="board"/>
-    <DictionaryStandard units="MILLIMETER">
-      <EntryStandard id="C40"><Circle diameter="0.4"/></EntryStandard>
-    </DictionaryStandard>
-  </Content>
-  <Ecad>
-    <CadHeader units="MILLIMETER"/>
-    <CadData>
-      {layers}
-      <Layer name="Drill" layerFunction="DRILL" side="ALL" polarity="POSITIVE"/>
-      <Step name="board" type="BOARD">
-        <Profile>
-          <Polygon>
-            <PolyBegin x="0" y="0"/>
-            <PolyStepSegment x="10" y="0"/>
-            <PolyStepSegment x="10" y="5"/>
-            <PolyStepSegment x="0" y="5"/>
-          </Polygon>
-        </Profile>
-        {features}
-        <LayerFeature layerRef="Drill">
-          <Set><Hole name="a" diameter="0.2" platingStatus="VIA" x="1" y="1"/></Set>
-          <Set><Hole name="b" diameter="0.2" platingStatus="VIA" x="3" y="1"/></Set>
-        </LayerFeature>
-      </Step>
-    </CadData>
-  </Ecad>
 </IPC-2581>"#
         ))
         .unwrap();
@@ -370,21 +303,26 @@ mod tests {
     }
 
     #[test]
-    fn via_profiles_need_a_pad_on_both_faces() {
-        let imported = single_board(
-            r#"<Layer name="F.Cu" layerFunction="SIGNAL" side="TOP" polarity="POSITIVE"/>"#,
-            r#"<LayerFeature layerRef="F.Cu">
-              <Set><Pad x="1" y="1"><StandardPrimitiveRef id="C40"/></Pad></Set>
-              <Set><Pad x="3" y="1"><StandardPrimitiveRef id="C40"/></Pad></Set>
-            </LayerFeature>"#,
-        );
+    fn via_profiles_pair_each_hole_with_its_smallest_outer_pad() {
+        let profile = |pad_mm, count| ViaProfile {
+            hole_mm: 0.2,
+            pad_mm,
+            count,
+        };
+        // The smaller bottom land decides `a`; `c` has no bottom land; the
+        // plated hole is not a via; the array's second board is not counted.
         assert_eq!(
-            via_profiles(&imported).unwrap(),
-            vec![ViaProfile {
-                hole_mm: 0.2,
-                pad_mm: None,
-                count: 2,
-            }]
+            via_profiles(&via_board(true)).unwrap(),
+            vec![
+                profile(None, 1),
+                profile(Some(0.4), 1),
+                profile(Some(0.45), 1)
+            ]
+        );
+        // Without bottom copper no via has a pad on both faces.
+        assert_eq!(
+            via_profiles(&via_board(false)).unwrap(),
+            vec![profile(None, 3)]
         );
     }
 
