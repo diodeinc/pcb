@@ -12,6 +12,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 - The `standard` DFM PDK allows only green and black soldermask.
 - RGB and hex soldermask colours map to a colour only within strict bounds; anything else is unrecognized and fails a soldermask colour rule. `pcb ipc info` drops the per-side `approximate` flag.
+- IPC-2581 import draws runs of polygon chords that follow one circle as that circle's arc, so the arcs KiCad flattens into micrometre chords flatten again at the accuracy each consumer needs. `pcb ipc2581 dfm check` on a 10.9 MB eight-layer board drops from 29 to about 6 CPU-seconds, most of which went to measuring four routed slots of 1,580 chords each. Findings that depended on chord-scale geometry change: on that board, about 50 copper feature-width findings 5 µm wide beside its routed slots no longer appear, and a few sites move along their feature.
 
 ## [0.4.90] - 2026-10-20
 

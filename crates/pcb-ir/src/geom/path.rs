@@ -276,6 +276,37 @@ impl ContourBuf {
         Self::new(cmds).with_uncertainty(self.uncertainty_mm + disagreement)
     }
 
+    /// The same contour with each run of line steps that follows one circle
+    /// drawn as that circle's arc. Exporters flatten arcs into chords far
+    /// finer than any later use needs; drawn as arcs, they flatten again at
+    /// the accuracy their consumer asks for.
+    ///
+    /// A run becomes an arc only when every one of its vertices lies within
+    /// `tolerance` of the arc and every chord within `tolerance` of it, and
+    /// the arc bows away from its own chord by more than `tolerance`, so
+    /// corners and straight edges stay as they are. Each arc keeps its run's
+    /// end vertices, so neighbours still meet there. The largest deviation
+    /// is charged to the uncertainty.
+    pub fn with_recovered_arcs(self, tolerance: f64) -> Self {
+        let mut deviation: f64 = 0.0;
+        let mut cmds = Vec::with_capacity(self.cmds.len());
+        let mut run = Vec::new();
+        for (current, cmd) in with_current_point(self.cmds) {
+            if cmd.op == PathOp::LineTo {
+                if run.is_empty() {
+                    run.push(current);
+                }
+                run.push(cmd.p0);
+                continue;
+            }
+            deviation = deviation.max(push_recovered_arcs(&run, tolerance, &mut cmds));
+            run.clear();
+            cmds.push(cmd);
+        }
+        deviation = deviation.max(push_recovered_arcs(&run, tolerance, &mut cmds));
+        Self::new(cmds).with_uncertainty(self.uncertainty_mm + deviation)
+    }
+
     /// Exact image under an affine transform. Circular arcs stay circular
     /// under similarities and become elliptical arcs otherwise; nothing is
     /// approximated. Prior uncertainty scales with the transform.
@@ -476,6 +507,121 @@ fn segment_signed_double_area(segment: Segment) -> f64 {
     }
 }
 
+/// Shortest arcs worth recovering: three points always share a circle.
+const MIN_ARC_CHORDS: usize = 4;
+
+/// Steps through the polyline `points` (from its first point) as arcs where
+/// [`ContourBuf::with_recovered_arcs`] allows and lines elsewhere; returns
+/// the largest deviation of an arc from its chords.
+fn push_recovered_arcs(points: &[Point], tolerance: f64, cmds: &mut Vec<PathCmd>) -> f64 {
+    let mut deviation: f64 = 0.0;
+    let mut start = 0;
+    while start + 1 < points.len() {
+        let rest = &points[start..];
+        // Grow the run by doubling, then bisect back to the longest fit.
+        let mut good = None;
+        let mut chords = MIN_ARC_CHORDS;
+        let mut bad = rest.len();
+        while chords < rest.len() {
+            match fit_arc(&rest[..=chords], tolerance) {
+                Some(fit) => good = Some((chords, fit)),
+                None => {
+                    bad = chords;
+                    break;
+                }
+            }
+            chords = (chords * 2).min(rest.len() - 1).max(chords + 1);
+        }
+        if let Some((mut low, _)) = good {
+            while bad - low > 1 {
+                let middle = (low + bad) / 2;
+                match fit_arc(&rest[..=middle], tolerance) {
+                    Some(fit) => {
+                        low = middle;
+                        good = Some((middle, fit));
+                    }
+                    None => bad = middle,
+                }
+            }
+        }
+        match good.filter(|&(chords, (center, clockwise, _))| {
+            bows(&rest[..=chords], center, clockwise, tolerance)
+        }) {
+            Some((chords, (center, clockwise, fitted))) => {
+                cmds.push(PathCmd::arc_to(rest[chords], center, clockwise));
+                deviation = deviation.max(fitted);
+                start += chords;
+            }
+            None => {
+                cmds.push(PathCmd::line_to(rest[1]));
+                start += 1;
+            }
+        }
+    }
+    deviation
+}
+
+/// The circle through the ends and middle of `points`, its direction, and
+/// how far its arc strays from the polyline, when every vertex lies within
+/// `tolerance` of it in order around less than a full turn, every chord
+/// within `tolerance` of it, and the circle is wider than an accuracy budget.
+fn fit_arc(points: &[Point], tolerance: f64) -> Option<(Point, bool, f64)> {
+    let first = points[0];
+    let (to_middle, to_last) = (
+        points[points.len() / 2] - first,
+        points[points.len() - 1] - first,
+    );
+    let determinant = 2.0 * cross(to_middle, to_last);
+    if determinant == 0.0 {
+        return None;
+    }
+    let (middle_sq, last_sq) = (to_middle.length().powi(2), to_last.length().powi(2));
+    let center = first
+        + Point::new(
+            middle_sq * to_last.y - last_sq * to_middle.y,
+            last_sq * to_middle.x - middle_sq * to_last.x,
+        ) / determinant;
+    let radius = first.distance_to(center);
+    let clockwise = determinant < 0.0;
+    let mut sweep = 0.0;
+    let mut strayed: f64 = 0.0;
+    for pair in points.windows(2) {
+        let (from, to) = (pair[0] - center, pair[1] - center);
+        let turn = cross(from, to).atan2(from.x * to.x + from.y * to.y);
+        if turn == 0.0 || (turn < 0.0) != clockwise {
+            return None;
+        }
+        sweep += turn.abs();
+        let half_chord = pair[0].distance_to(pair[1]) / 2.0;
+        let sagitta = radius - (radius * radius - half_chord * half_chord).max(0.0).sqrt();
+        strayed = strayed.max((to.length() - radius).abs() + sagitta);
+    }
+    // An arc no wider than the default accuracy budget would flatten again
+    // into fewer chords than its source and lose its shape; it stays chords.
+    let wide = radius > GeometryAccuracy::default().max_error_mm();
+    (strayed <= tolerance && sweep < 1.9 * std::f64::consts::PI && wide && radius.is_finite())
+        .then_some((center, clockwise, strayed))
+}
+
+/// Whether the arc through `points` about `center` bows away from its own
+/// chord by more than `tolerance`: one that does not is a straight edge.
+fn bows(points: &[Point], center: Point, clockwise: bool, tolerance: f64) -> bool {
+    let (first, last) = (points[0], points[points.len() - 1]);
+    let radius = first.distance_to(center);
+    let side = cross(last - first, center - first);
+    let half_chord = first.distance_to(last) / 2.0;
+    let rise = (radius * radius - half_chord * half_chord).max(0.0).sqrt();
+    // A minor arc's center lies on the side a counter-clockwise arc turns
+    // toward (left of its chord), so it bows by the radius less the rise;
+    // a major arc's center lies on the other side and it bows by more.
+    let sagitta = if (side > 0.0) == clockwise {
+        radius + rise
+    } else {
+        radius - rise
+    };
+    sagitta > tolerance
+}
+
 fn cross(left: Point, right: Point) -> f64 {
     left.x * right.y - left.y * right.x
 }
@@ -578,6 +724,74 @@ pub(crate) fn validate_cmd_points(name: &str, cmds: &[PathCmd]) -> Result<(), St
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn chorded_arcs_are_recovered_and_corners_are_kept() {
+        // A 1.8 x 1.0 stadium whose ends an exporter flattened into 2 um
+        // chords, as KiCad writes routed slots, and a rectangle with a
+        // notch, whose corners and short steps must stay lines.
+        let (radius, center_x) = (0.5, 0.4);
+        let mut points = vec![Point::new(-center_x, -radius)];
+        for (center, from) in [(center_x, -0.5), (-center_x, 0.5)] {
+            points.push(Point::new(center, radius * from * 2.0));
+            let steps = 785;
+            for step in 1..=steps {
+                let angle = std::f64::consts::PI * (from + step as f64 / steps as f64);
+                points.push(Point::new(
+                    center + radius * angle.cos(),
+                    radius * angle.sin(),
+                ));
+            }
+        }
+        let contour = |points: &[Point]| {
+            let mut cmds = vec![PathCmd::move_to(points[0])];
+            cmds.extend(points[1..].iter().map(|&point| PathCmd::line_to(point)));
+            cmds.push(PathCmd::close());
+            ContourBuf::new(cmds)
+        };
+        let slot = contour(&points).with_recovered_arcs(1e-4);
+        let arcs = slot
+            .cmds
+            .iter()
+            .filter(|cmd| cmd.op == PathOp::ArcTo)
+            .collect::<Vec<_>>();
+        assert_eq!(arcs.len(), 2, "{:?}", slot.cmds);
+        for (arc, center) in arcs.iter().zip([center_x, -center_x]) {
+            assert!(arc.p1.distance_to(Point::new(center, 0.0)) < 1e-6);
+            assert!((arc.p0.distance_to(arc.p1) - radius).abs() < 1e-6);
+        }
+        assert!(slot.cmds.len() < 10);
+        assert!(slot.uncertainty_mm > 0.0 && slot.uncertainty_mm <= 1e-4);
+
+        let notched = [
+            (0.0, 0.0),
+            (2.0, 0.0),
+            (2.0, 1.0),
+            (1.002, 1.0),
+            (1.002, 0.998),
+            (1.0, 0.998),
+            (1.0, 1.0),
+            (0.0, 1.0),
+        ]
+        .map(|(x, y)| Point::new(x, y));
+        let kept = contour(&notched).with_recovered_arcs(1e-4);
+        assert_eq!(kept.cmds, contour(&notched).cmds);
+        assert_eq!(kept.uncertainty_mm, 0.0);
+
+        // Chords over 0.01 rad of a 1 mm circle rise 12.5 nm from their
+        // chord, below the tolerance: a straight edge, in either direction.
+        let shallow = (0..=8)
+            .map(|step| {
+                let angle = 0.01 * (step as f64 / 8.0 - 0.5);
+                Point::new(angle.cos(), angle.sin())
+            })
+            .chain([Point::new(0.0, 0.5)])
+            .collect::<Vec<_>>();
+        for points in [shallow.clone(), shallow.into_iter().rev().collect()] {
+            let kept = contour(&points).with_recovered_arcs(1e-4);
+            assert_eq!(kept.cmds, contour(&points).cmds);
+        }
+    }
 
     #[test]
     fn an_outline_drawn_a_run_at_a_time_joins_into_one_closed_contour() {
