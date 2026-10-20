@@ -59,8 +59,14 @@ pub(super) fn copper_feature_width(
                 (&local.0, &local.1)
             }
         };
+        // Proving each piece's owner is independent boolean work against
+        // the conductor images; collected in order, the first failure in
+        // piece order is the one reported, as when run one at a time.
+        #[cfg(not(target_family = "wasm"))]
+        let pieces = pieces.into_par_iter();
+        #[cfg(target_family = "wasm")]
+        let pieces = pieces.into_iter();
         pieces
-            .into_iter()
             .map(|piece| {
                 let mut measured = measured_piece(&piece, limit_mm, &layer.layer, "copper_image")?;
                 // Prove ownership against final composed material. A bounding box
@@ -102,6 +108,8 @@ pub(super) fn copper_feature_width(
                 }
                 Ok::<_, anyhow::Error>(measured)
             })
+            .collect::<Vec<_>>()
+            .into_iter()
             .collect::<anyhow::Result<Vec<_>>>()
     };
     #[cfg(not(target_family = "wasm"))]
