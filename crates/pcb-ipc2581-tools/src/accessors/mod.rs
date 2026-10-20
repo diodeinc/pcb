@@ -20,7 +20,10 @@ pub use board::{
 };
 pub use bom::{Alternative, AvlLookup, CharacteristicsData};
 pub use components::ComponentStats;
-pub use drills::{DrillHoleType, DrillSize, DrillStats, DrillTypeDistribution, drill_stats};
+pub use drills::{
+    DrillHoleType, DrillSize, DrillStats, DrillTypeDistribution, ViaProfile, drill_stats,
+    via_profiles,
+};
 pub use layers::{LayerStats, NetStats};
 pub use metadata::{FileMetadata, SoftwareInfo};
 pub use provenance::{

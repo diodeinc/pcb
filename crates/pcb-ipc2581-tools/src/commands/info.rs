@@ -21,7 +21,7 @@ use serde_json::json;
 
 use crate::accessors::{
     ColorInfo, DrillHoleType, DrillStats, IpcAccessor, StackupLayerType, drill_stats,
-    nominal_copper_weight,
+    nominal_copper_weight, via_profiles,
 };
 #[cfg(feature = "cli")]
 use crate::utils::{file as file_utils, units};
@@ -831,6 +831,7 @@ pub fn info_json(
         && drills.total_holes > 0
     {
         info["drills"] = drill_stats_json(&drills);
+        info["drills"]["via_profiles"] = json!(via_profiles(imported)?);
     }
 
     // Net statistics
