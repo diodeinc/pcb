@@ -66,26 +66,29 @@ pub fn via_profiles(imported: &ImportedDesign) -> anyhow::Result<Vec<ViaProfile>
     let scope = ArtworkScope::Board;
     let layers = imported.layer_definitions.iter().enumerate();
     let mut holes = Vec::new();
-    let mut outer_pads = Vec::new();
+    // Smallest pad at each centre on the top and bottom faces; `None` when
+    // the board declares no copper layer on that face.
+    let mut faces: [Option<HashMap<(i64, i64), f64>>; 2] = [None, None];
     for (index, layer) in layers {
+        let face = match layer.side {
+            Some(Side::Top) => Some(0),
+            Some(Side::Bottom) => Some(1),
+            _ => None,
+        }
+        .filter(|_| is_copper(layer.layer_function));
         let is_drill = layer.layer_function == LayerFunction::Drill;
-        let is_outer =
-            is_copper(layer.layer_function) && matches!(layer.side, Some(Side::Top | Side::Bottom));
-        if !is_drill && !is_outer {
+        if !is_drill && face.is_none() {
             continue;
         }
         let doc = imported.materialize_layer(LayerId(index as u32), scope)?;
+        // Pads and holes are never in IPC placement groups, so they are in
+        // layer space already.
         let features = doc
             .layers
             .iter()
             .flat_map(|layer| layer.features.slice(&doc.features));
-        if is_drill {
-            holes.extend(features.filter_map(|feature| match drill_hole(feature)? {
-                (diameter, DrillHoleType::Via) => Some((center_key(feature.center), diameter)),
-                _ => None,
-            }));
-        } else {
-            let mut pads = HashMap::<(i64, i64), f64>::new();
+        if let Some(face) = face {
+            let pads = faces[face].get_or_insert_default();
             for feature in features.filter(|feature| {
                 feature.kind == FeatureKind::Padstack && feature.polarity == Polarity::Dark
             }) {
@@ -94,17 +97,20 @@ pub fn via_profiles(imported: &ImportedDesign) -> anyhow::Result<Vec<ViaProfile>
                     .and_modify(|pad| *pad = pad.min(size))
                     .or_insert(size);
             }
-            outer_pads.push(pads);
+        } else {
+            holes.extend(features.filter_map(|feature| match drill_hole(feature)? {
+                (diameter, DrillHoleType::Via) => Some((center_key(feature.center), diameter)),
+                _ => None,
+            }));
         }
     }
 
     let mut profiles = BTreeMap::<(i64, Option<i64>), ViaProfile>::new();
     for (at, hole_mm) in holes {
-        let pad_mm = outer_pads
+        let pad_mm = faces
             .iter()
-            .map(|pads| pads.get(&at).copied())
-            .try_fold(f64::INFINITY, |min, pad| pad.map(|pad| min.min(pad)))
-            .filter(|pad| pad.is_finite());
+            .map(|pads| pads.as_ref()?.get(&at).copied())
+            .try_fold(f64::INFINITY, |min, pad| pad.map(|pad| min.min(pad)));
         profiles
             .entry((to_um(hole_mm), pad_mm.map(to_um)))
             .or_insert(ViaProfile {
@@ -321,6 +327,64 @@ mod tests {
                 profile(0.2, Some(0.4)),
                 profile(0.2, Some(0.45)),
             ]
+        );
+    }
+
+    fn single_board(layers: &str, features: &str) -> ImportedDesign {
+        let ipc = ipc2581::Ipc2581::parse(&format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
+  <Content roleRef="owner">
+    <FunctionMode mode="FABRICATION"/>
+    <StepRef name="board"/>
+    <DictionaryStandard units="MILLIMETER">
+      <EntryStandard id="C40"><Circle diameter="0.4"/></EntryStandard>
+    </DictionaryStandard>
+  </Content>
+  <Ecad>
+    <CadHeader units="MILLIMETER"/>
+    <CadData>
+      {layers}
+      <Layer name="Drill" layerFunction="DRILL" side="ALL" polarity="POSITIVE"/>
+      <Step name="board" type="BOARD">
+        <Profile>
+          <Polygon>
+            <PolyBegin x="0" y="0"/>
+            <PolyStepSegment x="10" y="0"/>
+            <PolyStepSegment x="10" y="5"/>
+            <PolyStepSegment x="0" y="5"/>
+          </Polygon>
+        </Profile>
+        {features}
+        <LayerFeature layerRef="Drill">
+          <Set><Hole name="a" diameter="0.2" platingStatus="VIA" x="1" y="1"/></Set>
+          <Set><Hole name="b" diameter="0.2" platingStatus="VIA" x="3" y="1"/></Set>
+        </LayerFeature>
+      </Step>
+    </CadData>
+  </Ecad>
+</IPC-2581>"#
+        ))
+        .unwrap();
+        pcb_ir::import::ipc2581::import_design(&ipc, pcb_ir::geom::Resolution::default()).unwrap()
+    }
+
+    #[test]
+    fn via_profiles_need_a_pad_on_both_faces() {
+        let imported = single_board(
+            r#"<Layer name="F.Cu" layerFunction="SIGNAL" side="TOP" polarity="POSITIVE"/>"#,
+            r#"<LayerFeature layerRef="F.Cu">
+              <Set><Pad x="1" y="1"><StandardPrimitiveRef id="C40"/></Pad></Set>
+              <Set><Pad x="3" y="1"><StandardPrimitiveRef id="C40"/></Pad></Set>
+            </LayerFeature>"#,
+        );
+        assert_eq!(
+            via_profiles(&imported).unwrap(),
+            vec![ViaProfile {
+                hole_mm: 0.2,
+                pad_mm: None,
+                count: 2,
+            }]
         );
     }
 
