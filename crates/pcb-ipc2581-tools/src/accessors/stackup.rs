@@ -206,6 +206,10 @@ impl ColorInfo {
                 .strip_prefix('#')
                 .filter(|hex| matches!(hex.len(), 6 | 8))
             {
+                // Every pair, alpha included, must be hex.
+                if !hex.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+                    return None;
+                }
                 let channel = |at: usize| u8::from_str_radix(hex.get(at..at + 2)?, 16).ok();
                 return Some((channel(0)?, channel(2)?, channel(4)?));
             }
@@ -723,6 +727,7 @@ mod tests {
         for hex in ["#808080", "#FF8C00", "#FFC0CB", "#00CED1", "#8B4513"] {
             assert_eq!(named(hex), None, "{hex}");
         }
+        assert_eq!(named("#006400ZZ"), None);
         assert_eq!(named("Not specified"), None);
         assert_eq!(named("Green").as_deref(), Some("green"));
     }

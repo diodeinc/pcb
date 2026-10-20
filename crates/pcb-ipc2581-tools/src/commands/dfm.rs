@@ -1353,6 +1353,7 @@ limit = { minimum = ["10 mm", "5 mm"], maximum = ["40 mm", "25 mm"] }"#,
         // A hex colour within an ink colour's bounds is that colour; one
         // outside every ink's bounds is unrecognized, so not allowed.
         assert_eq!(status(&specified("OSP", "#3C9650"), "color"), "Pass");
+        assert_eq!(status(&specified("OSP", "#3C9650ZZ"), "color"), "Fail");
         let report = check_with_pdk(&specified("OSP", "#FF8C00"), LayoutTarget::Board, &pdk);
         assert!(report.findings.iter().any(|finding| finding.rule_id == "color"
             && finding.message
