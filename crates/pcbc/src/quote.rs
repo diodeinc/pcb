@@ -14,9 +14,9 @@ use crate::layout::LayoutArgs;
 #[derive(ValueEnum, Debug, Clone, Copy, Default)]
 pub enum QuoteRoute {
     /// US bare boards, assembled by Diode in the US
-    #[default]
     Us,
     /// Global bare boards, assembled by Diode in the US
+    #[default]
     GlobalUs,
     /// Global bare boards and assembly
     Global,

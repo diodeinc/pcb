@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Changed
+
+- `pcb quote` defaults to `--route global-us` (global bare boards, assembled by Diode in the US), matching Diode's order dialog.
+
 ## [0.4.91] - 2026-10-20
 
 ### Changed
