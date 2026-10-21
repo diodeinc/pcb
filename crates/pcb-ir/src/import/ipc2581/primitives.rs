@@ -608,17 +608,10 @@ pub(super) fn arc_step(
     }
 }
 
-/// How far a polygon's chords may stray from the arc recovered from them.
-/// Exporters flatten arcs into chords within a few nanometres of them; this
-/// recovers those while staying far below any accuracy budget.
-const RECOVERED_ARC_MM: f64 = 1e-4;
-
 pub(super) fn polygon_contour(polygon: &ipc2581::types::Polygon) -> ContourBuf {
     let mut cmds = poly_step_commands(polygon);
     cmds.push(PathCmd::close());
-    ContourBuf::new(cmds)
-        .with_consistent_arcs()
-        .with_recovered_arcs(RECOVERED_ARC_MM)
+    ContourBuf::new(cmds).with_consistent_arcs()
 }
 
 /// An outline with its cutouts as one even-odd path; returns the path index.

@@ -59,9 +59,6 @@ pub(super) fn copper_feature_width(
                 (&local.0, &local.1)
             }
         };
-        // Proving each piece's owner is independent boolean work against
-        // the conductor images; collected in order, the first failure in
-        // piece order is the one reported, as when run one at a time.
         #[cfg(not(target_family = "wasm"))]
         let pieces = pieces.into_par_iter();
         #[cfg(target_family = "wasm")]
@@ -108,8 +105,6 @@ pub(super) fn copper_feature_width(
                 }
                 Ok::<_, anyhow::Error>(measured)
             })
-            .collect::<Vec<_>>()
-            .into_iter()
             .collect::<anyhow::Result<Vec<_>>>()
     };
     #[cfg(not(target_family = "wasm"))]

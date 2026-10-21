@@ -11,6 +11,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ### Changed
 
 - `pcb quote` defaults to `--route global-us` (global bare boards, assembled by Diode in the US), matching Diode's order dialog.
+- IPC-2581 import no longer turns polygon chord runs into arcs.
 
 ## [0.4.91] - 2026-10-20
 
