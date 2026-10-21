@@ -1,0 +1,12 @@
+"""A root part on a net that a linked sheet exposes under two port names."""
+
+Project(name="RootAlias", path="kicad", layout=False)
+
+Resistor = Module("@stdlib/generics/Resistor.zen")
+Alias = Module("alias.zen")
+
+SIGNAL = Net("SIGNAL")
+ROOT_ONLY = Net("ROOT_ONLY")
+
+Resistor(name="R1", value="1kohms", package="0402", P1=SIGNAL, P2=ROOT_ONLY)
+Alias(name="ALIAS", A=SIGNAL, B=SIGNAL)

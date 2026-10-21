@@ -1,0 +1,14 @@
+"""A linked sheet whose INPUT net stays inside it; sheet_port_external.zen adds a root endpoint."""
+
+Project(name="SheetPort", path="kicad", layout=False)
+
+Resistor = Module("@stdlib/generics/Resistor.zen")
+Filter = Module("filter.zen")
+
+SIGNAL = Net("SIGNAL")
+ROOT_A = Net("ROOT_A")
+ROOT_B = Net("ROOT_B")
+SHEET_ONLY = Net("SHEET_ONLY")
+
+Resistor(name="R1", value="1kohms", package="0402", P1=ROOT_A, P2=ROOT_B)
+Filter(name="FILTER", resistance="1kohms", INPUT=SIGNAL, OUTPUT=SHEET_ONLY)

@@ -102,6 +102,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - Custom pads keep the holes their primitives enclose, so an outlined logo is no longer filled solid in copper, mask and paste, and their `gr_curve` primitives are drawn.
 - Curves drawn on silkscreen, mask, paste and copper layers are stroked open, without a stroke joining their ends.
 
+### Fixed
+
+- `pcb apply schematic` connects a net that crosses into a `Project()` module sheet through its sheet pin and hierarchical label alone, without extra global labels. A module port whose net stays inside the module gets no sheet pin, a net exposed under several port names crosses the sheet once, and generated sheets leave room for their pin labels. Existing generated sheets gain or lose pins as nets start or stop leaving their module.
+
 ## [0.4.82] - 2026-10-14
 
 ### Added

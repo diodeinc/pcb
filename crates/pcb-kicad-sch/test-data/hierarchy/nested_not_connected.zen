@@ -5,6 +5,7 @@ Project(name="NestedNotConnected", path="kicad", layout=False)
 load("@stdlib/interfaces.zen", "DiffPair", "Net", "Usb2", "Usb2TypeC")
 
 Child = Module("nested_not_connected_child.zen")
+Resistor = Module("@stdlib/generics/Resistor.zen")
 
 USB_DP = Net("USB_DP")
 USB_DN = Net("USB_DN")
@@ -14,3 +15,7 @@ USB2 = Usb2(D=DiffPair(P=USB_DP, N=USB_DN))
 USB_C = Usb2TypeC(usb2=USB2, CC1=USB_CC1, CC2=USB_CC2)
 
 Child(name="CHILD", USB=USB_C)
+
+# Root terminals take the connected signals out of the child sheet.
+Resistor(name="R_D", value="1kohms", package="0402", P1=USB_DP, P2=USB_DN)
+Resistor(name="R_CC", value="1kohms", package="0402", P1=USB_CC1, P2=USB_CC2)
