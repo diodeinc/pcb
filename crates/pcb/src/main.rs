@@ -1624,6 +1624,9 @@ fn self_update() -> Result<()> {
     };
 
     let launcher_status = match latest_release.as_ref() {
+        Some(_) if !can_install_launcher() => {
+            "pcb launcher: update skipped (desktop integration unavailable)".to_string()
+        }
         Some(latest) => match install_shim_launcher(latest) {
             Ok(()) => "pcb launcher: current".to_string(),
             Err(err) => {
@@ -1820,6 +1823,19 @@ fn install_shim_update(latest: &LatestRelease) -> Result<PathBuf> {
     copy_executable_permissions(&binary, &binary)?;
     self_replace::self_replace(binary)?;
     Ok(installed_shim)
+}
+
+fn can_install_launcher() -> bool {
+    // Minimal Linux containers do not have desktop URL-handler support.
+    // Check the required tool rather than DISPLAY, so desktop installs over
+    // SSH still work.
+    !cfg!(target_os = "linux")
+        || std::env::var_os("PATH").is_some_and(|path| {
+            std::env::split_paths(&path).any(|dir| {
+                let binary = dir.join("xdg-mime");
+                binary.is_file() && is_executable(&binary)
+            })
+        })
 }
 
 fn install_shim_launcher(latest: &LatestRelease) -> Result<()> {

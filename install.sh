@@ -56,6 +56,9 @@ EOF
 }
 
 register_url_launcher() {
+  if [[ "$platform" == Linux-* ]] && ! command -v xdg-mime >/dev/null 2>&1; then
+    return
+  fi
   launcher_toolchain="$1"
   if ! "$install_dir/pcb-launcher" --install --toolchain "$launcher_toolchain"; then
     echo "Warning: installed pcb, but could not register the Diode URL launcher; see $HOME/.pcb/pcb-launcher.log" >&2
