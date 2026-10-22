@@ -84,15 +84,18 @@ impl<'a> Dom<'a> {
 
         // Counting tag and attribute openers sizes the arenas once; growing
         // them by doubling would hold up to three copies at the peak.
-        let pairs = |first: u8, second: fn(u8) -> bool| {
-            xml.as_bytes()
-                .windows(2)
-                .filter(|pair| pair[0] == first && second(pair[1]))
+        let pairs = |first: char, second: fn(u8) -> bool| {
+            xml.match_indices(first)
+                .filter(|(index, _)| {
+                    xml.as_bytes()
+                        .get(index + 1)
+                        .is_some_and(|&next| second(next))
+                })
                 .count()
         };
         // Offsets are kept in 32 bits.
         index(xml.len())?;
-        let elements = pairs(b'<', |next| !matches!(next, b'/' | b'!' | b'?'));
+        let elements = pairs('<', |next| !matches!(next, b'/' | b'!' | b'?'));
         let spans = match keep {
             Keep::Tree => 0,
             Keep::SourceSpans => elements,
@@ -100,7 +103,7 @@ impl<'a> Dom<'a> {
         let mut dom = Self {
             xml,
             elements: Vec::with_capacity(elements),
-            attributes: Vec::with_capacity(pairs(b'=', |next| matches!(next, b'"' | b'\''))),
+            attributes: Vec::with_capacity(pairs('=', |next| matches!(next, b'"' | b'\''))),
             rewritten: Vec::new(),
             spans: Vec::with_capacity(spans),
             root_namespace: None,

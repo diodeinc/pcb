@@ -280,6 +280,9 @@ impl ContourBuf {
     /// under similarities and become elliptical arcs otherwise; nothing is
     /// approximated. Prior uncertainty scales with the transform.
     pub fn transformed(self, transform: Affine2) -> Self {
+        if transform == Affine2::IDENTITY {
+            return self;
+        }
         let cmds = transformed_cmds(self.cmds, transform).collect::<Vec<_>>();
         Self {
             bbox: contour_bbox(&cmds),

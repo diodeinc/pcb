@@ -292,6 +292,9 @@ pub(super) fn untagged<T>(group: Vec<(Ring, T)>) -> Vec<Ring> {
 /// `reach` widens every ring's bounds further, for operations that join
 /// rings that far apart.
 pub(super) fn bounds_connected_groups<T>(rings: Vec<(Ring, T)>, reach: f64) -> Vec<Vec<(Ring, T)>> {
+    if rings.len() == 1 {
+        return vec![rings];
+    }
     struct Group {
         hull: BBox,
         root: usize,
