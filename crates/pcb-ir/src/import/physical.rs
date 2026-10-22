@@ -1285,7 +1285,11 @@ fn paste_regions(
         for island in group {
             let mut most = None::<(usize, f64)>;
             for index in bounds.query(island.image.bbox()) {
-                let area = images[index].intersection(&island.image)?.area();
+                let area = if images[index].rings().eq(island.image.rings()) {
+                    island.image.area()
+                } else {
+                    images[index].intersection(&island.image)?.area()
+                };
                 if area > most.map_or(0.0, |(_, most)| most) {
                     most = Some((index, area));
                 }
