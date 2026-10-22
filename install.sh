@@ -56,7 +56,7 @@ EOF
 }
 
 register_url_launcher() {
-  if [[ "$platform" == Linux-* ]] && ! command -v xdg-mime >/dev/null 2>&1; then
+  if [[ "$platform" == Linux-* && ! -x "$(command -v xdg-mime)" ]]; then
     return
   fi
   launcher_toolchain="$1"
