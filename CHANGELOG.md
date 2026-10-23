@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Fixed
+
+- `load()`, `File()`, and `Path()` can no longer read files outside the workspace, its stdlib, and resolved dependencies through absolute paths, `package://` or `@stdlib` paths, or symlinks.
+
 ## [0.4.92] - 2026-10-22
 
 ### Changed

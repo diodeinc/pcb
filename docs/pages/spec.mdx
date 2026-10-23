@@ -605,7 +605,7 @@ footprint = File("Resistor_SMD.pretty/R_0603_1608Metric.kicad_mod")
 layout_dir = Path("layout/my_board", allow_not_exist=True)
 ```
 
-Both resolve the path where they are called, so the result can be passed anywhere, for example into `SpiceModel` inside a component modifier. `@stdlib/...` and `@pkg/...` paths cannot contain `..`.
+Both resolve the path where they are called, so the result can be passed anywhere, for example into `SpiceModel` inside a component modifier. `@stdlib/...` and `@pkg/...` paths cannot contain `..`, and no path, including an absolute path or a symlink, may resolve outside the workspace, its stdlib, and its resolved dependencies.
 
 ### Assertions
 

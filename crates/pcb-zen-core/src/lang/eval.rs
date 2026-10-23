@@ -909,6 +909,19 @@ impl EvalContextConfig {
             _ => self.resolve_url(context)?,
         };
 
+        // Every spec kind lands here, so this is the one containment check:
+        // `..`, absolute paths, and symlinks cannot reach host files.
+        let canonical = context.file_provider.canonicalize(&resolved_path)?;
+        if !self
+            .resolution
+            .contains_path(context.file_provider, &canonical)
+        {
+            anyhow::bail!(
+                "'{}' resolves outside the workspace and its dependencies",
+                context.original_spec()
+            );
+        }
+
         self.finish_resolve(context, resolved_path)
     }
 }
