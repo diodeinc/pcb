@@ -901,16 +901,12 @@ impl ResolutionResult {
         self.resolution.get(package_url)
     }
 
-    /// Whether a canonical path lies inside the workspace, its stdlib, or a
-    /// resolved package — the only places a load may read from.
+    /// Whether a canonical path lies inside the workspace or a resolved
+    /// package (the stdlib included) — the only places a load may read from.
     pub(crate) fn contains_path(&self, file_provider: &dyn FileProvider, path: &Path) -> bool {
         let root = &self.workspace_info.root;
         let in_workspace = !root.as_os_str().is_empty()
-            && [root.clone(), self.workspace_info.workspace_stdlib_dir()]
-                .iter()
-                .any(|dir| {
-                    path.starts_with(file_provider.canonicalize(dir).unwrap_or(dir.clone()))
-                });
+            && path.starts_with(file_provider.canonicalize(root).unwrap_or(root.clone()));
         in_workspace
             || self
                 .resolution
