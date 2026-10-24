@@ -86,3 +86,48 @@ def b_func():
 
     star_snapshot!(env, "a.zen");
 }
+
+#[test]
+#[cfg(unix)]
+fn load_cannot_read_files_outside_workspace() {
+    let env = TestProject::new();
+    let outside = tempfile::tempdir().unwrap();
+    let secret = outside.path().canonicalize().unwrap().join("secret.zen");
+    std::fs::write(&secret, "API_KEY hunter2\n").unwrap();
+    std::os::unix::fs::symlink(&secret, env.root().join("link.zen")).unwrap();
+    env.add_file("lib/ok.zen", "OK = 1\n");
+    let outside_dir = secret
+        .parent()
+        .unwrap()
+        .file_name()
+        .unwrap()
+        .to_str()
+        .unwrap();
+
+    let ok = env.root().join("lib/ok.zen");
+    let rejected = [
+        secret.display().to_string(),
+        format!("@stdlib/{}", secret.display()),
+        format!("package://workspace/../{outside_dir}/secret.zen"),
+        env.root().join("link.zen").display().to_string(),
+        "package://workspace/link.zen".to_string(),
+    ];
+    for spec in &rejected {
+        env.add_file("top.zen", &format!("load(\"{spec}\", \"x\")\n"));
+        let rendered =
+            pcb_zen::diagnostics::render_diagnostics_to_string(&env.eval("top.zen").diagnostics);
+        assert!(
+            rendered.contains("resolves outside the workspace") && !rendered.contains("hunter2"),
+            "{spec}: {rendered}"
+        );
+    }
+
+    // Absolute paths inside the workspace still load.
+    env.add_file("top.zen", &format!("load(\"{}\", \"OK\")\n", ok.display()));
+    let result = env.eval("top.zen");
+    assert!(
+        !result.diagnostics.iter().any(|d| d.is_error()),
+        "{:?}",
+        result.diagnostics
+    );
+}
