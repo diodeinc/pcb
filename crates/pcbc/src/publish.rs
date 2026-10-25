@@ -155,6 +155,17 @@ pub struct PublishArgs {
     #[arg(long, hide = true)]
     pub no_build: bool,
 
+    /// With --check, write each built .zen file's JSON netlist to <DIR>/<path>.json,
+    /// where <path> is the .zen file's path relative to the workspace root. DIR must be empty
+    /// or not exist
+    #[arg(
+        long,
+        value_name = "DIR",
+        requires = "check",
+        conflicts_with = "no_build"
+    )]
+    pub netlist_dir: Option<std::path::PathBuf>,
+
     /// Create commits and tags locally but don't push to remote
     #[arg(long, hide = true)]
     pub no_push: bool,
@@ -464,6 +475,18 @@ pub fn execute(args: PublishArgs) -> Result<()> {
         .map(|p| Path::new(p).to_path_buf())
         .unwrap_or_else(|| env::current_dir().unwrap());
 
+    if args.netlist_dir.is_some() && path.extension().is_some_and(|ext| ext == "zen") {
+        bail!("--netlist-dir only applies to package publishing");
+    }
+    // Writing only into a fresh directory keeps stale netlists and pre-existing
+    // symlinks out of the output.
+    if let Some(dir) = &args.netlist_dir
+        && dir.exists()
+        && dir.read_dir()?.next().is_some()
+    {
+        bail!("--netlist-dir {} must be empty or not exist", dir.display());
+    }
+
     if args.check && args.bump == Some(BumpType::Interactive) {
         bail!("--check needs an explicit --bump value");
     }
@@ -751,7 +774,12 @@ fn publish_packages(start_path: &Path, args: &PublishArgs) -> Result<()> {
         let (mut workspace, dirty_urls, manifest_changed) = load_dirty_packages(start_path)?;
         if !args.no_build {
             let scope = (!manifest_changed).then_some(&dirty_urls);
-            build_workspace(&workspace, scope, &args.suppress)?;
+            build_workspace(
+                &workspace,
+                scope,
+                &args.suppress,
+                args.netlist_dir.as_deref(),
+            )?;
         }
         let all_tags = git::list_all_tags_vec(&workspace.root);
         return print_publish_plan(&mut workspace, &dirty_urls, &all_tags, args.bump);
@@ -776,7 +804,7 @@ fn publish_packages(start_path: &Path, args: &PublishArgs) -> Result<()> {
 
     if !args.no_build {
         let scope = (!manifest_changed).then_some(&dirty_urls);
-        build_workspace(&workspace, scope, &args.suppress)?;
+        build_workspace(&workspace, scope, &args.suppress, None)?;
     }
 
     if git::has_uncommitted_changes(&workspace.root)? {
@@ -1057,6 +1085,7 @@ fn build_workspace(
     workspace: &WorkspaceInfo,
     scope: Option<&HashSet<String>>,
     suppress: &[String],
+    netlist_dir: Option<&Path>,
 ) -> Result<()> {
     eprintln!();
     eprintln!("{}", "Building workspace...".cyan().bold());
@@ -1127,6 +1156,15 @@ fn build_workspace(
         );
         if let Some(schematic) = result.schematic {
             crate::build::print_build_success(&file_name, &schematic);
+            if let Some(dir) = netlist_dir {
+                let rel = zen_path.strip_prefix(&workspace.root)?;
+                let mut out = dir.join(rel).into_os_string();
+                out.push(".json");
+                let out = std::path::PathBuf::from(out);
+                std::fs::create_dir_all(out.parent().unwrap())?;
+                std::fs::write(&out, schematic.to_json()?)
+                    .with_context(|| format!("Failed to write netlist {}", out.display()))?;
+            }
         }
     }
 

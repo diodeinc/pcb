@@ -137,3 +137,71 @@ fn test_publish_check_reports_package_versions() {
     );
     assert_eq!(sb.cmd("git", ["tag"]).read().unwrap(), "modules/Foo/v0.2.0");
 }
+
+#[test]
+fn test_publish_check_netlist_dir() {
+    let mut sb = Sandbox::new();
+    sb.write(
+        "pcb.toml",
+        "[workspace]\npcb-version = \"0.4\"\nrepository = \"github.com/acme/registry\"\n",
+    )
+    .write("modules/Foo/pcb.toml", "")
+    .write("modules/Foo/Foo.zen", "P1 = io(Net)\n")
+    .write(
+        "modules/Bar/pcb.toml",
+        "[dependencies]\n\"github.com/acme/registry/modules/Foo\" = \"0.2.0\"\n",
+    )
+    .write(
+        "modules/Bar/Bar.zen",
+        "Foo = Module(\"github.com/acme/registry/modules/Foo/Foo.zen\")\nFoo(name = \"U1\", P1 = Net(\"N1\"))\n",
+    )
+    .write("modules/Baz/pcb.toml", "")
+    .write("modules/Baz/Baz.zen", "P1 = io(Net)\n")
+    .init_git()
+    .commit("feat: add packages")
+    .tag("modules/Foo/v0.2.0")
+    .tag("modules/Bar/v0.1.0")
+    .tag("modules/Baz/v0.1.0")
+    .write("modules/Foo/Foo.zen", "P1 = io(Net)\nInternal = Net(\"INT\")\n")
+    .commit("feat: extend Foo");
+
+    let plan = sb
+        .run("pcbc", ["publish", "--check"])
+        .stdout_capture()
+        .stderr_null()
+        .run()
+        .unwrap()
+        .stdout;
+    let with_netlists = sb
+        .run("pcbc", ["publish", "--check", "--netlist-dir", "out"])
+        .stdout_capture()
+        .stderr_null()
+        .run()
+        .unwrap()
+        .stdout;
+    assert_eq!(
+        String::from_utf8(with_netlists).unwrap(),
+        String::from_utf8(plan).unwrap()
+    );
+
+    let out = sb.root_path().join("out");
+    for zen in ["modules/Foo/Foo.zen", "modules/Bar/Bar.zen"] {
+        let path = out.join(format!("{zen}.json"));
+        let netlist: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert!(netlist["instances"].is_object(), "{}", path.display());
+    }
+    let bar = std::fs::read_to_string(out.join("modules/Bar/Bar.zen.json")).unwrap();
+    assert!(bar.contains("N1"));
+    assert!(!out.join("modules/Baz").exists());
+
+    // Reusing a non-empty output directory is rejected.
+    let rerun = sb
+        .run("pcbc", ["publish", "--check", "--netlist-dir", "out"])
+        .stdout_null()
+        .stderr_null()
+        .unchecked()
+        .run()
+        .unwrap();
+    assert!(!rerun.status.success());
+}

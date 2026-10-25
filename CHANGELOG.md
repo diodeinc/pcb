@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added
+
+- `pcb publish --check --netlist-dir <DIR>` writes the JSON netlist of each built `.zen` file to `<DIR>/<path>.json`.
+
 ### Fixed
 
 - `load()`, `File()`, and `Path()` can no longer read files outside the workspace, its stdlib, and resolved dependencies through absolute paths, `package://` or `@stdlib` paths, or symlinks.
