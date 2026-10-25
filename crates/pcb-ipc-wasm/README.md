@@ -39,9 +39,10 @@ try {
 
 Use `new IpcDocument(xml, options?)` for strings. `fromBytes` detects UTF-8 XML
 or Zstandard from the bytes, including concatenated/skippable frames. Names
-are report labels; no path is opened. Geometry is imported and cached on demand.
-All methods are synchronous; use a Web Worker for large exports or DFM. Results
-are owned copies and remain valid after `free()`.
+are report labels; no path is opened. Geometry import is attempted during
+construction, and its result is cached. Constructors and methods are synchronous;
+use a Web Worker for large inputs, exports, or DFM. Results are owned copies and
+remain valid after `free()`.
 
 | API | Result |
 | --- | --- |

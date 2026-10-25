@@ -66,7 +66,8 @@ cd pcb
 ./install.sh --local
 ```
 
-Requires Rust. See [AGENTS.md](AGENTS.md) for test commands and repository conventions.
+Requires Rust. Run crate tests with `cargo nextest run -p <crate>` and doctests
+with `cargo test --doc -p <crate>`.
 
 ## License
 

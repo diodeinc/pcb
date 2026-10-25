@@ -11,7 +11,11 @@ as `kicad-step` in the KiCad tree.
 pcb step export board.kicad_pcb -o board.step
 ```
 
-Models come from the board's embedded files; nothing is looked up on disk.
+Models are read from the board's embedded files by default. To allow files on
+disk, use `--project-models` for the board's directory (`${KIPRJMOD}`),
+`--model-var NAME=DIR`, or `--model-dir DIR`. Variables come from these options,
+not the environment. Resolved paths, including symlinks, must stay under an
+allowed directory; external models must be regular files no larger than 256 MiB.
 
 ## What is exported
 
@@ -45,11 +49,11 @@ The defaults follow KiCad's exporter (`pcbnew/exporters/step/`):
   shell instead of failing.
 - **Components**: every `model` with a `.step`/`.stp` name, placed with
   KiCad's transform (position, rotation, bottom flip, model offset, then
-  the model's own rotation, 0.05 mm above the copper). Embedded files and
-  `${VAR}`/project-relative paths are resolved; a file used by several
-  footprints, or embedded twice under different names, is copied once and
-  instanced. Uniform scale is baked into the copy. DNP and unspecified
-  footprints are included unless `--no-dnp`/`--no-unspecified`;
+  the model's own rotation, 0.05 mm above the copper). Embedded files are
+  read directly; `${VAR}` and relative paths use the opt-in resolver above.
+  A file used by several footprints, or embedded twice under different names,
+  is copied once and instanced. Uniform scale is baked into the copy. DNP and
+  unspecified footprints are included unless `--no-dnp`/`--no-unspecified`;
   `--component-filter` takes reference designator globs.
 - **Donor STEP files** are copied without interpretation: the displayed
   representations are found through the product structure, the assembly
@@ -87,8 +91,7 @@ The defaults follow KiCad's exporter (`pcbnew/exporters/step/`):
   the connectivity test.
 
 - **Silkscreen and solder mask**, on by default (`--no-silkscreen` and
-  `--no-soldermask` leave them out; kicad-cli's `--include-*` flags are
-  accepted), as KiCad exports them: flat faces 0.04 mm and
+  `--no-soldermask` leave them out), as KiCad exports them: flat faces 0.04 mm and
   0.015 mm above the outer copper (and as far below the back copper),
   one product per side, coloured from the stackup with KiCad's
   transparency. Silkscreen is the union of the layer's graphics and text
@@ -110,56 +113,16 @@ The defaults follow KiCad's exporter (`pcbnew/exporters/step/`):
   Text with a `(face ...)` is drawn in that outline font when the board
   embeds it, shaped with HarfBuzz's rules and laid out at KiCad's 1.4 em
   per size; any face the board does not embed is drawn in the bundled
-  Liberation Sans, the metric-compatible stand-in for Arial, so the
-  export never depends on the fonts installed where it runs. Not drawn:
-  tables and barcodes.
+  Liberation Sans, the metric-compatible stand-in for Arial under the
+  [SIL Open Font License](fonts/LICENSE), so the export never depends on
+  the fonts installed where it runs. Not drawn: tables and barcodes.
 
 Missing model files are warned about and skipped; a model that exists but
 cannot be read makes the exit code 1 after the file is written, both as
 `kicad-cli` does. A board with no closed outline is an error, where KiCad
 would silently export its bounding box.
 
-## Layout
-
-| File | Role |
-| --- | --- |
-| `src/sexpr.rs` | Pull parser over the board bytes. No tree: callers open the lists they need and skip the rest. |
-| `src/board.rs` | The board as flat arrays: footprints, models, drills, vias, outline edges, embedded files, stackup. One pass. |
-| `src/outline.rs` | Line/arc loops, chaining with exact gap closing, outer/hole classification; drills that touch anything go through a polygon boolean and are snapped back onto the exact source curves. |
-| `src/holes.rs` | Round holes as radius profiles: drills, blind vias, backdrills, counterbores, countersinks, fill. |
-| `src/copper.rs` | Pad outlines, track strokes, per-layer unions through pcb-ir with pads and drills cut out, plating tubes. |
-| `src/rings.rs` | Rings from a boolean into loops: vertex merge, pinch split, nesting, arc refit with a crossing guard. |
-| `src/faces.rs` | Silkscreen and mask faces: strokes, fills and openings unioned cell by cell in parallel, drills cut and the board edge applied where they meet an island. |
-| `src/font.rs` | KiCad's stroke font from the `newstroke` crate: line layout, justification, markup, pen width. |
-| `src/outline_font.rs` | Outline fonts: embedded and bundled faces, HarfBuzz shaping, KiCad's outline layout, glyphs as rings. |
-| `fonts/` | Liberation Sans, the fallback face, under the SIL Open Font License. |
-| `src/donor.rs` | Donor STEP files: statement split, kind byte per statement, product tree, geometry closure, renumbered copy. |
-| `src/step.rs` | The output buffer, the STEP vocabulary, the extruded board solid, product structure. |
-| `src/scene.rs` | The scene shared with `pcb-gltf`: board layers, copper and faces, and model placements. |
-| `src/lib.rs` | `Board::parse` and `export`: options, model batching across threads. |
-| `src/cli.rs` | The `pcb step export` arguments and run: atomic write, warnings, failed models. Shared with `pcb gltf export`. |
-| `pcbc/src/step.rs` | The `pcb step` command, a thin wrapper over `cli.rs`. |
-
-Data lives in flat vectors indexed by integers. The board file is parsed
-once and never copied; names are borrowed slices. Donor files are owned
-buffers with `u32` offsets and are freed as soon as they are copied. Each
-donor statement is classified into a byte once; the closure walk, the style
-index and the id renumbering are table lookups. Output is streamed to the
-sink in model-sized chunks, so peak memory is the board plus one batch of
-models rather than the output.
-
-Copper is built per layer and net on worker threads, largest groups
-first; the board's contours are handed to pcb-ir once per group and the
-islands come back as polylines. Copper solids are written in parallel
-batches with ids from 1, and each batch is moved up to its place in the
-file by rewriting its ids, which is far cheaper than formatting them.
-
-Models are copied in batches on worker threads: a batch is decoded and
-analyzed in parallel, given id ranges serially in model order, emitted in
-parallel into private buffers, and written in order. A donor over 4 MB is
-itself scanned and copied on several threads, since one large connector
-model is often the whole batch. Ids depend only on model order, so the
-output is identical whatever the thread count.
+The output is deterministic across thread counts.
 
 ## Validation
 

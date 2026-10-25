@@ -10,13 +10,49 @@ changes.
 ## Repository structure
 
 A board repository has a root `pcb.toml` with `[workspace]` and `[board]`
-metadata, a board `.zen` entrypoint, and generated KiCad files under `layout/`.
+metadata, a board `.zen` entrypoint, and generated KiCad files under `eda/`.
 Create one with `pcb new board <NAME> <REPO_URL>`.
+
+```toml
+[workspace]
+repository = "github.com/myorg/MainBoard"
+pcb-version = "0.4"
+
+[board]
+name = "MainBoard"
+path = "MainBoard.zen"
+```
+
+`repository` identifies the repository used to derive package URLs. `pcb-version`
+accepts a `major.minor` lane, not an exact release or `nightly`; see
+[Toolchains](/pages/quickstart#toolchains) for per-command overrides.
+`[board].path` selects the entrypoint; the `Board()` call in that file controls
+the KiCad output path. `[board].description` is optional.
 
 A registry repository has a root `[workspace]` but no `[board]`. Both repository
 types can own reusable packages under `components/` and `modules/`. Each package
 has its own `pcb.toml` and `.zen` entrypoints; component packages also carry
 their symbols and footprints. `vendor/` holds vendored dependencies.
+
+Only the workspace root contains `[workspace]`. Add a reusable package with
+`pcb new package <path>`; it omits `[board]`. Dependencies belong to the manifest
+of the importing package, including the root manifest for the board.
+
+### Component sourcing metadata
+
+Package manifests may declare top-level `parts` associated with KiCad symbols.
+Place it before any table headers so TOML does not interpret it as a dependency:
+
+```toml
+parts = [
+  { mpn = "TPS54331DR", manufacturer = "Texas Instruments", symbol = "TPS54331.kicad_sym", symbol_name = "TPS54331" },
+]
+```
+
+Each part requires `mpn`, `manufacturer`, and a package-relative `symbol` path.
+`symbol_name` is required for multi-symbol libraries; it may be omitted when the
+file contains exactly one symbol. Optional fields are `qualifications` and
+`datasheet`. See [Component](/pages/spec#component) for explicit sourcing inputs.
 
 ## Version policy
 
@@ -181,12 +217,17 @@ Pseudo-versions identify unreleased commits while preserving version ordering.
 
 The format is `v<base>-0.<timestamp>-<commit>`.
 
+Select a branch:
+
 ```toml
 [dependencies]
-# Branch reference - resolved to pseudo-version
 "github.com/acme/component-lib" = { branch = "main" }
+```
 
-# Specific commit
+Or pin a specific commit:
+
+```toml
+[dependencies]
 "github.com/acme/component-lib" = { rev = "a1b2c3d4" }
 ```
 
@@ -221,11 +262,6 @@ the workspace's current `pcb-version` lane. After all migrations succeed, the
 command updates `[workspace].pcb-version` in `pcb.toml` to the target toolchain
 lane.
 
-```bash
-pcb migrate
-pcb migrate ./path/to/workspace
-```
-
 ### `pcb sync`
 
 Reconciles imports and hydrates package manifests. Run this after adding or
@@ -234,7 +270,6 @@ removing imports or changing dependency versions.
 ```bash
 pcb sync                    # Sync packages under the current workspace/package
 pcb sync --check            # CI guard: fail if pcb.toml or vendor/ is out of sync
-pcb sync -v                 # Print changed manifests
 ```
 
 The command also downloads selected packages into the cache and vendors packages
@@ -259,20 +294,6 @@ pcb add -u github.com/acme/regulators/Buck
 `pcb add` rewrites the direct dependency entry and rehydrates the package's
 dependency closure.
 
-### `pcb build`
-
-Builds a board or workspace package.
-
-```bash
-pcb build                    # Build default board
-pcb build WV0002.zen         # Build a specific board file
-pcb build --offline          # Build using only cached/vendored packages
-```
-
-`pcb build` checks that the hydrated state is sufficient and does not rewrite
-`pcb.toml` or `vendor/`. Use `pcb sync` or `pcb vendor` to update dependency
-state.
-
 ### `pcb list`
 
 Lists read-only package dependency information.
@@ -295,20 +316,17 @@ a bare path selects the workspace's package or dependency, and anything else
 (`<url>@<version>`, or a bare path outside a workspace) is fetched from the
 registry into the cache.
 
-### `pcb update`
-
-`pcb update` is disabled. Use [`pcb add -u`](#pcb-add) instead.
-
 ### `pcb publish`
 
-Publishes changed packages with annotated Git tags.
+Publishes changed packages with annotated Git tags in dependency order, updating
+dependents' manifests as their dependencies are published. Bumps are inferred
+from conventional commits unless `--bump=patch`, `minor`, or `major` is given;
+dependent bumps are at least as large as their published internal dependencies'.
+Unpublished packages start at `0.1.0`.
 
 ```bash
-pcb publish                  # Publish all changed packages
-pcb publish --bump=infer     # Infer bumps from commit history and dependency waves
-pcb publish --bump=infer -y  # Skip the final publish confirmation
-pcb publish --force          # Skip preflight checks
-pcb publish --check          # Print the publish plan as JSON without tagging
+pcb publish --check          # Inspect the plan without publishing
+pcb publish                  # Review and confirm publication
 ```
 
 A package requires publication when:
@@ -321,20 +339,6 @@ A package requires publication when:
 `--check` prints one JSON object with a `packages` array. Each entry holds the
 package `path`, its `current` version, the next `version`, and the `tag` to
 create. Bumps are inferred from commit history unless `--bump` is given.
-
-Versions are computed automatically:
-
-- **Unpublished:** Start at `0.1.0`.
-- **Published packages:** Apply the requested semantic-version bump: `patch`,
-  `minor`, or `major`.
-- **`--bump=infer`:** Infer each bump from conventional commits since the last
-  tag, then raise dependent bumps to at least the highest bump among published
-  internal dependencies.
-- **`-y` / `--yes`:** Skip the final confirmation prompt.
-
-Packages are published in dependency order. Packages with no changed
-dependencies are published first; their dependents follow after manifest
-updates.
 
 ### `pcb info`
 

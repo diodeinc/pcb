@@ -149,4 +149,4 @@ within 0.1 % at the median over 76 corpus boards. The exceptions: a panel
 whose routed gaps touch keeps them filled in KiCad; paste of pads with a
 negative margin beyond the pad's size is a fixed aperture in KiCad;
 silkscreen in fonts the board does not embed uses a system font in KiCad
-and the stroke font here; and text on copper layers is not copper here.
+and bundled Liberation Sans here; and text on copper layers is not copper here.

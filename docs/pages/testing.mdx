@@ -3,168 +3,114 @@ title: "Testing"
 description: "Validate Zener modules with test benches and circuit graphs"
 ---
 
-# Testing
+Zener tests check connectivity, component properties, and circuit topology.
+`TestBench` instantiates a module for each input case, then runs check functions
+against the evaluated module.
 
-Zener tests validate module connectivity, component properties, and circuit
-topology. Define tests in `.zen` files and run them with `pcb test`.
+## Write a test bench
 
-## Define a test bench
-
-`TestBench` evaluates a module for one or more input cases and runs each check
-function against the result:
+In a [PCB workspace](/pages/quickstart), create `series.zen` with two resistors
+in series:
 
 ```python
-MyCircuit = Module("./my_circuit.zen")
+Resistor = Module("@stdlib/generics/Resistor.zen")
 
-def verify_power_connections(module, inputs):
-    connections = module.nets.get("VCC", [])
-    check(len(connections) >= 2, "VCC must have at least two connections")
+IN = io(Net)
+OUT = io(Net)
+MID = Net()
 
-def verify_ground(module, inputs):
-    check("GND" in module.nets, "GND net is missing")
+Resistor(name="R1", value="1k", package="0402", P1=IN, P2=MID)
+Resistor(name="R2", value="2k", package="0402", P1=MID, P2=OUT)
+```
+
+Create `test_series.zen` beside it:
+
+```python
+Series = Module("./series.zen")
+
+def resistor(expected_value):
+    def matcher(path, cursor):
+        check(cursor < len(path.components), "expected another resistor")
+        component = path.components[cursor]
+        check(component.type == "resistor", "expected a resistor")
+        check(component.resistance.matches(expected_value), "unexpected resistance")
+        return 1
+    return matcher
+
+def verify_series(module, inputs):
+    components = module.components()
+    check(len(components) == 2, "expected two components")
+    check(components["R1.R"].resistance.matches("1k"), "R1 must be 1 kohm")
+    check(len(module.nets()["TEST_IN"]) == 1, "unexpected input connection")
+
+    paths = module.graph().paths(start="TEST_IN", end="TEST_OUT", max_depth=6)
+    check(len(paths) == 1, "expected one series path")
+    paths[0].matches(resistor("1k"), resistor("2k"))
 
 TestBench(
-    name = "PowerTest",
-    module = MyCircuit,
-    test_cases = {
-        "default": {},
-    },
-    checks = [verify_power_connections, verify_ground],
+    name="SeriesTest",
+    module=Series,
+    test_cases={"default": {"IN": Net("TEST_IN"), "OUT": Net("TEST_OUT")}},
+    checks=[verify_series],
 )
 ```
 
-This example assumes that `MyCircuit` has no required inputs. Supply each
-module input in the case dictionary when the module requires arguments.
+Run it with `pcb test test_series.zen`. Each check receives the evaluated module
+and its case's input dictionary. `check(condition, message)`, `error(message)`,
+and unhandled evaluation errors fail the test with a source location.
 
-| Parameter | Description |
-|---|---|
-| `name` | Test bench identifier. |
-| `module` | Module loader created with `Module()`. |
-| `test_cases` | Nonempty map from case names to module input dictionaries. |
-| `checks` | Functions to run for each evaluated case. |
-
-Each check receives the evaluated module and the active case's input dictionary.
-Call `check(condition, message)` or `error(message)` to fail a test. An unhandled
-evaluation error also fails the test. `pcb test` reports failures with their
-source locations.
+`test_cases` must be a nonempty map of case names to module input dictionaries.
+Supply all required `io()` and `config()` inputs; modules without required
+inputs can use an empty dictionary for a case.
 
 ## Inspect the evaluated module
 
-The evaluated module exposes its nets and components:
-
 | Expression | Result |
 |---|---|
-| `module.nets` | Map from net names to connected component-port tuples. |
-| `module.components` | Map from hierarchical paths to components. |
-| `module["U1"]` | Direct child component or module. |
-| `module["Power.U1"]` | Descendant selected by hierarchical path. |
+| `module.nets()` | Map from net names to connected `(component_path, pin)` tuples. |
+| `module.components()` | Map from module-relative hierarchical paths to components. |
+| `module.components()["R1.R"]` | The physical resistor inside generic module `R1`. |
+| `module.graph()` | Circuit graph for path searches. |
 
-Component values expose `name`, `type`, `pins`, `properties`, sourcing fields,
-and component-specific properties such as `resistance` when present.
+Call `nets()` and `components()` before accessing their dictionaries; the module
+itself does not support `[]`. Component values expose `name`, `type`, `pins`,
+`properties`, sourcing fields, and component-specific properties such as
+`resistance`.
 
-```python
-def verify_feedback_resistor(module, inputs):
-    resistor = module["Feedback.R1"]
-    check(resistor.type == "resistor", "Feedback.R1 must be a resistor")
-    check(resistor.resistance.matches("10k"), "Feedback.R1 must be 10 kohm")
-```
+## Search and match paths
 
-## Search circuit paths
+`graph.paths(start=..., end=..., max_depth=...)` finds simple paths between
+public `io()` net names or `(component_path, pin)` tuples. Tuple paths use the
+graph's full component paths, as returned in a path's `ports`. `max_depth`
+bounds the path's port count, not its component count; omitting it leaves the
+search unbounded. Set it explicitly for large circuits.
 
-`module.graph()` returns the circuit graph. Use `graph.paths()` to find simple
-paths between component pins or public module nets:
-
-```python
-def verify_power_path(module, inputs):
-    graph = module.graph()
-    paths = graph.paths(
-        start = ("Regulator", "VIN"),
-        end = "GND_GND",
-        max_depth = 5,
-    )
-    check(len(paths) > 0, "No path exists from VIN to ground")
-```
-
-`start` and `end` accept a `(component, pin)` tuple or the name of a public net.
-`max_depth` limits the number of traversed components and defaults to 10.
-
-Each returned path provides:
-
-- `ports`: traversed `(component, pin)` tuples
-- `components`: traversed component values
-- `nets`: traversed net names
-
-## Match components in a path
-
-`count`, `any`, `all`, and `none` accept a function that validates one
-component. The matcher succeeds when it returns without an error:
+Each path exposes `ports`, `components`, and `nets`. To test individual
+components, use a check function that succeeds by returning without an error:
 
 ```python
 def is_resistor(component):
-    check(component.type == "resistor", "component is not a resistor")
-
-resistor_count = path.count(is_resistor)
-path.any(is_resistor)
-path.all(is_resistor)
-path.none(is_resistor)
+    check(component.type == "resistor", "expected a resistor")
 ```
 
-`any`, `all`, and `none` fail when their condition is not satisfied.
+| Method | Behavior |
+|---|---|
+| `path.count(is_resistor)` | Count matching components. |
+| `path.any(is_resistor)` | Fail unless at least one matches. |
+| `path.all(is_resistor)` | Fail unless every component matches. |
+| `path.none(is_resistor)` | Fail if any component matches. |
 
-## Match a component sequence
+For ordered topology checks, `path.matches()` calls each matcher with the path
+and current component index. A matcher returns the number of components it
+consumed; the sequence must consume the entire path. The `resistor()` factory
+above is a project-defined helper, not a prelude symbol.
 
-`path.matches()` validates the complete ordered component sequence. Each matcher
-receives the path and the current component index, then returns the number of
-components it consumed.
-
-```python
-def resistor(expected_value=None):
-    def matcher(path, cursor):
-        check(cursor < len(path.components), "expected a resistor at end of path")
-        component = path.components[cursor]
-        check(component.type == "resistor", component.name + " is not a resistor")
-        if expected_value != None:
-            check(component.resistance.matches(expected_value), "unexpected resistance")
-        return 1
-
-    return matcher
-
-def capacitor(expected_value=None):
-    def matcher(path, cursor):
-        check(cursor < len(path.components), "expected a capacitor at end of path")
-        component = path.components[cursor]
-        check(component.type == "capacitor", component.name + " is not a capacitor")
-        if expected_value != None:
-            check(component.capacitance.matches(expected_value), "unexpected capacitance")
-        return 1
-
-    return matcher
-```
-
-Use the matchers in a topology check:
-
-```python
-def verify_filter(module, inputs):
-    paths = module.graph().paths(start=("OpAmp", "OUT"), end="GND_GND")
-    check(len(paths) > 0, "filter path is missing")
-    paths[0].matches(
-        resistor("1k"),
-        capacitor("100nF"),
-        resistor("10k"),
-    )
-```
-
-Matcher helpers are not prelude symbols. Define them in the test file or load
-them from a project-local helper module.
-
-Pass `suppress_errors=True` when a failed sequence is an expected search result.
-The method then returns `False` instead of failing the test:
+When searching among candidate paths, use `suppress_errors=True` to return
+`False` for a sequence mismatch instead of failing the test:
 
 ```python
 matching_paths = [path for path in paths if path.matches(
-    resistor(),
-    capacitor(),
-    suppress_errors = True,
+    resistor("1k"), resistor("2k"), suppress_errors=True,
 )]
-check(len(matching_paths) > 0, "RC path is missing")
+check(len(matching_paths) > 0, "expected a 1k/2k series path")
 ```

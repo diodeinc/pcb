@@ -22,112 +22,22 @@ id = "example-fab"
 name = "Example fabrication kit"
 revision = "2"
 
-[sources.capabilities]
-title = "Example Fab PCB capabilities"
-url = "https://fab.example/capabilities"
-accessed = "2026-09-01"
-
 [profiles.standard]
 name = "1 oz rigid standard"
 technologies = ["rigid"]
-source = "capabilities"
 
 [profiles.standard.support]
 copper_layers = { minimum = 2, maximum = 10 }
-outer_copper_weight = ["1 oz"]
-
-[profiles.standard.defaults]
-material = "FR-4"
-board_thickness = "1.6 mm"
-outer_copper_weight = "1 oz"
-inner_copper_weight = "0.5 oz"
-soldermask_color = "green"
-
-[[rules.assembly.diagnostic]]
-id = "assembly.missing_population"
-select = { diagnostic = "missing_population" }
 
 [[rules.drilling.hole_diameter]]
 id = "drilling.via_hole"
 select = { hole = "via" }
 limit = { minimum = "0.2 mm", preferred = "0.25 mm" }
-source = "capabilities"
-
-[[rules.drilling.hole_aspect_ratio]]
-id = "drilling.via_aspect_ratio"
-select = { hole = "via" }
-limit = { maximum = 8.0 }
-source = "capabilities"
-
-[[rules.drilling.slot_width]]
-id = "drilling.plated_slot"
-select = { plating = "plated" }
-cases = [
-  { id = "2-layer", when = { copper_layers = { exact = 2 } }, limit = { minimum = "0.50 mm" } },
-  { id = "multilayer", when = { copper_layers = { minimum = 3, maximum = 10 } }, limit = { minimum = "0.35 mm" } },
-]
-
-[[rules.drilling.hole_to_hole_clearance]]
-id = "drilling.via_to_pth"
-select = { first_hole = "via", second_hole = "pth" }
-limit = { minimum = "10 mil" }
-
-[[rules.drilling.hole_to_board_edge_clearance]]
-id = "drilling.npth_to_board_edge"
-select = { hole = "npth" }
-limit = { minimum = "0.30 mm", preferred = "0.40 mm" }
-
-[[rules.drilling.slot_to_board_edge_clearance]]
-id = "drilling.nonplated_slot_to_board_edge"
-select = { plating = "nonplated" }
-limit = { minimum = "0.30 mm" }
-
-[[rules.copper.annular_ring]]
-id = "copper.via_annular_ring"
-select = { hole = "via" }
-limit = { minimum = "100 um", preferred = "0.125 mm" }
-
-[[rules.copper.plated_slot_enclosure]]
-id = "copper.plated_slot_enclosure"
-limit = { preferred = "0.25 mm" }
-
-[[rules.copper.hole_clearance]]
-id = "copper.via_hole_clearance"
-select = { hole = "via" }
-limit = { minimum = "0.20 mm", preferred = "0.25 mm" }
-
-[[rules.copper.slot_clearance]]
-id = "copper.plated_slot_clearance"
-select = { plating = "plated" }
-limit = { minimum = "0.40 mm", preferred = "0.50 mm" }
-
-[[rules.copper.feature_width]]
-id = "copper.feature_width"
-cases = [
-  { id = "outer-1oz", when = { copper = { position = "outer", weight = "1 oz" } }, limit = { minimum = "0.10 mm" } },
-]
-
-[[rules.stackup.board_thickness]]
-id = "stackup.board_thickness"
-limit = { nominal = ["0.8 mm", "1.6 mm"], tolerance = "0.1 mm", tolerance_percent = 10 }
-
-[[rules.stackup.copper_weight]]
-id = "stackup.inner_copper_weight"
-select = { position = "inner" }
-limit = { allowed = ["0.5 oz", "1 oz"] }
-
-[[rules.board.surface_finish]]
-id = "board.surface_finish"
-limit = { allowed = ["lead_free_hasl", "enig"] }
-
-[[rules.board.soldermask_color]]
-id = "board.soldermask_color"
-limit = { allowed = ["green", "black"] }
-
-[[rules.board.size]]
-id = "board.size"
-limit = { minimum = ["3 mm", "3 mm"], maximum = ["500 mm", "400 mm"] }
 ```
+
+See the [file-backed example](../examples/dfm-pdk.toml) for conditional limits
+and more rule families, and the [PDK types](../src/commands/dfm/pdk.rs) for the
+complete accepted fields. The example is illustrative, not a qualified process.
 
 One PDK file is a kit with named profiles. A built-in name such as
 `jlcpcb-1oz` selects both a kit and one profile. A built-in name without a
@@ -255,34 +165,10 @@ retained in the report for auditability.
 
 ## Evaluation model
 
-Each rule has one verdict-producing evaluator. The evaluator uses the
-highest-level representation that still states the measured quantity exactly,
-and lowers only when fabrication composition can change that quantity. A
-high-level pass is never allowed to suppress a later authoritative failure.
-
-| Check | Authoritative representation | Acceleration only |
-| --- | --- | --- |
-| Profile copper-layer support | Conductive layers in the one physical IPC stackup | None |
-| Hole diameter | Materialized IPC drill primitive and plating class | None |
-| Plated-hole aspect ratio | Physical IPC stackup thickness over the resolved circular drill span, divided by finished hole diameter | None |
-| Nominal slot width | IPC slot primitive width | None |
-| Outline slot width | Materialized filled route outline, then its narrowest maximal inscribed disk | None |
-| Hole-to-hole clearance | Materialized drill circles and overlapping drill spans | Sorted bounds prune pairs already proven clear |
-| Hole-to-board-edge clearance | Analytic drill circle against its enclosing physical board profile, including cutouts | Indexed profile boundaries |
-| Slot-to-board-edge clearance | Materialized filled route outline against its enclosing physical board profile, including cutouts | Indexed profile boundaries |
-| Annular ring | Drill circle and final composed copper image on each applicable layer | Batched containment and an indexed copper boundary |
-| Plated-slot enclosure | Minimum distance from the materialized slot boundary to final copper with the cavity filled for the query | Indexed boundaries |
-| Hole-to-copper clearance | Analytic drill circle and attributed final composed copper on each layer in its drill span | Indexed attributed-copper boundaries |
-| Slot-to-copper clearance | Materialized filled route outline and attributed final composed copper on each layer in its physical span | Indexed region boundaries |
-| Copper width | Final composed copper image, medial-axis width of each residue | Guarded opening localizes candidates |
-| Copper clearance | Final composed copper attributed to occurrence-scoped electrical conductors | Sorted bounds prune conductor components already proven clear |
-| Soldermask web | Final composed mask-opening image, medial-axis width of each residue | Guarded closing localizes candidates |
-| V-score and board-edge clearance | Materialized line/profile geometry against final composed copper | Indexed copper boundaries |
-| Board-array spacing | Materialized filled array profiles | Bounding boxes prune pairs already proven clear |
-| Copper weight | Standard weight of each copper layer in the one physical IPC stackup | None |
-| Board thickness | IPC-2581 `overallThickness`, or the sum of physical stackup layers | None |
-| Surface finish and soldermask colour | IPC-2581 stackup specs | None |
-| Board size | Bounding box of the checked layout target's profile | None |
+Checks measure source primitives and stackup facts where sufficient, and final
+composed geometry where polarity or material removal changes the result. The
+[rule semantics](#rule-semantics) define each measured quantity; bounds and
+spatial indices accelerate checks but never substitute for a measurement.
 
 Geometric checks produce an aggregate measurement per subject and retain its
 failing measured sites. Measurements carry the uncertainty of the flattened
@@ -309,27 +195,13 @@ circle evidence identify the hole, while its measurement records the actual
 unitless ratio, maximum, drilled-span thickness, finished diameter, and
 thickness source. Witness separation does not encode the ratio.
 
-Morphological opening and closing are deliberately candidate stages for width
-and soldermask-web checks. Each candidate residue is measured on the medial
-axis of the unsnapped prepared boundary, as an inscribed disk diameter. The
-checker constructs the analytic point/point, point/line, and line/line
-bisectors of nearby facing segments: on distinct rings, or on one ring
-neither adjacent nor turned within a quarter turn of each other, the same
-judgement that selects the candidates. Quadratic roots delimit valid
-contact domains, nearest-boundary intervals, residue crossings, and radius
-limits. Vertices and spans share this construction; no snap-grid repair,
-sample-dependent disk pruning, or angular tuning margin decides eligibility.
-The contacts must be equidistant, globally nearest, and strictly obtuse from
-the center beyond numerical roundoff. Endpoint normal cones exclude corner
-contacts shadowed by adjoining edges. The disk radius must exceed its recorded
-boundary uncertainty. The minimum and its evidence come from the same analytic
-axis; flattening is used only to draw it, not to measure it.
-This is a resolved-contact measurement of the prepared geometry, not a
-reconstruction of intended curves from an already polygonal input. Source
-boundary uncertainty contributes to scalar width, but does not bound contact
-direction or certify source-branch correspondence or topology. Bounds and
-spatial indices can prove work unnecessary, but cannot emit a finding without
-the geometric measurement.
+Morphological opening/closing only finds width and soldermask-web candidates.
+Their measured width is an inscribed disk diameter on the medial axis of the
+unsnapped prepared boundary; the minimum and evidence share that measurement.
+Axis flattening is for drawing, not measuring. This measures resolved contacts
+in prepared geometry, not intended curves reconstructed from polygonal input.
+Source uncertainty contributes to scalar width but does not certify contact
+direction, source-branch correspondence, or topology.
 
 Copper-clearance ownership is retained through that same ordered artwork
 composition. Dark features add material to their owner; clears and final
@@ -369,19 +241,8 @@ lowest Step that holds all of its subjects:
   line crosses alike. A board profile is measured against the copper of its
   own Step.
 
-A frame holds of what its Step places only what such a measurement can reach:
-placed copper within the largest conductor clearance limit of something
-outside its placement, and placed mask openings within the web check's reach
-of something outside theirs, together with the openings that chain to them.
-Bounds decide this conservatively, so nothing a rule could measure is left
-out; everything else a Step places is measured in its own frame and only
-counted here.
-
-The same evaluators therefore run on a lone board, a board array or a
-fabrication panel without a second DFM code path: a lone board is a layout of
-one Step placed once. Rules are rigid-motion invariant, so a Step's findings
-hold wherever it is placed; the report lists those placements once per Step
-(see [frames](#frames)) instead of repeating findings.
+Each Step's findings apply at its placements; the report lists these in
+[frames](#frames) instead of repeating findings for identical placements.
 
 ## Rule semantics
 
@@ -484,6 +345,13 @@ hold wherever it is placed; the report lists those placements once per Step
   without a net leaves this rule `incomplete` instead of being guessed into an
   electrical domain; rules that measure the composed image are unaffected. Fiducials, copper-balance
   support, and netless pads remain explicit auxiliary conductors.
+- Explicit IPC `NetShort` declarations permit validated net-tie contacts on the
+  containing copper layer: a matching component graphic/pad contact permits
+  that graphic to meet the declared nets; a pad-only tie permits only the pad
+  pair. The declaration must name two distinct nets and match actual contact.
+  It does not merge nets or exempt remote shorts, third-net clearances, or
+  other layout occurrences. Unsupported or unmatched declarations leave the
+  affected ownership-dependent checks `incomplete`, not silently passing.
 - Soldermask-web rules report mask webs — gaps between mask openings —
   narrower than the limit. Morphology finds candidates; the medial-axis
   width decides each finding.
@@ -553,81 +421,46 @@ Use `./standard` to select a same-named file. Both sources use the same parser
 and checks. `--layout-target` accepts
 `board` or `board-array` and defaults to `board-array`.
 
-The `standard` PDK prefers 0.40 mm plated and nonplated slot-to-copper
-clearance. Shortfalls produce warnings, not a failed manufacturing verdict.
-This is conservative Diode routing guidance, not a manufacturer capability
-or an IPC requirement. Slot clearance is not enabled in the JLCPCB kit without
-a manufacturer source. It also fails on the same component-data errors that
-make the assembly report incomplete, with one finding per affected component.
+The bundled TOML files own the exact thresholds and source citations:
 
-The JLCPCB kit executes the public rigid FR-4 capability table for 2-32
-copper layers. It has two profiles, selected by finished outer copper weight:
-`one-ounce` (also `jlcpcb-1oz`) and `two-ounce`. `jlc` selects the
-profile the design's stackup qualifies for, and fails when the outer copper
-is neither 1 oz nor 2 oz. Track width and spacing depend on each layer's own
-weight: 0.10 mm (2-layer) or 0.09 mm (multilayer) for 1 oz outer copper,
-0.16 mm or 0.15 mm for 2 oz, 0.09 mm for 0.5 oz and 1 oz inner copper, and
-0.15 mm for 2 oz inner copper. Both profiles check the standard FR-4
-thicknesses 0.4, 0.6, 0.8, 1.0, 1.2, 1.6, and 2.0 mm within ±0.1 mm below
-1 mm and ±10 % from 1 mm; outer copper of 1 or 2 oz and inner copper of 0.5,
-1, or 2 oz; HASL, lead-free HASL, ENIG, or OSP up to 5 layers and ENIG or OSP
-from 6; green, purple, red, yellow, blue, white, or black soldermask; and
-board extents from 3 × 3 mm to 670 × 600 mm (2-layer), 663 × 593 mm (4-layer),
-or 656 × 586 mm (6 layers and more).
+- [`standard`](../pdks/standard.toml) supports 2–10 copper layers and reports
+  component-data errors that make the assembly report incomplete. Its preferred
+  slot-to-copper clearance is advisory Diode guidance: shortfalls warn, not fail;
+  it is not a manufacturer capability or IPC requirement.
+- [`jlcpcb`](../pdks/jlcpcb.toml) covers a subset of JLCPCB's rigid FR-4 service
+  for 2–32 copper layers. `jlc` selects `one-ounce` or `two-ounce` by finished
+  outer copper weight; `jlcpcb-1oz` fixes `one-ounce`. Track width and spacing
+  depend on each layer's weight. Profiles also check board thickness, finish,
+  soldermask color, and size; outer copper outside 1 oz or 2 oz fails support.
+- [`ipc`](../pdks/ipc.toml) preserves Classes 1–3 crossed with Producibility
+  Levels A–C as executable **partial Diode baselines**, not IPC profile matrices.
+  Aspect-ratio, hole-to-copper, and hole/slot-to-edge limits vary by level, not
+  class. Diode chose these opinionated values using IPC design topics as context;
+  they are not licensed IPC numeric matrices, do not prove full IPC compliance,
+  and do not imply IPC certification. A pass covers only the selected profile's
+  `coverage` metadata and enabled checks.
 
-The kit deliberately omits the one-layer NPTH-only service, heavier copper,
+The JLCPCB kit deliberately omits the one-layer NPTH-only service, heavier copper,
 thicker boards for 12 or more layers, the smaller size limits of boards
 thinner than 0.8 mm, the HASL exclusion for boards of 0.4 mm and thinner,
 local 3 mil BGA exceptions, dielectric layup templates, and panel spacing,
-which depends on the chosen routing, mouse-bite, or V-cut process. JLCPCB
-publishes a 0.10 mm soldermask web for standard colors and 0.13 mm for black
-or white with 1 oz copper, and 0.20 mm with 2 oz. `one-ounce` uses Diode's
-advisory 0.10 mm preferred web and `two-ounce` an advisory 0.20 mm preferred
-web: shortfalls produce warnings, not a failed manufacturing verdict. Passing
-this advisory check does not certify the manufacturer's color-specific
-minimum. `two-ounce` requires a 0.20 mm PTH annular ring and warns below
-JLCPCB's 0.254 mm 2 oz guidance.
+which depends on routing, mouse-bite, or V-cut process. Its soldermask-web checks
+are advisory warnings, not certification of the manufacturer's color-specific
+minimums. Slot-to-copper clearance and plated-slot enclosure are not enabled
+without a manufacturer source.
 
-The nine `ipc-1a` through `ipc-3c` built-ins preserve performance Classes 1-3
-crossed with Producibility Levels A-C, but they are executable **partial Diode
-baselines**, not IPC profile matrices. They check maximum via and PTH aspect
-ratio at 6.0 for Level A, 8.0 for Level B, and 10.0 for Level C. They also
-check via, PTH, and NPTH hole-to-copper clearance at 0.25 mm for Level A,
-0.20 mm for Level B, and 0.15 mm for Level C. They check via, PTH, NPTH,
-plated-slot, and nonplated-slot clearance to the board edge at 0.50 mm for
-Level A, 0.40 mm for Level B, and 0.30 mm for Level C. Plated and nonplated
-slot-to-copper clearance prefers 0.50 / 0.40 / 0.30 mm for A/B/C and warns
-on shortfalls, deliberately allowing more routing margin than for circular
-drills. These values apply across all three performance classes. Each profile
-assumes 1.6 mm board thickness for the through-hole aspect-ratio fallback
-described above. Diode chose these opinionated values using IPC design topics
-as context; they are not licensed IPC numeric matrices, do not prove full IPC
-compliance, and do not imply IPC certification. A pass covers only the checks
-listed in the selected profile's `coverage` metadata.
-
-All nine IPC profiles also adopt the following thresholds from the bundled
+All nine IPC profiles also inherit limits from the bundled
 Diode `standard.toml` PDK, cited as `diode-standard`. These general-purpose
 baselines apply uniformly across classes and levels; they are not IPC
 requirements or qualified capabilities for every technology or copper weight.
-
-| Check | Standard-derived limit | Scope |
-| --- | --- | --- |
-| Copper feature width | Required minimum 5 mil (0.127 mm) | Local widths of final composed copper on every copper layer, not just nominal trace widths |
-| Copper spacing | Required minimum 5 mil (0.127 mm) | Distinct final conductors on every copper layer; fabrication spacing, not voltage-dependent insulation clearance |
-| Annular ring | Required minimum 0.125 mm for vias, 7 mil (0.1778 mm) for PTHs | Nominal circular-hole enclosure on applicable copper layers, not tolerance-aware finished-board acceptance |
-| Hole diameter | Required minimum 0.20 mm for vias/NPTHs, 15 mil (0.381 mm) for PTHs | Source-declared circular hole diameter, interpreted as finished size |
-| Slot width | Required minimum 0.5 mm plated, 31 mil (0.7874 mm) nonplated | IPC primitive width or PCB IR outline minimum width; excludes the optional 0.6 mm plated preferred tier |
-| Hole-to-hole clearance | Required minimum 10 mil (0.254 mm) | All six unordered circular via/PTH/NPTH pair classes with overlapping physical drill spans; excludes routed-slot pairs |
-| Copper-to-board-edge clearance | Required minimum 15 mil (0.381 mm) | Each layer's composed copper image against board edges, including cutouts |
-| Soldermask web | Preferred 4 mil (0.1016 mm), warning only | Webs between final composed mask openings, not mask-to-pad registration; warnings do not fail the verdict |
 
 Hole-diameter checks do not model a separate drill-tool diameter, plating
 allowance, or manufacturing tolerance, and cannot verify the exporter's
 finished-size interpretation.
 
-Standard and all nine IPC profiles warn below 0.25 mm nominal plated-slot
-copper enclosure through a preferred tier. Custom PDKs can supply a required
-minimum. JLCPCB profiles do not enable this check.
+Standard and all nine IPC profiles use preferred warning tiers for nominal
+plated-slot enclosure and slot-to-copper clearance. Custom PDKs can supply
+required minimums.
 
 Every run prints its [summary](#summary) as one line of JSON on stdout. With
 `-o` / `--output` it first writes the full [report](#report-database), a
@@ -759,7 +592,7 @@ Each piece of evidence has exactly one form, its shape's `kind`:
 
 | `kind` | Geometry |
 | --- | --- |
-| `circle` | `center_x`, `center_y`, `diameter` (mm) |
+| `circle` | `center_x`, `center_y` (integer nm); `diameter` (mm) |
 | `segment` | `start_x` … `end_y` |
 | `bounds` | `min_x` … `max_y` |
 | `path` | open polylines in `paths` |
@@ -857,12 +690,6 @@ telemetry.
 
 ### Schema evolution
 
-Report version 3 is a SQLite database instead of JSON. The scene is shapes,
-not SVG, and evidence shares them. Findings keep only their identity, location
-and subjects, and their sites hold all geometry; evidence has one form, with
-the clearance band a `stroke`;
-the subject `source`/`provenance` pair is one `locator`; and waivers are gone.
-A required error stands for a preferred-tier finding of the same subject.
 New columns, records, and `kind`, `role`, `status`, rule, and method values may
 be added within a version. Unknown required semantics must produce an explicit
 unsupported state, never a guessed rendering or fabricated pass. Removing or
