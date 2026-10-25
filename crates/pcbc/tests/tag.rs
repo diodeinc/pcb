@@ -194,4 +194,14 @@ fn test_publish_check_netlist_dir() {
     let bar = std::fs::read_to_string(out.join("modules/Bar/Bar.zen.json")).unwrap();
     assert!(bar.contains("N1"));
     assert!(!out.join("modules/Baz").exists());
+
+    // Reusing a non-empty output directory is rejected.
+    let rerun = sb
+        .run("pcbc", ["publish", "--check", "--netlist-dir", "out"])
+        .stdout_null()
+        .stderr_null()
+        .unchecked()
+        .run()
+        .unwrap();
+    assert!(!rerun.status.success());
 }

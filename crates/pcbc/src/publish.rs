@@ -156,7 +156,8 @@ pub struct PublishArgs {
     pub no_build: bool,
 
     /// With --check, write each built .zen file's JSON netlist to <DIR>/<path>.json,
-    /// where <path> is the .zen file's path relative to the workspace root
+    /// where <path> is the .zen file's path relative to the workspace root. DIR must be empty
+    /// or not exist
     #[arg(
         long,
         value_name = "DIR",
@@ -476,6 +477,14 @@ pub fn execute(args: PublishArgs) -> Result<()> {
 
     if args.netlist_dir.is_some() && path.extension().is_some_and(|ext| ext == "zen") {
         bail!("--netlist-dir only applies to package publishing");
+    }
+    // Writing only into a fresh directory keeps stale netlists and pre-existing
+    // symlinks out of the output.
+    if let Some(dir) = &args.netlist_dir
+        && dir.exists()
+        && dir.read_dir()?.next().is_some()
+    {
+        bail!("--netlist-dir {} must be empty or not exist", dir.display());
     }
 
     if args.check && args.bump == Some(BumpType::Interactive) {
