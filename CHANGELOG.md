@@ -8,6 +8,8 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+## [0.4.93] - 2026-10-25
+
 ### Added
 
 - `pcb publish --check --netlist-dir <DIR>` writes the JSON netlist of each built `.zen` file to `<DIR>/<path>.json`.
@@ -2502,7 +2504,8 @@ Tvs(package="DO-214AA", direction="Unidirectional", reverse_standoff_voltage="24
 - Error on invalid type passed to `io()`
 - Format the auto-generated component .zen files
 
-[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.4.92...HEAD
+[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.4.93...HEAD
+[0.4.93]: https://github.com/diodeinc/pcb/compare/v0.4.92...v0.4.93
 [0.4.92]: https://github.com/diodeinc/pcb/compare/v0.4.91...v0.4.92
 [0.4.91]: https://github.com/diodeinc/pcb/compare/v0.4.90...v0.4.91
 [0.4.90]: https://github.com/diodeinc/pcb/compare/v0.4.89...v0.4.90
