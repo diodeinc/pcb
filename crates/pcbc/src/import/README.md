@@ -21,12 +21,10 @@ pcb import <design.kicad_sch|project.kicad_pro> <output-directory>
 9. `report` writes the extraction report.
 
 KiCad CLI validation and netlist export run on temporary source copies.
-Import resolves the generated Zener workspace offline during final validation.
 Source ERC, DRC, and schematic/PCB parity findings are reported, not import blockers.
 Connectivity follows the schematic even when the PCB is out of sync; import retains
-the existing PCB placement and routing rather than repairing it. The diagnostics JSON
-retains the individual parity findings, and the extraction report records their count.
-Generated-model pin and connectivity validation still blocks incorrect conversions.
+the existing PCB placement and routing. Individual parity findings go in the diagnostics
+JSON; the extraction report records their count.
 
 ## Output behavior
 
@@ -123,12 +121,10 @@ Each physical pad remains a distinct generated terminal. Wires, labels, or touch
 prevent classifying an anchor as an intentional open.
 Mechanical and documentation footprints with no numbered pads remain pinless components.
 
-`pcb-component-gen` renders each physical-pin plan as `Component(...)`.
-
 ## Generated-board validation
 
-The offline build suppresses `bom.unspecified` and `bom.underspecified` locally;
-sourcing completion is not part of structural import.
+The generated workspace is resolved offline. Validation locally suppresses
+`bom.unspecified` and `bom.underspecified`; sourcing completion is out of scope.
 
 Validation compares the complete generated physical-pin set and net partitions with the KiCad source.
 It rejects missing pins, unexpected pins, lost source endpoints, and shorts that are absent from the source schematic.
@@ -153,11 +149,9 @@ generated hierarchy or symbol identities.
 
 ## Footprint de-instancing
 
-Imports with a source board extract standalone footprints from it, without requiring
-the original `.kicad_mod` libraries.
-`pcb-sexpr::board::transform_board_instance_footprint_to_standalone` removes
-instance placement, path, UUID, property, and net data. It preserves local geometry,
-converts back-side geometry and layers, and makes embedded zones and pad angles local.
+Source-board footprints become standalone footprints without the original `.kicad_mod`
+libraries. Extraction strips placement, path, UUID, property, and net data while preserving
+local geometry, converting back-side geometry and layers, and making zones and pad angles local.
 
 ## Persistent schematic identity
 
@@ -177,8 +171,7 @@ converts back-side geometry and layers, and makes embedded zones and pad angles 
   Differing display properties across units of one component are rejected explicitly;
   generated components do not yet represent per-unit display overrides.
 - Wires, graphics, sheet relationships, native no-connects, and symbol geometry
-  remain in the original schematic. Import no longer classifies passive-promotion
-  candidates, substitutes symbols, or writes legacy `pcb:sch` comments.
+  remain native; symbols are not substituted and no `pcb:sch` comments are written.
 - Off-board symbols without a `Path` (artwork, excluded test points or alternate
   parts) remain native documentation, outside KiCad's PCB netlist. Their pins still
   join wiring as in KiCad's connection graph but contribute no component terminals.

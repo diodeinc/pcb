@@ -91,34 +91,10 @@ overlays for debugging.
 
 ## IPC boundary
 
-`pcb_ir::dialects::ipc::balancing_region` supplies only semantic collection and
-orchestration:
-
-```rust
-pub struct BoardArrayBalancingInput {
-    pub panel_outer: ContourSet,
-    pub board_footprints: ContourSet,
-    pub material_removal: ContourSet,
-    pub support_features: ContourSet,
-}
-
-pub struct BalancingRegionOptions {
-    pub clearance_mm: f64,
-    pub regularization_radius_mm: f64,
-    pub gap_radius_mm: f64,
-}
-```
-
-The collector uses existing IR feature spans, sides, and painted paths. It does
-not recognize tooling holes, fiducials, score lines, or other features from
-their shape. Support geometry is stored once in copper-reach buckets; a target
-layer's `support_features` union is derived on demand. An included path without
-paint has no physical envelope, so production collection fails closed instead
-of guessing.
-
-Generic Boolean operations, disk morphology, gap classification, Voronoi-axis
-construction, and certificates remain in `pcb-ir::geom`. File parsing and
-debug rendering remain in `pcb-ipc2581-tools`.
+The [IPC collector and input/options types](../../pcb-ir/src/dialects/ipc/balancing_region.rs)
+use IR feature spans, sides, and painted paths, not shape recognition. An
+included path without paint has no physical envelope, so production collection
+fails closed instead of guessing.
 
 ## Development harness
 
@@ -128,64 +104,25 @@ Run the harness in release mode for corpus iteration:
 cargo build --release -p pcb-ipc2581-tools \
   --example board_array_balancing_region
 
-gtimeout 60 target/release/examples/board_array_balancing_region \
+timeout 60 target/release/examples/board_array_balancing_region \
   path/to/array.xml \
   --output /tmp/balancing-region/case-name \
   --require-a-series-auto
 ```
 
-Options:
+Use GNU `timeout` (`gtimeout` on macOS with GNU coreutils), or omit the timeout
+wrapper. Run the example with `--help` for options and defaults, including the
+selected copper layer and certificate area tolerance.
 
-```text
---clearance-mm <mm>                  nominal clearance; default 0.5
---regularization-radius-mm <mm>      filled-region disk radius; default 0.5
---gap-radius-mm <mm>                 void-gap disk radius; default 0.5
---check-area-tolerance-mm2 <mm²>     certificate threshold; default 0.0001
---copper-layer <name>                layer to inspect; default first copper layer
---require-a-series-auto              reject non-A-series auto arrays
-```
+Each run overwrites deterministic `index.html`/`overview.svg` views, numbered
+intermediate-region SVGs, per-source-layer support views, and `regions.json`
+metrics and exact rings. See the [harness source](board_array_balancing_region.rs)
+for the complete artifact set. Artifacts are written before a failed certificate
+exits nonzero, allowing reproduction without reparsing IPC.
 
-Each run overwrites a deterministic artifact set:
-
-| Artifact | Contents |
-|---|---|
-| `index.html`, `overview.svg` | Interactive and portable combined views |
-| `00-panel-outer.svg` | Raw panel region `P` |
-| `10-board-footprints.svg` | Board-instance region `B` |
-| `20-material-removal.svg` | Fabrication removal `M` |
-| `30-support-features.svg` | Selected layer's support footprint `G_l` |
-| `40-raw-obstacles.svg` | Selected layer's obstacle union `O_l` |
-| `50-panel-keep-in.svg` | Panel eroded by construction clearance |
-| `60-obstacle-keep-out.svg` | Obstacles dilated by construction clearance |
-| `70-clearance-safe-region.svg` | Clearance-safe set `F` |
-| `75-opened-candidates.svg` | Filled-region opening `A` |
-| `80-removed-by-opening.svg` | Material rejected by filled regularization |
-| `82-narrow-voids.svg` | Two-sided closing residuals of the opened candidates |
-| `85-removed-by-gap-regularization.svg` | Material locally trimmed around gaps |
-| `90-safe-region.svg` | Final balancing-safe region |
-| `100-clearance-certificate.svg` | Safe region swept by nominal clearance |
-| `105-gap-violations.svg` | Remaining nominal two-sided gap violations |
-| `110-validation-violations.svg` | Union of all certificate failures |
-| `support-layers/*.svg` | Physical support footprint by source layer |
-| `regions.json` | Metrics and exact rings for every intermediate |
-
-Artifacts are written before a failed certificate exits nonzero. Exact rings
-make a failure reproducible without reparsing IPC.
-
-## Fast validation loop
-
-1. Run `cargo test -p pcb-ir geom::region`.
-2. Build the release harness once.
-3. Regenerate varied A7, A6, A5, and A4 auto-panelized arrays with a bounded
-   timeout.
-4. Require complete painted-path coverage, zero undersized components, and an
-   empty nominal certificate.
-5. Inspect board footprints, material removal, per-layer support, V-cut
-   inclusion, every regularization intermediate, and the final safe region.
-6. Compare `regions.json` area, component, ring, and vertex metrics.
-7. Parse every SVG and independently reconstruct the serialized regions with a
-   second geometry engine for area, subset, clearance, filled-disk, and
-   inter-component-gap checks.
-
-The viewer explains failures; the set-theoretic certificate determines
-correctness.
+For regression work, run `cargo test -p pcb-ir geom::region`, then inspect varied
+auto arrays across sizes and copper layers. Require complete painted-path
+coverage, no undersized components, and a passing nominal certificate. The viewer
+explains failures; the certificate determines the geometric verdict. Independent
+reconstruction of `regions.json` with a second geometry engine is an additional
+validation step, not something the harness performs automatically.

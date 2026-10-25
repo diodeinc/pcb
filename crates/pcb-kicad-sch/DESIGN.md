@@ -10,10 +10,10 @@ symbol-slot identity stored on each managed symbol. Deterministic UUIDs on
 generated labels, wires, sheets, and other items do not grant continued
 ownership of those items.
 
-Analysis interprets the schematic as KiCad does. Reconciliation preserves an
-equivalent schematic except to refresh netlist-derived symbol assembly flags
-and prune obsolete generated module sheets as described below.
-Otherwise, it makes the smallest repair needed to restore equivalence.
+Analysis interprets the schematic as KiCad does. Full reconciliation refreshes
+netlist-derived symbol fields and assembly flags and prunes obsolete generated
+module sheets as described below. Otherwise, it preserves equivalent schematics
+and makes the smallest repair needed to restore equivalence.
 
 KiCad power symbols are adopted by their exact effective net name and
 connectivity. They do not require Zener identity metadata or a particular
@@ -71,8 +71,9 @@ semantic decisions.
   geometry. PCB's realizer places one driver per island with a one-bend stub,
   deriving each driver's kind with the same rule the intent reports; an
   editor may use its own router instead.
-- **Verify** accepts a realization only if every selected issue is gone, no
-  issue appeared, and the result is netlist-equivalent. `pcb apply` verifies
-  through reconciliation, which also proves its edits reversible. An external
-  realizer calls `verify_connectivity_repair`, which additionally requires
-  that nothing outside the intent changed.
+- **Verify** accepts a realization only if every selected issue is gone and no
+  new issue appeared. Scoped repairs may leave unrelated existing issues
+  unresolved; full reconciliation requires netlist equivalence. `pcb apply`
+  verifies through reconciliation, which also proves its edits reversible.
+  An external realizer calls `verify_connectivity_repair`, which additionally
+  requires that nothing outside the intent changed.

@@ -3,32 +3,30 @@
 `pcb-ipc2581-tools` implements the `pcb ipc2581` command group. The `pcb ipc`
 alias provides the same commands.
 
-| Command | Purpose |
-|---|---|
-| `info` | Report board, layer, drill, and stackup metadata. |
-| `assembly` | Emit the versioned PCBA assembly report as JSON. |
-| `bom` | Export the bill of materials. |
-| `cpl` | Export component placement data. |
-| `html` | Export an HTML board summary. |
-| `outline` | Export a KiCad-compatible DXF outline. |
-| `render` | Render the finished board from both sides or one, or a single layer, as terminal graphics, SVG, or PNG. |
-| `dfm check` | Check IPC-2581 geometry against a fabrication PDK; print a JSON summary and write a SQLite report. |
-| `gerber` | Export fabrication layers and drill files. |
-| `view` | Export a filtered IPC-2581 function-mode document. |
-| `board-array create` | Create a rectangular board array. |
-| `board-array plan` | Report boards and utilization per automatic sheet size, and recommend a sheet for an order quantity. |
-| `fab-panel create` | Tile assembly panels into a supported fabrication panel size. |
-| `edit bom` | Add approved alternatives to BOM entries. |
-| `edit population` | Change which BOM designators are populated. |
-| `edit provenance` | Record a production run's parties, BOM header, history, and configuration properties. |
+Run `pcb ipc2581 --help` for available inspection, editing, rendering, and
+manufacturing commands, and `pcb ipc2581 <command> --help` for their options.
 
-Run `pcb ipc2581 <command> --help` for arguments and output options.
+## Geometry accuracy
+
+Global `--accuracy-um N` sets the geometry approximation budget to an integer
+1–100 µm (default 10). It applies to IPC-2581 geometry, Gerber operations, and
+IPC HTML reports, not comparison or feature-significance tolerances. DFM stays
+at 10 µm and copper balancing at 50 µm. KiCad exports, external commands, and
+interposer generation are not controlled by this flag. Smaller budgets may cost
+more time and memory; coarse approximation can lose small features.
+
+## Assembly and production metadata
 
 `assembly` reports the complete board array by default; `--scope board` selects
 one canonical board. See the [assembly report contract](docs/assembly-report.md).
 
-`edit bom` modifies the input file when `--output` is omitted. Specify an output
-path when the source document must remain unchanged.
+`edit bom` applies path-based manufacturer, MPN, and supplier selections from
+JSON. Both `--selections` and `--output` are required; see the
+[selection format](src/commands/bom_edit.rs).
+
+```bash
+pcb ipc edit bom design.xml --selections selections.json --output selected.xml
+```
 
 `edit population` sets `RefDes@populate` on the named designators only:
 `false` for `--dnp`, `true` for `--populate`. Every other designator keeps the
@@ -36,24 +34,10 @@ population it was authored with; a designator outside the BOM is an error. The
 assembly report, `cpl --exclude-dnp`, and board arrays of the edited file follow
 the population. An unchanged population leaves the file byte-for-byte intact.
 
-`edit provenance --provenance <json>` records where a production run came from,
-so the file describes itself. The JSON
-([example](src/commands/testdata/provenance.json)) sets:
-
-- `parties`: LogisticHeader Roles, Enterprises, and Persons, upserted by Role
-  `id`, Enterprise `id`, and Person `name`. A Person takes its party's Role and
-  Enterprise. The OWNER role becomes `Content@roleRef`. KiCad's placeholders
-  (`Role id="Owner"`, `Enterprise id="UNKNOWN"`, `Person name="UNKNOWN"`) are
-  removed unless something still refers to them.
-- `bom`: `assembly` and `revision` of every `BomHeader`.
-- `history`: `lifecyclePhase` and `externalConfigurationEntryPoint` of the
-  HistoryRecord.
-- `spec`: a named CadHeader Spec of `General type="CONFIGURATION"` properties,
-  `text` for strings and `value` for numbers. It replaces a Spec of that name.
-- `changedBy`: the Person the history ChangeRec is attributed to.
-
-Board arrays of the edited file keep the provenance. `info --format json`
-reports it under `provenance`.
+`edit provenance --provenance <json>` records a production run's parties, BOM
+header, history, and configuration properties; see the
+[JSON example](src/commands/testdata/provenance.json). Board arrays preserve
+this provenance, and `info --format json` reports it under `provenance`.
 
 Use `view --mode fabrication` to create an IPC-2581C fabrication projection.
 The projection removes BOM/AVL, package, placement, assembly, solder-paste,
@@ -70,32 +54,13 @@ or a strict, versioned TOML file:
 pcb ipc dfm check fabrication-panel.xml --pdk standard --output panel.dfm
 ```
 
-`standard` currently supports 2 through 10 copper layers.
-`jlc` checks JLCPCB's rigid FR-4 service and selects its `one-ounce` or
-`two-ounce` profile from the design's outer copper weight; `jlcpcb-1oz` always
-runs `one-ounce`. Both profiles check copper weight, board thickness,
-surface finish, soldermask colour, and board size against JLCPCB's options, and
-track width and spacing against each layer's copper weight. They prefer a
-0.10 mm (1 oz) or 0.20 mm (2 oz) soldermask web; shortfalls warn rather than
-fail. This advisory check does not certify JLCPCB's color-specific minimum,
-including 0.13 mm for black or white. The `ipc` alias
-selects the opinionated Class 2 / Producibility Level B default. It and the
-explicit `ipc-1a` through `ipc-3c` profiles run Diode's opinionated partial
-baseline for plated-hole aspect ratio, via, PTH, and NPTH hole-to-copper
-clearance, and via, PTH, NPTH, plated-slot, and nonplated-slot board-edge
-clearance. Diode selected these values with IPC design topics as context; they
-are not licensed IPC numeric matrices, do not prove full IPC compliance, and
-do not imply IPC certification.
-
-Pass a path such as `--pdk ./fab-process.toml` to use a custom PDK. Exact
-built-in names take precedence, so prefix a same-named file with `./`.
+See the [PDK and report formats](docs/dfm.md) for built-in coverage,
+manufacturer-specific omissions, advisory checks, and custom PDKs. A passing
+report covers only the selected checks, not full IPC compliance or certification.
 
 Complete reports are SQLite databases with diagnostics, native vector artwork,
 and the exact PDK source for external viewers. PCB does not generate DFM HTML or
 host a viewer.
-
-See the [PDK and report formats](docs/dfm.md) and the
-[standard PDK](pdks/standard.toml) for details.
 
 ## Panels and copper balancing
 
@@ -108,11 +73,17 @@ balancing. Both commands accept either flag, but not both together. See the
 `board-array create --sheet` gives on each sheet from A7 to A3. With
 `--quantity` (and an optional `--moq`, the minimum number of arrays per order),
 it adds the arrays, boards, and surplus each sheet orders. It then recommends the
-sheet that orders the least array area. When two sheets tie, it recommends the
-smaller one. `--format json` writes the same report as JSON.
+sheet that orders the least array area, excluding A3 whenever a smaller sheet
+fits the board. Ties favor the smaller sheet. `--format json` writes the same
+report as JSON.
 
-`fab-panel create` supports `--panel-size` values `12x18`, `16x18`, `18x24`
-(default), and `21x24`, in inches. Repeat an input path to request multiple copies:
+`board-array create --mouse-bite` uses routed slots and perforated tabs instead
+of V-scores; `--mouse-bite-placement` only analyzes placement and writes JSON.
+The [experimental tab geometry and physical-acceptance limits](../pcb-ir/src/geom/mouse_bite/README.md)
+apply even when manufacturing files are generated.
+
+`fab-panel create` packs assembly panels into a fabrication panel. Repeat an
+input path to request multiple copies:
 
 ```bash
 pcb ipc2581 fab-panel create \
@@ -121,19 +92,16 @@ pcb ipc2581 fab-panel create \
   assembly-a.xml assembly-a.xml assembly-b.xml
 ```
 
-Default process margins are 25.4 mm left/right and 50.8 mm top/bottom; the gap
-between assembly panels is 7.62 mm. Override them with `--edge-margin` (one to
-four CSS-shorthand values in millimeters) and `--panel-gap`.
-
 `--emit-usable-area` omits process margins from the output profile and rebases
 the packing area to the origin, retaining stock size and margins in metadata.
 For example, an 18 by 24 inch panel with `--edge-margin 25.4` emits a 16 by
 22 inch profile.
 
-All inputs must have identical physical stackups. The first input provides the
-fab panel stackup and canonical physical layer definitions. Each input must have
-one simple clockwise rounded-rectangle root profile, as generated by
-`board-array create`.
+Inputs must have identical physical stackups, units, and IPC revisions, and
+each must have a panel layout root with nonempty profile bounds. The first input
+provides the stackup and canonical physical layer definitions. Packing uses
+profile bounding boxes; it does not validate rounded-rectangle shape or winding,
+nor does accepting a profile establish manufacturing qualification.
 
 The generated panel applies the fabrication projection by default. Gerber
 manufacturing export separates profile geometry by purpose:
@@ -157,10 +125,10 @@ terminal output, network availability lookups, native Zstandard, and file
 command wrappers; native CLI behavior remains enabled by default.
 
 Import/export and DFM use the same implementations in both environments.
-`manufacturing::build_manufacturing_package_from_design` reuses an imported
-design; the resulting package exposes individual files and `to_zip()` for an
-in-memory archive. `geometry::render::prepare_layer` prepares a layer for the
-shared SVG/PNG renderers.
+`manufacturing::build_manufacturing_package` reuses an imported design; the
+resulting package exposes individual files and `to_zip()` for an in-memory
+archive. `geometry::render::layer_artwork` returns a `LayerView` containing
+artwork for the shared SVG/PNG renderers.
 
 `assembly::build_report` builds the assembly report from the same imported design.
 

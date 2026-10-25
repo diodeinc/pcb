@@ -4,8 +4,13 @@
 existing `ContourSet`, stroke, transform, and `attachment` query APIs. It accepts
 explicit stock, board, support, boundary station, support anchor and board
 witness. It does **not** choose support locations/counts, loads, clamps, laminate,
-thickness, or panel dimensions. No CLI panelization or manufacturing export is
-enabled. A tab has one perforated board interface; its other end stays on support.
+thickness, or panel dimensions. A tab has one perforated board interface; its
+other end stays on support.
+
+The [board-array adapter](../../../../pcb-ipc2581-tools/README.md#panels-and-copper-balancing)
+uses this builder for `pcb ipc board-array create --mouse-bite`, selecting tabs
+and emitting routed profile cutouts and NPTH holes. Manufacturing output does
+not establish physical acceptance of the experimental preset.
 
 ## Preset and evidence
 
@@ -73,26 +78,19 @@ separately.
 Canonical preparation, offsets and stroke expansion inherit each input region's
 `Resolution` and fallible `GeometryAccuracy` budget. Generated geometry uses the
 tightest input budget without widening it; contours retain their accumulated
-uncertainty. Budget failures propagate through `QueryError::Accuracy`. The coupon
-example uses the default 0.01 mm approximation budget with zero significance,
-plus query allowances of 0.015 mm boundary and 0.000001 mm numerical uncertainty.
-Stored geometry uncertainty is a floor even when a query supplies zero additional
-boundary allowance; neither allowance certifies source-curve topology. Repeated overlay on curved
-polygons can leave sub-micron slivers: tests bound both overlap area (<0.000001
-mm²) and penetration (<0.000001 mm), rather than claiming exact predicates.
-No topology guarantee extends to the pre-flattened source curves.
+uncertainty. Budget failures propagate through `QueryError::Accuracy`. Stored
+geometry uncertainty remains a floor even with zero additional query allowance.
+Repeated overlays can leave sub-micron slivers; bounded overlap/penetration
+tests are not exact predicates or topology guarantees for source curves.
 
 ## Reproducible coupons and outstanding physical acceptance
 
 Run `cargo run -p pcb-ir --example mouse_bite_coupon -- /tmp/coupons`.
 It writes straight/curved overview and detail SVGs, separate routed/retained
-polygon path data, virtual-break path data, and analytic NPTH CSVs. SVGs show
-substrate green, shoulders darker green, routed removal gray, holes white,
-nominal board boundary dashed black and proposed break row red. These are
-geometry review/interchange artifacts, **not** fabrication-ready Gerbers or IPC.
-The straight board is 20×20 mm; the curved board is a 20 mm diameter disk centered
-at (0, −10); support spans (−10, 3) to (10, 13); stock spans (−10, −20) to (10, 13).
-The single neck runs to (0, 5). Units and these datums must survive any fab adapter.
+polygon paths, virtual-break paths, and analytic NPTH CSVs. These are geometry
+review/interchange artifacts, **not** fabrication-ready Gerbers or IPC. The
+[coupon source](../../../examples/mouse_bite_coupon.rs) owns dimensions, datums,
+and query allowances; preserve its units and datums in any fab adapter.
 
 Physical acceptance is **unfulfilled**. No coupons from this preset have been
 fabricated or measured. The intended initial evaluation matrix is rigid FR-4
@@ -104,28 +102,19 @@ laminate grades, copper stackups, or every thickness in between.
 
 Protocol before claiming acceptance:
 
-1. Have the fab approve NPTH diameter, drill registration, slot/radius and copper
-   clearances; freeze coupon revision, laminate grade/weave, thickness, stackup,
-   copper distribution, finish and routing/drilling process. Fabricate both
-   geometries. Measure actual diameter, pitch, neck, offset and thickness.
-2. Clamp the board side at y = −5 mm with a padded jaw and apply an out-of-plane
-   load at the support-side line y = 10 mm with a spreader. Record the actual
-   contact positions, clamp torque, load-cell calibration, loading rate and
-   displacement. Reverse bending direction on separate coupons; do not reuse
-   fractured coupons. Record force–displacement and peak force; calculate moment
-   about the break row from the **measured** lever arm, not a guessed clamp model.
-3. Before destructive testing, use separate samples to exercise the actual
-   intended assembly handling, reflow and support loads. Record sag, permanent
-   set, premature breaks and component damage. A single-tab coupon is not a
-   substitute for an entire populated panel/fixture test.
-4. Photograph both fracture faces with a calibrated scale. Measure maximum nub
-   protrusion and indentation relative to the nominal edge, crack extent,
-   delamination, copper tear-out and loose fragments; inspect brittle nearby
-   components where relevant. Record break effort, debris and required cleanup.
-5. Save raw records with specimen/lot/revision IDs, geometry, material/stackup,
-   measured dimensions, conditioning, fixture/load history, force/displacement,
-   nub/indentation/damage measurements and photos. Establish application-specific
-   acceptance thresholds with manufacturing **before** evaluating pass/fail.
+1. Agree on application-specific acceptance thresholds with manufacturing and
+   have the fab approve drill/routing geometry, registration, and clearances.
+   Freeze revision, laminate/weave, stackup, copper, finish, and process; measure
+   actual hole diameter, pitch, neck, offset, and thickness.
+2. Test both bending directions on separate coupons with a recorded, calibrated
+   fixture/load protocol. Save force–displacement and peak force; derive moment
+   from the **measured** lever arm, not an assumed clamp model.
+3. Use separate samples for handling/reflow/support-load tests, including the
+   actual populated panel and fixture; record sag, permanent set, early breaks,
+   and component damage. A single-tab coupon cannot qualify the full panel.
+4. Measure nubs/indentation, cracks, delamination, copper tear-out, debris, and
+   cleanup. Save calibrated fracture photos and raw measurements with specimen,
+   lot, revision, material, conditioning, and fixture/load traceability.
 
 Neither connected ligaments, simulated virtual release, nor linear elastic
 compliance establishes fracture load, crack trajectory, safe assembly support,

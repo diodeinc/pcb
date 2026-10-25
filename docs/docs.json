@@ -33,19 +33,10 @@
         "group": "Toolchain",
         "pages": [
           "pages/quickstart",
-          "pages/vscode",
           "pages/spec",
           "pages/packages",
           "pages/testing"
         ]
-      },
-      {
-        "group": "Registry",
-        "pages": ["pages/registry"]
-      },
-      {
-        "group": "Examples",
-        "pages": ["pages/antenna_matching_network"]
       }
     ]
   },

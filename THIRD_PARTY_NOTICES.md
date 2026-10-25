@@ -67,9 +67,20 @@ and `lib/std/kicad-footprints/LICENSE.md`.
 licensed under MIT. See the
 [ruff license text](https://github.com/astral-sh/ruff/blob/main/LICENSE).
 
-## KiCad Footprint Generator
+## Fonts
+
+- Bundled Liberation Sans outline fonts retain the copyright and SIL OFL 1.1
+  terms in [their license](crates/pcb-step/fonts/LICENSE).
+- Bundled Roboto Mono retains the copyright and SIL OFL 1.1 terms in
+  [its license](crates/pcb-ipc2581-tools/fonts/RobotoMono-OFL.txt).
+- KiCad's newstroke font data in `crates/newstroke` is
+  [GPL-2.0-or-later](https://spdx.org/licenses/GPL-2.0-or-later.html); its CJK
+  glyphs derive from Source Han Sans under SIL OFL 1.1. The upstream revision
+  and copyright are recorded in the [generated data header](crates/newstroke/src/glyphs.rs).
+
+## KiCad Library Generators
 
 `lib/tools/kicad-step-gen/` contains STEP regeneration tooling that imports
-[kicad-footprint-generator](https://gitlab.com/kicad/libraries/kicad-footprint-generator),
+[kicad-library-generators](https://gitlab.com/kicad/libraries/kicad-library-tools),
 which is GPL-3.0-or-later unless otherwise noted upstream. The local tooling is
 distributed under GPL-3.0-or-later; see `lib/tools/kicad-step-gen/LICENSE.md`.

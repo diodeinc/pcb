@@ -62,99 +62,6 @@ Remote package URLs omit versions. Declare each version in `pcb.toml`:
 
 See [Packages](/pages/packages) for version resolution and `pcb sync`.
 
-### Repository layouts
-
-Zener projects use one of two repository shapes: a board repository or a registry repository.
-
-#### Board repository
-
-A board repository contains one board plus any local modules and components it owns. Create one with `pcb new board <name> <repo-url>`:
-
-```
-MainBoard/
-├── pcb.toml              # Workspace and board manifest
-├── MainBoard.zen
-├── modules/
-│   └── PowerSupply/
-│       ├── pcb.toml      # Package manifest
-│       └── PowerSupply.zen
-└── components/
-    └── TPS54331/
-        ├── pcb.toml
-        └── TPS54331.zen
-```
-
-Use `pcb new package <path>` to add modules or components inside the board repository.
-
-**Manifest** (root `pcb.toml`):
-
-```toml
-[workspace]
-repository = "github.com/myorg/MainBoard"
-pcb-version = "0.4"
-endpoint = "diode.computer"
-
-[board]
-name = "MainBoard"
-path = "MainBoard.zen"
-description = "Replace with concise board description."
-```
-
-- `name`: Optional Diode workspace name override for board release uploads. When omitted, publish uses the first path segment of `repository`.
-- `repository`: Git remote URL used to derive package URLs
-- `pcb-version`: Required toolchain lane (`"0.3"`, `"0.4"`, or `"nightly"`)
-- `endpoint`: Optional Diode host suffix for workspace-scoped app/API URLs
-- `[board]`: The repository's buildable board (`name`, entry `path`, `description`)
-
-Only the workspace root `pcb.toml` may contain a `[workspace]` section.
-Board dependencies are declared in the root manifest's `[dependencies]` table.
-
-#### Registry repository
-
-A registry repository contains reusable packages but no board at the root. It uses top-level `components/` and `modules/` directories:
-
-```
-registry/
-├── pcb.toml              # Workspace manifest
-├── components/
-│   └── TPS54331/
-│       ├── pcb.toml      # Package manifest
-│       ├── TPS54331.zen
-│       ├── TPS54331.kicad_sym
-│       └── TPS54331.kicad_mod
-└── modules/
-    └── UsbCSink/
-        ├── pcb.toml      # Package manifest
-        └── UsbCSink.zen
-```
-
-Registry manifests include `[workspace]` but do not include `[board]`:
-
-```toml
-[workspace]
-repository = "github.com/myorg/registry"
-pcb-version = "0.4"
-```
-
-**Package manifest** (e.g., `modules/PowerSupply/pcb.toml`):
-
-```toml
-[dependencies]
-"code.diode.computer/diode/registry/components/TPS54331" = "1.0"
-
-parts = [
-  { mpn = "TPS54331DR", symbol = "TPS54331.kicad_sym", symbol_name = "TPS54331", manufacturer = "Texas Instruments", qualifications = ["Preferred"] },
-]
-```
-
-Module and component packages omit `[board]` because boards and other modules
-instantiate them as libraries.
-
-- `[dependencies]`: Version constraints for packages imported by this package
-- `parts`: Optional default sourcing metadata keyed by symbol file. Each entry provides `mpn`, `manufacturer`, optional `qualifications`, optional `datasheet`, a package-relative `.kicad_sym` `symbol` path, and optional `symbol_name` to target a specific symbol within a multi-symbol library file. If `symbol_name` is omitted, the referenced `.kicad_sym` file must contain exactly one symbol; otherwise resolution fails and `symbol_name` is required. `Component()` sourcing precedence is described below.
-
-See [Packages](/pages/packages) for the complete manifest reference.
-
 ### Prelude
 
 These stdlib symbols are available in every user `.zen` file without `load()`:
@@ -162,7 +69,7 @@ These stdlib symbols are available in every user `.zen` file without `load()`:
 - `io`, `input`, `output` — from `@stdlib/io.zen`
 - `Net`, `Power`, `Ground`, and the `NotConnected()` open-net constructor — from `@stdlib/interfaces.zen`
 - `Board` — from `@stdlib/board_config.zen`
-- `Layout`, `Part` — from `@stdlib/properties.zen`
+- `Project`, `Layout`, `Part` — from `@stdlib/properties.zen`
 
 Local definitions shadow prelude symbols. The prelude does not apply to stdlib modules themselves.
 

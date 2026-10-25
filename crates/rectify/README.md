@@ -82,18 +82,6 @@ Use `--use-stored-initial-transform` only when comparing against the older
 benchmark behavior. The benchmark reports pass rate, reward score, exact
 rotation rate, high-percentile offset error, and per-footprint-type results.
 
-## Source layout
-
-| Module | Responsibility |
-|---|---|
-| `footprint` | Parse footprints and load embedded or referenced STEP data. |
-| `mesh` | Tessellate STEP geometry. |
-| `pose` | Generate KiCad-compatible axis-aligned rotations. |
-| `raster` | Build pad, hole, contact, and pin masks. |
-| `solver` | Evaluate poses, translations, support planes, and scores. |
-| `bench` | Compare inferred and stored transforms. |
-| `patch` | Rewrite footprint model transforms. |
-
 Run the crate tests with:
 
 ```bash

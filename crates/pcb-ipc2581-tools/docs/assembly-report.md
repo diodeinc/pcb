@@ -1,4 +1,4 @@
-# PCBA assembly report v4
+# PCBA assembly report v5
 
 `assembly::build_report` lowers one cached `pcb-ir` imported design into the
 deterministic contract used by the CLI and native library. The report carries
@@ -11,6 +11,12 @@ select one canonical board instead.
 ```bash
 pcb ipc assembly design.xml --scope board-array > assembly-report.json
 ```
+
+Alternatively, `--report FILE` reads a current-schema report (`-` reads stdin)
+instead of XML, preserving its scope; `--scope` cannot be combined with it.
+`--dnp` and `--populate` override named BOM designators on either input and
+recompute population-dependent counts, diagnostics, and readiness. Older report
+schemas are rejected; v5 includes per-component `paste_islands` counts.
 
 The report has no generated timestamp or host file path. Repeating a build
 with the same IPC input and scope produces identical JSON. Stable identifiers
@@ -49,13 +55,9 @@ neither metric uses tolerance-based curve flattening.
 
 Each package preserves its IPC-2581C primary, topside, and other-side views
 when present. Package-level fields retain pin-one metadata, height, negative
-body extension, comment, and pickup point when supplied. A view can contain:
-
-- a body outline and its source transform;
-- a land pattern with pads, targets, pin references, and transforms;
-- silkscreen outlines and markings;
-- an assembly drawing with its outline and markings;
-- structural text with content, font evidence, transform, and bounds.
+body extension, comment, and pickup point when supplied. Views retain body
+outlines, land patterns, silkscreen, assembly drawings, and structural text,
+including their transforms, styling, pin references, and font evidence.
 
 Package pins retain their local location, transform, source attributes, and
 shape. Standard primitives are lowered to ordered canonical paths with fill or
@@ -146,7 +148,5 @@ It emits warnings when a hole has ambiguous or conflicting termination
 evidence, or when an associated via has unknown or conflicting protection
 intent.
 
-The complete report contract is declared in `src/assembly/report.rs`. The
-IPC-2581C-valid fixture in `src/assembly/testdata/report.xml` exercises package
-geometry, structural text, board cutouts, via protection, and mirrored panel
-repeats.
+See the [report types](../src/assembly/report.rs) and
+[IPC-2581C fixture](../src/assembly/testdata/report.xml) for the full contract.

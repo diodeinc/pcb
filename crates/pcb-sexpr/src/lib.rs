@@ -12,6 +12,9 @@
 //! - [`Sexpr::walk`] - Depth-first traversal with ancestor context
 //! - [`Sexpr::walk_strings`] - Walk only string literals
 //! - [`PatchSet`] - Collect patches and write directly to any `std::io::Write`
+//!
+//! For KiCad board syntax, see the upstream
+//! [Board File Format](https://dev-docs.kicad.org/en/file-formats/sexpr-pcb/).
 
 #![forbid(unsafe_code)]
 

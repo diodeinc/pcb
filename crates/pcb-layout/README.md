@@ -68,10 +68,13 @@ placement.
 
 ## Layout fragments
 
-A group with `layout_path` can load placement, routing, zones, and graphics from
-a reusable KiCad fragment. The highest successfully loaded fragment in each
-hierarchy branch is authoritative. Descendant fragments in that branch are
-ignored and produce a warning.
+A newly added group with `layout_path` can load placement, routing, zones, and
+graphics from a reusable KiCad fragment only when all its direct member
+footprints are newly added in that sync, not replacements inheriting placement.
+Existing groups and repairs of missing group wrappers do not reapply fragments.
+Among eligible groups, the highest successfully loaded fragment in each hierarchy
+branch is authoritative. Descendant fragments in that branch are ignored and
+produce a warning.
 
 For an authoritative fragment, synchronization:
 
@@ -81,8 +84,9 @@ For an authoritative fragment, synchronization:
 4. Copies the fragment routing with the same translation applied to the block.
 5. Maps fragment net names to board net names through pad connectivity.
 
-A fragment that cannot be loaded does not become authoritative. Its group uses
-normal hierarchical placement.
+Missing fragments and other non-`ValueError` load failures warn and fall back to
+normal hierarchical placement. `ValueError` failures, such as unknown package
+URIs or multiple fragment project files, stop synchronization.
 
 ## Hierarchical placement
 
@@ -93,19 +97,6 @@ with hierarchy depth and is capped at 10 mm.
 
 The placement implementation in `src/scripts/lens/hierplace.py` is independent
 of KiCad. KiCad extraction and mutation are isolated in `kicad_adapter.py`.
-
-## Source layout
-
-```text
-src/scripts/lens/
-├── types.py          # View, complement, and identity types
-├── lens.py           # Extract, adapt, join, and synchronization logic
-├── kicad_adapter.py  # KiCad board input and output
-├── hierplace.py      # Deterministic hierarchical placement
-├── changeset.py      # Planned synchronization operations
-├── oplog.py          # Applied-operation logging
-└── tests/            # Unit, property, and stateful tests
-```
 
 ## Verification
 

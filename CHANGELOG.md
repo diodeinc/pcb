@@ -108,9 +108,6 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ### Fixed
 
 - `pcb gltf export --synthesize-outline` exports an empty board as an empty scene instead of failing.
-
-### Fixed
-
 - STEP and GLB solder mask no longer bulges past a board edge whose corners happen to lie on one circle, such as a chamfered top: straight runs are refitted as arcs only when their chords stay within 0.02 mm of the arc.
 - Custom pads keep the holes their primitives enclose, so an outlined logo is no longer filled solid in copper, mask and paste, and their `gr_curve` primitives are drawn.
 - Curves drawn on silkscreen, mask, paste and copper layers are stroked open, without a stroke joining their ends.
