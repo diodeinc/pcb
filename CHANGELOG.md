@@ -8,6 +8,14 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Fixed
+
+- JLCPCB DFM requires a 0.254 mm PTH annular ring for 2 oz copper and checks published drill-to-copper and nonplated-slot-to-copper clearances. Inferred mixed-hole and NPTH-pair spacing limits warn instead of failing the board.
+
+### Changed
+
+- The `standard` DFM PDK retains stricter Diode limits and adopts stricter JLCPCB limits and missing checks. Both 1 oz and 2 oz profiles use conservative fixed dimensions: 0.16 mm copper width/spacing, 0.254 mm PTH ring, and 0.20 mm preferred soldermask web. Unsupported or mixed outer copper weights fail qualification. The separately pinned IPC baselines are unchanged.
+
 ## [0.4.93] - 2026-10-25
 
 ### Added

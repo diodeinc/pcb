@@ -847,8 +847,8 @@ limit = { minimum = "300 mil" }
               <PolyStepSegment x="5" y="8"/><PolyStepSegment x="2" y="8"/>
             </Polygon></Contour>
             <Contour><Polygon>
-              <PolyBegin x="5.05" y="2"/><PolyStepSegment x="8" y="2"/>
-              <PolyStepSegment x="8" y="8"/><PolyStepSegment x="5.05" y="8"/>
+              <PolyBegin x="5.15" y="2"/><PolyStepSegment x="8" y="2"/>
+              <PolyStepSegment x="8" y="8"/><PolyStepSegment x="5.15" y="8"/>
             </Polygon></Contour>
           </Features></Set>
         </LayerFeature>"#;
@@ -861,7 +861,9 @@ limit = { minimum = "300 mil" }
             </Features>
           </Set>
         </LayerFeature>"#;
-        let board = BOARD.replace(copper, mask_web);
+        let board = BOARD
+            .replace(copper, mask_web)
+            .replace("overallThickness=\"0.07\"", "overallThickness=\"1.6\"");
         let standard = builtin_pdks::find("standard").unwrap();
 
         let results = check_with_pdk(&board, LayoutTarget::Board, standard.source);
@@ -1212,6 +1214,245 @@ limit = { minimum = "300 mil" }
             },
             Resolution::default(),
         )
+    }
+
+    #[test]
+    fn standard_dimensional_limits_cover_both_jlc_profiles() {
+        for copper in ["0.035", "0.07"] {
+            let xml = weighted_board(copper);
+            let standard = check_builtin(&xml, "standard").unwrap();
+            let jlc = check_builtin(&xml, "jlc").unwrap();
+            // Compare the public report's dimensional requirements, including
+            // inactive hole/slot rules. Standard's limits are unconditional;
+            // each must cover every corresponding JLC layer/weight case.
+            for required in jlc
+                .rules
+                .iter()
+                .filter(|rule| rule.limit.normalized_unit == "mm")
+            {
+                assert!(
+                    standard.rules.iter().any(|candidate| {
+                        candidate.quantity == required.quantity
+                            && candidate.finding_title == required.finding_title
+                            && candidate.comparison == required.comparison
+                            && candidate.limit.normalized_unit == "mm"
+                            && (candidate.severity == report::Severity::Error
+                                || required.severity == report::Severity::Warning)
+                            && match required.comparison {
+                                "minimum" => {
+                                    candidate.limit.normalized_value
+                                        >= required.limit.normalized_value
+                                }
+                                "maximum" => {
+                                    candidate.limit.normalized_value
+                                        <= required.limit.normalized_value
+                                }
+                                _ => false,
+                            }
+                    }),
+                    "standard does not cover {} at {}",
+                    required.id,
+                    required.limit.pdk_value
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn standard_qualifies_copper_and_thickness_no_more_loosely_than_jlc() {
+        for (top, bottom, thickness, passes) in [
+            ("0.035", "0.035", "1.6", true),
+            ("0.07", "0.07", "1.6", true),
+            ("0.035", "0.07", "1.6", false),
+            ("0.105", "0.105", "1.6", false),
+            ("0.035", "0.035", "2.4", false),
+        ] {
+            let xml = weighted_board(top)
+                .replace("lineWidth=\"0.12\"", "lineWidth=\"0.2\"")
+                .replace(
+                    &format!("layerOrGroupRef=\"BOTTOM\" thickness=\"{top}\""),
+                    &format!("layerOrGroupRef=\"BOTTOM\" thickness=\"{bottom}\""),
+                )
+                .replace(
+                    "overallThickness=\"1.6\"",
+                    &format!("overallThickness=\"{thickness}\""),
+                );
+            for pdk in ["standard", "jlc"] {
+                let checked = check_builtin(&xml, pdk).unwrap();
+                assert_eq!(
+                    matches!(checked.verdict, report::Verdict::Pass),
+                    passes,
+                    "{pdk}: {top}/{bottom} mm copper, {thickness} mm board: {:?}",
+                    checked.findings
+                );
+            }
+        }
+    }
+
+    /// A four-layer board with a 1 mm hole at (10, 10), and square N1 lands
+    /// enclosing it by `ring_mm` on every layer unless it is nonplated.
+    fn jlc_drilled_board(plating: &str, ring_mm: f64, outer_copper_mm: &str) -> String {
+        let mut xml = weighted_board(outer_copper_mm)
+            .replace("lineWidth=\"0.12\"", "lineWidth=\"0.2\"")
+            .replace(r#"sequence="1"/>"#, r#"sequence="3"/>"#)
+            .replace(
+                r#"<Layer name="BOTTOM""#,
+                r#"<Layer name="IN1" layerFunction="SIGNAL" side="INTERNAL" polarity="POSITIVE"/>
+      <Layer name="IN2" layerFunction="SIGNAL" side="INTERNAL" polarity="POSITIVE"/>
+      <Layer name="DRILL" layerFunction="DRILL" side="ALL" polarity="POSITIVE"><Span fromLayer="TOP" toLayer="BOTTOM"/></Layer>
+      <Layer name="BOTTOM""#,
+            )
+            .replace(
+                r#"<StackupLayer layerOrGroupRef="BOTTOM""#,
+                r#"<StackupLayer layerOrGroupRef="IN1" thickness="0.035" sequence="1"/>
+          <StackupLayer layerOrGroupRef="IN2" thickness="0.035" sequence="2"/>
+          <StackupLayer layerOrGroupRef="BOTTOM""#,
+            );
+        let mut features = format!(
+            r#"<LayerFeature layerRef="DRILL"><Set net="N1"><Hole name="H1" diameter="1" platingStatus="{plating}" x="10" y="10"/></Set></LayerFeature>"#
+        );
+        if plating != "NONPLATED" {
+            let (low, high) = (9.5 - ring_mm, 10.5 + ring_mm);
+            for layer in ["TOP", "IN1", "IN2", "BOTTOM"] {
+                features.push_str(&format!(
+                    r#"<LayerFeature layerRef="{layer}"><Set net="N1"><Features><Contour><Polygon>
+                      <PolyBegin x="{low}" y="{low}"/><PolyStepSegment x="{high}" y="{low}"/>
+                      <PolyStepSegment x="{high}" y="{high}"/><PolyStepSegment x="{low}" y="{high}"/>
+                      <PolyStepSegment x="{low}" y="{low}"/>
+                    </Polygon></Contour></Features></Set></LayerFeature>"#
+                ));
+            }
+        }
+        xml = xml.replace("</Step>", &format!("{features}</Step>"));
+        xml
+    }
+
+    #[test]
+    fn jlc_requires_the_published_two_ounce_pth_annular_ring() {
+        for (copper, ring, fails) in [
+            ("0.035", 0.23, false),
+            ("0.07", 0.23, true),
+            ("0.07", 0.27, false),
+        ] {
+            let checked = check_builtin(&jlc_drilled_board("PLATED", ring, copper), "jlc").unwrap();
+            assert_eq!(
+                matches!(checked.verdict, report::Verdict::Fail),
+                fails,
+                "{copper} mm foil, {ring} mm ring: {:?}",
+                checked.findings
+            );
+            assert_eq!(checked.summary.errors, usize::from(fails));
+        }
+    }
+
+    #[test]
+    fn jlc_checks_drill_to_copper_clearance_by_hole_class_and_layer() {
+        for (plating, ring, layer, id, below, above) in [
+            ("VIA", 0.08, "TOP", "via", 0.19, 0.22),
+            ("VIA", 0.08, "IN1", "via", 0.19, 0.22),
+            ("NONPLATED", 0.0, "TOP", "npth", 0.19, 0.22),
+            ("NONPLATED", 0.0, "IN1", "npth", 0.19, 0.22),
+            ("PLATED", 0.16, "TOP", "pth.outer", 0.27, 0.30),
+            ("PLATED", 0.16, "IN1", "pth.inner", 0.29, 0.32),
+        ] {
+            for (gap, fails) in [(below, true), (above, false)] {
+                let left = 10.5 + gap;
+                let right = left + 1.0;
+                let copper = format!(
+                    r#"<LayerFeature layerRef="{layer}"><Set net="N2"><Features><Contour><Polygon>
+                      <PolyBegin x="{left}" y="9"/><PolyStepSegment x="{right}" y="9"/>
+                      <PolyStepSegment x="{right}" y="11"/><PolyStepSegment x="{left}" y="11"/>
+                      <PolyStepSegment x="{left}" y="9"/>
+                    </Polygon></Contour></Features></Set></LayerFeature>"#
+                );
+                let xml = jlc_drilled_board(plating, ring, "0.035")
+                    .replace("</Step>", &format!("{copper}</Step>"));
+                let checked = check_builtin(&xml, "jlc").unwrap();
+                let result = rule(&checked, &format!("jlc.copper.minimum_hole_clearance.{id}"));
+                assert_eq!(
+                    result.finding_count,
+                    usize::from(fails),
+                    "{plating} on {layer}, {gap} mm gap: {:?}",
+                    checked.findings
+                );
+                assert_eq!(result.severity, report::Severity::Error);
+                if !fails {
+                    assert_eq!(checked.summary.errors, 0, "{:?}", checked.findings);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn jlc_distinguishes_published_and_inferred_hole_pair_limits() {
+        for (first, second, gap, severity) in [
+            ("VIA", "VIA", 0.19, Some(report::Severity::Error)),
+            ("VIA", "VIA", 0.35, None),
+            ("PLATED", "PLATED", 0.35, Some(report::Severity::Error)),
+            ("VIA", "PLATED", 0.35, Some(report::Severity::Warning)),
+            ("VIA", "NONPLATED", 0.35, Some(report::Severity::Warning)),
+            ("PLATED", "NONPLATED", 0.35, Some(report::Severity::Warning)),
+            (
+                "NONPLATED",
+                "NONPLATED",
+                0.35,
+                Some(report::Severity::Warning),
+            ),
+            ("PLATED", "PLATED", 0.47, None),
+            ("VIA", "PLATED", 0.47, None),
+        ] {
+            let x = 11.0 + gap;
+            let hole = format!(
+                r#"<LayerFeature layerRef="DRILL"><Set net="N1"><Hole name="H2" diameter="1" platingStatus="{second}" x="{x}" y="10"/></Set></LayerFeature>"#
+            );
+            let xml = jlc_drilled_board(first, 0.23, "0.035")
+                .replace("</Step>", &format!("{hole}</Step>"));
+            let checked = check_builtin(&xml, "jlc").unwrap();
+            let findings = checked
+                .findings
+                .iter()
+                .filter(|finding| {
+                    finding
+                        .rule_id
+                        .starts_with("jlc.drilling.minimum_hole_clearance.")
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(findings.len(), usize::from(severity.is_some()));
+            if let Some(severity) = severity {
+                assert_eq!(findings[0].severity, severity, "{first}/{second}");
+                assert!((findings[0].measurement.actual_mm().unwrap() - gap).abs() < 1e-8);
+            }
+        }
+    }
+
+    #[test]
+    fn jlc_requires_copper_clearance_from_nonplated_routed_slots() {
+        for (gap, fails) in [(0.19, true), (0.22, false)] {
+            let left = 11.5 + gap;
+            let right = left + 1.0;
+            let features = format!(
+                r#"<LayerFeature layerRef="ROUT"><Set><SlotCavity name="S1" platingStatus="NONPLATED"><Location x="10" y="10"/><Oval width="3" height="1"/></SlotCavity></Set></LayerFeature>
+                <LayerFeature layerRef="TOP"><Set net="N2"><Features><Contour><Polygon>
+                  <PolyBegin x="{left}" y="9"/><PolyStepSegment x="{right}" y="9"/>
+                  <PolyStepSegment x="{right}" y="11"/><PolyStepSegment x="{left}" y="11"/>
+                  <PolyStepSegment x="{left}" y="9"/>
+                </Polygon></Contour></Features></Set></LayerFeature>"#
+            );
+            let xml = weighted_board("0.035")
+                .replace(
+                    r#"<Layer name="BOTTOM""#,
+                    r#"<Layer name="ROUT" layerFunction="ROUT" side="ALL" polarity="POSITIVE"><Span fromLayer="TOP" toLayer="BOTTOM"/></Layer><Layer name="BOTTOM""#,
+                )
+                .replace("</Step>", &format!("{features}</Step>"));
+            let checked = check_builtin(&xml, "jlc").unwrap();
+            assert_eq!(
+                checked.summary.errors,
+                usize::from(fails),
+                "{:?}",
+                checked.findings
+            );
+            assert_eq!(matches!(checked.verdict, report::Verdict::Fail), fails);
+        }
     }
 
     #[test]

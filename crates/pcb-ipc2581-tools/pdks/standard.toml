@@ -4,23 +4,43 @@ default_profile = "standard"
 [pdk]
 id = "standard"
 name = "Standard"
-revision = "draft-2026-09-03"
+revision = "jlc-floor-2026-10-26"
 manufacturer = "Diode"
 process = "Standard"
+
+[sources.jlc-baseline]
+title = "Diode baseline bounded by the audited JLCPCB kit"
+url = "https://github.com/diodeinc/pcb/blob/main/crates/pcb-ipc2581-tools/pdks/jlcpcb.toml"
+note = "Standard retains stricter Diode limits and adopts any stricter JLCPCB constraint. Fixed dimensional rules cover both 1 oz and 2 oz JLC profiles using the stricter value; advisory JLC limits remain advisory unless a stricter Diode minimum already applies. This is Diode policy, not a qualified manufacturer's process."
 
 [sources.diode-slot-guidance]
 title = "Diode slot copper guidance"
 url = "https://github.com/diodeinc/pcb/blob/main/crates/pcb-ipc2581-tools/docs/dfm.md"
-note = "Diode prefers 0.40 mm clearance for plated and nonplated slots and 0.25 mm copper enclosure for plated slots as conservative routing guidance, not a manufacturer capability or IPC requirement. Shortfalls warn; missing physical stackup or declared slot span remains an input error."
+note = "Diode prefers 0.40 mm clearance for plated and nonplated slots and 0.25 mm copper enclosure for plated slots as conservative routing guidance, not a manufacturer capability or IPC requirement. Nonplated slots also require the JLCPCB 0.20 mm minimum clearance; shortfalls of preferred limits warn. Missing physical stackup or declared slot span remains an input error."
 
 [profiles.standard]
 name = "Diode standard"
-description = "General-purpose defaults retained from the original Diode DFM PDK."
+description = "Conservative rigid FR-4 baseline at least as strict as the audited JLCPCB 1 oz and 2 oz profiles."
 technologies = ["rigid"]
-coverage = ["Assembly readiness diagnostics"]
+coverage = ["Assembly readiness diagnostics", "2-10 copper layers", "JLCPCB 1 oz and 2 oz constraints as a floor", "Fixed dimensions use the stricter JLC profile value; advisory limits remain advisory"]
+source = "jlc-baseline"
 
 [profiles.standard.support]
 copper_layers = { minimum = 2, maximum = 10 }
+outer_copper_weight = ["1 oz"]
+
+# Qualification follows JLC's uniform outer copper weights. Both profiles use
+# the same conservative dimensional rules below, including on inner layers.
+[profiles.two-ounce]
+name = "Diode standard, 2 oz"
+description = "The same conservative standard limits, qualified for 2 oz outer copper."
+technologies = ["rigid"]
+coverage = ["Assembly readiness diagnostics", "2-10 copper layers", "JLCPCB 1 oz and 2 oz constraints as a floor"]
+source = "jlc-baseline"
+
+[profiles.two-ounce.support]
+copper_layers = { minimum = 2, maximum = 10 }
+outer_copper_weight = ["2 oz"]
 
 [[rules.assembly.diagnostic]]
 id = "assembly.missing_population"
@@ -58,12 +78,14 @@ limit = { minimum = "0.2 mm" }
 [[rules.drilling.hole_diameter]]
 id = "drilling.minimum_pth_hole_diameter"
 select = { hole = "pth" }
-limit = { minimum = "15 mil" }
+limit = { minimum = "15 mil", preferred = "0.50 mm" }
+source = "jlc-baseline"
 
 [[rules.drilling.hole_diameter]]
 id = "drilling.minimum_npth_hole_diameter"
 select = { hole = "npth" }
-limit = { minimum = "0.2 mm" }
+limit = { minimum = "0.50 mm" }
+source = "jlc-baseline"
 
 [[rules.drilling.slot_width]]
 id = "drilling.minimum_slot_width"
@@ -73,7 +95,8 @@ limit = { minimum = "0.5 mm", preferred = "0.6 mm" }
 [[rules.drilling.slot_width]]
 id = "drilling.minimum_slot_width.nonplated"
 select = { plating = "nonplated" }
-limit = { minimum = "31 mil" }
+limit = { minimum = "1.0 mm" }
+source = "jlc-baseline"
 
 [[rules.drilling.hole_to_hole_clearance]]
 id = "drilling.minimum_hole_to_hole_clearance.via_via"
@@ -83,27 +106,32 @@ limit = { minimum = "10 mil" }
 [[rules.drilling.hole_to_hole_clearance]]
 id = "drilling.minimum_hole_to_hole_clearance.via_pth"
 select = { first_hole = "via", second_hole = "pth" }
-limit = { minimum = "10 mil" }
+limit = { minimum = "10 mil", preferred = "0.45 mm" }
+source = "jlc-baseline"
 
 [[rules.drilling.hole_to_hole_clearance]]
 id = "drilling.minimum_hole_to_hole_clearance.via_npth"
 select = { first_hole = "via", second_hole = "npth" }
-limit = { minimum = "10 mil" }
+limit = { minimum = "10 mil", preferred = "0.45 mm" }
+source = "jlc-baseline"
 
 [[rules.drilling.hole_to_hole_clearance]]
 id = "drilling.minimum_hole_to_hole_clearance.pth_pth"
 select = { first_hole = "pth", second_hole = "pth" }
-limit = { minimum = "10 mil" }
+limit = { minimum = "0.45 mm" }
+source = "jlc-baseline"
 
 [[rules.drilling.hole_to_hole_clearance]]
 id = "drilling.minimum_hole_to_hole_clearance.pth_npth"
 select = { first_hole = "pth", second_hole = "npth" }
-limit = { minimum = "10 mil" }
+limit = { minimum = "10 mil", preferred = "0.45 mm" }
+source = "jlc-baseline"
 
 [[rules.drilling.hole_to_hole_clearance]]
 id = "drilling.minimum_hole_to_hole_clearance.npth_npth"
 select = { first_hole = "npth", second_hole = "npth" }
-limit = { minimum = "10 mil" }
+limit = { minimum = "10 mil", preferred = "0.45 mm" }
+source = "jlc-baseline"
 
 [[rules.copper.annular_ring]]
 id = "copper.minimum_via_annular_ring"
@@ -113,11 +141,31 @@ limit = { minimum = "0.125 mm" }
 [[rules.copper.annular_ring]]
 id = "copper.minimum_pth_annular_ring"
 select = { hole = "pth" }
-limit = { minimum = "7 mil" }
+limit = { minimum = "0.254 mm" }
+source = "jlc-baseline"
+
+[[rules.copper.hole_clearance]]
+id = "copper.minimum_via_hole_clearance"
+select = { hole = "via" }
+limit = { minimum = "0.20 mm" }
+source = "jlc-baseline"
+
+[[rules.copper.hole_clearance]]
+id = "copper.minimum_npth_hole_clearance"
+select = { hole = "npth" }
+limit = { minimum = "0.20 mm" }
+source = "jlc-baseline"
+
+[[rules.copper.hole_clearance]]
+id = "copper.minimum_pth_hole_clearance"
+select = { hole = "pth" }
+limit = { minimum = "0.30 mm", preferred = "0.35 mm" }
+source = "jlc-baseline"
 
 [[rules.copper.feature_width]]
 id = "copper.minimum_feature_width"
-limit = { minimum = "5 mil" }
+limit = { minimum = "0.16 mm" }
+source = "jlc-baseline"
 
 [[rules.copper.plated_slot_enclosure]]
 id = "copper.plated_slot_enclosure"
@@ -126,7 +174,8 @@ source = "diode-slot-guidance"
 
 [[rules.copper.clearance]]
 id = "copper.minimum_copper_clearance"
-limit = { minimum = "5 mil" }
+limit = { minimum = "0.16 mm" }
+source = "jlc-baseline"
 
 [[rules.copper.slot_clearance]]
 id = "diode.standard.copper.plated_slot_clearance"
@@ -137,7 +186,7 @@ source = "diode-slot-guidance"
 [[rules.copper.slot_clearance]]
 id = "diode.standard.copper.nonplated_slot_clearance"
 select = { plating = "nonplated" }
-limit = { preferred = "0.40 mm" }
+limit = { minimum = "0.20 mm", preferred = "0.40 mm" }
 source = "diode-slot-guidance"
 
 [[rules.copper.board_edge_clearance]]
@@ -146,11 +195,47 @@ limit = { minimum = "15 mil" }
 
 [[rules.copper.vscore_clearance]]
 id = "copper.minimum_vscore_to_copper_clearance"
-limit = { minimum = "15 mil" }
+limit = { minimum = "0.40 mm" }
+source = "jlc-baseline"
 
 [[rules.soldermask.web]]
 id = "soldermask.minimum_web"
-limit = { preferred = "4 mil" }
+limit = { preferred = "0.20 mm" }
+source = "jlc-baseline"
+
+[[rules.stackup.board_thickness]]
+id = "stackup.board_thickness"
+limit = { nominal = ["0.4 mm", "0.6 mm", "0.8 mm", "1.0 mm", "1.2 mm", "1.6 mm", "2.0 mm"], tolerance = "0.1 mm", tolerance_percent = 10 }
+source = "jlc-baseline"
+
+[[rules.stackup.copper_weight]]
+id = "stackup.outer_copper_weight"
+select = { position = "outer" }
+limit = { allowed = ["1 oz", "2 oz"] }
+source = "jlc-baseline"
+
+[[rules.stackup.copper_weight]]
+id = "stackup.inner_copper_weight"
+select = { position = "inner" }
+limit = { allowed = ["0.5 oz", "1 oz", "2 oz"] }
+source = "jlc-baseline"
+
+[[rules.board.surface_finish]]
+id = "board.surface_finish"
+cases = [
+  { id = "up-to-5-layer", when = { copper_layers = { minimum = 2, maximum = 5 } }, limit = { allowed = ["hasl", "lead_free_hasl", "enig", "osp"] } },
+  { id = "6-layer-and-up", when = { copper_layers = { minimum = 6, maximum = 10 } }, limit = { allowed = ["enig", "osp"] } },
+]
+source = "jlc-baseline"
+
+[[rules.board.size]]
+id = "board.size"
+cases = [
+  { id = "2-layer", when = { copper_layers = { exact = 2 } }, limit = { minimum = ["3 mm", "3 mm"], maximum = ["670 mm", "600 mm"] } },
+  { id = "4-layer", when = { copper_layers = { minimum = 3, maximum = 5 } }, limit = { minimum = ["3 mm", "3 mm"], maximum = ["663 mm", "593 mm"] } },
+  { id = "6-layer-and-up", when = { copper_layers = { minimum = 6, maximum = 10 } }, limit = { minimum = ["3 mm", "3 mm"], maximum = ["656 mm", "586 mm"] } },
+]
+source = "jlc-baseline"
 
 [[rules.panelization.board_spacing]]
 id = "panelization.minimum_board_array_spacing"

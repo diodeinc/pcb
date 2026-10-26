@@ -424,9 +424,20 @@ and checks. `--layout-target` accepts
 The bundled TOML files own the exact thresholds and source citations:
 
 - [`standard`](../pdks/standard.toml) supports 2–10 copper layers and reports
-  component-data errors that make the assembly report incomplete. Its preferred
-  slot-to-copper clearance is advisory Diode guidance: shortfalls warn, not fail;
-  it is not a manufacturer capability or IPC requirement.
+  component-data errors that make the assembly report incomplete. It retains
+  stricter Diode requirements and uses the audited JLCPCB constraints as a
+  floor, including previously missing drill-to-copper, stackup, finish, and size
+  checks. It selects `standard` for uniform 1 oz outer copper or `two-ounce`
+  for uniform 2 oz outer copper; unsupported or mixed outer weights fail
+  qualification. Both profiles use the same fixed dimensions, taking the
+  stricter value across JLC's layer/weight cases: 0.16 mm copper width/spacing,
+  0.254 mm PTH ring, 0.30 mm PTH-to-copper clearance (0.35 mm preferred),
+  and 0.20 mm preferred soldermask web. Advisory JLC limits remain advisory
+  unless an existing Diode minimum is stricter. The 0.40 mm preferred
+  slot-to-copper clearance and 0.25 mm preferred plated-slot enclosure remain
+  Diode guidance; nonplated slots also require 0.20 mm copper clearance.
+  This is a conservative policy, not a qualified manufacturer's process,
+  and it shares the documented JLC coverage gaps below.
 - [`jlcpcb`](../pdks/jlcpcb.toml) covers a subset of JLCPCB's rigid FR-4 service
   for 2–32 copper layers. `jlc` selects `one-ounce` or `two-ounce` by finished
   outer copper weight; `jlcpcb-1oz` fixes `one-ounce`. Track width and spacing
@@ -441,25 +452,70 @@ The bundled TOML files own the exact thresholds and source citations:
   `coverage` metadata and enabled checks.
 
 The JLCPCB kit deliberately omits the one-layer NPTH-only service, heavier copper,
-thicker boards for 12 or more layers, the smaller size limits of boards
-thinner than 0.8 mm, the HASL exclusion for boards of 0.4 mm and thinner,
+thicker boards for 12 or more layers, thickness-dependent size limits,
+the HASL exclusion for boards of 0.4 mm and thinner,
 local 3 mil BGA exceptions, dielectric layup templates, and panel spacing,
 which depends on routing, mouse-bite, or V-cut process. Its soldermask-web checks
 are advisory warnings, not certification of the manufacturer's color-specific
-minimums. Slot-to-copper clearance and plated-slot enclosure are not enabled
-without a manufacturer source.
+minimums. Nonplated routed-slot-to-copper clearance is required at 0.20 mm;
+plated-slot clearance and enclosure remain outside the kit's coverage.
 
-All nine IPC profiles also inherit limits from the bundled
-Diode `standard.toml` PDK, cited as `diode-standard`. These general-purpose
-baselines apply uniformly across classes and levels; they are not IPC
-requirements or qualified capabilities for every technology or copper weight.
+### JLCPCB source audit (2026-10-26)
+
+The [current capability table](https://jlcpcb.com/capabilities/pcb-capabilities)
+is the primary source. Detailed layer/weight conditions take precedence over a
+row's abbreviated headline. These service limits also bound the conservative
+Diode `standard` PDK; missing standard checks do not mean unrestricted service.
+
+| Check | Required minimum | Advisory preference |
+| --- | --- | --- |
+| NPTH diameter | 0.50 mm | — |
+| Nonplated slot width | 1.00 mm | — |
+| Via–via drilled-edge spacing | 0.20 mm | — |
+| PTH–PTH drilled-edge spacing | 0.45 mm | — |
+| Mixed hole pairs and NPTH–NPTH spacing | Not established | 0.45 mm, Diode review guidance |
+| PTH ring, 1 oz, two layers | 0.18 mm | 0.25 mm |
+| PTH ring, 1 oz, multilayer | 0.15 mm | 0.20 mm |
+| PTH ring, 2 oz | 0.254 mm | — |
+| Via/NPTH edge to unrelated copper | 0.20 mm | — |
+| PTH edge to unrelated outer copper | 0.28 mm | 0.35 mm |
+| PTH edge to unrelated inner copper | 0.30 mm | — |
+| Nonplated routed-slot edge to copper | 0.20 mm | — |
+| Copper to V-cut centerline | 0.40 mm | — |
+
+Two source ambiguities need explicit policy:
+
+- **NPTH diameter:** the capability table calls 0.50 mm the minimum. A
+  [targeted JLCPCB support reply](https://jlcpcb.com/help/answers/detail/861-Regarding-the-Minimum-NPTH-Diameter)
+  says NPTHs use the same drilling process as plated holes and *suggests*
+  larger than 0.50 mm to avoid HASL solder or soldermask ink blocking them.
+  It does not establish a supported smaller minimum. The kit conservatively
+  retains the published 0.50 mm service limit, not a claim about the smallest
+  drill tool. ENIG alone does not remove the soldermask risk.
+- **Hole-pair scope:** the table specifies via–via and pad-hole spacing, not
+  an ordinary-process matrix covering every mixed pair. Applying 0.45 mm to
+  via–PTH, via–NPTH, PTH–NPTH, and NPTH–NPTH is therefore Diode review guidance,
+  warning only. JLCPCB's [mouse-bite guidance](https://jlcpcb.com/blog/mouse-bite-panelization-guide)
+  explicitly allows 0.35–0.40 mm edge spacing, disproving a universal 0.45 mm
+  NPTH-pair minimum; it does not establish an ordinary mounting-hole limit.
+  [POFV-specific mixed-hole requirements](https://jlcpcb.com/news/free-via-in-pad-6-20-layer-pcbs-pofv)
+  likewise do not establish ordinary-via limits. A warning is not certification
+  that a smaller gap is manufacturable; those process-specific requirements
+  remain outside the kit's coverage.
+
+All nine IPC profiles retain separately pinned copies of earlier Diode
+`standard.toml` limits, cited as `diode-standard`; they do not inherit subsequent
+changes to standard. These general-purpose baselines apply uniformly across
+classes and levels; they are not IPC requirements or qualified capabilities
+for every technology or copper weight.
 
 Hole-diameter checks do not model a separate drill-tool diameter, plating
 allowance, or manufacturing tolerance, and cannot verify the exporter's
 finished-size interpretation.
 
 Standard and all nine IPC profiles use preferred warning tiers for nominal
-plated-slot enclosure and slot-to-copper clearance. Custom PDKs can supply
+plated-slot enclosure and slot-to-copper clearance. Standard additionally
+requires 0.20 mm nonplated-slot clearance. Custom PDKs can supply other
 required minimums.
 
 Every run prints its [summary](#summary) as one line of JSON on stdout. With

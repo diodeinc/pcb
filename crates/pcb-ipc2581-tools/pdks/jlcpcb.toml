@@ -4,14 +4,19 @@ default_profile = "one-ounce"
 [pdk]
 id = "jlcpcb-rigid-fr4"
 name = "JLCPCB rigid FR-4"
-revision = "stackup-profiles-2026-10-15"
+revision = "drill-clearances-2026-10-26"
 manufacturer = "JLCPCB"
 process = "Rigid FR-4, 1 oz or 2 oz outer copper"
+
+[sources.hole-pair-review-guidance]
+title = "Diode hole-pair review guidance"
+url = "https://github.com/diodeinc/pcb/blob/main/crates/pcb-ipc2581-tools/docs/dfm.md"
+note = "Diode extrapolates the 0.45 mm pad-hole spacing to mixed pairs and NPTH pairs for review only. The source audit did not establish a published ordinary-process pair matrix; these are warnings, not established manufacturer minimums or certification of smaller clearances. Process-specific POFV and mouse-bite requirements are not modeled."
 
 [sources.jlc-capabilities]
 title = "JLCPCB PCB Capabilities"
 url = "https://jlcpcb.com/capabilities/pcb-capabilities"
-accessed = "2026-10-15"
+accessed = "2026-10-26"
 note = "Public capability table. Rules use standard service values and exclude special local BGA exceptions."
 
 [sources.diode-mask-guidance]
@@ -68,6 +73,8 @@ source = "jlc-capabilities"
 [[rules.drilling.hole_diameter]]
 id = "jlc.drilling.minimum_npth_hole_diameter"
 select = { hole = "npth" }
+# Retain the published service minimum; support calls it blockage guidance but
+# does not establish a supported smaller minimum. See the coverage notes.
 limit = { minimum = "0.50 mm" }
 source = "jlc-capabilities"
 
@@ -95,14 +102,14 @@ source = "jlc-capabilities"
 [[rules.drilling.hole_to_hole_clearance]]
 id = "jlc.drilling.minimum_hole_clearance.via_pth"
 select = { first_hole = "via", second_hole = "pth" }
-limit = { minimum = "0.45 mm" }
-source = "jlc-capabilities"
+limit = { preferred = "0.45 mm" }
+source = "hole-pair-review-guidance"
 
 [[rules.drilling.hole_to_hole_clearance]]
 id = "jlc.drilling.minimum_hole_clearance.via_npth"
 select = { first_hole = "via", second_hole = "npth" }
-limit = { minimum = "0.45 mm" }
-source = "jlc-capabilities"
+limit = { preferred = "0.45 mm" }
+source = "hole-pair-review-guidance"
 
 [[rules.drilling.hole_to_hole_clearance]]
 id = "jlc.drilling.minimum_hole_clearance.pth_pth"
@@ -113,14 +120,14 @@ source = "jlc-capabilities"
 [[rules.drilling.hole_to_hole_clearance]]
 id = "jlc.drilling.minimum_hole_clearance.pth_npth"
 select = { first_hole = "pth", second_hole = "npth" }
-limit = { minimum = "0.45 mm" }
-source = "jlc-capabilities"
+limit = { preferred = "0.45 mm" }
+source = "hole-pair-review-guidance"
 
 [[rules.drilling.hole_to_hole_clearance]]
 id = "jlc.drilling.minimum_hole_clearance.npth_npth"
 select = { first_hole = "npth", second_hole = "npth" }
-limit = { minimum = "0.45 mm" }
-source = "jlc-capabilities"
+limit = { preferred = "0.45 mm" }
+source = "hole-pair-review-guidance"
 
 [[rules.copper.annular_ring]]
 id = "jlc.copper.minimum_via_annular_ring"
@@ -142,7 +149,34 @@ source = "jlc-capabilities"
 id = "jlc.copper.minimum_pth_annular_ring_2oz"
 profiles = ["two-ounce"]
 select = { hole = "pth" }
-limit = { minimum = "0.20 mm", preferred = "0.254 mm" }
+limit = { minimum = "0.254 mm" }
+source = "jlc-capabilities"
+
+[[rules.copper.hole_clearance]]
+id = "jlc.copper.minimum_hole_clearance.via"
+select = { hole = "via" }
+limit = { minimum = "0.20 mm" }
+source = "jlc-capabilities"
+
+[[rules.copper.hole_clearance]]
+id = "jlc.copper.minimum_hole_clearance.npth"
+select = { hole = "npth" }
+limit = { minimum = "0.20 mm" }
+source = "jlc-capabilities"
+
+[[rules.copper.hole_clearance]]
+id = "jlc.copper.minimum_hole_clearance.pth"
+select = { hole = "pth" }
+cases = [
+  { id = "outer", when = { copper = { position = "outer" } }, limit = { minimum = "0.28 mm", preferred = "0.35 mm" } },
+  { id = "inner", when = { copper = { position = "inner" } }, limit = { minimum = "0.30 mm" } },
+]
+source = "jlc-capabilities"
+
+[[rules.copper.slot_clearance]]
+id = "jlc.copper.minimum_nonplated_slot_clearance"
+select = { plating = "nonplated" }
+limit = { minimum = "0.20 mm" }
 source = "jlc-capabilities"
 
 # Track width and spacing depend on each layer's own finished copper weight.
