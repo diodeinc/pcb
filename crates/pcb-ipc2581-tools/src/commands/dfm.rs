@@ -1222,9 +1222,7 @@ limit = { minimum = "300 mil" }
             let xml = weighted_board(copper);
             let standard = check_builtin(&xml, "standard").unwrap();
             let jlc = check_builtin(&xml, "jlc").unwrap();
-            // Compare the public report's dimensional requirements, including
-            // inactive hole/slot rules. Standard's limits are unconditional;
-            // each must cover every corresponding JLC layer/weight case.
+            // Fixed standard limits must cover every JLC case, even inactive ones.
             for required in jlc
                 .rules
                 .iter()
@@ -1289,8 +1287,7 @@ limit = { minimum = "300 mil" }
         }
     }
 
-    /// A four-layer board with a 1 mm hole at (10, 10), and square N1 lands
-    /// enclosing it by `ring_mm` on every layer unless it is nonplated.
+    /// Four layers, a 1 mm hole at (10, 10), and N1 lands unless nonplated.
     fn jlc_drilled_board(plating: &str, ring_mm: f64, outer_copper_mm: &str) -> String {
         let mut xml = weighted_board(outer_copper_mm)
             .replace("lineWidth=\"0.12\"", "lineWidth=\"0.2\"")

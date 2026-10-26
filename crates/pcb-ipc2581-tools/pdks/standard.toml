@@ -9,33 +9,32 @@ manufacturer = "Diode"
 process = "Standard"
 
 [sources.jlc-baseline]
-title = "Diode baseline bounded by the audited JLCPCB kit"
+title = "JLCPCB baseline"
 url = "https://github.com/diodeinc/pcb/blob/main/crates/pcb-ipc2581-tools/pdks/jlcpcb.toml"
-note = "Standard retains stricter Diode limits and adopts any stricter JLCPCB constraint. Fixed dimensional rules cover both 1 oz and 2 oz JLC profiles using the stricter value; advisory JLC limits remain advisory unless a stricter Diode minimum already applies. This is Diode policy, not a qualified manufacturer's process."
+note = "Use the stricter Diode/JLC limit across both copper weights; preserve advisory tiers."
 
 [sources.diode-slot-guidance]
 title = "Diode slot copper guidance"
 url = "https://github.com/diodeinc/pcb/blob/main/crates/pcb-ipc2581-tools/docs/dfm.md"
-note = "Diode prefers 0.40 mm clearance for plated and nonplated slots and 0.25 mm copper enclosure for plated slots as conservative routing guidance, not a manufacturer capability or IPC requirement. Nonplated slots also require the JLCPCB 0.20 mm minimum clearance; shortfalls of preferred limits warn. Missing physical stackup or declared slot span remains an input error."
+note = "Advisory: 0.40 mm slot clearance and 0.25 mm plated-slot enclosure. NPTH slots also require 0.20 mm clearance."
 
 [profiles.standard]
 name = "Diode standard"
-description = "Conservative rigid FR-4 baseline at least as strict as the audited JLCPCB 1 oz and 2 oz profiles."
+description = "Rigid FR-4 with the stricter Diode/JLCPCB limits."
 technologies = ["rigid"]
-coverage = ["Assembly readiness diagnostics", "2-10 copper layers", "JLCPCB 1 oz and 2 oz constraints as a floor", "Fixed dimensions use the stricter JLC profile value; advisory limits remain advisory"]
+coverage = ["Assembly readiness diagnostics", "2-10 copper layers", "JLCPCB 1 oz/2 oz limits"]
 source = "jlc-baseline"
 
 [profiles.standard.support]
 copper_layers = { minimum = 2, maximum = 10 }
 outer_copper_weight = ["1 oz"]
 
-# Qualification follows JLC's uniform outer copper weights. Both profiles use
-# the same conservative dimensional rules below, including on inner layers.
+# Both profiles share fixed limits, including on inner layers.
 [profiles.two-ounce]
 name = "Diode standard, 2 oz"
-description = "The same conservative standard limits, qualified for 2 oz outer copper."
+description = "Standard limits for 2 oz outer copper."
 technologies = ["rigid"]
-coverage = ["Assembly readiness diagnostics", "2-10 copper layers", "JLCPCB 1 oz and 2 oz constraints as a floor"]
+coverage = ["Assembly readiness diagnostics", "2-10 copper layers", "JLCPCB 1 oz/2 oz limits"]
 source = "jlc-baseline"
 
 [profiles.two-ounce.support]

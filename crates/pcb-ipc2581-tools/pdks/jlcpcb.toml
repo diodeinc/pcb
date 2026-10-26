@@ -11,7 +11,7 @@ process = "Rigid FR-4, 1 oz or 2 oz outer copper"
 [sources.hole-pair-review-guidance]
 title = "Diode hole-pair review guidance"
 url = "https://github.com/diodeinc/pcb/blob/main/crates/pcb-ipc2581-tools/docs/dfm.md"
-note = "Diode extrapolates the 0.45 mm pad-hole spacing to mixed pairs and NPTH pairs for review only. The source audit did not establish a published ordinary-process pair matrix; these are warnings, not established manufacturer minimums or certification of smaller clearances. Process-specific POFV and mouse-bite requirements are not modeled."
+note = "The 0.45 mm mixed-hole/NPTH-pair spacing is inferred guidance, not a published JLCPCB minimum."
 
 [sources.jlc-capabilities]
 title = "JLCPCB PCB Capabilities"
@@ -73,8 +73,7 @@ source = "jlc-capabilities"
 [[rules.drilling.hole_diameter]]
 id = "jlc.drilling.minimum_npth_hole_diameter"
 select = { hole = "npth" }
-# Retain the published service minimum; support calls it blockage guidance but
-# does not establish a supported smaller minimum. See the coverage notes.
+# Published service minimum; smaller NPTHs risk solder/mask blockage.
 limit = { minimum = "0.50 mm" }
 source = "jlc-capabilities"
 
