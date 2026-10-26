@@ -14,7 +14,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Changed
 
-- The `standard` DFM PDK is now at least as strict as both JLCPCB copper-weight profiles.
+- The `standard` DFM PDK tightens weaker limits to the most relaxed JLCPCB 1 oz values, retaining stronger Diode limits.
 
 ## [0.4.93] - 2026-10-25
 

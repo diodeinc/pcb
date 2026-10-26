@@ -426,9 +426,9 @@ The bundled TOML files own the exact thresholds and source citations:
 - [`standard`](../pdks/standard.toml) supports 2–10 copper layers and reports
   assembly-readiness errors. It selects `standard` for 1 oz outer copper or
   `two-ounce` for 2 oz; mixed or unsupported weights fail qualification.
-  Both profiles use fixed limits at least as strict as every JLC layer/weight
-  case, retaining stronger Diode requirements. This is Diode policy, not a
-  qualified manufacturer's process.
+  Both profiles retain stronger Diode limits and tighten weaker ones to the
+  most relaxed JLCPCB 1 oz values. This is Diode policy, not a qualified
+  manufacturer's process.
 - [`jlcpcb`](../pdks/jlcpcb.toml) covers a subset of JLCPCB's rigid FR-4 service
   for 2–32 copper layers. `jlc` selects `one-ounce` or `two-ounce` by finished
   outer copper weight; `jlcpcb-1oz` fixes `one-ounce`. Track width and spacing

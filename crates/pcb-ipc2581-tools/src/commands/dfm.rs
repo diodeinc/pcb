@@ -866,15 +866,17 @@ limit = { minimum = "300 mil" }
             .replace("overallThickness=\"0.07\"", "overallThickness=\"1.6\"");
         let standard = builtin_pdks::find("standard").unwrap();
 
-        let results = check_with_pdk(&board, LayoutTarget::Board, standard.source);
-        let mask_rule = rule(&results, "soldermask.minimum_web.preferred");
+        for (gap, warnings) in [(0.08, 1), (0.15, 0)] {
+            let xml = board.replace("5.15", &(5.0 + gap).to_string());
+            let results = check_with_pdk(&xml, LayoutTarget::Board, standard.source);
+            let mask_rule = rule(&results, "soldermask.minimum_web.preferred");
 
-        assert!(matches!(results.verdict, report::Verdict::Pass));
-        assert_eq!(results.summary.errors, 0);
-        assert_eq!(results.summary.warnings, 1);
-        assert_eq!(mask_rule.severity, report::Severity::Warning);
-        assert!(matches!(mask_rule.status, report::RuleStatus::Warning));
-        assert_eq!(mask_rule.finding_count, 1);
+            assert!(matches!(results.verdict, report::Verdict::Pass));
+            assert_eq!(results.summary.errors, 0);
+            assert_eq!(results.summary.warnings, warnings, "{gap} mm mask web");
+            assert_eq!(mask_rule.severity, report::Severity::Warning);
+            assert_eq!(mask_rule.finding_count, warnings);
+        }
     }
 
     #[test]
@@ -1217,40 +1219,49 @@ limit = { minimum = "300 mil" }
     }
 
     #[test]
-    fn standard_dimensional_limits_cover_both_jlc_profiles() {
+    fn standard_keeps_five_mil_copper_limits_for_both_copper_weights() {
         for copper in ["0.035", "0.07"] {
-            let xml = weighted_board(copper);
-            let standard = check_builtin(&xml, "standard").unwrap();
-            let jlc = check_builtin(&xml, "jlc").unwrap();
-            // Fixed standard limits must cover every JLC case, even inactive ones.
-            for required in jlc
-                .rules
-                .iter()
-                .filter(|rule| rule.limit.normalized_unit == "mm")
-            {
-                assert!(
-                    standard.rules.iter().any(|candidate| {
-                        candidate.quantity == required.quantity
-                            && candidate.finding_title == required.finding_title
-                            && candidate.comparison == required.comparison
-                            && candidate.limit.normalized_unit == "mm"
-                            && (candidate.severity == report::Severity::Error
-                                || required.severity == report::Severity::Warning)
-                            && match required.comparison {
-                                "minimum" => {
-                                    candidate.limit.normalized_value
-                                        >= required.limit.normalized_value
-                                }
-                                "maximum" => {
-                                    candidate.limit.normalized_value
-                                        <= required.limit.normalized_value
-                                }
-                                _ => false,
-                            }
-                    }),
-                    "standard does not cover {} at {}",
-                    required.id,
-                    required.limit.pdk_value
+            for (width, gap, width_fails, gap_fails) in [
+                (0.11, 0.20, true, false),
+                (0.14, 0.20, false, false),
+                (0.20, 0.11, false, true),
+                (0.20, 0.14, false, false),
+            ] {
+                let y = 1.0 + width + gap;
+                let second = format!(
+                    r#"<LayerFeature layerRef="TOP"><Set net="N2"><Features>
+                      <Line startX="1" startY="{y}" endX="29" endY="{y}">
+                        <LineDesc lineWidth="{width}" lineEnd="ROUND"/>
+                      </Line>
+                    </Features></Set></LayerFeature>"#
+                );
+                let xml = weighted_board(copper)
+                    .replace("lineWidth=\"0.12\"", &format!("lineWidth=\"{width}\""))
+                    .replace("</Step>", &format!("{second}</Step>"));
+                let checked = check_builtin(&xml, "standard").unwrap();
+                assert_eq!(
+                    rule(&checked, "copper.minimum_feature_width").status,
+                    if width_fails {
+                        report::RuleStatus::Fail
+                    } else {
+                        report::RuleStatus::Pass
+                    },
+                    "{copper} mm foil, {width} mm width"
+                );
+                assert_eq!(
+                    rule(&checked, "copper.minimum_copper_clearance").status,
+                    if gap_fails {
+                        report::RuleStatus::Fail
+                    } else {
+                        report::RuleStatus::Pass
+                    },
+                    "{copper} mm foil, {gap} mm gap"
+                );
+                assert_eq!(
+                    matches!(checked.verdict, report::Verdict::Fail),
+                    width_fails || gap_fails,
+                    "{:?}",
+                    checked.findings
                 );
             }
         }
@@ -1325,20 +1336,25 @@ limit = { minimum = "300 mil" }
     }
 
     #[test]
-    fn jlc_requires_the_published_two_ounce_pth_annular_ring() {
-        for (copper, ring, fails) in [
-            ("0.035", 0.23, false),
-            ("0.07", 0.23, true),
-            ("0.07", 0.27, false),
+    fn builtin_pth_annular_rings_follow_their_copper_weight_policy() {
+        for (copper, ring, jlc_fails, standard_fails) in [
+            ("0.035", 0.16, false, true),
+            ("0.035", 0.19, false, false),
+            ("0.035", 0.23, false, false),
+            ("0.07", 0.23, true, false),
+            ("0.07", 0.27, false, false),
         ] {
-            let checked = check_builtin(&jlc_drilled_board("PLATED", ring, copper), "jlc").unwrap();
-            assert_eq!(
-                matches!(checked.verdict, report::Verdict::Fail),
-                fails,
-                "{copper} mm foil, {ring} mm ring: {:?}",
-                checked.findings
-            );
-            assert_eq!(checked.summary.errors, usize::from(fails));
+            for (pdk, fails) in [("jlc", jlc_fails), ("standard", standard_fails)] {
+                let checked =
+                    check_builtin(&jlc_drilled_board("PLATED", ring, copper), pdk).unwrap();
+                assert_eq!(
+                    matches!(checked.verdict, report::Verdict::Fail),
+                    fails,
+                    "{pdk}: {copper} mm foil, {ring} mm ring: {:?}",
+                    checked.findings
+                );
+                assert_eq!(checked.summary.errors, usize::from(fails));
+            }
         }
     }
 

@@ -11,7 +11,7 @@ process = "Standard"
 [sources.jlc-baseline]
 title = "JLCPCB baseline"
 url = "https://github.com/diodeinc/pcb/blob/main/crates/pcb-ipc2581-tools/pdks/jlcpcb.toml"
-note = "Use the stricter Diode/JLC limit across both copper weights; preserve advisory tiers."
+note = "Tighten weaker Diode limits to the most relaxed JLCPCB 1 oz values; preserve advisory tiers."
 
 [sources.diode-slot-guidance]
 title = "Diode slot copper guidance"
@@ -22,19 +22,19 @@ note = "Advisory: 0.40 mm slot clearance and 0.25 mm plated-slot enclosure. NPTH
 name = "Diode standard"
 description = "Rigid FR-4 with the stricter Diode/JLCPCB limits."
 technologies = ["rigid"]
-coverage = ["Assembly readiness diagnostics", "2-10 copper layers", "JLCPCB 1 oz/2 oz limits"]
+coverage = ["Assembly readiness diagnostics", "2-10 copper layers", "JLCPCB 1 oz floor"]
 source = "jlc-baseline"
 
 [profiles.standard.support]
 copper_layers = { minimum = 2, maximum = 10 }
 outer_copper_weight = ["1 oz"]
 
-# Both profiles share fixed limits, including on inner layers.
+# Both profiles share the most relaxed JLCPCB 1 oz floor.
 [profiles.two-ounce]
 name = "Diode standard, 2 oz"
 description = "Standard limits for 2 oz outer copper."
 technologies = ["rigid"]
-coverage = ["Assembly readiness diagnostics", "2-10 copper layers", "JLCPCB 1 oz/2 oz limits"]
+coverage = ["Assembly readiness diagnostics", "2-10 copper layers", "JLCPCB 1 oz floor"]
 source = "jlc-baseline"
 
 [profiles.two-ounce.support]
@@ -140,7 +140,7 @@ limit = { minimum = "0.125 mm" }
 [[rules.copper.annular_ring]]
 id = "copper.minimum_pth_annular_ring"
 select = { hole = "pth" }
-limit = { minimum = "0.254 mm" }
+limit = { minimum = "7 mil" }
 source = "jlc-baseline"
 
 [[rules.copper.hole_clearance]]
@@ -158,12 +158,12 @@ source = "jlc-baseline"
 [[rules.copper.hole_clearance]]
 id = "copper.minimum_pth_hole_clearance"
 select = { hole = "pth" }
-limit = { minimum = "0.30 mm", preferred = "0.35 mm" }
+limit = { minimum = "0.28 mm", preferred = "0.35 mm" }
 source = "jlc-baseline"
 
 [[rules.copper.feature_width]]
 id = "copper.minimum_feature_width"
-limit = { minimum = "0.16 mm" }
+limit = { minimum = "5 mil" }
 source = "jlc-baseline"
 
 [[rules.copper.plated_slot_enclosure]]
@@ -173,7 +173,7 @@ source = "diode-slot-guidance"
 
 [[rules.copper.clearance]]
 id = "copper.minimum_copper_clearance"
-limit = { minimum = "0.16 mm" }
+limit = { minimum = "5 mil" }
 source = "jlc-baseline"
 
 [[rules.copper.slot_clearance]]
@@ -199,7 +199,7 @@ source = "jlc-baseline"
 
 [[rules.soldermask.web]]
 id = "soldermask.minimum_web"
-limit = { preferred = "0.20 mm" }
+limit = { preferred = "4 mil" }
 source = "jlc-baseline"
 
 [[rules.stackup.board_thickness]]
