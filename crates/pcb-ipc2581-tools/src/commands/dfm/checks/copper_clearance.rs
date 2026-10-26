@@ -938,8 +938,8 @@ limit = { minimum = "0.15 mm" }
                 "{pdk}: missing 0.05 mm gap"
             );
         }
-        // The IPC profile, unlike standard/JLC, also enables hole-to-copper
-        // clearance. Only the added drill, not E1's ground pad, may hit the tie.
+        // The IPC profile also checks hole-to-copper clearance. Only the added
+        // drill, not E1's ground pad, may hit the tie.
         let report = antenna_check(&xml, "ipc").unwrap();
         assert_eq!(
             report

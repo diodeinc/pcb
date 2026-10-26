@@ -182,14 +182,15 @@ limit = {{ minimum = "0.20 mm" }}"#
     }
 
     #[test]
-    fn standard_slot_copper_checks_warn_without_failing_but_require_a_span() {
+    fn standard_slot_copper_checks_require_npth_minimum_and_warn_above_it() {
         let standard = dfm::builtin_pdks()
             .iter()
             .find(|pdk| pdk.name == "standard")
             .unwrap();
-        for plating in ["PLATED", "NONPLATED"] {
-            let xml = board(plating, "net=\"N1\"", &copper("net=\"N2\""))
-                .replace("height=\"0.6\"", "height=\"0.8\"")
+        for (plating, gap) in [("PLATED", 0.1), ("NONPLATED", 0.1), ("NONPLATED", 0.3)] {
+            let copper = copper("net=\"N2\"").replace("1.1", &(1.0 + gap).to_string());
+            let xml = board(plating, "net=\"N1\"", &copper)
+                .replace("height=\"0.6\"", "height=\"1\"")
                 .replace(
                     "<Datum x=\"0\" y=\"0\"/>",
                     r#"<Datum x="0" y="0"/><Profile><Polygon>
@@ -198,15 +199,23 @@ limit = {{ minimum = "0.20 mm" }}"#
 <PolyStepSegment x="-10" y="-10"/></Polygon></Profile>"#,
                 );
             let result = check(&xml, standard.source);
-            assert!(matches!(result.verdict, report::Verdict::Pass));
-            assert_eq!(result.summary.errors, 0);
+            let fails = plating == "NONPLATED" && gap < 0.2;
+            assert_eq!(matches!(result.verdict, report::Verdict::Fail), fails);
+            assert_eq!(result.summary.errors, usize::from(fails));
             let finding = result
                 .findings
                 .iter()
                 .find(|finding| finding.rule_id.contains("slot_clearance"))
                 .unwrap();
-            assert_eq!(finding.severity, report::Severity::Warning);
-            assert!((finding.measurement.actual_mm().unwrap() - 0.1).abs() < 1e-8);
+            assert_eq!(
+                finding.severity,
+                if fails {
+                    report::Severity::Error
+                } else {
+                    report::Severity::Warning
+                }
+            );
+            assert!((finding.measurement.actual_mm().unwrap() - gap).abs() < 1e-8);
             assert_eq!(finding.subjects[0].kind, "routed_slot");
 
             let enclosure = result

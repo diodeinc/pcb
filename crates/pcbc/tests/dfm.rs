@@ -31,7 +31,7 @@ fn add_outline(sandbox: &Sandbox, board: &str) {
     let path = sandbox.default_cwd().join(board);
     let layout = std::fs::read_to_string(&path).unwrap();
     let body = layout.trim_end().strip_suffix(')').unwrap();
-    let outline = r#"(gr_rect (start -500 -500) (end 500 500) (stroke (width 0.1) (type default)) (fill no) (layer "Edge.Cuts"))"#;
+    let outline = r#"(gr_rect (start -100 -100) (end 100 100) (stroke (width 0.1) (type default)) (fill no) (layer "Edge.Cuts"))"#;
     std::fs::write(path, format!("{body}\t{outline}\n)\n")).unwrap();
 }
 

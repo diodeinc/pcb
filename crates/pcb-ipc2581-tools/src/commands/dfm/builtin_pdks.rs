@@ -29,7 +29,7 @@ macro_rules! builtin {
 }
 
 pub(super) const BUILTIN_PDKS: &[BuiltinPdk] = &[
-    builtin!("standard", "standard", STANDARD),
+    builtin!("standard", STANDARD),
     builtin!("jlcpcb-1oz", "one-ounce", JLCPCB),
     builtin!("jlc", JLCPCB),
     builtin!("ipc", "2b", IPC),

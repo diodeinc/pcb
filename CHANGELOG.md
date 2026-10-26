@@ -8,6 +8,14 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Fixed
+
+- Correct JLCPCB DFM annular-ring and copper-clearance rules; make inferred hole-spacing limits advisory.
+
+### Changed
+
+- The `standard` DFM PDK tightens weaker limits to the most relaxed JLCPCB 1 oz values, retaining stronger Diode limits.
+
 ## [0.4.93] - 2026-10-25
 
 ### Added
