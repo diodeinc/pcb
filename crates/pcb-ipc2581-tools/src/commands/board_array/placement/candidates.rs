@@ -30,6 +30,9 @@ pub struct Rejection {
 
 pub struct Sites {
     pub candidates: Vec<Candidate>,
+    /// Clear convex corners, for when the straight sites cannot hold the
+    /// board.
+    pub corners: Vec<Candidate>,
     pub rejected: Vec<Rejection>,
     /// Frame material beyond an outline-following slot, local to this board.
     pub frame: ContourSet,
@@ -58,6 +61,7 @@ pub fn find(
     };
     let mut sites = Sites {
         candidates: Vec::new(),
+        corners: Vec::new(),
         rejected: Vec::new(),
         frame: ContourSet::empty(resolution),
     };
@@ -99,22 +103,18 @@ pub fn find(
             }
         }
     }
-    // A board whose straight outline offers no site, such as a module
-    // castellated up to its corners, may still be held at its corners.
-    if sites.candidates.is_empty() {
-        for id in boundary
-            .boundaries()
-            .filter(|id| ring_signed_area(&substrate.rings[id.ring]) > 0.0)
-        {
-            let perimeter = boundary.perimeter(id)?;
-            sites.candidates.extend(corners(
-                &substrate.rings[id.ring],
-                intervals,
-                id,
-                perimeter,
-                preset,
-            ));
-        }
+    for id in boundary
+        .boundaries()
+        .filter(|id| ring_signed_area(&substrate.rings[id.ring]) > 0.0)
+    {
+        let perimeter = boundary.perimeter(id)?;
+        sites.corners.extend(corners(
+            &substrate.rings[id.ring],
+            intervals,
+            id,
+            perimeter,
+            preset,
+        ));
     }
     sites.frame = frame;
     Ok(sites)

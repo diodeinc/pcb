@@ -111,7 +111,7 @@ pub(super) fn place(
         islands == 1,
         "placement models one connected board; this substrate has {islands} separate islands"
     );
-    let sites = candidates::find(substrate, &prepared.intervals, preset, resolution)?;
+    let mut sites = candidates::find(substrate, &prepared.intervals, preset, resolution)?;
     let loads = candidates::load_points(substrate, preset.load_point_spacing_mm);
     let bbox = substrate.bbox();
     // Cross rails sit one board span apart, so the rail a tab lands on is
@@ -124,11 +124,20 @@ pub(super) fn place(
         preset.physics,
         preset.min_separation_mm,
     );
-    let selection = select::select(
-        &sites.candidates.iter().map(|c| c.site).collect::<Vec<_>>(),
-        &loads,
-        &model,
-    );
+    let choose = |sites: &candidates::Sites| {
+        select::select(
+            &sites.candidates.iter().map(|c| c.site).collect::<Vec<_>>(),
+            &loads,
+            &model,
+        )
+    };
+    let mut selection = choose(&sites);
+    // Corners join only when the straight outline cannot hold the board.
+    if !selection.satisfied() && !sites.corners.is_empty() {
+        let corners = std::mem::take(&mut sites.corners);
+        sites.candidates.extend(corners);
+        selection = choose(&sites);
+    }
     Ok(Placement {
         prepared,
         sites,
