@@ -962,6 +962,27 @@ impl PhysicalStackup {
         self.layer_thicknesses(0, self.layers.len().saturating_sub(1))
     }
 
+    /// The summed thickness of the layers between each pair of adjacent
+    /// copper layers, top to bottom, labelled "upper–lower".
+    pub fn dielectric_gaps(&self) -> std::result::Result<Vec<(String, f64)>, String> {
+        let copper = (0..self.layers.len())
+            .filter(|&index| self.layers[index].copper_index.is_some())
+            .collect::<Vec<_>>();
+        copper
+            .windows(2)
+            .map(|pair| {
+                let (upper, lower) = (&self.layers[pair[0]].name, &self.layers[pair[1]].name);
+                if pair[1] == pair[0] + 1 {
+                    return Err(format!(
+                        "physical stackup states no dielectric between '{upper}' and '{lower}'"
+                    ));
+                }
+                let gap = self.layer_thicknesses(pair[0] + 1, pair[1] - 1)?;
+                Ok((format!("{upper}–{lower}"), gap.millimeters))
+            })
+            .collect()
+    }
+
     fn layer_thicknesses(
         &self,
         first: usize,

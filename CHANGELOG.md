@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added
+
+- The JLCPCB DFM PDK flags stackups whose dielectric gaps match no JLCPCB stackup template for their build.
+
 ### Fixed
 
 - Correct JLCPCB DFM annular-ring and copper-clearance rules; make inferred hole-spacing limits advisory.
