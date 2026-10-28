@@ -1343,6 +1343,64 @@ limit = { minimum = "300 mil" }
     }
 
     #[test]
+    fn standard_via_drill_and_ring_have_tight_review_bands() {
+        for copper in ["0.035", "0.07"] {
+            for (diameter, ring, errors, warnings) in [
+                (0.189, 0.125, 1, 0),
+                (0.190, 0.125, 0, 1),
+                (0.195, 0.125, 0, 1),
+                (0.200, 0.125, 0, 0),
+                // Keep the error case outside the existing curve uncertainty.
+                (1.0, 0.110, 1, 0),
+                (1.0, 0.115, 0, 1),
+                (1.0, 0.120, 0, 1),
+                (1.0, 0.125, 0, 0),
+            ] {
+                let xml = jlc_drilled_board("VIA", ring, copper).replace(
+                    r#"<Hole name="H1" diameter="1""#,
+                    &format!(r#"<Hole name="H1" diameter="{diameter}""#),
+                );
+                let checked = check_builtin(&xml, "standard").unwrap();
+                assert_eq!(
+                    (checked.summary.errors, checked.summary.warnings),
+                    (errors, warnings),
+                    "{copper} mm foil, {diameter} mm drill, {ring} mm ring: {:?}",
+                    checked.findings
+                );
+                assert_eq!(matches!(checked.verdict, report::Verdict::Fail), errors > 0);
+            }
+        }
+    }
+
+    #[test]
+    fn builtin_routed_edges_have_tight_review_bands() {
+        for (pdk, minimum, target) in [("standard", 0.371, 0.381), ("jlc", 0.19, 0.20)] {
+            for copper in ["0.035", "0.07"] {
+                for (gap, errors, warnings) in [
+                    (minimum - 0.005, 1, 0),
+                    (minimum, 0, 1),
+                    ((minimum + target) / 2.0, 0, 1),
+                    (target, 0, 0),
+                ] {
+                    let y = gap + 0.1;
+                    let xml = weighted_board(copper)
+                        .replace("lineWidth=\"0.12\"", "lineWidth=\"0.2\"")
+                        .replace("startY=\"1\"", &format!("startY=\"{y}\""))
+                        .replace("endY=\"1\"", &format!("endY=\"{y}\""));
+                    let checked = check_builtin(&xml, pdk).unwrap();
+                    assert_eq!(
+                        (checked.summary.errors, checked.summary.warnings),
+                        (errors, warnings),
+                        "{pdk}: {copper} mm foil, {gap} mm gap: {:?}",
+                        checked.findings
+                    );
+                    assert_eq!(matches!(checked.verdict, report::Verdict::Fail), errors > 0);
+                }
+            }
+        }
+    }
+
+    #[test]
     fn builtin_pth_annular_rings_follow_their_copper_weight_policy() {
         for (copper, ring, jlc_fails, standard_fails) in [
             ("0.035", 0.16, false, true),
@@ -1370,8 +1428,10 @@ limit = { minimum = "300 mil" }
         for (plating, ring, layer, id, below, above) in [
             ("VIA", 0.08, "TOP", "via", 0.19, 0.22),
             ("VIA", 0.08, "IN1", "via", 0.19, 0.22),
-            ("NONPLATED", 0.0, "TOP", "npth", 0.19, 0.22),
-            ("NONPLATED", 0.0, "IN1", "npth", 0.19, 0.22),
+            ("NONPLATED", 0.0, "TOP", "npth", 0.189, 0.22),
+            ("NONPLATED", 0.0, "IN1", "npth", 0.189, 0.22),
+            ("NONPLATED", 0.0, "TOP", "npth.preferred", 0.19, 0.20),
+            ("NONPLATED", 0.0, "IN1", "npth.preferred", 0.195, 0.201),
             ("PLATED", 0.16, "TOP", "pth.outer", 0.27, 0.30),
             ("PLATED", 0.16, "IN1", "pth.inner", 0.29, 0.32),
         ] {
@@ -1395,9 +1455,32 @@ limit = { minimum = "300 mil" }
                     "{plating} on {layer}, {gap} mm gap: {:?}",
                     checked.findings
                 );
-                assert_eq!(result.severity, report::Severity::Error);
-                if !fails {
-                    assert_eq!(checked.summary.errors, 0, "{:?}", checked.findings);
+                let warning = id.ends_with(".preferred");
+                assert_eq!(
+                    result.severity,
+                    if warning {
+                        report::Severity::Warning
+                    } else {
+                        report::Severity::Error
+                    }
+                );
+                assert_eq!(
+                    matches!(checked.verdict, report::Verdict::Fail),
+                    fails && !warning,
+                    "{plating} on {layer}, {gap} mm gap: {:?}",
+                    checked.findings
+                );
+                if plating == "NONPLATED" {
+                    let standard = check_builtin(&xml, "standard").unwrap();
+                    assert_eq!(
+                        (standard.summary.errors, standard.summary.warnings),
+                        (
+                            usize::from(fails && !warning),
+                            usize::from(fails && warning)
+                        ),
+                        "standard: {plating} on {layer}, {gap} mm gap: {:?}",
+                        standard.findings
+                    );
                 }
             }
         }
@@ -1447,7 +1530,13 @@ limit = { minimum = "300 mil" }
 
     #[test]
     fn jlc_requires_copper_clearance_from_nonplated_routed_slots() {
-        for (gap, fails) in [(0.19, true), (0.22, false)] {
+        for (gap, errors, warnings) in [
+            (0.185, 1, 0),
+            (0.190, 0, 1),
+            (0.195, 0, 1),
+            (0.200, 0, 0),
+            (0.220, 0, 0),
+        ] {
             let left = 11.5 + gap;
             let right = left + 1.0;
             let features = format!(
@@ -1458,20 +1547,23 @@ limit = { minimum = "300 mil" }
                   <PolyStepSegment x="{left}" y="9"/>
                 </Polygon></Contour></Features></Set></LayerFeature>"#
             );
-            let xml = weighted_board("0.035")
-                .replace(
-                    r#"<Layer name="BOTTOM""#,
-                    r#"<Layer name="ROUT" layerFunction="ROUT" side="ALL" polarity="POSITIVE"><Span fromLayer="TOP" toLayer="BOTTOM"/></Layer><Layer name="BOTTOM""#,
-                )
-                .replace("</Step>", &format!("{features}</Step>"));
-            let checked = check_builtin(&xml, "jlc").unwrap();
-            assert_eq!(
-                checked.summary.errors,
-                usize::from(fails),
-                "{:?}",
-                checked.findings
-            );
-            assert_eq!(matches!(checked.verdict, report::Verdict::Fail), fails);
+            for copper in ["0.035", "0.07"] {
+                let xml = weighted_board(copper)
+                    .replace("lineWidth=\"0.12\"", "lineWidth=\"0.2\"")
+                    .replace(
+                        r#"<Layer name="BOTTOM""#,
+                        r#"<Layer name="ROUT" layerFunction="ROUT" side="ALL" polarity="POSITIVE"><Span fromLayer="TOP" toLayer="BOTTOM"/></Layer><Layer name="BOTTOM""#,
+                    )
+                    .replace("</Step>", &format!("{features}</Step>"));
+                let checked = check_builtin(&xml, "jlc").unwrap();
+                assert_eq!(
+                    (checked.summary.errors, checked.summary.warnings),
+                    (errors, warnings),
+                    "{copper} mm foil, {gap} mm gap: {:?}",
+                    checked.findings
+                );
+                assert_eq!(matches!(checked.verdict, report::Verdict::Fail), errors > 0);
+            }
         }
     }
 

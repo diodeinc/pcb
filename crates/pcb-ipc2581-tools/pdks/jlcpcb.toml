@@ -13,6 +13,11 @@ title = "Diode hole-pair review guidance"
 url = "https://github.com/diodeinc/pcb/blob/main/crates/pcb-ipc2581-tools/docs/dfm.md"
 note = "The 0.45 mm mixed-hole/NPTH-pair spacing is inferred guidance, not a published JLCPCB minimum."
 
+[sources.clearance-review-guidance]
+title = "Diode copper-clearance review allowance"
+url = "https://github.com/diodeinc/pcb/blob/main/crates/pcb-ipc2581-tools/docs/dfm.md"
+note = "NPTH, nonplated-slot and routed-edge copper clearances warn below JLCPCB's 0.20 mm minimum and error below 0.19 mm. This 0.01 mm review band is Diode policy, not a manufacturer-qualified tolerance."
+
 [sources.jlc-stackup-templates]
 title = "JLCPCB stackup (impedance) templates"
 url = "https://cart.jlcpcb.com/api/overseas-shop-cart/v1/shoppingCart/getImpedanceTemplateSettings"
@@ -166,8 +171,8 @@ source = "jlc-capabilities"
 [[rules.copper.hole_clearance]]
 id = "jlc.copper.minimum_hole_clearance.npth"
 select = { hole = "npth" }
-limit = { minimum = "0.20 mm" }
-source = "jlc-capabilities"
+limit = { minimum = "0.19 mm", preferred = "0.20 mm" }
+source = "clearance-review-guidance"
 
 [[rules.copper.hole_clearance]]
 id = "jlc.copper.minimum_hole_clearance.pth"
@@ -181,8 +186,8 @@ source = "jlc-capabilities"
 [[rules.copper.slot_clearance]]
 id = "jlc.copper.minimum_nonplated_slot_clearance"
 select = { plating = "nonplated" }
-limit = { minimum = "0.20 mm" }
-source = "jlc-capabilities"
+limit = { minimum = "0.19 mm", preferred = "0.20 mm" }
+source = "clearance-review-guidance"
 
 # Track width and spacing depend on each layer's own finished copper weight.
 [[rules.copper.feature_width]]
@@ -213,8 +218,8 @@ source = "jlc-capabilities"
 
 [[rules.copper.board_edge_clearance]]
 id = "jlc.copper.minimum_board_edge_clearance"
-limit = { minimum = "0.20 mm" }
-source = "jlc-capabilities"
+limit = { minimum = "0.19 mm", preferred = "0.20 mm" }
+source = "clearance-review-guidance"
 
 [[rules.copper.vscore_clearance]]
 id = "jlc.copper.minimum_vscore_clearance"
