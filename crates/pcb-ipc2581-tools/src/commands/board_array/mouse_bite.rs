@@ -39,7 +39,8 @@ pub struct Tabs {
 
 /// Tab and slot geometry for `placement`'s board, which sits in `cell` in its
 /// own coordinates and is repeated at `offsets` inside `stock`. Sites the
-/// builder rejects are dropped and the placement is re-solved without them.
+/// builder rejects are dropped and the placement is re-solved without them;
+/// corners placement held back are tried once no straight-edge site is left.
 /// The tabs are the best the outline allows: a board they cannot hold within
 /// the limit is still panelized, with a warning; only a board with no site
 /// at all fails.
@@ -52,7 +53,9 @@ pub(super) fn generate(
     resolution: Resolution,
 ) -> Result<Tabs> {
     let cell = Cell::new(&placement.prepared.substrate, cell, preset, resolution)?;
-    let candidates = &placement.sites.candidates;
+    let mut candidates = &placement.sites.candidates;
+    // Corners placement has not already joined to the candidates.
+    let mut corners = Some(&placement.sites.corners).filter(|c| !c.is_empty());
     // Every site is built at most once, however often the placement is
     // re-solved around the ones that fail.
     let mut tabs: Vec<Option<Result<TabGeometry>>> = candidates.iter().map(|_| None).collect();
@@ -61,6 +64,17 @@ pub(super) fn generate(
     let mut selection = placement.selection.clone();
     let chosen = loop {
         let chosen: Vec<usize> = selection.chosen.iter().map(|&k| kept[k]).collect();
+        // No straight-edge tab could be built: hold the board at its corners.
+        if chosen.is_empty()
+            && let Some(corners) = corners.take()
+        {
+            candidates = corners;
+            tabs = candidates.iter().map(|_| None).collect();
+            kept = (0..candidates.len()).collect();
+            let sites: Vec<_> = candidates.iter().map(|c| c.site).collect();
+            selection = select::select(&sites, &placement.loads, &placement.model);
+            continue;
+        }
         ensure!(
             !chosen.is_empty(),
             "no tab site on the board outline: {}{}",
