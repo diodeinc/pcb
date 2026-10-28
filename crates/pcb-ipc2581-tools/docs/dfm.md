@@ -460,15 +460,24 @@ the HASL exclusion for boards of 0.4 mm and thinner,
 local 3 mil BGA exceptions, dielectric layup templates, and panel spacing,
 which depends on routing, mouse-bite, or V-cut process. Its soldermask-web checks
 are advisory warnings, not certification of the manufacturer's color-specific
-minimums. Nonplated routed-slot-to-copper clearance is required at 0.20 mm;
-plated-slot clearance and enclosure remain outside the kit's coverage.
+minimums. Plated-slot clearance and enclosure remain outside the kit's coverage.
 
-For circular NPTH-to-copper clearance, both JLC profiles use a Diode review
-allowance: below 0.19 mm is an error, 0.19 mm to below 0.20 mm is a warning,
-and 0.20 mm or more passes. JLC's published minimum remains 0.20 mm; the
-0.01 mm review band is Diode policy, not a manufacturer-qualified fabrication
-tolerance. A warning still calls for review of the published requirement.
-Via, plated-hole, and routed-slot clearance limits are unchanged.
+Both copper-weight profiles in the standard and JLC kits use these tight
+dimensional review bands. Below the minimum is an error; from the minimum to
+below the target is a warning; the target or above passes.
+
+| Kit | Check | Minimum (mm) | Target (mm) |
+| --- | --- | --- | --- |
+| Standard | Via drill diameter | 0.190 | 0.200 |
+| Standard | Via annular ring | 0.115 | 0.125 |
+| Standard | NPTH-to-copper | 0.190 | 0.200 |
+| Standard | Routed-edge-to-copper | 0.371 | 0.381 (15 mil) |
+| JLC | NPTH-, nonplated-slot-, and routed-edge-to-copper | 0.190 | 0.200 |
+
+These 0.01 mm bands are Diode review policy, not manufacturer-qualified
+fabrication tolerances. JLC's published clearance minimum remains 0.20 mm;
+a warning still calls for review of that requirement. Other limits and existing
+advisory tiers are unchanged.
 
 Two JLC source ambiguities affect the kit:
 

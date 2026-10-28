@@ -8,6 +8,11 @@ revision = "jlc-floor-2026-10-26"
 manufacturer = "Diode"
 process = "Standard"
 
+[sources.review-band-policy]
+title = "Diode dimensional review bands"
+url = "https://github.com/diodeinc/pcb/blob/main/crates/pcb-ipc2581-tools/docs/dfm.md"
+note = "Via drill diameter, via annular ring, NPTH-to-copper and copper-to-edge clearance allow a 0.01 mm review band below the existing target. This is Diode policy, not a manufacturer-qualified tolerance."
+
 [sources.jlc-baseline]
 title = "JLCPCB baseline"
 url = "https://github.com/diodeinc/pcb/blob/main/crates/pcb-ipc2581-tools/pdks/jlcpcb.toml"
@@ -72,7 +77,8 @@ limit = { allowed = ["green", "black"] }
 [[rules.drilling.hole_diameter]]
 id = "drilling.minimum_via_hole_diameter"
 select = { hole = "via" }
-limit = { minimum = "0.2 mm" }
+limit = { minimum = "0.19 mm", preferred = "0.20 mm" }
+source = "review-band-policy"
 
 [[rules.drilling.hole_diameter]]
 id = "drilling.minimum_pth_hole_diameter"
@@ -135,7 +141,8 @@ source = "jlc-baseline"
 [[rules.copper.annular_ring]]
 id = "copper.minimum_via_annular_ring"
 select = { hole = "via" }
-limit = { minimum = "0.125 mm" }
+limit = { minimum = "0.115 mm", preferred = "0.125 mm" }
+source = "review-band-policy"
 
 [[rules.copper.annular_ring]]
 id = "copper.minimum_pth_annular_ring"
@@ -152,8 +159,8 @@ source = "jlc-baseline"
 [[rules.copper.hole_clearance]]
 id = "copper.minimum_npth_hole_clearance"
 select = { hole = "npth" }
-limit = { minimum = "0.20 mm" }
-source = "jlc-baseline"
+limit = { minimum = "0.19 mm", preferred = "0.20 mm" }
+source = "review-band-policy"
 
 [[rules.copper.hole_clearance]]
 id = "copper.minimum_pth_hole_clearance"
@@ -190,7 +197,8 @@ source = "diode-slot-guidance"
 
 [[rules.copper.board_edge_clearance]]
 id = "copper.minimum_board_edge_clearance"
-limit = { minimum = "15 mil" }
+limit = { minimum = "0.371 mm", preferred = "15 mil" }
+source = "review-band-policy"
 
 [[rules.copper.vscore_clearance]]
 id = "copper.minimum_vscore_to_copper_clearance"
