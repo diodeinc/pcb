@@ -89,8 +89,8 @@ The schema gives each kind of constraint one place:
   for matching the design against the PDK's top-level `[[stackup_builds]]`
   (`copper_layers`, `board_thickness`, `outer_copper_weight`,
   `inner_copper_weight`, and `templates` of `name`, `default`, and
-  `dielectric_gaps_mm`). JLCPCB's are generated into
-  `pdks/jlcpcb-stackups.toml` by `pdks/update_jlcpcb_stackups.py`.
+  `dielectric_gaps_mm`), each build with inner layers. JLCPCB's are
+  generated into `pdks/jlcpcb.toml` by `pdks/update_jlcpcb_stackups.py`.
 - `rules.board` holds limits on the whole board: `surface_finish` and
   `soldermask_color` list the values `allowed`, and `size` states a
   `minimum`, a `maximum`, or both as two board extents.

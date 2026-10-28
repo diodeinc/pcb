@@ -1717,6 +1717,15 @@ templates = [
         };
         let fail = |message: &str| ("Fail".to_owned(), Some(message.to_owned()));
 
+        // The rule needs builds with inner layers and real gaps to match.
+        for broken in [
+            pdk[..pdk.find("[[stackup_builds]]").unwrap()].to_owned(),
+            pdk.replace("copper_layers = 4", "copper_layers = 2"),
+            pdk.replace("[0.1, 1.265, 0.12]", "[0.1, nan, 0.12]"),
+        ] {
+            assert!(pdk::Pdk::parse(&broken).is_err(), "{broken}");
+        }
+
         assert_eq!(check("0.035", &["0.21", "1.065", "0.21"]).0, "Pass");
         assert_eq!(check("0.035", &["0.1", "1.265", "0.144"]).0, "Pass");
         assert_eq!(

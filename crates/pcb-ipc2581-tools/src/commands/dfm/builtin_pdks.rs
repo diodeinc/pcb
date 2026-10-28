@@ -9,11 +9,7 @@ pub struct BuiltinPdk {
 
 const STANDARD: &str = include_str!("../../../pdks/standard.toml");
 const IPC: &str = include_str!("../../../pdks/ipc.toml");
-const JLCPCB: &str = concat!(
-    include_str!("../../../pdks/jlcpcb.toml"),
-    "\n",
-    include_str!("../../../pdks/jlcpcb-stackups.toml"),
-);
+const JLCPCB: &str = include_str!("../../../pdks/jlcpcb.toml");
 
 macro_rules! builtin {
     ($name:literal, $profile:literal, $source:expr) => {

@@ -76,17 +76,22 @@ impl Pdk {
         }
         for build in &pdk.stackup_builds {
             let gaps = build.copper_layers.saturating_sub(1) as usize;
-            if build.templates.is_empty()
-                || build
-                    .templates
-                    .iter()
-                    .any(|t| t.dielectric_gaps_mm.len() != gaps)
+            let valid = |template: &StackupTemplate| {
+                let mm = &template.dielectric_gaps_mm;
+                mm.len() == gaps && mm.iter().all(|gap| gap.is_finite() && *gap > 0.0)
+            };
+            if build.copper_layers < 3
+                || build.templates.is_empty()
+                || !build.templates.iter().all(valid)
             {
                 bail!(
-                    "each {}-layer stackup build needs templates of {gaps} dielectric gaps",
+                    "{}-layer stackup build: builds need inner layers and templates of {gaps} positive dielectric gaps",
                     build.copper_layers
                 );
             }
+        }
+        if !pdk.rules.stackup.dielectric_gaps.is_empty() && pdk.stackup_builds.is_empty() {
+            bail!("rules.stackup.dielectric_gaps requires [[stackup_builds]] to match against");
         }
         Ok(pdk)
     }
