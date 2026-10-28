@@ -214,7 +214,7 @@ fn collect_drill_info(doc: &GeometryDocument, collector: &mut DrillStatsCollecto
     }
 }
 
-fn drill_hole(feature: &pcb_ir::dialects::ipc::Feature) -> Option<(f64, DrillHoleType)> {
+pub(super) fn drill_hole(feature: &pcb_ir::dialects::ipc::Feature) -> Option<(f64, DrillHoleType)> {
     if !feature.is_drill_like() || feature.kind != FeatureKind::Hole {
         return None;
     }

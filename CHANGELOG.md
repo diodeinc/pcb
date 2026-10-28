@@ -11,11 +11,13 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ### Added
 
 - The JLCPCB DFM PDK flags stackups whose dielectric gaps match no JLCPCB stackup template for their build.
+- `pcb ipc info` reports castellated edges: at least two plated half-holes (not vias) the board outline cuts through, and JLCPCB's castellation rules, under `castellations` in `--format json`.
 
 ### Fixed
 
 - Correct JLCPCB DFM annular-ring and copper-clearance rules; make inferred hole-spacing limits advisory.
 - `pcb ipc board-array create --mouse-bite` holds a board at its corners when its straight outline has no tab site, as on modules castellated up to their corners, and otherwise names what keeps tabs off the outline.
+- `pcb ipc board-array create` refuses V-scores on castellated boards, and `--mouse-bite` keeps stamp holes 1 mm from plating at the board edge.
 
 ### Changed
 

@@ -2092,7 +2092,11 @@ fn a_module_castellated_up_to_its_corners_is_held_at_the_corners() {
         .flat_map(|layer| layer.holes())
         .filter(|hole| close(hole.diameter, 0.381))
         .collect::<Vec<_>>();
-    assert!(!holes.is_empty() && holes.len() % (4 * 5) == 0, "{}", holes.len());
+    assert!(
+        !holes.is_empty() && holes.len() % (4 * 5) == 0,
+        "{}",
+        holes.len()
+    );
     // Boards repeat every 30 mm from (25, 25): 20 mm board, 5 mm margins.
     let to_corner = |v: f64| {
         let v = (v - 25.0).rem_euclid(30.0);
@@ -2230,4 +2234,54 @@ fn every_board_of_a_mouse_bite_array_gets_the_same_tabs_and_voids() {
             .collect::<Vec<_>>();
         assert_points_close(points(cutout), expected);
     }
+}
+
+/// A 20 × 20 mm module castellated along every edge but for a 4 mm gap
+/// mid-edge: room for a 3 mm tab, but not one 1 mm clear of the lands.
+fn castellated_module() -> String {
+    let mut pads = String::new();
+    let mut holes = String::new();
+    for t in (0..6).flat_map(|k| [1.15 + 1.27 * f64::from(k), 18.85 - 1.27 * f64::from(k)]) {
+        for (x, y) in [(t, 0.0), (t, 20.0), (0.0, t), (20.0, t)] {
+            pads += &format!(
+                r#"<Set><Pad padstackDefRef="edge"><Location x="{x}" y="{y}"/></Pad></Set>"#
+            );
+            holes += &format!(
+                r#"<Set><Hole name="h" diameter="0.6" platingStatus="PLATED" plusTol="0" minusTol="0" x="{x}" y="{y}"/></Set>"#
+            );
+        }
+    }
+    board_fixture(
+        &format!(
+            r#"{SURFACE_LAYERS}
+  <Layer name="Drill" layerFunction="DRILL" side="ALL" polarity="POSITIVE"/>"#
+        ),
+        r#"<LayerRef name="Drill"/>"#,
+        &rectangle(0.0, 0.0, 20.0, 20.0),
+        &format!(
+            r#"<PadStackDef name="edge"><PadstackHoleDef name="h" diameter="0.6" platingStatus="PLATED" plusTol="0" minusTol="0" x="0" y="0"/>
+      <PadstackPadDef layerRef="TOP" padUse="REGULAR"><Location x="0" y="0"/><RectCenter width="1" height="1"/></PadstackPadDef></PadStackDef>
+    <LayerFeature layerRef="TOP">{pads}</LayerFeature>
+    <LayerFeature layerRef="Drill">{holes}</LayerFeature>"#
+        ),
+    )
+}
+
+#[test]
+fn castellated_edges_are_never_scored_and_keep_tabs_a_millimetre_away() {
+    let separate = |separation| {
+        create_board_array(
+            &castellated_module(),
+            &options(2, 2, BoardMarginMm::all(5.0), BoardMarginMm::all(20.0)),
+            false,
+            separation,
+            Resolution::default(),
+        )
+        .unwrap_err()
+        .to_string()
+    };
+    let error = separate(Separation::VScore);
+    assert!(error.contains("castellated edges"), "{error}");
+    let error = separate(Separation::MouseBite);
+    assert!(error.contains("no tab site"), "{error}");
 }

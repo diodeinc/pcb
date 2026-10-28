@@ -20,8 +20,8 @@ use serde::Serialize;
 use serde_json::json;
 
 use crate::accessors::{
-    ColorInfo, DrillHoleType, DrillStats, IpcAccessor, StackupLayerType, drill_stats,
-    nominal_copper_weight, via_profiles,
+    ColorInfo, DrillHoleType, DrillStats, IpcAccessor, StackupLayerType, castellations,
+    drill_stats, nominal_copper_weight, via_profiles,
 };
 #[cfg(feature = "cli")]
 use crate::utils::{file as file_utils, units};
@@ -816,6 +816,7 @@ pub fn info_json(
         info["drills"] = drill_stats_json(&drills);
         info["drills"]["via_profiles"] = json!(via_profiles(imported)?);
     }
+    info["castellations"] = serde_json::to_value(castellations(imported)?)?;
 
     // Net statistics
     if let Some(nets) = accessor.net_stats() {

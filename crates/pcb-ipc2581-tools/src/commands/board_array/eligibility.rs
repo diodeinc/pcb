@@ -23,7 +23,7 @@ use sha2::{Digest, Sha256};
 
 /// The board's material: every board outline less its cutouts. Empty when
 /// the board has no Profile.
-pub(super) fn board_substrate(
+pub(crate) fn board_substrate(
     imported: &ImportedDesign,
     resolution: Resolution,
 ) -> Result<ContourSet> {
@@ -317,13 +317,17 @@ fn courtyard_evidence(
     Ok((evidence, ignored))
 }
 
+/// JLCPCB keeps stamp holes this far from castellation lands.
+const STAMP_HOLE_CLEARANCE_MM: f64 = 1.0;
+
 /// Plating a tab's perforations could reach: castellations, and any plated
 /// hole or pad on the board within `inward_mm` of its outline. A tab there
 /// would tear the copper and drill its break holes through it. Barrel and
 /// pads alike count, on whatever layer carries them, so nothing has to know
-/// what a castellation is. The reach is widened by the geometry error so
-/// plating that only touches it still counts: the outline check treats
-/// touching as contact, and this filter must not decide otherwise.
+/// what a castellation is; all of it keeps tabs [`STAMP_HOLE_CLEARANCE_MM`]
+/// away. The reach is widened by the geometry error so plating that only
+/// touches it still counts: the outline check treats touching as contact,
+/// and this filter must not decide otherwise.
 fn edge_plating_evidence(
     imported: &ImportedDesign,
     substrate: &ContourSet,
@@ -360,13 +364,13 @@ fn edge_plating_evidence(
             }
             evidence.push(Evidence {
                 label: "edge plating".into(),
+                region: region.disk_dilate(STAMP_HOLE_CLEARANCE_MM)?,
                 id: format!(
                     "plating:{}:feature-{}:placement-{:?}",
                     imported.resolve(layer.name),
                     occurrence.id.feature.0,
                     occurrence.id.placement
                 ),
-                region,
             });
         }
     }
@@ -977,8 +981,8 @@ mod tests {
         assert_eq!(plating.len(), 4, "{plating:?}");
         assert!(plating.iter().any(|id| id.starts_with("plating:TOP:")));
         assert!(plating.iter().any(|id| id.starts_with("plating:Drill:")));
-        // The 1 mm footprint is blocked wherever it would touch either, and
-        // nowhere else because of them.
+        // The 1 mm footprint is blocked wherever it would come within 1 mm
+        // of either, and nowhere else because of them.
         let touched = report["intervals"]
             .as_array()
             .unwrap()
@@ -1000,7 +1004,7 @@ mod tests {
                 interval["start"][0].as_f64().unwrap(),
                 interval["end"][0].as_f64().unwrap(),
             );
-            let near = |x: f64| lo.min(hi) > x - 1.1 && lo.max(hi) < x + 1.1;
+            let near = |x: f64| lo.min(hi) > x - 2.1 && lo.max(hi) < x + 2.1;
             assert!(near(16.0) || near(4.0) || near(10.0), "{lo} {hi}");
         }
     }
