@@ -13,7 +13,7 @@ use super::pdk::{
     AssemblyDiagnostic, BOARD_OUTLINE_RULE_ID, Case, CopperWeight, HoleKind, LayerPosition, Length,
     LengthCase, LengthLimit, Pdk, PlatedHoleKind, Profile, ProfileStatus, Ratio, RatioLimit,
     RuleConditions, RuleMetadata, SelectingRule, SizeLimit, SlotPlating, SoldermaskColor,
-    SurfaceFinish, ThicknessLimit,
+    StackupBuild, SurfaceFinish, ThicknessLimit,
 };
 use super::report::{Severity, ViewRecipe};
 use crate::accessors::nominal_copper_weight;
@@ -119,6 +119,11 @@ pub(super) enum Allowed {
     Finishes(Vec<SurfaceFinish>),
     Colors(Vec<SoldermaskColor>),
     Size(SizeLimit),
+    /// Dielectric gaps within a tolerance of some template for the build.
+    StackupTemplates {
+        tolerance: Length,
+        builds: Vec<StackupBuild>,
+    },
 }
 
 impl Allowed {
@@ -139,6 +144,10 @@ impl Allowed {
                 colors.collect::<Vec<_>>().join(", ")
             }
             Self::Size(limit) => limit.describe(),
+            Self::StackupTemplates { tolerance, .. } => format!(
+                "each dielectric gap within ± {} of a stackup template for the build",
+                tolerance.original()
+            ),
         }
     }
 }
@@ -223,6 +232,9 @@ pub(super) enum RuleKind {
     CopperWeight(LayerPosition),
     /// Property: the finished board thickness the physical stackup states.
     BoardThickness,
+    /// Property: the stackup's copper-to-copper dielectric gaps match one of
+    /// the fab's stackup templates for its build.
+    DielectricGaps,
     /// Property: the surface finish the stackup specifies.
     SurfaceFinish,
     /// Property: the colour of each soldermask layer.
@@ -351,6 +363,7 @@ impl RuleKind {
             ),
             Self::CopperWeight(_) => ("copper_weight", "Copper weight", &["stackup"]),
             Self::BoardThickness => ("board_thickness", "Board thickness", &["stackup"]),
+            Self::DielectricGaps => ("dielectric_gaps", "Dielectric gaps", &["stackup"]),
             Self::SurfaceFinish => ("surface_finish", "Surface finish", &[]),
             Self::SoldermaskColor => ("soldermask_color", "Soldermask color", &[]),
             Self::BoardSize => ("board_size", "Board size", &[]),
@@ -365,6 +378,7 @@ impl RuleKind {
                     | Self::AssemblyDiagnostic(_)
                     | Self::CopperWeight(_)
                     | Self::BoardThickness
+                    | Self::DielectricGaps
                     | Self::SurfaceFinish
                     | Self::SoldermaskColor
                     | Self::BoardSize
@@ -601,6 +615,15 @@ impl RuleKind {
                 method: "physical_stackup_thickness_against_nominal_tolerance",
                 finding_title: "Board thickness is not a supported finished thickness".to_owned(),
                 quantity_label: "finished board thickness".to_owned(),
+                witness_roles: None,
+                pools: Pools::STACKUP,
+            },
+            Self::DielectricGaps => Semantics {
+                subject: "stackup",
+                quantity: "dielectric_gaps",
+                method: "physical_stackup_dielectric_gaps_against_stackup_templates",
+                finding_title: "Stackup matches no stackup template for its build".to_owned(),
+                quantity_label: "copper-to-copper dielectric gaps".to_owned(),
                 witness_roles: None,
                 pools: Pools::STACKUP,
             },
@@ -932,6 +955,18 @@ pub(super) fn lower(pdk: &Pdk, selected_profile: Option<&str>) -> Result<Vec<Rul
             &format!("Allowed {} copper weight", position_label(position)),
             RuleKind::CopperWeight(position),
             |limit| Allowed::CopperWeights(limit.allowed.clone()),
+        ));
+    }
+    for rule in &stackup.dielectric_gaps {
+        rules.extend(lower_property(
+            (&rule.metadata, rule.limit.as_ref(), &rule.cases),
+            selected,
+            "Stackup template dielectric gaps",
+            RuleKind::DielectricGaps,
+            |limit| Allowed::StackupTemplates {
+                tolerance: limit.tolerance.clone(),
+                builds: pdk.stackup_builds.clone(),
+            },
         ));
     }
     for rule in &board.surface_finish {

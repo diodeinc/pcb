@@ -32,6 +32,10 @@ pub struct Pdk {
     pub sources: BTreeMap<String, SourceReference>,
     #[serde(default)]
     pub rules: Rules,
+    /// The fab's stackup templates, by build, that
+    /// `rules.stackup.dielectric_gaps` matches designs against.
+    #[serde(default)]
+    pub stackup_builds: Vec<StackupBuild>,
 }
 
 impl Pdk {
@@ -68,6 +72,20 @@ impl Pdk {
         for (id, source) in &pdk.sources {
             if source.title.trim().is_empty() || source.url.trim().is_empty() {
                 bail!("source '{id}' requires a non-empty title and URL");
+            }
+        }
+        for build in &pdk.stackup_builds {
+            let gaps = build.copper_layers.saturating_sub(1) as usize;
+            if build.templates.is_empty()
+                || build
+                    .templates
+                    .iter()
+                    .any(|t| t.dielectric_gaps_mm.len() != gaps)
+            {
+                bail!(
+                    "each {}-layer stackup build needs templates of {gaps} dielectric gaps",
+                    build.copper_layers
+                );
             }
         }
         Ok(pdk)
@@ -246,6 +264,38 @@ impl ThicknessLimit {
         };
         format!("{nominal}{tolerance}")
     }
+}
+
+/// Every copper-to-copper dielectric gap within `tolerance` of some stackup
+/// template's for the design's build.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DielectricGapLimit {
+    pub tolerance: Length,
+}
+
+/// The stackup templates a fab offers for one build: a copper layer count,
+/// a nominal finished thickness, and one outer and one inner copper weight.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StackupBuild {
+    pub copper_layers: u32,
+    pub board_thickness: Length,
+    pub outer_copper_weight: CopperWeight,
+    pub inner_copper_weight: CopperWeight,
+    pub templates: Vec<StackupTemplate>,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StackupTemplate {
+    pub name: String,
+    /// The fab uses this template when an order names none.
+    #[serde(default)]
+    pub default: bool,
+    /// Dielectric thickness between each pair of adjacent copper layers,
+    /// top to bottom.
+    pub dielectric_gaps_mm: Vec<f64>,
 }
 
 /// The board's extents, compared side for side after ordering each pair from
@@ -643,6 +693,7 @@ impl Rules {
                     },
                 )
             }))
+            .chain(properties(&self.stackup.dielectric_gaps, |_, _| Ok(())))
             .chain(properties(&self.board.surface_finish, allowed))
             .chain(properties(&self.board.soldermask_color, allowed))
             .chain(properties(&self.board.size, SizeLimit::validate))
@@ -825,6 +876,8 @@ pub struct StackupRules {
     pub board_thickness: Vec<PropertyRule<ThicknessLimit>>,
     #[serde(default)]
     pub copper_weight: Vec<SelectingRule<PositionSelector, AllowedLimit<CopperWeight>>>,
+    #[serde(default)]
+    pub dielectric_gaps: Vec<PropertyRule<DielectricGapLimit>>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]

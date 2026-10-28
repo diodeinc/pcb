@@ -1298,22 +1298,29 @@ limit = { minimum = "300 mil" }
         }
     }
 
-    /// Four layers, a 1 mm hole at (10, 10), and N1 lands unless nonplated.
+    /// Four layers in JLC's default 1.6 mm stackup, a 1 mm hole at (10, 10),
+    /// and N1 lands unless nonplated.
     fn jlc_drilled_board(plating: &str, ring_mm: f64, outer_copper_mm: &str) -> String {
         let mut xml = weighted_board(outer_copper_mm)
             .replace("lineWidth=\"0.12\"", "lineWidth=\"0.2\"")
-            .replace(r#"sequence="1"/>"#, r#"sequence="3"/>"#)
+            .replace(r#"sequence="1"/>"#, r#"sequence="6"/>"#)
             .replace(
                 r#"<Layer name="BOTTOM""#,
-                r#"<Layer name="IN1" layerFunction="SIGNAL" side="INTERNAL" polarity="POSITIVE"/>
+                r#"<Layer name="PP1" layerFunction="DIELPREG" side="INTERNAL" polarity="POSITIVE"/>
+      <Layer name="IN1" layerFunction="SIGNAL" side="INTERNAL" polarity="POSITIVE"/>
+      <Layer name="CORE" layerFunction="DIELCORE" side="INTERNAL" polarity="POSITIVE"/>
       <Layer name="IN2" layerFunction="SIGNAL" side="INTERNAL" polarity="POSITIVE"/>
+      <Layer name="PP2" layerFunction="DIELPREG" side="INTERNAL" polarity="POSITIVE"/>
       <Layer name="DRILL" layerFunction="DRILL" side="ALL" polarity="POSITIVE"><Span fromLayer="TOP" toLayer="BOTTOM"/></Layer>
       <Layer name="BOTTOM""#,
             )
             .replace(
                 r#"<StackupLayer layerOrGroupRef="BOTTOM""#,
-                r#"<StackupLayer layerOrGroupRef="IN1" thickness="0.035" sequence="1"/>
-          <StackupLayer layerOrGroupRef="IN2" thickness="0.035" sequence="2"/>
+                r#"<StackupLayer layerOrGroupRef="PP1" thickness="0.203" sequence="1"/>
+          <StackupLayer layerOrGroupRef="IN1" thickness="0.035" sequence="2"/>
+          <StackupLayer layerOrGroupRef="CORE" thickness="1.03" sequence="3"/>
+          <StackupLayer layerOrGroupRef="IN2" thickness="0.035" sequence="4"/>
+          <StackupLayer layerOrGroupRef="PP2" thickness="0.203" sequence="5"/>
           <StackupLayer layerOrGroupRef="BOTTOM""#,
             );
         let mut features = format!(
@@ -1627,6 +1634,141 @@ limit = { minimum = ["10 mm", "5 mm"], maximum = ["40 mm", "25 mm"] }"#,
         assert_eq!(status(BOARD, "board.outline"), "Pass");
         assert_eq!(status(&unoutlined, "board.outline"), "Fail");
         assert_eq!(status(&unoutlined, "size"), "NotApplicable");
+    }
+
+    /// A 30 mm square board whose copper layers, `outer` or `inner` mm
+    /// thick, are separated by prepregs `gaps` mm thick ("" is unstated).
+    fn stacked_board(outer: &str, inner: &str, gaps: &[&str], thickness: &str) -> String {
+        let (mut layers, mut stackup) = (String::new(), String::new());
+        for index in 0..=gaps.len() {
+            let (side, copper) = match index {
+                0 => ("TOP", outer),
+                _ if index == gaps.len() => ("BOTTOM", outer),
+                _ => ("INTERNAL", inner),
+            };
+            let (name, sequence) = (index + 1, 2 * index);
+            layers += &format!(
+                r#"<Layer name="L{name}" layerFunction="SIGNAL" side="{side}" polarity="POSITIVE"/>"#
+            );
+            stackup += &format!(
+                r#"<StackupLayer layerOrGroupRef="L{name}" thickness="{copper}" sequence="{sequence}"/>"#
+            );
+            if let Some(&gap) = gaps.get(index) {
+                let gap = match gap {
+                    "" => String::new(),
+                    gap => format!(r#" thickness="{gap}""#),
+                };
+                layers += &format!(
+                    r#"<Layer name="PP{name}" layerFunction="DIELPREG" side="INTERNAL" polarity="POSITIVE"/>"#
+                );
+                stackup += &format!(
+                    r#"<StackupLayer layerOrGroupRef="PP{name}"{gap} sequence="{}"/>"#,
+                    sequence + 1
+                );
+            }
+        }
+        format!(
+            r#"<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
+  <Content roleRef="owner"><FunctionMode mode="FABRICATION"/><StepRef name="board"/><LayerRef name="L1"/></Content>
+  <Ecad><CadHeader units="MILLIMETER"/><CadData>{layers}
+    <Stackup name="Primary" overallThickness="{thickness}" whereMeasured="METAL" stackupStatus="PROPOSED">
+      <StackupGroup name="Primary_Group" thickness="{thickness}">{stackup}</StackupGroup>
+    </Stackup>
+    <Step name="board" type="BOARD"><Datum x="0" y="0"/><Profile><Polygon>
+      <PolyBegin x="0" y="0"/><PolyStepSegment x="30" y="0"/><PolyStepSegment x="30" y="30"/>
+      <PolyStepSegment x="0" y="30"/><PolyStepSegment x="0" y="0"/>
+    </Polygon></Profile></Step>
+  </CadData></Ecad>
+</IPC-2581>"#
+        )
+    }
+
+    /// A rule's status and its finding or skip reason.
+    fn judged(report: &DfmReport, id: &str) -> (String, Option<String>) {
+        let result = rule(report, id);
+        let finding = report.findings.iter().find(|finding| finding.rule_id == id);
+        let message = finding.map(|finding| finding.message.clone());
+        (
+            format!("{:?}", result.status),
+            message.or(result.skip_reason.clone()),
+        )
+    }
+
+    #[test]
+    fn dielectric_gaps_must_match_a_stackup_template_for_the_build() {
+        let pdk = fixtures::pdk(
+            r#"[[rules.stackup.dielectric_gaps]]
+id = "gaps"
+limit = { tolerance = "0.025 mm" }
+
+[[stackup_builds]]
+copper_layers = 4
+board_thickness = "1.6 mm"
+outer_copper_weight = "1 oz"
+inner_copper_weight = "0.5 oz"
+templates = [
+  { name = "A", default = true, dielectric_gaps_mm = [0.2104, 1.065, 0.2104] },
+  { name = "B", dielectric_gaps_mm = [0.1, 1.265, 0.12] },
+]"#,
+        );
+        let check = |outer: &str, gaps: &[&str]| {
+            let xml = stacked_board(outer, "0.0152", gaps, "1.6");
+            judged(&check_with_pdk(&xml, LayoutTarget::Board, &pdk), "gaps")
+        };
+        let fail = |message: &str| ("Fail".to_owned(), Some(message.to_owned()));
+
+        assert_eq!(check("0.035", &["0.21", "1.065", "0.21"]).0, "Pass");
+        assert_eq!(check("0.035", &["0.1", "1.265", "0.144"]).0, "Pass");
+        assert_eq!(
+            check("0.035", &["0.1", "1.265", "0.15"]),
+            fail(
+                "dielectric gaps match no stackup template for the 4-layer 1.6 mm, 1 oz outer / 0.5 oz inner build within ± 0.025 mm; closest is B: L3–L4 is 0.1500 mm, template 0.1200 mm; the build's default is A"
+            )
+        );
+        assert_eq!(
+            check("0.07", &["0.21", "1.065", "0.21"]),
+            fail("no stackup template exists for a 4-layer 1.6 mm build with these copper weights")
+        );
+        assert_eq!(
+            check("0.035", &["0.21", "", "0.21"]),
+            (
+                "Incomplete".to_owned(),
+                Some("physical stackup layer 'PP2' has no thickness".to_owned())
+            )
+        );
+        assert_eq!(
+            check("0.035", &["1.5"]),
+            (
+                "NotApplicable".to_owned(),
+                Some("the PDK lists no stackup templates for 2-layer boards".to_owned())
+            )
+        );
+    }
+
+    #[test]
+    fn jlc_flags_the_f9wry_stackup_its_only_template_does_not_match() {
+        let check = |gaps: &[&str]| {
+            let xml = stacked_board("0.07", "0.07", gaps, "2.0");
+            judged(
+                &check_builtin(&xml, "jlc").unwrap(),
+                "jlc.stackup.dielectric_gaps",
+            )
+        };
+        let jlc = [
+            "0.1415", "0.1", "0.125", "0.1", "0.125", "0.1", "0.125", "0.1", "0.125", "0.1",
+            "0.1415",
+        ];
+        assert_eq!(check(&jlc), ("Pass".to_owned(), None));
+        let f9wry = [
+            "0.1", "0.1", "0.12", "0.1", "0.12", "0.1", "0.12", "0.1", "0.12", "0.1", "0.1",
+        ];
+        assert_eq!(
+            check(&f9wry),
+            (
+                "Fail".to_owned(),
+                Some("dielectric gaps match no stackup template for the 12-layer 2.0 mm, 2 oz outer / 2 oz inner build within ± 0.025 mm; closest is JLC122022-1080: L1–L2 is 0.1000 mm, template 0.1415 mm; L11–L12 is 0.1000 mm, template 0.1415 mm; the build has no default template".to_owned())
+            )
+        );
     }
 
     #[test]

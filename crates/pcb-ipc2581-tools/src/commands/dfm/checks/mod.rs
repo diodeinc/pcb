@@ -552,6 +552,7 @@ fn missing_subjects(kind: RuleKind, design: &Design) -> Option<String> {
         RuleKind::CopperLayerCount
         | RuleKind::CopperWeight(_)
         | RuleKind::BoardThickness
+        | RuleKind::DielectricGaps
         | RuleKind::SurfaceFinish
         | RuleKind::SoldermaskColor
         | RuleKind::BoardSize
@@ -708,6 +709,7 @@ fn evaluate(rule: &Rule, design: &Design) -> anyhow::Result<RuleEvaluation> {
         RuleKind::SoldermaskWeb => thin_regions::soldermask_web(limit(), design)?.into(),
         RuleKind::CopperWeight(_)
         | RuleKind::BoardThickness
+        | RuleKind::DielectricGaps
         | RuleKind::SurfaceFinish
         | RuleKind::SoldermaskColor
         | RuleKind::BoardSize => RuleEvaluation::Property(board_property::evaluate(rule, design)),

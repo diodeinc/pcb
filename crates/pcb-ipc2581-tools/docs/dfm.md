@@ -85,7 +85,12 @@ The schema gives each kind of constraint one place:
   design conforms when its thickness is within `tolerance` or
   `tolerance_percent` of the nominal value, whichever is larger, of one of
   them. `copper_weight` selects an `outer` or `inner` layer position and
-  lists the weights `allowed` there.
+  lists the weights `allowed` there. `dielectric_gaps` states a `tolerance`
+  for matching the design against the PDK's top-level `[[stackup_builds]]`
+  (`copper_layers`, `board_thickness`, `outer_copper_weight`,
+  `inner_copper_weight`, and `templates` of `name`, `default`, and
+  `dielectric_gaps_mm`). JLCPCB's are generated into
+  `pdks/jlcpcb-stackups.toml` by `pdks/update_jlcpcb_stackups.py`.
 - `rules.board` holds limits on the whole board: `surface_finish` and
   `soldermask_color` list the values `allowed`, and `size` states a
   `minimum`, a `maximum`, or both as two board extents.
@@ -373,6 +378,13 @@ Each Step's findings apply at its placements; the report lists these in
   - Board thickness is the finished thickness: IPC `overallThickness`
     includes foil and soldermask. A stackup that states no thickness leaves
     the rule `incomplete`; the profile thickness default is not used.
+  - Dielectric gaps are the dielectric thicknesses between adjacent copper
+    layers. The design's build is its layer count, the listed thickness
+    nearest its finished thickness, and its outer and inner copper weights;
+    it conforms when a template for that build has every gap within
+    `tolerance`. A build with no template fails. A layer count with no build
+    is `not_applicable`; missing thicknesses or weights leave the rule
+    `incomplete`.
   - Surface finish reads the `SurfaceFinish` spec of each coating layer in
     the stackup, once per spec; unreferenced specs are ignored. IPC `S` is
     solder leveling without stated lead content: it conforms when both

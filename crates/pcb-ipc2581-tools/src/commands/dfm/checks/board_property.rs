@@ -16,7 +16,9 @@ use ipc2581::types::LayerFunction;
 
 use crate::accessors::{ColorInfo, format_ounces, nominal_copper_weight};
 use crate::commands::dfm::design::Design;
-use crate::commands::dfm::pdk::{CopperWeight, LayerPosition, SoldermaskColor, SurfaceFinish};
+use crate::commands::dfm::pdk::{
+    CopperWeight, LayerPosition, Length, SoldermaskColor, StackupBuild, SurfaceFinish,
+};
 use crate::commands::dfm::report::{LayerRef, RuleStatus, Subject};
 use crate::commands::dfm::rules::{Allowed, Rule, RuleKind, position_label};
 use crate::layers;
@@ -86,6 +88,9 @@ pub(super) fn evaluate(rule: &Rule, design: &Design) -> Result<Evaluation, Unjud
                 subject: subject("stackup", stackup.name.clone()),
             });
             Ok(judged(1, nonconforming))
+        }
+        (RuleKind::DielectricGaps, Allowed::StackupTemplates { tolerance, builds }) => {
+            dielectric_gaps(tolerance, builds, design)
         }
         (RuleKind::SurfaceFinish, Allowed::Finishes(allowed)) => {
             surface_finish(allowed, &allowed_text, design)
@@ -186,6 +191,132 @@ fn copper_weight(
         }
     }
     Ok(evaluation)
+}
+
+/// Match the stackup's copper-to-copper dielectric gaps against the
+/// templates of its build: its layer count, the listed thickness nearest its
+/// finished thickness, and the one standard weight of its outer and of its
+/// inner layers. It conforms when some template has every gap within
+/// `tolerance`.
+fn dielectric_gaps(
+    tolerance: &Length,
+    builds: &[StackupBuild],
+    design: &Design,
+) -> Result<Evaluation, Unjudged> {
+    let stackup = design
+        .stackup
+        .as_ref()
+        .expect("dielectric-gap rules request stackup extraction");
+    let layers = stackup.copper_layers.len() as u32;
+    let builds = builds
+        .iter()
+        .filter(|build| build.copper_layers == layers)
+        .collect::<Vec<_>>();
+    if builds.is_empty() {
+        return Err((
+            RuleStatus::NotApplicable,
+            format!("the PDK lists no stackup templates for {layers}-layer boards"),
+        ));
+    }
+    let gaps = stackup.dielectric_gaps().map_err(incomplete)?;
+    let thickness = stackup.total_thickness().map_err(incomplete)?.millimeters;
+    let (mut outer, mut inner) = (Vec::new(), Vec::new());
+    for (layer, ounces) in stackup.copper_layers.iter().zip(&stackup.copper_weights_oz) {
+        let ounces = ounces.ok_or_else(|| {
+            incomplete(format!(
+                "copper layer '{}' states no weight or thickness",
+                layer.name
+            ))
+        })?;
+        let is_outer = layer.side != Some("inner");
+        let weights = if is_outer { &mut outer } else { &mut inner };
+        weights.push(nominal_copper_weight(ounces, is_outer));
+    }
+    let shared = |weights: &[Option<f64>]| weights.iter().all(|weight| *weight == weights[0]);
+    let off = |build: &&StackupBuild| (build.board_thickness.millimeters() - thickness).abs();
+    let nearest = builds
+        .iter()
+        .min_by(|left, right| off(left).total_cmp(&off(right)))
+        .map(|build| build.board_thickness.clone())
+        .expect("builds are not empty");
+    let build = builds.into_iter().find(|build| {
+        build.board_thickness == nearest
+            && shared(&outer)
+            && shared(&inner)
+            && outer[0] == Some(build.outer_copper_weight.ounces())
+            && inner.first().copied().flatten() == Some(build.inner_copper_weight.ounces())
+    });
+    let message = match build {
+        Some(build) => mismatch(build, &gaps, tolerance),
+        None => Some(format!(
+            "no stackup template exists for a {layers}-layer {} build with these copper weights",
+            nearest.original()
+        )),
+    };
+    Ok(judged(
+        1,
+        message.map(|message| Nonconforming {
+            message,
+            layers: Vec::new(),
+            subject: subject("stackup", stackup.name.clone()),
+        }),
+    ))
+}
+
+/// Why no template of `build` has every gap within `tolerance`, naming the
+/// closest (the default on a tie) and its gaps outside tolerance, worst
+/// first; `None` if some template matches.
+fn mismatch(build: &StackupBuild, gaps: &[(String, f64)], tolerance: &Length) -> Option<String> {
+    let off = |expected: &[f64]| {
+        let pairs = gaps.iter().zip(expected);
+        pairs
+            .map(|((_, gap), expected)| (gap - expected).abs())
+            .fold(0.0, f64::max)
+    };
+    let closest = build
+        .templates
+        .iter()
+        .min_by(|left, right| {
+            off(&left.dielectric_gaps_mm)
+                .total_cmp(&off(&right.dielectric_gaps_mm))
+                .then(right.default.cmp(&left.default))
+        })
+        .expect("a stackup build lists at least one template");
+    let limit = tolerance.millimeters() + COMPARISON_EPSILON_MM;
+    let mut outside = gaps
+        .iter()
+        .zip(&closest.dielectric_gaps_mm)
+        .filter(|((_, gap), expected)| (gap - *expected).abs() > limit)
+        .collect::<Vec<_>>();
+    if outside.is_empty() {
+        return None;
+    }
+    outside.sort_by(|((_, left), left_expected), ((_, right), right_expected)| {
+        (right - *right_expected)
+            .abs()
+            .total_cmp(&(left - *left_expected).abs())
+    });
+    let outside = outside
+        .iter()
+        .map(|((label, gap), expected)| {
+            format!("{label} is {gap:.4} mm, template {expected:.4} mm")
+        })
+        .collect::<Vec<_>>()
+        .join("; ");
+    let default = match build.templates.iter().find(|template| template.default) {
+        _ if closest.default => String::new(),
+        Some(default) => format!("; the build's default is {}", default.name),
+        None => "; the build has no default template".to_owned(),
+    };
+    Some(format!(
+        "dielectric gaps match no stackup template for the {}-layer {}, {} outer / {} inner build within ± {}; closest is {}: {outside}{default}",
+        build.copper_layers,
+        build.board_thickness.original(),
+        build.outer_copper_weight.original(),
+        build.inner_copper_weight.original(),
+        tolerance.original(),
+        closest.name,
+    ))
 }
 
 /// A layout without a profile has no board to fabricate.

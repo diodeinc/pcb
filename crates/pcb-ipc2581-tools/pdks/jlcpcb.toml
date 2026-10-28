@@ -4,7 +4,7 @@ default_profile = "one-ounce"
 [pdk]
 id = "jlcpcb-rigid-fr4"
 name = "JLCPCB rigid FR-4"
-revision = "drill-clearances-2026-10-26"
+revision = "stackup-templates-2026-10-28"
 manufacturer = "JLCPCB"
 process = "Rigid FR-4, 1 oz or 2 oz outer copper"
 
@@ -12,6 +12,12 @@ process = "Rigid FR-4, 1 oz or 2 oz outer copper"
 title = "Diode hole-pair review guidance"
 url = "https://github.com/diodeinc/pcb/blob/main/crates/pcb-ipc2581-tools/docs/dfm.md"
 note = "The 0.45 mm mixed-hole/NPTH-pair spacing is inferred guidance, not a published JLCPCB minimum."
+
+[sources.jlc-stackup-templates]
+title = "JLCPCB stackup (impedance) templates"
+url = "https://cart.jlcpcb.com/api/overseas-shop-cart/v1/shoppingCart/getImpedanceTemplateSettings"
+accessed = "2026-10-28"
+note = "Stored in jlcpcb-stackups.toml; regenerate with update_jlcpcb_stackups.py."
 
 [sources.jlc-capabilities]
 title = "JLCPCB PCB Capabilities"
@@ -244,6 +250,13 @@ id = "jlc.stackup.inner_copper_weight"
 select = { position = "inner" }
 limit = { allowed = ["0.5 oz", "1 oz", "2 oz"] }
 source = "jlc-capabilities"
+
+# 0.025 mm absorbs rounding and prepreg press-out variation (7628 spans
+# 0.188-0.218 mm across JLC templates) but not a missing or extra ply.
+[[rules.stackup.dielectric_gaps]]
+id = "jlc.stackup.dielectric_gaps"
+limit = { tolerance = "0.025 mm" }
+source = "jlc-stackup-templates"
 
 [[rules.board.surface_finish]]
 id = "jlc.board.surface_finish"
