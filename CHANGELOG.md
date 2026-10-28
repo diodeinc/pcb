@@ -8,6 +8,8 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+## [0.4.94] - 2026-10-28
+
 ### Added
 
 - The JLCPCB DFM PDK flags stackups whose dielectric gaps match no JLCPCB stackup template for their build.
@@ -2516,7 +2518,8 @@ Tvs(package="DO-214AA", direction="Unidirectional", reverse_standoff_voltage="24
 - Error on invalid type passed to `io()`
 - Format the auto-generated component .zen files
 
-[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.4.93...HEAD
+[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.4.94...HEAD
+[0.4.94]: https://github.com/diodeinc/pcb/compare/v0.4.93...v0.4.94
 [0.4.93]: https://github.com/diodeinc/pcb/compare/v0.4.92...v0.4.93
 [0.4.92]: https://github.com/diodeinc/pcb/compare/v0.4.91...v0.4.92
 [0.4.91]: https://github.com/diodeinc/pcb/compare/v0.4.90...v0.4.91
