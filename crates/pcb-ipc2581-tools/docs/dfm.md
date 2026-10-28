@@ -463,6 +463,13 @@ are advisory warnings, not certification of the manufacturer's color-specific
 minimums. Nonplated routed-slot-to-copper clearance is required at 0.20 mm;
 plated-slot clearance and enclosure remain outside the kit's coverage.
 
+For circular NPTH-to-copper clearance, both JLC profiles use a Diode review
+allowance: below 0.19 mm is an error, 0.19 mm to below 0.20 mm is a warning,
+and 0.20 mm or more passes. JLC's published minimum remains 0.20 mm; the
+0.01 mm review band is Diode policy, not a manufacturer-qualified fabrication
+tolerance. A warning still calls for review of the published requirement.
+Via, plated-hole, and routed-slot clearance limits are unchanged.
+
 Two JLC source ambiguities affect the kit:
 
 - NPTH diameter retains the [published 0.50 mm minimum](https://jlcpcb.com/capabilities/pcb-capabilities).

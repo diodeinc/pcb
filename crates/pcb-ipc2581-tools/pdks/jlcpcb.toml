@@ -13,6 +13,11 @@ title = "Diode hole-pair review guidance"
 url = "https://github.com/diodeinc/pcb/blob/main/crates/pcb-ipc2581-tools/docs/dfm.md"
 note = "The 0.45 mm mixed-hole/NPTH-pair spacing is inferred guidance, not a published JLCPCB minimum."
 
+[sources.npth-copper-review-guidance]
+title = "Diode NPTH-to-copper review allowance"
+url = "https://github.com/diodeinc/pcb/blob/main/crates/pcb-ipc2581-tools/docs/dfm.md"
+note = "JLCPCB publishes a 0.20 mm NPTH-to-copper minimum. Diode warns below 0.20 mm and errors below 0.19 mm, allowing a 0.01 mm review band. This is Diode policy, not a manufacturer-qualified tolerance."
+
 [sources.jlc-stackup-templates]
 title = "JLCPCB stackup (impedance) templates"
 url = "https://cart.jlcpcb.com/api/overseas-shop-cart/v1/shoppingCart/getImpedanceTemplateSettings"
@@ -166,8 +171,8 @@ source = "jlc-capabilities"
 [[rules.copper.hole_clearance]]
 id = "jlc.copper.minimum_hole_clearance.npth"
 select = { hole = "npth" }
-limit = { minimum = "0.20 mm" }
-source = "jlc-capabilities"
+limit = { minimum = "0.19 mm", preferred = "0.20 mm" }
+source = "npth-copper-review-guidance"
 
 [[rules.copper.hole_clearance]]
 id = "jlc.copper.minimum_hole_clearance.pth"

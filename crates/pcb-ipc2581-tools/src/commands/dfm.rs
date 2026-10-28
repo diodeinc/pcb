@@ -1370,8 +1370,10 @@ limit = { minimum = "300 mil" }
         for (plating, ring, layer, id, below, above) in [
             ("VIA", 0.08, "TOP", "via", 0.19, 0.22),
             ("VIA", 0.08, "IN1", "via", 0.19, 0.22),
-            ("NONPLATED", 0.0, "TOP", "npth", 0.19, 0.22),
-            ("NONPLATED", 0.0, "IN1", "npth", 0.19, 0.22),
+            ("NONPLATED", 0.0, "TOP", "npth", 0.189, 0.22),
+            ("NONPLATED", 0.0, "IN1", "npth", 0.189, 0.22),
+            ("NONPLATED", 0.0, "TOP", "npth.preferred", 0.19, 0.20),
+            ("NONPLATED", 0.0, "IN1", "npth.preferred", 0.195, 0.201),
             ("PLATED", 0.16, "TOP", "pth.outer", 0.27, 0.30),
             ("PLATED", 0.16, "IN1", "pth.inner", 0.29, 0.32),
         ] {
@@ -1395,10 +1397,21 @@ limit = { minimum = "300 mil" }
                     "{plating} on {layer}, {gap} mm gap: {:?}",
                     checked.findings
                 );
-                assert_eq!(result.severity, report::Severity::Error);
-                if !fails {
-                    assert_eq!(checked.summary.errors, 0, "{:?}", checked.findings);
-                }
+                let warning = id.ends_with(".preferred");
+                assert_eq!(
+                    result.severity,
+                    if warning {
+                        report::Severity::Warning
+                    } else {
+                        report::Severity::Error
+                    }
+                );
+                assert_eq!(
+                    matches!(checked.verdict, report::Verdict::Fail),
+                    fails && !warning,
+                    "{plating} on {layer}, {gap} mm gap: {:?}",
+                    checked.findings
+                );
             }
         }
     }
