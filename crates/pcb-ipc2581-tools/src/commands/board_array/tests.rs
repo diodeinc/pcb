@@ -2039,7 +2039,77 @@ fn a_board_with_no_tab_site_cannot_be_panelized() {
     )
     .unwrap_err()
     .to_string();
-    assert!(error.contains("no tab site"), "{error}");
+    assert!(
+        error.contains("no tab site")
+            && error.contains("an unassociated courtyard on F.Courtyard is in the way"),
+        "{error}"
+    );
+}
+
+#[test]
+fn a_module_castellated_up_to_its_corners_is_held_at_the_corners() {
+    // The interface footprint's courtyard covers each edge's lands and stops
+    // 2.85 mm from the corners: too little straight edge for a tab beside a
+    // corner, but enough for one straddling it.
+    let strip = |x0: f64, y0: f64, x1: f64, y1: f64| {
+        format!(
+            r#"<Set componentRef="J1"><Features><Polygon>{}</Polygon></Features></Set>"#,
+            rectangle(x0, y0, x1, y1)
+        )
+    };
+    let courtyard = format!(
+        r#"<Component refDes="J1" part="p" layerRef="TOP" mountType="THMT"><Location x="0" y="0"/></Component>
+    <LayerFeature layerRef="F.Courtyard">{}{}{}{}</LayerFeature>"#,
+        strip(2.85, -0.55, 17.15, 0.8),
+        strip(2.85, 19.2, 17.15, 20.55),
+        strip(-0.55, 2.85, 0.8, 17.15),
+        strip(19.2, 2.85, 20.55, 17.15),
+    );
+    let module = board_fixture(
+        &format!(
+            r#"{SURFACE_LAYERS}
+  <Layer name="F.Courtyard" layerFunction="COURTYARD" side="TOP" polarity="POSITIVE"/>"#
+        ),
+        r#"<LayerRef name="F.Courtyard"/>"#,
+        &rectangle(0.0, 0.0, 20.0, 20.0),
+        &courtyard,
+    );
+    let creation = create_board_array(
+        &module,
+        &options(2, 2, BoardMarginMm::all(5.0), BoardMarginMm::all(20.0)),
+        false,
+        Separation::MouseBite,
+        Resolution::default(),
+    )
+    .unwrap();
+    assert!(creation.warnings.is_empty(), "{:?}", creation.warnings);
+    // Every tab straddles a corner: each of its five holes lies within a
+    // tab's half width of one, clear of the courtyard.
+    let ipc = Ipc2581::parse(&creation.xml).unwrap();
+    let holes = array_step(&ipc)
+        .layer_features
+        .iter()
+        .flat_map(|layer| layer.holes())
+        .filter(|hole| close(hole.diameter, 0.381))
+        .collect::<Vec<_>>();
+    assert!(
+        !holes.is_empty() && holes.len() % (4 * 5) == 0,
+        "{}",
+        holes.len()
+    );
+    // Boards repeat every 30 mm from (25, 25): 20 mm board, 5 mm margins.
+    let to_corner = |v: f64| {
+        let v = (v - 25.0).rem_euclid(30.0);
+        v.min((v - 20.0).abs()).min(30.0 - v)
+    };
+    for hole in &holes {
+        assert!(
+            to_corner(hole.x) < 1.5 && to_corner(hole.y) < 1.5,
+            "hole at ({}, {}) is not at a corner",
+            hole.x,
+            hole.y
+        );
+    }
 }
 
 #[test]
@@ -2164,4 +2234,78 @@ fn every_board_of_a_mouse_bite_array_gets_the_same_tabs_and_voids() {
             .collect::<Vec<_>>();
         assert_points_close(points(cutout), expected);
     }
+}
+
+/// A square module `size` mm wide with 0.6 mm castellations on 1 mm lands
+/// at `lands`.
+fn castellated_module(size: f64, lands: impl IntoIterator<Item = (f64, f64)>) -> String {
+    let mut pads = String::new();
+    let mut holes = String::new();
+    for (x, y) in lands {
+        pads +=
+            &format!(r#"<Set><Pad padstackDefRef="edge"><Location x="{x}" y="{y}"/></Pad></Set>"#);
+        holes += &format!(
+            r#"<Set><Hole name="h" diameter="0.6" platingStatus="PLATED" plusTol="0" minusTol="0" x="{x}" y="{y}"/></Set>"#
+        );
+    }
+    board_fixture(
+        &format!(
+            r#"{SURFACE_LAYERS}
+  <Layer name="Drill" layerFunction="DRILL" side="ALL" polarity="POSITIVE"/>"#
+        ),
+        r#"<LayerRef name="Drill"/>"#,
+        &rectangle(0.0, 0.0, size, size),
+        &format!(
+            r#"<PadStackDef name="edge"><PadstackHoleDef name="h" diameter="0.6" platingStatus="PLATED" plusTol="0" minusTol="0" x="0" y="0"/>
+      <PadstackPadDef layerRef="TOP" padUse="REGULAR"><Location x="0" y="0"/><RectCenter width="1" height="1"/></PadstackPadDef></PadStackDef>
+    <LayerFeature layerRef="TOP">{pads}</LayerFeature>
+    <LayerFeature layerRef="Drill">{holes}</LayerFeature>"#
+        ),
+    )
+}
+
+#[test]
+fn castellated_edges_are_never_scored_and_keep_tabs_a_millimetre_away() {
+    // Castellated along every edge but for a 4 mm gap mid-edge: room for a
+    // 3 mm tab, but not one 1 mm clear of the lands.
+    let lands = (0..6)
+        .flat_map(|k| [1.15 + 1.27 * f64::from(k), 18.85 - 1.27 * f64::from(k)])
+        .flat_map(|t| [(t, 0.0), (t, 20.0), (0.0, t), (20.0, t)])
+        .collect::<Vec<_>>();
+    let separate = |separation| {
+        create_board_array(
+            &castellated_module(20.0, lands.clone()),
+            &options(2, 2, BoardMarginMm::all(5.0), BoardMarginMm::all(20.0)),
+            false,
+            separation,
+            Resolution::default(),
+        )
+        .unwrap_err()
+        .to_string()
+    };
+    let error = separate(Separation::VScore);
+    assert!(error.contains("castellated edges"), "{error}");
+    let error = separate(Separation::MouseBite);
+    assert!(error.contains("no tab site"), "{error}");
+}
+
+#[test]
+fn corners_hold_a_board_its_straight_sites_cannot() {
+    // A 60 mm module castellated from 4 to 56 mm along every edge, but for
+    // a gap mid-bottom with room for straight tabs that cannot hold it
+    // alone. The corners are clear.
+    let row = (0..42).map(|k| 4.0 + 1.27 * f64::from(k));
+    let lands = row
+        .clone()
+        .flat_map(|t| [(t, 60.0), (0.0, t), (60.0, t)])
+        .chain(row.filter(|t| !(26.0..34.0).contains(t)).map(|t| (t, 0.0)));
+    let creation = create_board_array(
+        &castellated_module(60.0, lands),
+        &options(2, 2, BoardMarginMm::all(5.0), BoardMarginMm::all(20.0)),
+        false,
+        Separation::MouseBite,
+        Resolution::default(),
+    )
+    .unwrap();
+    assert!(creation.warnings.is_empty(), "{:?}", creation.warnings);
 }

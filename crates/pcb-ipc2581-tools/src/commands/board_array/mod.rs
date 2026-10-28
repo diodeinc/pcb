@@ -533,6 +533,14 @@ fn build_board_array_spec(
 ) -> Result<BoardArraySpec> {
     let mode = panelization.mode;
     validate_options(options, mode, separation)?;
+    if separation == Separation::VScore {
+        let edges = crate::accessors::castellations(&import_design(ipc, resolution)?)?;
+        ensure!(
+            !edges.castellated,
+            "the board has castellated edges, which V-scoring would cut through; use mouse-bite \
+             separation (--mouse-bite)"
+        );
+    }
 
     let ecad = ipc.ecad().context("IPC-2581 file has no ECAD section")?;
     let board_width = root.bbox.width();

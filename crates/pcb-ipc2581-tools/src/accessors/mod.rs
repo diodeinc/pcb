@@ -6,6 +6,7 @@ use crate::geometry::{self, GeometryDocument};
 
 mod board;
 mod bom;
+mod castellations;
 mod components;
 mod drills;
 mod layers;
@@ -19,6 +20,7 @@ pub use board::{
     BoardArrayMargins, BoardDimensions, StackupInfo,
 };
 pub use bom::{Alternative, AvlLookup, CharacteristicsData};
+pub use castellations::{Castellations, castellations};
 pub use components::ComponentStats;
 pub use drills::{
     DrillHoleType, DrillSize, DrillStats, DrillTypeDistribution, ViaProfile, drill_stats,

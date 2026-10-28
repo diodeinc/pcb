@@ -30,6 +30,9 @@ pub struct Rejection {
 
 pub struct Sites {
     pub candidates: Vec<Candidate>,
+    /// Clear convex corners, for when the straight sites cannot hold the
+    /// board.
+    pub corners: Vec<Candidate>,
     pub rejected: Vec<Rejection>,
     /// Frame material beyond an outline-following slot, local to this board.
     pub frame: ContourSet,
@@ -58,6 +61,7 @@ pub fn find(
     };
     let mut sites = Sites {
         candidates: Vec::new(),
+        corners: Vec::new(),
         rejected: Vec::new(),
         frame: ContourSet::empty(resolution),
     };
@@ -99,8 +103,65 @@ pub fn find(
             }
         }
     }
+    for id in boundary
+        .boundaries()
+        .filter(|id| ring_signed_area(&substrate.rings[id.ring]) > 0.0)
+    {
+        let perimeter = boundary.perimeter(id)?;
+        sites.corners.extend(corners(
+            &substrate.rings[id.ring],
+            intervals,
+            id,
+            perimeter,
+            preset,
+        ));
+    }
     sites.frame = frame;
     Ok(sites)
+}
+
+/// Tabs straddling convex corners too sharp for a tab beside them, the neck
+/// on the bisector. A corner qualifies where a tab centred on it is clear of
+/// every obstacle; the corner itself leaves its outline state unresolved.
+fn corners(
+    ring: &Vec<[f64; 2]>,
+    intervals: &[OutlineInterval],
+    id: BoundaryId,
+    perimeter: f64,
+    preset: &Preset,
+) -> Vec<Candidate> {
+    let limit = (preset.tab_width_mm / preset.min_tab_radius_mm).to_degrees();
+    let edges: Vec<(Point, Point)> = ring_edges(ring).collect();
+    let mut station = 0.0;
+    let mut corners = Vec::new();
+    for (i, &(a, b)) in edges.iter().enumerate() {
+        let (p, q) = edges[(i + edges.len() - 1) % edges.len()];
+        let (u, v) = ((q - p) / p.distance_to(q), (b - a) / a.distance_to(b));
+        let cross = u.x * v.y - u.y * v.x;
+        let at = |i: &&OutlineInterval| {
+            i.boundary == id
+                && (i.start_mm <= station && station <= i.end_mm
+                    || station == 0.0 && touching(i.end_mm, perimeter))
+        };
+        let mut around = intervals.iter().filter(at).peekable();
+        if cross > 0.0
+            && cross.atan2(u.x * v.x + u.y * v.y).to_degrees() > limit
+            && around.peek().is_some()
+            && around.all(|i| i.obstacles.is_empty() && i.state != OutlineState::Blocked)
+        {
+            let bisector = Point::new(u.y + v.y, -u.x - v.x);
+            corners.push(Candidate {
+                ring: id.ring,
+                station_mm: station,
+                site: Site {
+                    point: a,
+                    outward_normal: bisector / bisector.length(),
+                },
+            });
+        }
+        station += a.distance_to(b);
+    }
+    corners
 }
 
 struct Checker<'a> {
