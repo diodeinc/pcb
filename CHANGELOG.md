@@ -15,6 +15,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ### Fixed
 
 - Correct JLCPCB DFM annular-ring and copper-clearance rules; make inferred hole-spacing limits advisory.
+- `pcb ipc board-array create --mouse-bite` holds a board at its corners when its straight outline has no tab site, as on modules castellated up to their corners, and otherwise names what keeps tabs off the outline.
 
 ### Changed
 

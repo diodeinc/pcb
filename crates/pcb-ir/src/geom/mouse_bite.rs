@@ -287,6 +287,10 @@ pub fn build(input: Attachment<'_>) -> Result<TabGeometry, QueryError> {
     if let Some((_, message)) = expected.iter().find(|(holds, _)| !holds) {
         return Err(QueryError::InvalidInput(message));
     }
+    // The neck runs from the site toward the anchor: the outline's normal on
+    // a straight edge, the bisector across a corner.
+    let outward =
+        (input.support_anchor - site.point) / input.support_anchor.distance_to(site.point);
     let radius = SparkFunShallow::CUTTER_RADIUS_MM;
     let resolution = input.stock.resolution.strict().with_accuracy(
         input
@@ -297,7 +301,7 @@ pub fn build(input: Attachment<'_>) -> Result<TabGeometry, QueryError> {
     );
     let neck = stroke(
         &ContourBuf::new(vec![
-            PathCmd::move_to(site.point - site.outward_normal * radius),
+            PathCmd::move_to(site.point - outward * radius),
             PathCmd::line_to(input.support_anchor),
         ])
         .with_uncertainty(input.board.uncertainty_mm),
@@ -313,7 +317,7 @@ pub fn build(input: Attachment<'_>) -> Result<TabGeometry, QueryError> {
         .board
         .disk_dilate(SparkFunShallow::OUTWARD_OFFSET_MM)?;
     let offset_query = BoundaryQuery::new(&offset, input.tolerance)?;
-    let target = site.point + site.outward_normal * SparkFunShallow::OUTWARD_OFFSET_MM;
+    let target = site.point + outward * SparkFunShallow::OUTWARD_OFFSET_MM;
     let projection = offset_query
         .boundaries()
         .map(|id| offset_query.project(id, target))

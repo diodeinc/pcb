@@ -50,6 +50,8 @@ pub(super) fn board_substrate(
 
 pub(super) struct Evidence {
     pub id: String,
+    /// What the obstacle is, in words; several pieces of evidence can share it.
+    pub label: String,
     pub region: ContourSet,
 }
 
@@ -277,10 +279,14 @@ fn courtyard_evidence(
                 );
             };
             covered.push(group.component);
+            let layer = imported.resolve(layer.name);
             evidence.push(Evidence {
+                label: match group.component {
+                    Some(c) => format!("{}'s courtyard on {layer}", imported.resolve(c)),
+                    None => format!("an unassociated courtyard on {layer}"),
+                },
                 id: format!(
-                    "courtyard:{}:{}:{}",
-                    imported.resolve(layer.name),
+                    "courtyard:{layer}:{}:{}",
                     group
                         .component
                         .map(|c| imported.resolve(c))
@@ -353,6 +359,7 @@ fn edge_plating_evidence(
                 continue;
             }
             evidence.push(Evidence {
+                label: "edge plating".into(),
                 id: format!(
                     "plating:{}:feature-{}:placement-{:?}",
                     imported.resolve(layer.name),

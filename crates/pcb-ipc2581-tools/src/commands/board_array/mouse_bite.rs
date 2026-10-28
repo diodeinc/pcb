@@ -63,7 +63,8 @@ pub(super) fn generate(
         let chosen: Vec<usize> = selection.chosen.iter().map(|&k| kept[k]).collect();
         ensure!(
             !chosen.is_empty(),
-            "no tab site on the board outline{}",
+            "no tab site on the board outline: {}{}",
+            why_no_site(placement, preset),
             dropped_note(&dropped)
         );
         for &c in &chosen {
@@ -155,6 +156,40 @@ pub(super) fn generate(
         per_board: chosen.len(),
         warning,
     })
+}
+
+/// What keeps tabs off the outline: how much of it each obstacle covers.
+fn why_no_site(placement: &Placement, preset: &Preset) -> String {
+    let prepared = &placement.prepared;
+    let mut blocked: Vec<(&str, f64)> = Vec::new();
+    for interval in &prepared.intervals {
+        let mut labels: Vec<&str> = interval
+            .obstacles
+            .iter()
+            .map(|&k| prepared.evidence[k].label.as_str())
+            .collect();
+        labels.sort_unstable();
+        labels.dedup();
+        for label in labels {
+            let length = interval.end_mm - interval.start_mm;
+            match blocked.iter_mut().find(|(l, _)| *l == label) {
+                Some((_, mm)) => *mm += length,
+                None => blocked.push((label, length)),
+            }
+        }
+    }
+    blocked.sort_by(|a, b| b.1.total_cmp(&a.1));
+    format!(
+        "a {:.2} mm tab must clear everything from {:.2} mm inside the outline to {:.2} mm \
+         outside it{}",
+        preset.tab_width_mm,
+        preset.inward_mm,
+        preset.routing_gap_mm + preset.frame_landing_mm,
+        blocked
+            .iter()
+            .map(|(label, mm)| format!("; {label} is in the way along {mm:.2} mm"))
+            .collect::<String>()
+    )
 }
 
 fn dropped_note(dropped: &[String]) -> String {
