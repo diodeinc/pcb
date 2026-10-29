@@ -37,11 +37,12 @@ use std::collections::{HashMap, HashSet};
 use ipc2581::Symbol;
 use pcb_ir::dialects::ipc::ArtworkScope;
 use pcb_ir::geom::dfm::{COMPARISON_EPSILON_MM, Distance};
-use pcb_ir::geom::{BBox, Point};
+use pcb_ir::geom::region::PaintComposer;
+use pcb_ir::geom::{BBox, ContourSet, Point, Polarity, Resolution};
 use pcb_ir::import::ipc2581::LayoutOccurrenceId;
 use sha2::{Digest, Sha256};
 
-use super::design::{Design, Hole, HoleClass, Slot};
+use super::design::{ConductorId, CopperConductor, Design, Hole, HoleClass, Land, Slot};
 use super::pdk::SlotPlating;
 use super::report::{
     DrillSpan, Evidence, Finding, LayerRef, Location, Measurement, MeasurementKind, ReportPoint,
@@ -901,6 +902,43 @@ fn ratio_finding(rule: &Rule, measured: RatioMeasured, maximum: f64) -> Finding 
     }
 }
 
+/// `conductor`'s copper without those of `lands` that belong to it, or
+/// `None` when none does. A land is cut from its own conductor only, so
+/// another owner's copper under it is still measured.
+pub(super) fn without_own_lands<'a>(
+    conductor: &CopperConductor,
+    lands: impl IntoIterator<Item = &'a Land>,
+    resolution: Resolution,
+) -> anyhow::Result<Option<ContourSet>> {
+    let mut own = lands
+        .into_iter()
+        .filter(|land| match conductor.id {
+            ConductorId::Net {
+                step,
+                instance: None,
+                net,
+                object: None,
+            } => step == land.step && land.net == Some(net),
+            ConductorId::Isolated {
+                instance: None,
+                occurrence,
+                ..
+            } => occurrence == land.id.0,
+            _ => false,
+        })
+        .filter_map(|land| land.image.as_ref())
+        .peekable();
+    if own.peek().is_none() {
+        return Ok(None);
+    }
+    let mut composer = PaintComposer::new(resolution);
+    composer.push(Polarity::Dark, conductor.image.clone());
+    for land in own {
+        composer.push(Polarity::Clear, land.clone());
+    }
+    Ok(Some(composer.finish()?))
+}
+
 /// The copper a plated drilled feature owns, for holes and slots alike.
 ///
 /// A canonical land link can mean unique overlap rather than identity, and
@@ -941,6 +979,27 @@ impl Ownership {
                 .collect(),
             lands: lands.iter().map(|land| land.id).collect(),
         }
+    }
+
+    /// Whether a NetShort on `layer` lets `conductor` meet this feature's
+    /// copper at `point`. The tie is local: a tied graphic may meet a feature
+    /// whose own land is the pad it is tied to, and a tied pad may be entered
+    /// through its partner the feature owns. Elsewhere the tied nets meet
+    /// the feature like any others.
+    fn tied(
+        &self,
+        ties: &copper_clearance::TiePermissions,
+        layer: &super::design::CopperLayer,
+        conductor: super::design::ConductorId,
+        point: Point,
+    ) -> bool {
+        ties.graphic_pads(conductor).any(|pad| {
+            matches!(
+                pad,
+                super::design::ConductorId::Net { object: Some(object), .. }
+                    if self.lands.iter().any(|land| land.0 == object)
+            )
+        }) || ties.enters_pad(layer, conductor, |partner| self.owns(partner), point)
     }
 
     pub(super) fn owns(&self, conductor: super::design::ConductorId) -> bool {

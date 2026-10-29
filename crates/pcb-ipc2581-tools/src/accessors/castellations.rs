@@ -10,7 +10,13 @@ use super::drills::{DrillHoleType, drill_hole};
 
 /// One plated hole on the edge may be a stray, such as a mounting hole.
 /// Diode's wire-pad castellation footprint has one half-hole per pad.
-const MIN_CASTELLATED_HOLES: usize = 2;
+pub(crate) const MIN_CASTELLATED_HOLES: usize = 2;
+
+/// Whether a plated hole whose centre is `edge_distance_mm` from the board
+/// outline is a half-hole the outline cuts through.
+pub(crate) fn on_edge(edge_distance_mm: f64, diameter_mm: f64) -> bool {
+    edge_distance_mm.abs() <= diameter_mm / 4.0
+}
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Castellations {
@@ -48,7 +54,7 @@ pub fn castellations(imported: &ImportedDesign) -> anyhow::Result<Castellations>
         for feature in &doc.features {
             if let Some((diameter, DrillHoleType::Plated)) = drill_hole(feature)
                 && let Some(distance) = outline.signed_distance(feature.center)
-                && distance.mm.abs() <= diameter / 4.0
+                && on_edge(distance.mm, diameter)
             {
                 holes.push((feature.center, diameter));
             }

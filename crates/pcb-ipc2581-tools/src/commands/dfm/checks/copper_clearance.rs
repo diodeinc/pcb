@@ -35,79 +35,13 @@ pub(super) fn evaluate(
 ) -> anyhow::Result<Evaluation> {
     let measure = |layer: &CopperLayer| {
         let conductors = &layer.conductors;
-        // Like KiCad, permit a tied graphic to meet the group's nets, but
-        // never merge those nets. Pad-only ties permit just the pad pair.
-        let mut permissions = HashSet::new();
-        let mut pad_pairs = HashSet::new();
-        for short in &layer.net_shorts {
-            let objects = short.nets.map(|net| {
-                conductors
-                    .iter()
-                    .filter_map(|conductor| {
-                        let ConductorId::Net {
-                            object: Some(object),
-                            ..
-                        } = conductor.id
-                        else {
-                            return None;
-                        };
-                        if conductor.id.electrical() != net {
-                            return None;
-                        }
-                        let distance = conductor
-                            .image
-                            .prepare_query()
-                            .signed_distance(short.location)?;
-                        if distance.mm
-                            > conductor.image.uncertainty_mm + NET_SHORT_LOCATION_TOLERANCE_MM
-                        {
-                            return None;
-                        }
-                        let feature = design.imported.feature_definition(object.feature)?;
-                        Some((
-                            conductor.id,
-                            component_copper(&design.imported.geometry, feature)?,
-                            feature.kind,
-                        ))
-                    })
-                    .collect::<Vec<_>>()
-            });
-            let mut matched = false;
-            for &(first, component, first_kind) in &objects[0] {
-                for &(second, other_component, second_kind) in &objects[1] {
-                    if component != other_component {
-                        continue;
-                    }
-                    match (
-                        first_kind == FeatureKind::Padstack,
-                        second_kind == FeatureKind::Padstack,
-                    ) {
-                        (false, true) => {
-                            permissions.insert((first, second.electrical()));
-                        }
-                        (true, false) => {
-                            permissions.insert((second, first.electrical()));
-                        }
-                        (true, true) => {
-                            pad_pairs.insert((first, second));
-                        }
-                        (false, false) => continue,
-                    }
-                    matched = true;
-                }
-            }
-            anyhow::ensure!(
-                matched,
-                "{} has no matching component graphic/pad or pad/pad contact",
-                short.description
-            );
-        }
+        let ties = TiePermissions::of(design, layer)?;
         let permitted = |first: ConductorId, second: ConductorId| {
             first.electrical() == second.electrical()
-                || permissions.contains(&(first, second.electrical()))
-                || permissions.contains(&(second, first.electrical()))
-                || pad_pairs.contains(&(first, second))
-                || pad_pairs.contains(&(second, first))
+                || ties.graphic_meets(first, second)
+                || ties.graphic_meets(second, first)
+                || ties.pad_pairs.contains(&(first, second))
+                || ties.pad_pairs.contains(&(second, first))
         };
         // A conductor whose bounds come within the limit of no other's is
         // proven clear whole; only the rest are taken apart into pieces.
@@ -201,32 +135,13 @@ pub(super) fn evaluate(
 
             let left_id = conductors[left.conductor_index].id;
             let right_id = conductors[right.conductor_index].id;
-            // A route may enter a tied pad where that pad meets its partner.
-            // This is a pad-position exception, not permission for the route's net.
             let enters_pad = |target, incoming: ConductorId, point| {
-                pad_pairs.iter().any(|&(first, second)| {
-                    let entry = if first == target {
-                        second
-                    } else if second == target {
-                        first
-                    } else {
-                        return false;
-                    };
-                    entry.electrical() == incoming.electrical()
-                        && conductors
-                            .iter()
-                            .find(|conductor| conductor.id == entry)
-                            .and_then(|conductor| {
-                                conductor.image.prepare_query().signed_distance(point).map(
-                                    |distance| {
-                                        distance.mm
-                                            <= conductor.image.uncertainty_mm
-                                                + NET_SHORT_LOCATION_TOLERANCE_MM
-                                    },
-                                )
-                            })
-                            .unwrap_or(false)
-                })
+                ties.enters_pad(
+                    layer,
+                    target,
+                    |entry| entry.electrical() == incoming.electrical(),
+                    point,
+                )
             };
             if enters_pad(left_id, right_id, distance.first)
                 || enters_pad(right_id, left_id, distance.second)
@@ -290,6 +205,143 @@ pub(super) fn evaluate(
             .sum(),
         measured,
     })
+}
+
+/// What one layer's NetShort declarations permit. Like KiCad, a tied graphic
+/// may meet the group's other net, and a pad-only tie permits just the pad
+/// pair; the nets themselves are never merged.
+pub(super) struct TiePermissions {
+    /// A tied graphic's conductor and the partner pad it is tied to, whose
+    /// net the graphic may meet.
+    graphics: HashSet<(ConductorId, ConductorId)>,
+    pad_pairs: HashSet<(ConductorId, ConductorId)>,
+}
+
+impl TiePermissions {
+    pub(super) fn of(design: &Design, layer: &CopperLayer) -> anyhow::Result<Self> {
+        let conductors = &layer.conductors;
+        let mut graphics = HashSet::new();
+        let mut pad_pairs = HashSet::new();
+        for short in &layer.net_shorts {
+            let objects = short.nets.map(|net| {
+                conductors
+                    .iter()
+                    .filter_map(|conductor| {
+                        let ConductorId::Net {
+                            object: Some(object),
+                            ..
+                        } = conductor.id
+                        else {
+                            return None;
+                        };
+                        if conductor.id.electrical() != net {
+                            return None;
+                        }
+                        let distance = conductor
+                            .image
+                            .prepare_query()
+                            .signed_distance(short.location)?;
+                        if distance.mm
+                            > conductor.image.uncertainty_mm + NET_SHORT_LOCATION_TOLERANCE_MM
+                        {
+                            return None;
+                        }
+                        let feature = design.imported.feature_definition(object.feature)?;
+                        Some((
+                            conductor.id,
+                            component_copper(&design.imported.geometry, feature)?,
+                            feature.kind,
+                        ))
+                    })
+                    .collect::<Vec<_>>()
+            });
+            let mut matched = false;
+            for &(first, component, first_kind) in &objects[0] {
+                for &(second, other_component, second_kind) in &objects[1] {
+                    if component != other_component {
+                        continue;
+                    }
+                    match (
+                        first_kind == FeatureKind::Padstack,
+                        second_kind == FeatureKind::Padstack,
+                    ) {
+                        (false, true) => {
+                            graphics.insert((first, second));
+                        }
+                        (true, false) => {
+                            graphics.insert((second, first));
+                        }
+                        (true, true) => {
+                            pad_pairs.insert((first, second));
+                        }
+                        (false, false) => continue,
+                    }
+                    matched = true;
+                }
+            }
+            anyhow::ensure!(
+                matched,
+                "{} has no matching component graphic/pad or pad/pad contact",
+                short.description
+            );
+        }
+        Ok(Self {
+            graphics,
+            pad_pairs,
+        })
+    }
+
+    /// Whether `graphic` is a tied graphic that may meet `net`'s copper.
+    pub(super) fn graphic_meets(&self, graphic: ConductorId, net: ConductorId) -> bool {
+        self.graphic_pads(graphic)
+            .any(|pad| pad.electrical() == net.electrical())
+    }
+
+    /// The pads the tied graphic `graphic` is tied to.
+    pub(super) fn graphic_pads(&self, graphic: ConductorId) -> impl Iterator<Item = ConductorId> {
+        self.graphics
+            .iter()
+            .filter(move |(tied, _)| *tied == graphic)
+            .map(|&(_, pad)| pad)
+    }
+
+    /// Whether copper meeting the tied pad `target` at `point` enters it
+    /// through its partner pad, one that `entry` accepts. This is a
+    /// pad-position exception, not permission for the incoming net.
+    pub(super) fn enters_pad(
+        &self,
+        layer: &CopperLayer,
+        target: ConductorId,
+        entry: impl Fn(ConductorId) -> bool,
+        point: pcb_ir::geom::Point,
+    ) -> bool {
+        self.pad_pairs.iter().any(|&(first, second)| {
+            let partner = if first == target {
+                second
+            } else if second == target {
+                first
+            } else {
+                return false;
+            };
+            entry(partner)
+                && layer
+                    .conductors
+                    .iter()
+                    .find(|conductor| conductor.id == partner)
+                    .and_then(|conductor| {
+                        conductor
+                            .image
+                            .prepare_query()
+                            .signed_distance(point)
+                            .map(|distance| {
+                                distance.mm
+                                    <= conductor.image.uncertainty_mm
+                                        + NET_SHORT_LOCATION_TOLERANCE_MM
+                            })
+                    })
+                    .unwrap_or(false)
+        })
+    }
 }
 
 pub(super) fn conductor_subject(
@@ -607,6 +659,58 @@ mod tests {
                 "{pdk}: missing real annular-ring violation"
             );
         }
+    }
+
+    #[test]
+    fn a_tied_graphic_may_meet_the_partner_nets_hole_but_not_a_third_nets() {
+        // The radiator is the feed net's and runs over the grounded PTH, as
+        // a feed-net antenna graphic tied to ground at that pin does.
+        let feed = |tie: bool| {
+            let set = r#"<Set geometryUsage="GRAPHIC" componentRef="E1">"#;
+            let tie = if tie {
+                // Where the radiator's grounded leg overlaps pad 2.
+                TIE.replace(
+                    r#"x="168.9" y="-100.439392""#,
+                    r#"x="169.1" y="-98.689392""#,
+                )
+            } else {
+                String::new()
+            };
+            ANTENNA.replacen(
+                set,
+                &format!(
+                    r#"<Set net="WIFI.RF_ANT" geometryUsage="GRAPHIC" componentRef="E1">{tie}"#
+                ),
+                1,
+            )
+        };
+        let via = r#"<LayerFeature layerRef="F.Cu_B.Cu"><Set net="UNRELATED">
+            <Hole name="V1" diameter="0.30" platingStatus="VIA" plusTol="0.0" minusTol="0.0" x="173.8" y="-100.439392"/>
+          </Set></LayerFeature></Step>"#;
+        let hole_findings = |xml: &str| {
+            antenna_check(xml, "jlcpcb-1oz")
+                .unwrap()
+                .findings
+                .into_iter()
+                .filter(|finding| finding.rule_id.contains("hole_clearance"))
+                .map(|finding| {
+                    let hole = &finding.subjects[0];
+                    (hole.kind, finding.subjects[1].net.clone().unwrap())
+                })
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            hole_findings(&feed(false)),
+            [("plated_hole", "WIFI.RF_ANT".to_owned())],
+            "untied, the feed copper over a ground hole is a short"
+        );
+        assert_eq!(hole_findings(&feed(true)), []);
+        // The tie permits ground, not every net the radiator reaches.
+        let third = hole_findings(&feed(true).replacen("</Step>", via, 1));
+        assert!(
+            third.contains(&("via_hole", "WIFI.RF_ANT".to_owned())),
+            "{third:?}"
+        );
     }
 
     #[test]

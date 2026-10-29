@@ -4,20 +4,24 @@
 //! clearance is `dist(D, M) = max(0, dist(c, M) - r)`. The drill is analytic;
 //! only the composed copper boundary contributes geometric uncertainty. Via
 //! and PTH checks exclude copper proven to belong to the hole's scoped net or
-//! a physically associated land. NPTH checks exclude nothing. Measurements
-//! are made only on copper layers in the declared drill span.
+//! a physically associated land, and copper a local NetShort lets meet it,
+//! without merging the tied nets. NPTH checks exclude only, layer by layer,
+//! the geometry of the land the hole is drilled through by design: a
+//! component pad centred on it whose shape covers the drill. The rest of that
+//! land's net is measured. Measurements are made only on copper layers in
+//! the declared drill span.
 
 use pcb_ir::geom::dfm::{Distance, circular_region, region_clearance_sites_with_index};
-use pcb_ir::geom::{BBox, Point};
+use pcb_ir::geom::{BBox, ContourSet, Point, PreparedRegion, tol};
 
-use crate::commands::dfm::design::{Design, HoleClass, spans};
+use crate::commands::dfm::design::{ConductorId, CopperLayer, Design, Hole, HoleClass, spans};
 use crate::commands::dfm::report::{Evidence, MeasurementKind};
 use crate::commands::dfm::rules::Conditions;
 
-use super::copper_clearance::conductor_subject;
+use super::copper_clearance::{TiePermissions, conductor_subject};
 use super::{
     Evaluation, Measured, MeasuredSite, Ownership, hole_subject, layers, linework_clearance,
-    spanned_layers, violates,
+    spanned_layers, violates, without_own_lands,
 };
 
 pub(super) fn evaluate(
@@ -28,6 +32,15 @@ pub(super) fn evaluate(
 ) -> anyhow::Result<Evaluation> {
     let mut checked = 0;
     let mut measured = Vec::new();
+    // A nonplated hole has no net for a tie to name.
+    let ties = match class {
+        HoleClass::Npth => Vec::new(),
+        HoleClass::Via | HoleClass::Pth => design
+            .copper_layers
+            .iter()
+            .map(|layer| TiePermissions::of(design, layer))
+            .collect::<anyhow::Result<Vec<_>>>()?,
+    };
 
     // A placed hole is measured here too, against what its own Step's design
     // does not hold: this Step's copper and that of the other placements.
@@ -48,31 +61,40 @@ pub(super) fn evaluate(
         );
         for (copper_index, copper) in spanned_layers(design, &hole.drill_span, conditions) {
             checked += usize::from(hole.branch.is_none());
+            // An NPTH's own mounting land is not an offender; the rest of
+            // that land's conductor is measured without it.
+            let land_remainders = match class {
+                HoleClass::Npth => npth_land_remainders(hole, copper, design)?,
+                HoleClass::Via | HoleClass::Pth => Vec::new(),
+            };
             // Only a conductor whose bounds reach the keepout can enter it.
             let nearest = design.conductors_near[copper_index]
                 .query(hole.bbox.expand(limit_mm))
                 .into_iter()
                 .map(|index| {
-                    (
-                        &copper.conductors[index],
-                        &design.conductor_boundaries[copper_index][index],
-                    )
+                    let conductor = &copper.conductors[index];
+                    match land_remainders.iter().find(|(id, ..)| *id == conductor.id) {
+                        Some((_, image, boundary)) => (conductor, image, boundary),
+                        None => (
+                            conductor,
+                            &conductor.image,
+                            &design.conductor_boundaries[copper_index][index],
+                        ),
+                    }
                 })
-                .filter(|(conductor, _)| spans(hole.branch, conductor.branch))
-                .filter(|(conductor, _)| class == HoleClass::Npth || !owner.owns(conductor.id))
-                .filter_map(|(conductor, boundary)| {
-                    disk_to_copper_clearance(
-                        hole.center,
-                        radius_mm,
-                        &conductor.image,
-                        boundary,
-                        limit_mm,
-                    )
-                    .map(|distance| (conductor, boundary, distance))
+                .filter(|(conductor, ..)| spans(hole.branch, conductor.branch))
+                .filter(|(conductor, ..)| class == HoleClass::Npth || !owner.owns(conductor.id))
+                .filter_map(|(conductor, image, boundary)| {
+                    disk_to_copper_clearance(hole.center, radius_mm, image, boundary, limit_mm)
+                        .map(|distance| (conductor, image, boundary, distance))
                 })
-                .min_by(|(_, _, left), (_, _, right)| left.mm.total_cmp(&right.mm));
+                .filter(|(conductor, _, _, distance)| {
+                    ties.get(copper_index)
+                        .is_none_or(|ties| !owner.tied(ties, copper, conductor.id, distance.second))
+                })
+                .min_by(|(.., left), (.., right)| left.mm.total_cmp(&right.mm));
 
-            let Some((offender, boundary, distance)) = nearest else {
+            let Some((offender, offender_image, boundary, distance)) = nearest else {
                 continue;
             };
             let finding_layers = layers([&hole.layer, &copper.layer]);
@@ -93,7 +115,7 @@ pub(super) fn evaluate(
                     region_clearance_sites_with_index(
                         &drill,
                         &drill.prepare_query(),
-                        &offender.image,
+                        offender_image,
                         boundary,
                         limit_mm,
                     )?,
@@ -139,6 +161,55 @@ pub(super) fn evaluate(
     }
 
     Ok(Evaluation { checked, measured })
+}
+
+/// The conductors on `copper` that hold a land the nonplated `hole` is drilled
+/// through by design, each without that land: what remains of them is
+/// measured as any other copper. A land qualifies when it is a component pad
+/// of the hole's own Step, centred on the hole, whose source shape covers the
+/// whole drill, such as a mounting hole's annular land. Only the land's own
+/// geometry is exempt, never its net: disconnected same-net copper, copper
+/// joined to the land outside it, and the net on other layers are measured.
+fn npth_land_remainders(
+    hole: &Hole,
+    copper: &CopperLayer,
+    design: &Design,
+) -> anyhow::Result<Vec<(ConductorId, ContourSet, PreparedRegion)>> {
+    if hole.branch.is_some() {
+        return Ok(Vec::new());
+    }
+    let radius_mm = hole.diameter_mm / 2.0;
+    let lands = copper
+        .lands
+        .iter()
+        .filter(|land| {
+            land.reference_designator.is_some()
+                && land.step == hole.step
+                && land.center.distance_to(hole.center) <= tol::REGION_MM
+        })
+        // The drill disk lies inside the land's own shape, not just its bounds.
+        .filter(|land| {
+            land.image.as_ref().is_some_and(|image| {
+                image.contains_point(hole.center)
+                    && image
+                        .prepare_query()
+                        .nearest_within(hole.center, radius_mm - tol::REGION_MM)
+                        .is_none()
+            })
+        })
+        .collect::<Vec<_>>();
+    copper
+        .conductors
+        .iter()
+        .filter_map(|conductor| {
+            let image = without_own_lands(conductor, lands.iter().copied(), design.resolution);
+            image.transpose().map(|image| {
+                let image = image?;
+                let boundary = image.prepare_query();
+                Ok((conductor.id, image, boundary))
+            })
+        })
+        .collect()
 }
 
 fn disk_to_copper_clearance(
@@ -365,6 +436,84 @@ limit = {{ minimum = "0.20 mm" }}"#
                 "unattributed_copper"
             );
         }
+    }
+
+    #[test]
+    fn npth_exempts_only_its_own_mounting_land_geometry() {
+        // A 1 mm NPTH through a 1.2 mm mounting land of net MH on L0.
+        let pad = |x: f64, primitive: &str, pin: bool| {
+            let pin = if pin {
+                r#"<PinRef componentRef="H1" pin="1"/>"#
+            } else {
+                ""
+            };
+            format!(
+                r#"<LayerFeature layerRef="L0"><Set net="MH" polarity="POSITIVE"><Pad padstackDefRef="land-stack"><Location x="{x}" y="0"/>{primitive}{pin}</Pad></Set></LayerFeature>"#
+            )
+        };
+        let disk = r#"<StandardPrimitiveRef id="land"/>"#;
+        let land = |x: f64, pin: bool| pad(x, disk, pin);
+        let run = |features: &[String]| {
+            let xml = board("NONPLATED", Some((0, 2)), features)
+                .replace(
+                    r#"<LayerRef name="DRILL"/>"#,
+                    r#"<LayerRef name="DRILL"/><DictionaryStandard units="MILLIMETER"><EntryStandard id="land"><Circle diameter="1.2"/></EntryStandard></DictionaryStandard>
+    <DictionaryUser units="MILLIMETER"><EntryUser id="ring"><UserSpecial><Circle diameter="1.4"><LineDesc lineWidth="0.3" lineEnd="ROUND"/><FillDesc fillProperty="HOLLOW"/></Circle></UserSpecial></EntryUser></DictionaryUser>"#,
+                )
+                .replace(
+                    r#"<Datum x="0" y="0"/>"#,
+                    r#"<Datum x="0" y="0"/><PadStackDef name="land-stack"><PadstackPadDef layerRef="L0" padUse="REGULAR"><Location x="0" y="0"/><StandardPrimitiveRef id="land"/></PadstackPadDef></PadStackDef>"#,
+                );
+            run(&xml, "npth")
+                .findings
+                .iter()
+                .map(|finding| {
+                    (
+                        finding.layers[1].name.clone(),
+                        finding.subjects[1].net.clone().unwrap_or_default(),
+                        (finding.measurement.actual_mm().unwrap() * 1e6).round() / 1e6,
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+        let found = |layer: &str, net: &str, mm: f64| vec![(layer.to_owned(), net.to_owned(), mm)];
+        // A same-net 1 × 1 mm square from x = `x`, apart from the land or not.
+        let same_net = |x: f64| copper(0, Some("MH"), x);
+
+        assert_eq!(run(&[land(0.0, true)]), []);
+        // Bare copper, or a pad that is not centred on the hole, is no land.
+        assert_eq!(run(&[land(0.0, false)]), found("L0", "MH", 0.0));
+        assert_eq!(run(&[land(0.1, true)]), found("L0", "MH", 0.0));
+        // A ring whose bounds span the drill but whose copper does not cover
+        // it is not a land the hole is drilled through: its flattened inner
+        // edge is about 0.05 mm away.
+        let ring = r#"<UserPrimitiveRef id="ring"/>"#;
+        let [(layer, net, mm)] = run(&[pad(0.0, ring, true)]).try_into().unwrap();
+        assert_eq!((layer.as_str(), net.as_str()), ("L0", "MH"));
+        assert!((0.04..=0.05).contains(&mm), "{mm}");
+        // The land's net is not exempt: separate same-net copper 0.12 mm
+        // from the drill, and same-net copper joined to the land but 0.10 mm
+        // from the drill beyond it, both still violate.
+        assert_eq!(
+            run(&[land(0.0, true), same_net(0.62)]),
+            found("L0", "MH", 0.12)
+        );
+        let [(layer, net, mm)] = run(&[land(0.0, true), same_net(0.55)]).try_into().unwrap();
+        assert_eq!((layer.as_str(), net.as_str()), ("L0", "MH"));
+        assert!(
+            (0.095..=0.1).contains(&mm),
+            "the flattened land's edge: {mm}"
+        );
+        // Other copper near the hole is measured as before: another net on
+        // the land's layer, and the land's own net where it has no land.
+        assert_eq!(
+            run(&[land(0.0, true), copper(0, Some("N2"), 0.65)]),
+            found("L0", "N2", 0.15)
+        );
+        assert_eq!(
+            run(&[land(0.0, true), copper(1, Some("MH"), 0.55)]),
+            found("L1", "MH", 0.05)
+        );
     }
 
     #[test]
