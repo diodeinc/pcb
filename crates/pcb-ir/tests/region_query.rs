@@ -44,6 +44,11 @@ fn boundary_and_near_boundary_points_keep_their_signed_distance() {
     ] {
         let distance = query(&prepared, point, 0.0);
         assert_eq!(distance.second, point);
+        // The half-open winding predicate includes the left/bottom edges,
+        // not the right/top edges. Inside boundary points retain negative zero.
+        let inside = point.x < 4.0 && point.y < 4.0;
+        assert_eq!(distance.mm.is_sign_negative(), inside);
+        assert_eq!(prepared.winding(point) != 0, inside);
     }
     // Much closer than the region's containment/significance tolerance.
     for x in [-5e-7, -1e-10, 1e-10, 5e-7] {
@@ -195,6 +200,7 @@ fn batches_match_exhaustive_measurements_and_repeated_queries() {
     let distances = prepared.signed_distances(&points);
     for ((&point, distance), inside) in points.iter().zip(&distances).zip(inside) {
         assert_eq!(*distance, prepared.signed_distance(point));
+        assert_eq!(prepared.winding(point) != 0, inside);
         let distance = distance.unwrap();
         let expected = region
             .rings
