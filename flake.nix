@@ -168,7 +168,10 @@
             packages = [
               rust
               pkgs.cargo-nextest
+              pkgs.python3
+              pkgs.uv
             ];
+            UV_PYTHON = "${pkgs.python3}/bin/python3";
           };
         }
       );

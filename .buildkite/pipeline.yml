@@ -1,9 +1,9 @@
-# One native job; Cargo artifacts and the Nix toolchain persist on each pfet worker.
+# Independent native jobs; Cargo, uv and the Nix toolchain persist on each pfet worker.
 agents:
   queue: pfet
 
 steps:
-  - label: ":rust: Manufacturing core"
+  - label: ":rust: Manufacturing core and STEP"
     key: core
     if: build.branch != pipeline.default_branch
     # Broad Rust inputs deliberately cover new path dependencies and shared fixtures, too.
@@ -22,9 +22,31 @@ steps:
     artifact_paths: target/nextest/ci/junit.xml
 
   # if + if_changed is AND; always check the default branch.
-  - label: ":rust: Manufacturing core"
+  - label: ":rust: Manufacturing core and STEP"
     key: core-main
     if: build.branch == pipeline.default_branch
     timeout_in_minutes: 5
     command: bin/ci-core
     artifact_paths: target/nextest/ci/junit.xml
+
+  - label: ":python: Python"
+    key: python
+    if: build.branch != pipeline.default_branch
+    if_changed:
+      - "**/*.py"
+      - pyproject.toml
+      - uv.lock
+      - install.sh
+      - flake.{nix,lock}
+      - bin/ci-python
+      - .buildkite/**
+    timeout_in_minutes: 3
+    command: bin/ci-python
+    artifact_paths: target/pytest/junit.xml
+
+  - label: ":python: Python"
+    key: python-main
+    if: build.branch == pipeline.default_branch
+    timeout_in_minutes: 3
+    command: bin/ci-python
+    artifact_paths: target/pytest/junit.xml

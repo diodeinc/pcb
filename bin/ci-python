@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Pure Python coverage; native pcbnew tests remain in the KiCad-equipped jobs.
+uv run --locked ty check
+uv run --locked ruff check crates/pcb-layout/src/scripts
+uv run --locked ruff format --check crates/pcb-layout/src/scripts
+uv run --locked pytest bin/tests crates/pcb-layout/src/scripts/lens/tests \
+  --junitxml=target/pytest/junit.xml

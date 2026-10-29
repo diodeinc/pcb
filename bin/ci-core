@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Native manufacturing libraries: no KiCad, compiler, GUI or network fixtures.
+# Native manufacturing and STEP libraries: no KiCad, compiler, GUI or network fixtures.
 packages=(
   -p pcb-ir
   -p ipc2581
@@ -9,6 +9,7 @@ packages=(
   -p pcb-sexpr
   -p pcb-intern
   -p newstroke
+  -p pcb-step
   -p pcb-ipc2581-tools
 )
 args=(--locked --no-default-features --features pcb-sexpr/serde "${packages[@]}")
