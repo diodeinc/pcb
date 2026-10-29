@@ -15,10 +15,28 @@ steps:
       - "{rustfmt,.rustfmt,clippy,.clippy}.toml"
       - .config/nextest.toml
       - flake.{nix,lock}
-      - bin/ci-core
       - .buildkite/**
     timeout_in_minutes: 5
-    command: bin/ci-core
+    command: &core-checks |
+      set -euo pipefail
+
+      # Native manufacturing and STEP libraries: no KiCad, compiler, GUI or network fixtures.
+      packages=(
+        -p pcb-ir
+        -p ipc2581
+        -p gerberx2
+        -p pcb-sexpr
+        -p pcb-intern
+        -p newstroke
+        -p pcb-step
+        -p pcb-ipc2581-tools
+      )
+      args=(--locked --no-default-features --features pcb-sexpr/serde "${packages[@]}")
+
+      cargo fmt "${packages[@]}" -- --check
+      cargo clippy "${args[@]}" --all-targets -- -D warnings
+      cargo nextest run "${args[@]}" --profile ci
+      cargo test "${args[@]}" --doc
     artifact_paths: target/nextest/ci/junit.xml
 
   # if + if_changed is AND; always check the default branch.
@@ -26,7 +44,7 @@ steps:
     key: core-main
     if: build.branch == pipeline.default_branch
     timeout_in_minutes: 5
-    command: bin/ci-core
+    command: *core-checks
     artifact_paths: target/nextest/ci/junit.xml
 
   - label: ":python: Python tests"
@@ -38,15 +56,20 @@ steps:
       - uv.lock
       - install.sh
       - flake.{nix,lock}
-      - bin/ci-python
       - .buildkite/**
     timeout_in_minutes: 3
-    command: bin/ci-python
+    command: &python-checks |
+      set -euo pipefail
+
+      # Pure Python coverage; native pcbnew tests remain in the KiCad-equipped jobs.
+      uv run --locked --no-default-groups --group test \
+        pytest bin/tests crates/pcb-layout/src/scripts/lens/tests \
+        --junitxml=target/pytest/junit.xml
     artifact_paths: target/pytest/junit.xml
 
   - label: ":python: Python tests"
     key: python-main
     if: build.branch == pipeline.default_branch
     timeout_in_minutes: 3
-    command: bin/ci-python
+    command: *python-checks
     artifact_paths: target/pytest/junit.xml
