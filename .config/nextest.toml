@@ -6,6 +6,9 @@ fail-fast = false
 failure-output = "immediate-final"
 status-level = "skip"
 
+[profile.ci.junit]
+path = "junit.xml"
+
 # Start the longest tests first.
 [[profile.default.overrides]]
 filter = '''

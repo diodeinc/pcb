@@ -1,0 +1,30 @@
+# One native job; Cargo artifacts and the Nix toolchain persist on each pfet worker.
+agents:
+  queue: pfet
+
+steps:
+  - label: ":rust: Manufacturing core"
+    key: core
+    if: build.branch != pipeline.default_branch
+    # Broad Rust inputs deliberately cover new path dependencies and shared fixtures, too.
+    if_changed:
+      - crates/**
+      - Cargo.{toml,lock}
+      - .cargo/**
+      - rust-toolchain{,.toml}
+      - "{rustfmt,.rustfmt,clippy,.clippy}.toml"
+      - .config/nextest.toml
+      - flake.{nix,lock}
+      - bin/ci-core
+      - .buildkite/**
+    timeout_in_minutes: 5
+    command: bin/ci-core
+    artifact_paths: target/nextest/ci/junit.xml
+
+  # if + if_changed is AND; always check the default branch.
+  - label: ":rust: Manufacturing core"
+    key: core-main
+    if: build.branch == pipeline.default_branch
+    timeout_in_minutes: 5
+    command: bin/ci-core
+    artifact_paths: target/nextest/ci/junit.xml

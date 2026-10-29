@@ -4,10 +4,20 @@
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
     crane.url = "github:ipetkov/crane";
+    rust-overlay = {
+      url = "github:oxalica/rust-overlay";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
   };
 
   outputs =
-    { self, nixpkgs, crane, ... }:
+    {
+      self,
+      nixpkgs,
+      crane,
+      rust-overlay,
+      ...
+    }:
     let
       lib = nixpkgs.lib;
       systems = [
@@ -135,6 +145,34 @@
         };
     in
     {
+      devShells = forAllSystems (
+        system:
+        let
+          pkgs = import nixpkgs {
+            inherit system;
+            overlays = [ rust-overlay.overlays.default ];
+          };
+          rust = pkgs.rust-bin.fromRustupToolchain (
+            (lib.importTOML ./rust-toolchain.toml).toolchain
+            // {
+              profile = "minimal";
+              components = [
+                "rustfmt"
+                "clippy"
+              ];
+            }
+          );
+        in
+        {
+          ci = pkgs.mkShell {
+            packages = [
+              rust
+              pkgs.cargo-nextest
+            ];
+          };
+        }
+      );
+
       packages = forAllSystems (
         system:
         let
