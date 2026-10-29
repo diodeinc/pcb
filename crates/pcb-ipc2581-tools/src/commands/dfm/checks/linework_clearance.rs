@@ -28,10 +28,12 @@
 use std::ops::Range;
 
 use pcb_ir::geom::dfm::{ClearanceSite, Distance, linework_clearance_sites};
+use pcb_ir::geom::region::PaintComposer;
 use pcb_ir::geom::region::ring_edges;
-use pcb_ir::geom::{BBox, Point};
+use pcb_ir::geom::{BBox, ContourSet, Point, Polarity, PreparedRegion};
 
-use crate::commands::dfm::design::{BoardOutline, CopperLayer, Design, Score};
+use crate::accessors::castellations;
+use crate::commands::dfm::design::{BoardOutline, CopperLayer, Design, HoleClass, Score};
 use crate::commands::dfm::report::{
     Evidence, LayerRef, MeasurementKind, ReportPoint, SourceLocator, Subject,
 };
@@ -134,9 +136,84 @@ pub(super) fn evaluate(
     conditions: &Conditions,
     design: &Design,
 ) -> anyhow::Result<Vec<(Option<Vec<u32>>, Evaluation)>> {
+    let cuts = match linework {
+        Linework::BoardEdge => castellation_cuts(design)?,
+        Linework::VScore => Vec::new(),
+    };
     linework_pools(linework, design)
         .into_iter()
-        .map(|(placements, pool)| Ok((placements, measure(limit_mm, &pool, conditions, design)?)))
+        .map(|(placements, pool)| {
+            Ok((
+                placements,
+                measure(limit_mm, &pool, conditions, design, &cuts)?,
+            ))
+        })
+        .collect()
+}
+
+/// Each copper layer's image without the lands of castellated holes, where
+/// the board has castellations: a plated half-hole's own land meets the
+/// edge by design. The lands are those the hole is linked to by identity,
+/// as [`Ownership`](super::Ownership) reads them; their traces, pours and
+/// every other copper on the layer are measured as before. `None` leaves a
+/// layer's image whole, as does a design whose holes or their lands could
+/// not be extracted: castellations are then measured like other copper.
+fn castellation_cuts(design: &Design) -> anyhow::Result<Vec<Option<(ContourSet, PreparedRegion)>>> {
+    let edges = design
+        .board_outlines
+        .iter()
+        .filter(|outline| outline.is_board())
+        .collect::<Vec<_>>();
+    let castellated = design
+        .holes
+        .iter()
+        .enumerate()
+        .filter(|(_, hole)| {
+            hole.class == HoleClass::Pth
+                && hole.branch.is_none()
+                && edges.iter().any(|outline| {
+                    outline
+                        .boundary
+                        .signed_distance(hole.center)
+                        .is_some_and(|distance| {
+                            castellations::on_edge(distance.mm, hole.diameter_mm)
+                        })
+                })
+        })
+        .collect::<Vec<_>>();
+    let mut lands = vec![Vec::new(); design.copper_layers.len()];
+    if castellated.len() >= castellations::MIN_CASTELLATED_HOLES {
+        for (hole_index, hole) in castellated {
+            // Without linked lands (their pool unbuilt), nothing is exempt.
+            for link in design.hole_lands.get(hole_index).into_iter().flatten() {
+                let land = &design.copper_layers[link.copper_index as usize].lands
+                    [link.land_index as usize];
+                if hole.padstack == Some(land.padstack)
+                    && hole.net.zip(land.net).is_none_or(|(own, land)| own == land)
+                    && let Some(image) = &land.image
+                {
+                    lands[link.copper_index as usize].push(image);
+                }
+            }
+        }
+    }
+    design
+        .copper_layers
+        .iter()
+        .zip(lands)
+        .map(|(copper, lands)| {
+            if lands.is_empty() {
+                return Ok(None);
+            }
+            let mut composer = PaintComposer::new(design.resolution);
+            composer.push(Polarity::Dark, copper.image.clone());
+            for land in lands {
+                composer.push(Polarity::Clear, land.clone());
+            }
+            let image = composer.finish()?;
+            let boundary = image.prepare_query();
+            Ok(Some((image, boundary)))
+        })
         .collect()
 }
 
@@ -145,9 +222,9 @@ fn measure(
     pool: &LineworkPool,
     conditions: &Conditions,
     design: &Design,
+    cuts: &[Option<(ContourSet, PreparedRegion)>],
 ) -> anyhow::Result<Evaluation> {
     let copper_layers = &design.copper_layers;
-    let boundaries = &design.copper_boundaries;
     let (items, segments) = (&pool.items, &pool.segments);
     let endpoints = segments
         .iter()
@@ -160,7 +237,11 @@ fn measure(
         .enumerate()
         .filter(|(_, copper)| conditions.applies_to_layer(copper))
     {
-        let inside = copper.image.contains_points_batch(&endpoints);
+        let (image, boundary) = match cuts.get(copper_index) {
+            Some(Some((image, boundary))) => (image, boundary),
+            _ => (&copper.image, &design.copper_boundaries[copper_index]),
+        };
+        let inside = image.contains_points_batch(&endpoints);
         for item in items {
             let Some(nearest) = item
                 .segments
@@ -177,15 +258,15 @@ fn measure(
                             0.0,
                             start,
                             start,
-                            copper.image.uncertainty_mm,
+                            image.uncertainty_mm,
                         )),
                         (_, true) => Some(Distance::with_uncertainty(
                             0.0,
                             end,
                             end,
-                            copper.image.uncertainty_mm,
+                            image.uncertainty_mm,
                         )),
-                        _ => boundaries[copper_index].segment_nearest_within(start, end, limit_mm),
+                        _ => boundary.segment_nearest_within(start, end, limit_mm),
                     }
                 })
                 .min_by(|left, right| left.mm.total_cmp(&right.mm))
@@ -197,8 +278,8 @@ fn measure(
             let sites = if violates(&distance, limit_mm) {
                 let geometry = linework_clearance_sites(
                     &segments[item.segments.clone()],
-                    &copper.image,
-                    &boundaries[copper_index],
+                    image,
+                    boundary,
                     limit_mm,
                     item.uncertainty_mm,
                 );
@@ -412,5 +493,80 @@ mod tests {
                 .collect::<Vec<_>>()
         };
         assert_eq!(segments(&paths), segments(&joined));
+    }
+
+    /// A 10 mm board whose left edge at x = 0 cuts plated half-holes at
+    /// each `y`, each on a 2 × 1 mm land of its own net, plus `extra`.
+    fn castellated(ys: &[f64], extra: &str) -> String {
+        let (mut lands, mut holes) = (String::new(), String::new());
+        for (index, y) in ys.iter().enumerate() {
+            lands.push_str(&format!(
+                r#"<Set net="N{index}"><Pad padstackDefRef="castle"><Location x="0" y="{y}"/><StandardPrimitiveRef id="land"/><PinRef componentRef="J1" pin="{index}"/></Pad></Set>"#
+            ));
+            holes.push_str(&format!(
+                r#"<Set geometry="castle" net="N{index}"><Hole name="H{index}" diameter="0.6" platingStatus="PLATED" x="0" y="{y}"/></Set>"#
+            ));
+        }
+        format!(
+            r#"<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
+  <Content roleRef="owner"><FunctionMode mode="FABRICATION"/><StepRef name="board"/>
+    <LayerRef name="TOP"/><LayerRef name="DRILL"/>
+    <DictionaryStandard units="MILLIMETER"><EntryStandard id="land"><RectCenter width="2" height="1"/></EntryStandard></DictionaryStandard>
+  </Content>
+  <Ecad><CadHeader units="MILLIMETER"/><CadData>
+    <Layer name="TOP" layerFunction="CONDUCTOR" side="TOP" polarity="POSITIVE"/>
+    <Layer name="DRILL" layerFunction="DRILL" side="ALL" polarity="POSITIVE"><Span fromLayer="TOP" toLayer="TOP"/></Layer>
+    <Step name="board" type="BOARD">
+      <Profile><Polygon>
+        <PolyBegin x="0" y="0"/><PolyStepSegment x="10" y="0"/>
+        <PolyStepSegment x="10" y="10"/><PolyStepSegment x="0" y="10"/>
+        <PolyStepSegment x="0" y="0"/>
+      </Polygon></Profile>
+      <PadStackDef name="castle">
+        <PadstackHoleDef name="castle-hole" diameter="0.6" platingStatus="PLATED" plusTol="0" minusTol="0" x="0" y="0"/>
+        <PadstackPadDef layerRef="TOP" padUse="REGULAR"><Location x="0" y="0"/><StandardPrimitiveRef id="land"/></PadstackPadDef>
+      </PadStackDef>
+      <LayerFeature layerRef="TOP">{lands}{extra}</LayerFeature>
+      <LayerFeature layerRef="DRILL">{holes}</LayerFeature>
+    </Step>
+  </CadData></Ecad>
+</IPC-2581>"#
+        )
+    }
+
+    #[test]
+    fn castellation_lands_meet_the_edge_but_nothing_else_near_them_does() {
+        use crate::commands::dfm::fixtures;
+        let pdk = fixtures::pdk(
+            "[[rules.copper.board_edge_clearance]]\nid = \"edge\"\nlimit = { minimum = \"0.20 mm\" }",
+        );
+        let edge = |xml: &str| {
+            fixtures::run_board(xml, &pdk)
+                .findings
+                .iter()
+                .map(|finding| finding.measurement.actual_mm().unwrap())
+                .collect::<Vec<_>>()
+        };
+        let strip = |net: &str, x: f64, y: f64| {
+            format!(
+                r#"<Set net="{net}"><Features><Contour><Polygon>
+                  <PolyBegin x="{x}" y="{y}"/><PolyStepSegment x="2" y="{y}"/>
+                  <PolyStepSegment x="2" y="{}"/><PolyStepSegment x="{x}" y="{}"/>
+                  <PolyStepSegment x="{x}" y="{y}"/>
+                </Polygon></Contour></Features></Set>"#,
+                y + 0.2,
+                y + 0.2
+            )
+        };
+        assert_eq!(edge(&castellated(&[3.0, 6.0], "")), Vec::<f64>::new());
+        // One plated hole on the edge may be a stray, as for board arrays.
+        assert_eq!(edge(&castellated(&[3.0], "")), [0.0]);
+        // A land's own net running on along the edge, and another net
+        // between the castellations, are both ordinary edge copper.
+        for extra in [strip("N0", 0.05, 3.6), strip("OTHER", 0.1, 4.4)] {
+            let found = edge(&castellated(&[3.0, 6.0], &extra));
+            assert_eq!(found.len(), 1, "{extra}");
+            assert!(found[0] > 0.0 && found[0] < 0.2, "{found:?}");
+        }
     }
 }

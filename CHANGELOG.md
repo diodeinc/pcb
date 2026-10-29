@@ -12,6 +12,11 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 - The JLCPCB DFM PDK warns instead of failing on near-minimum via spacing, outer PTH clearance, and 2 oz PTH rings.
 
+### Fixed
+
+- DFM no longer reports an NPTH's own concentric mounting land, castellation lands at the board edge, or copper a `NetShort` ties to a via or PTH; other copper near them is still checked.
+- DFM checks a polyimide (flex) design only against a profile qualified for flex, and stops as incomplete when the PDK has none, as the JLCPCB kit does, instead of failing rigid FR-4 limits.
+
 ## [0.4.94] - 2026-10-28
 
 ### Added

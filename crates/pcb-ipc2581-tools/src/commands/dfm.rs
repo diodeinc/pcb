@@ -73,7 +73,9 @@ pub fn builtin_pdks() -> &'static [BuiltinPdk] {
 ///
 /// Manufacturing violations are successful results with a `fail` verdict, and
 /// so is a required rule that could not be evaluated: it is reported as
-/// `incomplete`, never passed. Only invalid inputs return an error.
+/// `incomplete`, never passed. Only invalid inputs return an error, and a
+/// flexible design the PDK has no qualified profile for: none of its rules
+/// can judge it.
 pub fn check(
     imported: &ImportedDesign,
     request: CheckRequest<'_>,
@@ -105,11 +107,35 @@ fn check_with_scene(
     let pdk =
         pdk::Pdk::parse(pdk_source).with_context(|| format!("failed to parse PDK {pdk_path}"))?;
     let scope = request.layout_target.artwork_scope();
+    let flexible = design::flexible_technology(imported);
+    let technology = flexible.as_ref().map(|(technology, _)| *technology);
     let selection = match explicit_profile {
         Some(profile) => report::ProfileSelection::explicit(profile),
-        None => select_profile(&pdk, imported, scope, resolution)
+        None => select_profile(&pdk, imported, scope, resolution, technology)
             .with_context(|| format!("failed to select a profile of PDK {pdk_path}"))?,
     };
+    // A flexible board is not a rigid one with odd properties: no rigid
+    // limit qualifies it, so a kit without a profile for it cannot check it.
+    if let (Some((technology, materials)), Some(profile)) =
+        (&flexible, pdk.profiles.get(&selection.profile))
+        && !qualifies(profile, Some(*technology))
+    {
+        bail!(
+            "the stackup's dielectric is {}, a {} design, and PDK {pdk_path} ('{}') has no qualified {} process: profile '{}' lists technologies [{}]. No rule of this PDK applies; check the design against a PDK with a {} profile",
+            materials.join(", "),
+            technology.label(),
+            pdk.pdk.name,
+            technology.label(),
+            selection.profile,
+            profile
+                .technologies
+                .iter()
+                .map(|technology| technology.label())
+                .collect::<Vec<_>>()
+                .join(", "),
+            technology.label(),
+        );
+    }
     let mut rules = rules::lower(&pdk, Some(&selection.profile))
         .with_context(|| format!("failed to lower PDK {pdk_path}"))?;
     if rules.is_empty() {
@@ -182,6 +208,7 @@ fn select_profile(
     imported: &ImportedDesign,
     scope: pcb_ir::dialects::ipc::ArtworkScope,
     resolution: Resolution,
+    technology: Option<pdk::Technology>,
 ) -> Result<report::ProfileSelection> {
     let candidates = std::iter::once(pdk.default_profile.as_str())
         .chain(
@@ -191,6 +218,7 @@ fn select_profile(
                 .filter(|name| *name != pdk.default_profile),
         )
         .filter(|name| pdk.profiles[*name].status == pdk::ProfileStatus::Executable)
+        .filter(|name| qualifies(&pdk.profiles[*name], technology))
         .collect::<Vec<_>>();
     let default = report::ProfileSelection::automatic(&pdk.default_profile, Vec::new());
     match candidates.as_slice() {
@@ -227,6 +255,15 @@ fn select_profile(
         &pdk.default_profile,
         rejected,
     ))
+}
+
+/// Whether a profile qualifies a design of `technology`. A flexible design
+/// needs a profile that lists its technology: one that lists none states no
+/// process, so it is never taken for a flex one. A design not shown to be
+/// flexible is unconstrained, since a rigid stackup rarely states its
+/// material and `technologies` was descriptive metadata before.
+fn qualifies(profile: &pdk::Profile, technology: Option<pdk::Technology>) -> bool {
+    technology.is_none_or(|technology| profile.technologies.contains(&technology))
 }
 
 #[cfg(feature = "cli")]
@@ -1641,6 +1678,133 @@ limit = { minimum = "300 mil" }
         let support = rule(&unfit, "profile.support.outer_copper_weight");
         assert!(matches!(support.status, report::RuleStatus::Fail));
         assert!(matches!(unfit.verdict, report::Verdict::Fail));
+    }
+
+    #[test]
+    fn a_flexible_stackup_runs_only_a_profile_qualified_for_its_technology() {
+        // A 2-layer board with one stated core material.
+        let board = |materials: &[&str]| {
+            let specs = materials
+                .iter()
+                .enumerate()
+                .map(|(index, material)| {
+                    format!(
+                        r#"<Spec name="CORE{index}"><General type="MATERIAL"><Property text="{material}"/></General></Spec>"#
+                    )
+                })
+                .collect::<String>();
+            let cores = (0..materials.len())
+                .map(|index| {
+                    format!(
+                        r#"<Layer name="CORE{index}" layerFunction="DIELCORE" side="INTERNAL" polarity="POSITIVE"/>"#
+                    )
+                })
+                .collect::<String>();
+            let layers = (0..materials.len())
+                .map(|index| {
+                    format!(
+                        r#"<StackupLayer layerOrGroupRef="CORE{index}" thickness="0.025" tolPlus="0" tolMinus="0" sequence="{}"><SpecRef id="CORE{index}"/></StackupLayer>"#,
+                        index + 1
+                    )
+                })
+                .collect::<String>();
+            BOARD
+                .replace(
+                    "<CadHeader units=\"MILLIMETER\"/>",
+                    &format!(r#"<CadHeader units="MILLIMETER">{specs}</CadHeader>"#),
+                )
+                .replace(
+                    r#"<Layer name="TOP""#,
+                    &format!(r#"{cores}<Layer name="TOP""#),
+                )
+                .replace(
+                    r#"<StackupLayer layerOrGroupRef="BOTTOM""#,
+                    &format!(r#"{layers}<StackupLayer layerOrGroupRef="BOTTOM""#),
+                )
+        };
+
+        // JLC's kit is rigid FR-4 only: a polyimide board is not judged by
+        // its rigid copper-weight, thickness or soldermask limits, nor passed.
+        let error = check_builtin(&board(&["Polyimide-Core"]), "jlc")
+            .unwrap_err()
+            .to_string();
+        for detail in [
+            "Polyimide-Core",
+            "a flex design",
+            "no qualified flex process",
+        ] {
+            assert!(error.contains(detail), "missing {detail}: {error}");
+        }
+        assert!(
+            check_builtin(&board(&["Polyimide-Core"]), "jlcpcb-1oz").is_err(),
+            "naming a rigid profile does not qualify it"
+        );
+        // A stated rigid material is checked as before.
+        let rigid = check_builtin(&board(&["FR4-Core"]), "jlc").unwrap();
+        assert_eq!(rigid.pdk.profile, "one-ounce");
+
+        let pdk = r#"schema_version = 2
+default_profile = "rigid"
+[pdk]
+id = "test"
+name = "Test"
+revision = "1"
+[profiles.rigid]
+name = "Rigid"
+technologies = ["rigid"]
+[profiles.flex]
+name = "Flex"
+technologies = ["flex"]
+[[rules.stackup.board_thickness]]
+id = "rigid-thickness"
+profiles = ["rigid"]
+limit = { nominal = ["1.6 mm"], tolerance = "0.1 mm" }
+[[rules.stackup.board_thickness]]
+id = "flex-thickness"
+profiles = ["flex"]
+limit = { nominal = ["0.07 mm"], tolerance = "0.01 mm" }
+"#;
+        let check = |xml: &str| {
+            check_with_scene(
+                &fixtures::import(xml),
+                fixtures::request(xml, pdk, LayoutTarget::Board),
+                Resolution::default(),
+                false,
+            )
+        };
+        let flex = check(&board(&["Polyimide-Core"])).unwrap();
+        assert_eq!(flex.pdk.profile, "flex");
+        assert!(matches!(flex.verdict, report::Verdict::Pass));
+        assert!(flex.rules.iter().all(|rule| rule.id != "rigid-thickness"));
+        let rigid = check(&board(&["FR4-Core"])).unwrap();
+        assert_eq!(rigid.pdk.profile, "rigid");
+        assert!(
+            matches!(rigid.verdict, report::Verdict::Fail),
+            "0.07 mm is not 1.6 mm"
+        );
+        // Polyimide bonded to FR-4 is rigid-flex, which neither profile is.
+        let error = check(&board(&["Polyimide-Core", "FR4-Prepreg"]))
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("no qualified rigid_flex process"), "{error}");
+        // A profile that states no technology is no flex process either.
+        let unstated = check_with_scene(
+            &fixtures::import(&board(&["Polyimide-Core"])),
+            fixtures::request(
+                &board(&["Polyimide-Core"]),
+                &fixtures::pdk(
+                    r#"[[rules.stackup.board_thickness]]
+id = "thickness"
+limit = { nominal = ["0.07 mm"], tolerance = "0.01 mm" }"#,
+                ),
+                LayoutTarget::Board,
+            ),
+            Resolution::default(),
+            false,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(unstated.contains("lists technologies []"), "{unstated}");
     }
 
     #[test]

@@ -1011,6 +1011,60 @@ impl PhysicalStackup {
     }
 }
 
+/// The flexible technology a design's stackup names, and the flexible
+/// dielectric materials that name it: a board built on polyimide is a
+/// flexible one. It is flex when every dielectric material stated is
+/// flexible, rigid-flex when a rigid one is stated too, and `None` when no
+/// dielectric is stated to be flexible.
+pub(super) fn flexible_technology(
+    imported: &ImportedDesign,
+) -> Option<(super::pdk::Technology, Vec<String>)> {
+    let (mut flexible, mut rigid) = (Vec::new(), false);
+    for stackup in &imported.stackups {
+        for layer in &stackup.layers {
+            let dielectric = imported
+                .layer_definitions
+                .iter()
+                .find(|definition| definition.name == layer.layer_ref)
+                .is_some_and(|definition| {
+                    matches!(
+                        definition.layer_function,
+                        LayerFunction::DielBase
+                            | LayerFunction::DielCore
+                            | LayerFunction::DielPreg
+                            | LayerFunction::DielAdhv
+                            | LayerFunction::DielBondPly
+                            | LayerFunction::DielCoverlay
+                    )
+                });
+            let material = layer.material.or_else(|| {
+                layer
+                    .spec_ref
+                    .and_then(|spec| imported.specs.get(&spec))
+                    .and_then(|spec| spec.material)
+            });
+            let Some(material) = material.filter(|_| dielectric) else {
+                continue;
+            };
+            let material = imported.resolve(material);
+            let name = material.to_lowercase();
+            if name.contains("polyimide") || name.contains("kapton") {
+                if !flexible.iter().any(|known| known == material) {
+                    flexible.push(material.to_owned());
+                }
+            } else {
+                rigid = true;
+            }
+        }
+    }
+    let technology = if rigid {
+        super::pdk::Technology::RigidFlex
+    } else {
+        super::pdk::Technology::Flex
+    };
+    (!flexible.is_empty()).then_some((technology, flexible))
+}
+
 fn collect_physical_stackup(imported: &ImportedDesign) -> Result<PhysicalStackup> {
     let stackup = match imported.stackups.as_slice() {
         [stackup] => stackup,
@@ -1211,6 +1265,10 @@ pub(super) struct SlotWidth {
 pub(super) struct Land {
     pub id: LandId,
     pub bbox: BBox,
+    pub center: Point,
+    /// The land's source copper, before routing and clears, for a land
+    /// whose bounds meet one of the Step's own drilled holes.
+    pub image: Option<ContourSet>,
     pub step: Option<Symbol>,
     pub padstack: Symbol,
     pub primitive_ref: Option<Symbol>,
@@ -2017,6 +2075,13 @@ fn collect_copper_layers(
                 .layer_within(layer_index, source.conductor_reach_mm(), drilled)
                 .with_context(|| format!("failed to extract IPC-2581 copper layer '{name}'"))?;
             pcb_ir::dialects::ipc::process::expand_feature_placement_groups(&mut document);
+            let own_drilled = BBoxIndex::new(
+                drilled
+                    .iter()
+                    .filter(|(_, branch)| branch.is_none())
+                    .map(|(bbox, _)| *bbox)
+                    .collect(),
+            );
             let mut lands = Vec::new();
             for feature in document.features.iter().filter(|feature| {
                 feature.kind == FeatureKind::Padstack
@@ -2034,6 +2099,16 @@ fn collect_copper_layers(
                             .context("materialized land has no occurrence identity")?,
                     ),
                     bbox: feature.bbox,
+                    center: feature.center,
+                    image: (!own_drilled.query(feature.bbox).is_empty())
+                        .then(|| {
+                            ContourSet::from_painted_paths(
+                                &document.arena,
+                                feature.paths.slice(&document.arena.paths),
+                                source.resolution,
+                            )
+                        })
+                        .transpose()?,
                     step: feature.source_step_ref,
                     padstack,
                     primitive_ref: feature.primitive_ref.and_then(|primitive| primitive.id()),

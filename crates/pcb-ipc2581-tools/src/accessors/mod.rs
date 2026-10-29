@@ -6,7 +6,7 @@ use crate::geometry::{self, GeometryDocument};
 
 mod board;
 mod bom;
-mod castellations;
+pub(crate) mod castellations;
 mod components;
 mod drills;
 mod layers;

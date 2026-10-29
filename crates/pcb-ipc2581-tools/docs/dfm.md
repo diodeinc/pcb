@@ -125,9 +125,19 @@ rule id reports `incomplete` and names what no case matched. It carries the
 strictest severity the cases declare, so an uncovered required limit fails the
 verdict instead of leaving the layer silently unchecked. A condition
 that needs stackup context leaves its rule `incomplete` when the IPC-2581 file
-has no unambiguous physical stackup. The `technologies` list remains descriptive
-metadata because imported designs do not yet state rigid, flex, and HDI
-technology reliably enough for qualification.
+has no unambiguous physical stackup.
+
+A profile's `technologies` list qualifies flexible designs. A stackup whose
+dielectric material is polyimide (or Kapton) is `flex`, or `rigid_flex` when a
+rigid dielectric material is stated too. Automatic selection considers only the
+profiles that list that technology; a profile that lists none states no process
+and never qualifies a flexible design. When neither the selected nor
+an explicitly named profile qualifies it, no rule of the PDK applies and the
+check stops as `incomplete`, naming the materials and the missing process; it
+never judges a flex board against rigid copper-weight, thickness, or
+soldermask limits, nor passes it. A design that states no flexible material
+is not constrained: rigid stackups rarely name their material, and HDI is not
+yet detected.
 
 A copper-weight condition names a standard weight (⅛, ¼, ⅓, ½, then whole
 ounces), while a stackup states a thickness that only approximates one: 1 oz
@@ -328,8 +338,14 @@ Each Step's findings apply at its placements; the report lists these in
   same stated padstack and no contradictory net, whose net it then owns on
   every layer. A land linked only because the drill overlaps it proves nothing,
   so a drill through foreign copper is reported. Other-net, auxiliary, and
-  unattributed functional copper remains an offender. NPTH copper is never
-  exempt, a same-named net included.
+  unattributed functional copper remains an offender. A copper object that a
+  validated `NetShort` permits to meet the hole's net, such as a tied antenna
+  graphic over its grounded pin, is exempt too; the tied nets are not merged.
+  NPTH copper is exempt only, layer by layer, when it is the land the hole is
+  drilled through by design: a component pad centred on the hole and at least
+  as wide, such as a mounting hole's annular land, with the copper joined to
+  it on that layer. A same-named net elsewhere, other copper on that layer,
+  and the land's net on a layer without the land are measured as before.
 - Slot-to-copper clearance (`rules.copper.slot_clearance`) measures the true
   materialized filled slot outline, including its ends, against unrelated
   final copper on its physical span. Touching or overlapping copper has zero
@@ -364,6 +380,11 @@ Each Step's findings apply at its placements; the report lists these in
   centerlines or profile outlines (cutouts included) to each layer's
   composed copper image. A centerline is measured over its drawn extent, to
   the copper of the Step that draws it and of every Step placed under it.
+  Board-edge clearance does not measure the lands of castellations: when two
+  or more plated holes have their centres within a quarter diameter of the
+  board profile, each one's own lands (same stated padstack, no contradictory
+  net) are removed from the image first. Their traces, pours, and all other
+  copper near the edge are still measured.
 - Board-array spacing measures boundary-to-boundary distance between the
   sibling board arrays one Step places, as a fabrication panel does; it
   requires `--layout-target board-array` and at least two arrays.
@@ -460,7 +481,9 @@ the HASL exclusion for boards of 0.4 mm and thinner,
 local 3 mil BGA exceptions, dielectric layup templates, and panel spacing,
 which depends on routing, mouse-bite, or V-cut process. Its soldermask-web checks
 are advisory warnings, not certification of the manufacturer's color-specific
-minimums. Plated-slot clearance and enclosure remain outside the kit's coverage.
+minimums. Plated-slot clearance and enclosure remain outside the kit's coverage. Its profiles
+are rigid FR-4 only: JLCPCB's flex service is not qualified here, so a polyimide
+design checked with it stops as `incomplete` rather than failing rigid limits.
 
 Both copper-weight profiles in the standard and JLC kits use these tight
 dimensional review bands. Below the minimum is an error; from the minimum to

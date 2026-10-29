@@ -943,6 +943,27 @@ impl Ownership {
         }
     }
 
+    /// Whether a NetShort on `layer` lets `conductor` meet this feature's
+    /// copper at `point`. The tie is local: a tied graphic may meet a feature
+    /// whose own land is the pad it is tied to, and a tied pad may be entered
+    /// through its partner the feature owns. Elsewhere the tied nets meet
+    /// the feature like any others.
+    fn tied(
+        &self,
+        ties: &copper_clearance::TiePermissions,
+        layer: &super::design::CopperLayer,
+        conductor: super::design::ConductorId,
+        point: Point,
+    ) -> bool {
+        ties.graphic_pads(conductor).any(|pad| {
+            matches!(
+                pad,
+                super::design::ConductorId::Net { object: Some(object), .. }
+                    if self.lands.iter().any(|land| land.0 == object)
+            )
+        }) || ties.enters_pad(layer, conductor, |partner| self.owns(partner), point)
+    }
+
     pub(super) fn owns(&self, conductor: super::design::ConductorId) -> bool {
         use super::design::ConductorId;
         match conductor {

@@ -701,10 +701,19 @@ impl Rule {
     }
 }
 
+/// Every pool the rules read: those they depend on, and those board-edge
+/// clearance reads when it can, for the castellations an edge cuts. Without
+/// holes or their lands it measures castellation lands like other copper,
+/// so they are not a dependency that could leave it incomplete.
 pub(super) fn pools(rules: &[Rule], has_stackup: bool) -> Pools {
     rules
         .iter()
-        .map(|rule| rule.pools(has_stackup))
+        .map(|rule| match rule.kind {
+            RuleKind::LineworkToCopperClearance(Linework::BoardEdge) => {
+                rule.pools(has_stackup) | Pools::HOLES | Pools::HOLE_LANDS
+            }
+            _ => rule.pools(has_stackup),
+        })
         .fold(Pools::NONE, |union, pools| union | pools)
 }
 
