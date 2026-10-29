@@ -4,7 +4,7 @@ default_profile = "one-ounce"
 [pdk]
 id = "jlcpcb-rigid-fr4"
 name = "JLCPCB rigid FR-4"
-revision = "stackup-templates-2026-10-28"
+revision = "review-bands-2026-10-29"
 manufacturer = "JLCPCB"
 process = "Rigid FR-4, 1 oz or 2 oz outer copper"
 
@@ -17,6 +17,11 @@ note = "The 0.45 mm mixed-hole/NPTH-pair spacing is inferred guidance, not a pub
 title = "Diode copper-clearance review allowance"
 url = "https://github.com/diodeinc/pcb/blob/main/crates/pcb-ipc2581-tools/docs/dfm.md"
 note = "NPTH, nonplated-slot and routed-edge copper clearances warn below JLCPCB's 0.20 mm minimum and error below 0.19 mm. This 0.01 mm review band is Diode policy, not a manufacturer-qualified tolerance."
+
+[sources.precision-review-guidance]
+title = "Diode near-minimum review allowance"
+url = "https://github.com/diodeinc/pcb/blob/main/crates/pcb-ipc2581-tools/docs/dfm.md"
+note = "Via-via drill spacing warns below JLCPCB's 0.20 mm minimum and errors below 0.199 mm. Outer-layer PTH-to-copper clearance errors below 0.27 mm instead of JLCPCB's 0.28 mm and keeps its 0.35 mm warning tier; inner layers keep JLCPCB's 0.30 mm. 2 oz PTH annular ring warns below JLCPCB's 10 mil (0.254 mm) and errors below 0.250 mm. These allowances are Diode review policy, not manufacturer-qualified tolerances; jlc-capabilities cites the published values."
 
 [sources.jlc-stackup-templates]
 title = "JLCPCB stackup (impedance) templates"
@@ -106,8 +111,8 @@ source = "jlc-capabilities"
 [[rules.drilling.hole_to_hole_clearance]]
 id = "jlc.drilling.minimum_hole_clearance.via_via"
 select = { first_hole = "via", second_hole = "via" }
-limit = { minimum = "0.20 mm" }
-source = "jlc-capabilities"
+limit = { minimum = "0.199 mm", preferred = "0.20 mm" }
+source = "precision-review-guidance"
 
 [[rules.drilling.hole_to_hole_clearance]]
 id = "jlc.drilling.minimum_hole_clearance.via_pth"
@@ -159,8 +164,8 @@ source = "jlc-capabilities"
 id = "jlc.copper.minimum_pth_annular_ring_2oz"
 profiles = ["two-ounce"]
 select = { hole = "pth" }
-limit = { minimum = "0.254 mm" }
-source = "jlc-capabilities"
+limit = { minimum = "0.250 mm", preferred = "0.254 mm" }
+source = "precision-review-guidance"
 
 [[rules.copper.hole_clearance]]
 id = "jlc.copper.minimum_hole_clearance.via"
@@ -178,10 +183,10 @@ source = "clearance-review-guidance"
 id = "jlc.copper.minimum_hole_clearance.pth"
 select = { hole = "pth" }
 cases = [
-  { id = "outer", when = { copper = { position = "outer" } }, limit = { minimum = "0.28 mm", preferred = "0.35 mm" } },
+  { id = "outer", when = { copper = { position = "outer" } }, limit = { minimum = "0.27 mm", preferred = "0.35 mm" } },
   { id = "inner", when = { copper = { position = "inner" } }, limit = { minimum = "0.30 mm" } },
 ]
-source = "jlc-capabilities"
+source = "precision-review-guidance"
 
 [[rules.copper.slot_clearance]]
 id = "jlc.copper.minimum_nonplated_slot_clearance"

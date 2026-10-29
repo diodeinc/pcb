@@ -479,6 +479,22 @@ fabrication tolerances. JLC's published clearance minimum remains 0.20 mm;
 a warning still calls for review of that requirement. Other limits and existing
 advisory tiers are unchanged.
 
+The JLC kit also lowers three error floors slightly below JLC's published
+minimums:
+
+| Profile | Check | Minimum (mm) | Target (mm) | JLC published (mm) |
+| --- | --- | --- | --- | --- |
+| Both | Via-to-via drill spacing | 0.199 | 0.200 | 0.200 |
+| Both | Outer-layer PTH-to-copper | 0.270 | 0.350 | 0.280 |
+| 2 oz | PTH annular ring | 0.250 | 0.254 (10 mil) | 0.254 |
+
+These are Diode review allowances, not revised manufacturer guarantees. The
+via-pair floor absorbs layout and export precision, not finer drilling pitch;
+the ring floor absorbs a nominal 0.25 mm ring drawn against the 10 mil rule.
+A design inside a band warns until reviewed against JLC's published value.
+Inner-layer PTH-to-copper keeps JLC's 0.30 mm. Measurements whose geometric
+uncertainty spans a floor stay unresolved, as for every other limit.
+
 Two JLC source ambiguities affect the kit:
 
 - NPTH diameter retains the [published 0.50 mm minimum](https://jlcpcb.com/capabilities/pcb-capabilities).
