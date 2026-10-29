@@ -242,11 +242,9 @@ fn contained_vertex(
     mut vertices: impl Iterator<Item = Point>,
     container: &PreparedRegion,
 ) -> Option<Point> {
-    vertices.find(|&vertex| {
-        container
-            .signed_distance(vertex)
-            .is_some_and(|distance| distance.mm.is_sign_negative())
-    })
+    // The sign of signed_distance is exactly the winding predicate, including
+    // negative zero on an inside boundary. No nearest-boundary witness is used.
+    vertices.find(|&vertex| container.winding(vertex) != 0)
 }
 
 /// A connected local clearance failure. The paths are the participating

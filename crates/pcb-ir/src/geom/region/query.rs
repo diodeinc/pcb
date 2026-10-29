@@ -271,7 +271,8 @@ impl PreparedRegion {
 
     fn visit(&self, index: usize, query: &mut Query) {
         let node = &self.nodes[index];
-        let measure = node.bounds.distance_to(BBox::from_point(query.point)) <= query.distance;
+        let measure = query.distance >= 0.0
+            && node.bounds.distance_to(BBox::from_point(query.point)) <= query.distance;
         // Half-open height matches horizontal_crossing at shared vertices.
         let wind = query.needs_winding
             && node.bounds.min.y <= query.point.y
@@ -299,6 +300,13 @@ impl PreparedRegion {
                         query.winding += direction;
                     }
                 }
+            }
+            NodeKind::Branch(left, right) if !measure => {
+                // Only winding can matter below a node too far to measure.
+                // Its sum is order independent; nearest-first traversal would
+                // compute distances that this query does not need.
+                self.visit(*left, query);
+                self.visit(*right, query);
             }
             NodeKind::Branch(left, right) => {
                 let bounds = BBox::from_point(query.point);

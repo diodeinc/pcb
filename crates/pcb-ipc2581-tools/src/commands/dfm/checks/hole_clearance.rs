@@ -7,7 +7,7 @@
 //! a physically associated land. NPTH checks exclude nothing. Measurements
 //! are made only on copper layers in the declared drill span.
 
-use pcb_ir::geom::dfm::{Distance, circular_region, region_clearance_sites};
+use pcb_ir::geom::dfm::{Distance, circular_region, region_clearance_sites_with_index};
 use pcb_ir::geom::{BBox, Point};
 
 use crate::commands::dfm::design::{Design, HoleClass, spans};
@@ -68,11 +68,11 @@ pub(super) fn evaluate(
                         boundary,
                         limit_mm,
                     )
-                    .map(|distance| (conductor, distance))
+                    .map(|distance| (conductor, boundary, distance))
                 })
-                .min_by(|(_, left), (_, right)| left.mm.total_cmp(&right.mm));
+                .min_by(|(_, _, left), (_, _, right)| left.mm.total_cmp(&right.mm));
 
-            let Some((offender, distance)) = nearest else {
+            let Some((offender, boundary, distance)) = nearest else {
                 continue;
             };
             let finding_layers = layers([&hole.layer, &copper.layer]);
@@ -90,7 +90,13 @@ pub(super) fn evaluate(
             if violates(&distance, limit_mm) {
                 let drill = circular_region(hole.center, radius_mm, design.resolution)?;
                 sites = linework_clearance::report_sites(
-                    region_clearance_sites(&drill, &offender.image, limit_mm)?,
+                    region_clearance_sites_with_index(
+                        &drill,
+                        &drill.prepare_query(),
+                        &offender.image,
+                        boundary,
+                        limit_mm,
+                    )?,
                     &finding_layers,
                     limit_mm,
                 );
