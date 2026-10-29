@@ -1421,6 +1421,28 @@ limit = { minimum = "300 mil" }
                 assert_eq!(checked.summary.errors, usize::from(fails));
             }
         }
+
+        // 2 oz rings from 0.250 mm to JLC's 10 mil warn; much smaller rings still fail.
+        for (ring, errors, warnings) in [
+            (0.125, 1, 0),
+            (0.245, 1, 0),
+            (0.250, 0, 1),
+            (0.252, 0, 1),
+            (0.254, 0, 0),
+        ] {
+            let checked = check_builtin(&jlc_drilled_board("PLATED", ring, "0.07"), "jlc").unwrap();
+            let id = "jlc.copper.minimum_pth_annular_ring_2oz";
+            assert_eq!(
+                (
+                    rule(&checked, id).finding_count,
+                    rule(&checked, &format!("{id}.preferred")).finding_count
+                ),
+                (errors, warnings),
+                "{ring} mm ring: {:?}",
+                checked.findings
+            );
+            assert_eq!(matches!(checked.verdict, report::Verdict::Fail), errors > 0);
+        }
     }
 
     #[test]
@@ -1432,7 +1454,8 @@ limit = { minimum = "300 mil" }
             ("NONPLATED", 0.0, "IN1", "npth", 0.189, 0.22),
             ("NONPLATED", 0.0, "TOP", "npth.preferred", 0.19, 0.20),
             ("NONPLATED", 0.0, "IN1", "npth.preferred", 0.195, 0.201),
-            ("PLATED", 0.16, "TOP", "pth.outer", 0.27, 0.30),
+            ("PLATED", 0.16, "TOP", "pth.outer", 0.265, 0.27),
+            ("PLATED", 0.16, "TOP", "pth.outer.preferred", 0.275, 0.35),
             ("PLATED", 0.16, "IN1", "pth.inner", 0.29, 0.32),
         ] {
             for (gap, fails) in [(below, true), (above, false)] {
@@ -1489,7 +1512,12 @@ limit = { minimum = "300 mil" }
     #[test]
     fn jlc_distinguishes_published_and_inferred_hole_pair_limits() {
         for (first, second, gap, severity) in [
-            ("VIA", "VIA", 0.19, Some(report::Severity::Error)),
+            ("VIA", "VIA", 0.15, Some(report::Severity::Error)),
+            ("VIA", "VIA", 0.1989, Some(report::Severity::Error)),
+            ("VIA", "VIA", 0.199, Some(report::Severity::Warning)),
+            // Export precision just short of JLC's 0.20 mm.
+            ("VIA", "VIA", 0.199998, Some(report::Severity::Warning)),
+            ("VIA", "VIA", 0.20, None),
             ("VIA", "VIA", 0.35, None),
             ("PLATED", "PLATED", 0.35, Some(report::Severity::Error)),
             ("VIA", "PLATED", 0.35, Some(report::Severity::Warning)),

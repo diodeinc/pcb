@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Changed
+
+- The JLCPCB DFM PDK warns instead of failing on near-minimum via spacing, outer PTH clearance, and 2 oz PTH rings.
+
 ## [0.4.94] - 2026-10-28
 
 ### Added
