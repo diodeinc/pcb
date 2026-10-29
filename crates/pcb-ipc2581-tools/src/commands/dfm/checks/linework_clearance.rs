@@ -39,7 +39,7 @@ use crate::commands::dfm::report::{
 };
 use crate::commands::dfm::rules::{Conditions, Linework};
 
-use super::{Evaluation, Measured, MeasuredSite, layers, violates};
+use super::{Evaluation, Measured, MeasuredSite, layers, violates, without_own_lands};
 
 /// One reference item: a V-score centerline or a board outline, as a range
 /// of bare segments plus its report identity.
@@ -190,9 +190,9 @@ fn castellation_cuts(design: &Design) -> anyhow::Result<Vec<Option<(ContourSet, 
                     [link.land_index as usize];
                 if hole.padstack == Some(land.padstack)
                     && hole.net.zip(land.net).is_none_or(|(own, land)| own == land)
-                    && let Some(image) = &land.image
+                    && land.image.is_some()
                 {
-                    lands[link.copper_index as usize].push(image);
+                    lands[link.copper_index as usize].push(land);
                 }
             }
         }
@@ -205,12 +205,19 @@ fn castellation_cuts(design: &Design) -> anyhow::Result<Vec<Option<(ContourSet, 
             if lands.is_empty() {
                 return Ok(None);
             }
-            let mut composer = PaintComposer::new(design.resolution);
-            composer.push(Polarity::Dark, copper.image.clone());
-            for land in lands {
-                composer.push(Polarity::Clear, land.clone());
+            let mut image = PaintComposer::new(design.resolution);
+            for conductor in copper
+                .conductors
+                .iter()
+                .filter(|conductor| conductor.id.instance().is_none())
+            {
+                let own = without_own_lands(conductor, lands.iter().copied(), design.resolution)?;
+                image.push(
+                    Polarity::Dark,
+                    own.unwrap_or_else(|| conductor.image.clone()),
+                );
             }
-            let image = composer.finish()?;
+            let image = image.finish()?;
             let boundary = image.prepare_query();
             Ok(Some((image, boundary)))
         })
@@ -563,6 +570,15 @@ mod tests {
         assert_eq!(edge(&castellated(&[3.0], "")), [0.0]);
         // A land's own net running on along the edge, and another net
         // between the castellations, are both ordinary edge copper.
+        // Another net's copper wholly under a castellation land still
+        // touches the edge: only the land's own copper is set aside.
+        let under = r#"<Set net="OTHER"><Features><Contour><Polygon>
+          <PolyBegin x="0" y="2.8"/><PolyStepSegment x="0.1" y="2.8"/>
+          <PolyStepSegment x="0.1" y="2.9"/><PolyStepSegment x="0" y="2.9"/>
+          <PolyStepSegment x="0" y="2.8"/>
+        </Polygon></Contour></Features></Set>"#;
+        let [touch] = edge(&castellated(&[3.0, 6.0], under)).try_into().unwrap();
+        assert!(touch < 1e-9, "{touch}");
         for extra in [strip("N0", 0.05, 3.6), strip("OTHER", 0.1, 4.4)] {
             let found = edge(&castellated(&[3.0, 6.0], &extra));
             assert_eq!(found.len(), 1, "{extra}");

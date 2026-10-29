@@ -12,8 +12,7 @@
 //! the declared drill span.
 
 use pcb_ir::geom::dfm::{Distance, circular_region, region_clearance_sites_with_index};
-use pcb_ir::geom::region::PaintComposer;
-use pcb_ir::geom::{BBox, ContourSet, Point, Polarity, PreparedRegion, tol};
+use pcb_ir::geom::{BBox, ContourSet, Point, PreparedRegion, tol};
 
 use crate::commands::dfm::design::{ConductorId, CopperLayer, Design, Hole, HoleClass, spans};
 use crate::commands::dfm::report::{Evidence, MeasurementKind};
@@ -22,7 +21,7 @@ use crate::commands::dfm::rules::Conditions;
 use super::copper_clearance::{TiePermissions, conductor_subject};
 use super::{
     Evaluation, Measured, MeasuredSite, Ownership, hole_subject, layers, linework_clearance,
-    spanned_layers, violates,
+    spanned_layers, violates, without_own_lands,
 };
 
 pub(super) fn evaluate(
@@ -188,45 +187,27 @@ fn npth_land_remainders(
                 && land.step == hole.step
                 && land.center.distance_to(hole.center) <= tol::REGION_MM
         })
-        .filter_map(|land| land.image.as_ref().map(|image| (land, image)))
         // The drill disk lies inside the land's own shape, not just its bounds.
-        .filter(|(_, image)| {
-            image.contains_point(hole.center)
-                && image
-                    .prepare_query()
-                    .nearest_within(hole.center, radius_mm - tol::REGION_MM)
-                    .is_none()
+        .filter(|land| {
+            land.image.as_ref().is_some_and(|image| {
+                image.contains_point(hole.center)
+                    && image
+                        .prepare_query()
+                        .nearest_within(hole.center, radius_mm - tol::REGION_MM)
+                        .is_none()
+            })
         })
         .collect::<Vec<_>>();
     copper
         .conductors
         .iter()
         .filter_map(|conductor| {
-            let own = lands
-                .iter()
-                .filter(|(land, _)| match conductor.id {
-                    ConductorId::Net {
-                        step,
-                        instance: None,
-                        net,
-                        object: None,
-                    } => step == land.step && land.net == Some(net),
-                    ConductorId::Isolated { occurrence, .. } => occurrence == land.id.0,
-                    _ => false,
-                })
-                .map(|(_, image)| *image)
-                .collect::<Vec<_>>();
-            (!own.is_empty()).then_some((conductor, own))
-        })
-        .map(|(conductor, own)| {
-            let mut composer = PaintComposer::new(design.resolution);
-            composer.push(Polarity::Dark, conductor.image.clone());
-            for land in own {
-                composer.push(Polarity::Clear, land.clone());
-            }
-            let image = composer.finish()?;
-            let boundary = image.prepare_query();
-            Ok((conductor.id, image, boundary))
+            let image = without_own_lands(conductor, lands.iter().copied(), design.resolution);
+            image.transpose().map(|image| {
+                let image = image?;
+                let boundary = image.prepare_query();
+                Ok((conductor.id, image, boundary))
+            })
         })
         .collect()
 }

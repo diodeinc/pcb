@@ -14,8 +14,8 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Fixed
 
-- DFM no longer reports an NPTH's own concentric mounting land, castellation lands at the board edge, or copper a `NetShort` ties to a via or PTH; other copper near them is still checked.
-- DFM checks a polyimide (flex) design only against a profile qualified for flex, and stops as incomplete when the PDK has none, as the JLCPCB kit does, instead of failing rigid FR-4 limits.
+- DFM no longer flags NPTH mounting lands, castellation lands at the board edge, or `NetShort`-tied copper at vias and PTHs.
+- DFM stops on flex designs when the PDK has no flex profile, instead of applying rigid FR-4 limits.
 
 ## [0.4.94] - 2026-10-28
 

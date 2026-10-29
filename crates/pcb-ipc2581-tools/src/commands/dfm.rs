@@ -220,7 +220,14 @@ fn select_profile(
         .filter(|name| pdk.profiles[*name].status == pdk::ProfileStatus::Executable)
         .filter(|name| qualifies(&pdk.profiles[*name], technology))
         .collect::<Vec<_>>();
-    let default = report::ProfileSelection::automatic(&pdk.default_profile, Vec::new());
+    // A flexible design falls back within the profiles qualified for it, so
+    // their support rules report what it lacks.
+    let fallback = if qualifies(&pdk.profiles[&pdk.default_profile], technology) {
+        pdk.default_profile.as_str()
+    } else {
+        candidates.first().copied().unwrap_or(&pdk.default_profile)
+    };
+    let default = report::ProfileSelection::automatic(fallback, Vec::new());
     match candidates.as_slice() {
         // Lowering reports a kit with no executable profile.
         [] => return Ok(default),
@@ -250,11 +257,8 @@ fn select_profile(
                 .collect(),
         });
     }
-    rejected.retain(|profile| profile.profile != pdk.default_profile);
-    Ok(report::ProfileSelection::automatic(
-        &pdk.default_profile,
-        rejected,
-    ))
+    rejected.retain(|profile| profile.profile != fallback);
+    Ok(report::ProfileSelection::automatic(fallback, rejected))
 }
 
 /// Whether a profile qualifies a design of `technology`. A flexible design
@@ -1787,6 +1791,24 @@ limit = { nominal = ["0.07 mm"], tolerance = "0.01 mm" }
             .unwrap_err()
             .to_string();
         assert!(error.contains("no qualified rigid_flex process"), "{error}");
+        // Flex adhesive is not a rigid substrate.
+        let glued = check(&board(&["Polyimide-Core", "Acrylic Adhesive"])).unwrap();
+        assert_eq!(glued.pdk.profile, "flex");
+        // When a flex profile's support cannot be decided, the flex profile
+        // still runs and reports it, rather than the rigid default.
+        let support = pdk.replace(
+            "technologies = [\"flex\"]\n",
+            "technologies = [\"flex\"]\n[profiles.flex.support]\nsurface_finish = [\"enig\"]\nouter_copper_weight = [\"1 oz\"]\n",
+        );
+        let unweighted = board(&["Polyimide-Core"]).replace(r#" thickness="0.035""#, "");
+        let undecided = check_with_scene(
+            &fixtures::import(&unweighted),
+            fixtures::request(&unweighted, &support, LayoutTarget::Board),
+            Resolution::default(),
+            false,
+        )
+        .unwrap();
+        assert_eq!(undecided.pdk.profile, "flex");
         // A profile that states no technology is no flex process either.
         let unstated = check_with_scene(
             &fixtures::import(&board(&["Polyimide-Core"])),

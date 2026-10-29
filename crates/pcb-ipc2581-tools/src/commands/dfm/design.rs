@@ -1014,7 +1014,8 @@ impl PhysicalStackup {
 /// The flexible technology a design's stackup names, and the flexible
 /// dielectric materials that name it: a board built on polyimide is a
 /// flexible one. It is flex when every dielectric material stated is
-/// flexible, rigid-flex when a rigid one is stated too, and `None` when no
+/// flexible or bonding (adhesive, bond ply, coverlay), rigid-flex when a
+/// substrate material that is neither is stated too, and `None` when no
 /// dielectric is stated to be flexible.
 pub(super) fn flexible_technology(
     imported: &ImportedDesign,
@@ -1048,6 +1049,24 @@ pub(super) fn flexible_technology(
             };
             let material = imported.resolve(material);
             let name = material.to_lowercase();
+            let bonding = ["adhesive", "bond", "coverlay", "cover lay", "acrylic"]
+                .iter()
+                .any(|word| name.contains(word))
+                || imported
+                    .layer_definitions
+                    .iter()
+                    .find(|definition| definition.name == layer.layer_ref)
+                    .is_some_and(|definition| {
+                        matches!(
+                            definition.layer_function,
+                            LayerFunction::DielAdhv
+                                | LayerFunction::DielBondPly
+                                | LayerFunction::DielCoverlay
+                        )
+                    });
+            if bonding {
+                continue;
+            }
             if name.contains("polyimide") || name.contains("kapton") {
                 if !flexible.iter().any(|known| known == material) {
                     flexible.push(material.to_owned());
