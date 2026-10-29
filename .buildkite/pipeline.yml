@@ -29,7 +29,7 @@ steps:
     command: bin/ci-core
     artifact_paths: target/nextest/ci/junit.xml
 
-  - label: ":python: Python"
+  - label: ":python: Python tests"
     key: python
     if: build.branch != pipeline.default_branch
     if_changed:
@@ -44,7 +44,7 @@ steps:
     command: bin/ci-python
     artifact_paths: target/pytest/junit.xml
 
-  - label: ":python: Python"
+  - label: ":python: Python tests"
     key: python-main
     if: build.branch == pipeline.default_branch
     timeout_in_minutes: 3

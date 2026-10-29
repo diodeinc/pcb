@@ -5,7 +5,8 @@ requires-python = ">=3.10"
 dependencies = ["click>=8.5.0"]
 
 [dependency-groups]
-dev = ["pytest>=9.1.1", "hypothesis>=6.168.5", "ruff>=0.16.10", "ty>=0.0.85"]
+dev = [{ include-group = "test" }, "ruff>=0.16.10", "ty>=0.0.85"]
+test = ["pytest>=9.1.1", "hypothesis>=6.168.5"]
 
 [tool.ruff]
 # KiCad embeds Python 3.9; requires-python describes only the dev/test environment.
