@@ -8,7 +8,7 @@
 use std::sync::Arc;
 
 use ndarray::Array2;
-use num_complex::Complex;
+use rustfft::num_complex::Complex;
 use rustfft::{Fft, FftPlanner};
 
 use crate::footprint::{PadKind, PadShape};

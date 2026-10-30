@@ -16,7 +16,6 @@ pathdiff = { workspace = true }
 thiserror = { workspace = true }
 log = { workspace = true }
 rust_decimal = { workspace = true }
-rust_decimal_macros = { workspace = true }
 natord = { workspace = true }
 starlark = { workspace = true, optional = true }
 starlark_map = { workspace = true, optional = true }

@@ -2,14 +2,13 @@ use std::{fmt, str::FromStr};
 
 use crate::PhysicalUnit;
 use rust_decimal::{Decimal, prelude::FromPrimitive};
-use rust_decimal_macros::dec;
 use serde::{Deserialize, Serialize};
 
 // Constants
-const KELVIN_OFFSET: Decimal = dec!(273.15);
-const MINUTE: Decimal = dec!(60);
-const HOUR: Decimal = dec!(3600);
-const ONE_HUNDRED: Decimal = dec!(100);
+const KELVIN_OFFSET: Decimal = Decimal::from_parts(27315, 0, 0, false, 2); // 273.15
+const MINUTE: Decimal = Decimal::from_parts(60, 0, 0, false, 0);
+const HOUR: Decimal = Decimal::from_parts(3600, 0, 0, false, 0);
+const ONE_HUNDRED: Decimal = Decimal::ONE_HUNDRED;
 
 /// Parse percentage or decimal string to tolerance fraction
 fn parse_percentish_decimal(s: &str) -> Result<Decimal, ParseError> {
