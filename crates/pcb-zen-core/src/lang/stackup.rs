@@ -104,6 +104,7 @@ impl fmt::Display for CopperFinish {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
             CopperFinish::Enig => "ENIG",
+            CopperFinish::Osp => "OSP",
             CopperFinish::HalSnpb => "HAL SnPb",
             CopperFinish::HalLeadFree => "HAL lead-free",
         })
@@ -116,6 +117,7 @@ impl FromStr for CopperFinish {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
             "ENIG" => Ok(CopperFinish::Enig),
+            "OSP" => Ok(CopperFinish::Osp),
             "HAL SnPb" => Ok(CopperFinish::HalSnpb),
             "HAL lead-free" => Ok(CopperFinish::HalLeadFree),
             _ => Err(StackupError::UnknownCopperFinish(s.to_string())),
@@ -153,6 +155,7 @@ pub enum DielectricForm {
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum CopperFinish {
     Enig,
+    Osp,
     #[serde(rename = "HAL SnPb")]
     HalSnpb,
     #[serde(rename = "HAL lead-free")]
