@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Removed
+
+- `pcb quote --route global`: Diode now assembles every order in the US; quote `global-us` or `us`. BOM matching still covers US and global offers.
+
 ## [0.4.95] - 2026-10-29
 
 ### Changed

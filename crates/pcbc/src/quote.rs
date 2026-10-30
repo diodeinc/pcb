@@ -18,8 +18,6 @@ pub enum QuoteRoute {
     /// Global bare boards, assembled by Diode in the US
     #[default]
     GlobalUs,
-    /// Global bare boards and assembly
-    Global,
 }
 
 impl QuoteRoute {
@@ -27,7 +25,6 @@ impl QuoteRoute {
         match self {
             Self::Us => "us",
             Self::GlobalUs => "global-us",
-            Self::Global => "global",
         }
     }
 
@@ -35,7 +32,6 @@ impl QuoteRoute {
         match self {
             Self::Us => "US bare boards, assembled by Diode in the US",
             Self::GlobalUs => "Global bare boards, assembled by Diode in the US",
-            Self::Global => "Global bare boards and assembly",
         }
     }
 }
