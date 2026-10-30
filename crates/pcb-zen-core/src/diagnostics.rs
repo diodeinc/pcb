@@ -569,7 +569,7 @@ impl DiagnosticReport {
         DiagnosticReport {
             location: format_location(&innermost.path, innermost.span),
             kind: diagnostic_kind(diagnostic),
-            severity: diagnostic.severity,
+            severity: innermost.severity,
             body: innermost.body.clone(),
             suppressed: diagnostic.suppressed, // Use outermost suppression status
             fixable: !innermost.fix.is_empty(),

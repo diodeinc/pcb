@@ -388,14 +388,16 @@ fn workspace_relative_path(path: &Path, workspace_root: &Path) -> String {
         .to_string()
 }
 
-fn diagnostics_report_for_file(
-    source_file: String,
-    diagnostics: &Diagnostics,
-) -> Vec<pcb_zen_core::DiagnosticReport> {
-    pcb_zen_core::DiagnosticsReport::from_diagnostics(diagnostics, &source_file)
-        .files
-        .remove(&source_file)
-        .unwrap_or_default()
+fn diagnostics_report_for_file(diagnostics: &Diagnostics) -> Vec<pcb_zen_core::DiagnosticReport> {
+    diagnostics
+        .iter()
+        .map(|diagnostic| {
+            let mut report = pcb_zen_core::DiagnosticReport::from_diagnostic(diagnostic);
+            // Build gating uses the outer severity, not the nested cause's.
+            report.severity = diagnostic.severity;
+            report
+        })
+        .collect()
 }
 
 fn write_diagnostics_report(
@@ -462,8 +464,8 @@ pub fn execute(args: BuildArgs) -> Result<()> {
         if args.diagnostics.is_some() {
             let source_file = workspace_relative_path(zen_path, &workspace_root);
             diagnostics_report.insert(
-                source_file.clone(),
-                diagnostics_report_for_file(source_file, &build_result.diagnostics),
+                source_file,
+                diagnostics_report_for_file(&build_result.diagnostics),
             );
         }
 
