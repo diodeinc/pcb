@@ -3,7 +3,7 @@ load("properties.zen", "Project")
 
 # Enum Types
 CopperWeight = enum("0.5oz", "1oz", "2oz")
-CopperFinish = enum("HASL", "HASL Lead-free", "ENIG", "HAL SnPb", "HAL lead-free")
+CopperFinish = enum("HASL", "HASL Lead-free", "ENIG", "HAL SnPb", "HAL lead-free", "OSP")
 
 # Copper constraints - all clearances and widths for copper features
 Copper = record(
@@ -140,7 +140,7 @@ Stackup = record(
     thickness=field(float | None, None),  # Total thickness in mm
     symmetric=field(bool | None, None),  # Assert symmetric stackup (default: True)
     layers=field(list[CopperLayer | DielectricLayer] | None, None),  # Ordered list of stackup layers
-    copper_finish=field(str | None, None),  # Surface finish: "ENIG", "HAL SnPb", "HAL lead-free"
+    copper_finish=field(str | None, None),  # Surface finish: "ENIG", "HAL SnPb", "HAL lead-free", "OSP"
 )
 
 # Complete board configuration
