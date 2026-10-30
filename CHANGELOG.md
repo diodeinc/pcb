@@ -8,10 +8,6 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
-### Fixed
-
-- `pcb build --diagnostics` reports the effective severity of electrical checks, so advice and warnings no longer appear as JSON errors.
-
 ### Removed
 
 - `pcb quote --route global`: Diode now assembles every order in the US; quote `global-us` or `us`. BOM matching still covers US and global offers.
