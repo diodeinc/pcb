@@ -161,6 +161,10 @@ dev = [
     { name = "ruff" },
     { name = "ty" },
 ]
+test = [
+    { name = "hypothesis" },
+    { name = "pytest" },
+]
 
 [package.metadata]
 requires-dist = [{ name = "click", specifier = ">=8.5.0" }]
@@ -171,6 +175,10 @@ dev = [
     { name = "pytest", specifier = ">=9.1.1" },
     { name = "ruff", specifier = ">=0.16.10" },
     { name = "ty", specifier = ">=0.0.85" },
+]
+test = [
+    { name = "hypothesis", specifier = ">=6.168.5" },
+    { name = "pytest", specifier = ">=9.1.1" },
 ]
 
 [[package]]

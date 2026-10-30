@@ -21,7 +21,7 @@ use ipc2581::Ipc2581;
 use pcb_ir::dialects::ipc::ArtworkScope;
 use pcb_ir::dialects::placement::PlacementSide;
 use pcb_ir::import::ipc2581::ImportedDesign;
-#[cfg(feature = "cli")]
+#[cfg(any(feature = "cli", test))]
 use pcb_ir::import::ipc2581::import_design;
 use pcb_ir::import::physical::Association;
 
