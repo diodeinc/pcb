@@ -17,8 +17,8 @@ starlark_syntax = { git = "https://github.com/diodeinc/starlark-rust", rev = "c3
 allocative = { git = "https://github.com/diodeinc/starlark-rust", rev = "c3d776bcd0bf074b00fc059d7700b82ab8dcc010", default-features = false }
 pagable = { git = "https://github.com/diodeinc/starlark-rust", rev = "c3d776bcd0bf074b00fc059d7700b82ab8dcc010", default-features = false }
 
-ruff_python_formatter = { git = "https://github.com/astral-sh/ruff", tag = "0.16.10" }
-ruff_formatter = { git = "https://github.com/astral-sh/ruff", tag = "0.16.10" }
+ruff_python_formatter = { git = "https://github.com/astral-sh/ruff", tag = "0.17.3" }
+ruff_formatter = { git = "https://github.com/astral-sh/ruff", tag = "0.17.3" }
 
 mimalloc = "0.1"
 
@@ -59,7 +59,7 @@ ariadne = { version = "0.6", features = ["auto-color"] }
 chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4.6.7", features = ["derive", "wrap_help"] }
 colored = "3"
-derive_more = { version = "2.1.1", features = ["full"] }
+derive_more = { version = "2.1.1", features = ["display", "from"] }
 dirs = "7"
 dupe = { git = "https://github.com/diodeinc/starlark-rust", rev = "c3d776bcd0bf074b00fc059d7700b82ab8dcc010" }
 duct = "1.1.2"
@@ -69,7 +69,7 @@ inquire = "0.9"
 itertools = "0.15"
 heck = "0.5.0"
 hex = "0.4"
-httpmock = "0.8"
+httpmock = "0.9"
 libm = { version = "0.2.16", default-features = false }
 log = "0.4.34"
 minijinja = { version = "3.0", features = ["serde"] }
@@ -137,7 +137,7 @@ flate2 = "1"
 ruzstd = "0.9.1"
 terminal_size = "0.4.4"
 terminal_hyperlink = "0.1"
-uppsala = "0.11.0"
+uppsala = "0.12"
 termimad = "0.35.5"
 # regex-fancy (pure Rust, and fancy-regex is already in the tree via pagable)
 # rather than regex-onig, which compiles Oniguruma from C via onig_sys.
@@ -146,15 +146,15 @@ textwrap = "0.16"
 unicode-width = "0.2.2"
 urlencoding = "2.1"
 wasm-bindgen = "0.2.129"
+# Share Ruff's zip major rather than compiling a second archive stack.
 zip = { version = "8", default-features = false, features = ["deflate"] }
 fslock = "0.2"
 rust_decimal = { version = "1.43", features = ["serde", "serde-with-str"] }
-rust_decimal_macros = "1.40"
 comfy-table = { version = "8", features = ["custom_styling"] }
 url = "2.5"
 ignore = "0.4.33"
 i_overlay = "9.0.1"
-i_triangle = "0.49"
+i_triangle = "0.51"
 boostvoronoi = "0.12.1"
 sha2 = "0.11"
 semver = { version = "1.0", features = ["serde"] }
@@ -162,6 +162,7 @@ kurbo = "0.13"
 tiny-skia = "0.12"
 zstd = "0.14"
 jiff = "0.2"
+# r2d2_sqlite 0.35 requires rusqlite 0.40 and its matching SQLite bindings.
 rusqlite = { version = "0.40.2", features = ["bundled"] }
 r2d2 = "0.8"
 r2d2_sqlite = "0.35"
@@ -175,7 +176,6 @@ triangulate = { git = "https://github.com/diodeinc/foxtrot.git", rev = "16b35c6b
 meshopt-rs = { git = "https://github.com/yzsolt/meshopt-rs", rev = "7b64153167830dfe4fb28d6bd699a28d106f172e" }
 ndarray = "0.17"
 rustfft = "6.4"
-num-complex = "0.4"
 
 # The profile that release CI uses for published binaries.
 # The geometry stack burns most of the test suite's wall clock in pcb-ir's

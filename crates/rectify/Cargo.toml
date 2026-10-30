@@ -27,7 +27,6 @@ regex = { workspace = true }
 # Numerics: raster grids, FFT-based mask correlation, parallel pose scan
 ndarray = { workspace = true }
 rustfft = { workspace = true }
-num-complex = { workspace = true }
 rayon = { workspace = true }
 
 # CLI progress bars for `bench` / `audit` batches.

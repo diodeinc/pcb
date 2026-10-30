@@ -3705,7 +3705,7 @@ mod tests {
             })
             .collect::<Vec<_>>();
 
-        for (case, request, expected) in itertools::izip!(cases, requests, expected_results) {
+        for ((case, request), expected) in cases.into_iter().zip(requests).zip(expected_results) {
             let req_id = server.send_request(request)?;
             let response = goto_definition_response_location(&mut server, req_id)
                 .context(format!("getting response for case `{}`", case.2))?;
