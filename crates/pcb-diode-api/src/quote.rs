@@ -17,7 +17,7 @@ const QUOTE_TIMEOUT_SECS: u64 = 600;
 #[derive(Serialize, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct QuoteRequest<'a> {
-    /// `us`, `global-us`, or `global`
+    /// `us` or `global-us`
     pub route: &'a str,
     /// Assembled boards per quote
     pub quantities: &'a [u32],
