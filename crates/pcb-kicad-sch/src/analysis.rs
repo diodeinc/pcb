@@ -313,6 +313,10 @@ pub fn inspect_schematic(
     apply_symbol_or_label_endpoint_requirements(document, netlist, &mut expected)?;
     let physical = observed_reconcilable_connectivity(document, netlist)?;
     let mut analysis = analyze_connectivity(&expected, &physical.graph);
+    let optional = crate::component_slots::optional_unplaced_slots(document, netlist)?;
+    analysis.issues.retain(
+        |issue| !matches!(issue, SchematicIssue::MissingSymbol { slot } if optional.contains(slot)),
+    );
     let (_, no_connect_issues) = inspect_no_connects(document, netlist)?;
     analysis.issues.extend(no_connect_issues);
     analysis.issues.splice(

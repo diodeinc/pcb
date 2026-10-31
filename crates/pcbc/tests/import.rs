@@ -1589,6 +1589,115 @@ fn cross_sheet_multi_unit_components_survive_import_and_apply() {
 }
 
 #[test]
+fn unplaced_unused_units_survive_import_and_apply() {
+    let mut sandbox = sandbox();
+    let font = "(effects (font (size 1.27 1.27)))";
+    // KiCad lets a design leave an unused unit off the schematic; its pins are simply absent.
+    let source = format!(
+        r#"(kicad_sch (version 20250114) (generator "eeschema")
+        (uuid "00000000-0000-0000-0000-000000000001") (paper "A4")
+        (lib_symbols (symbol "Test:Dual" (in_bom no) (on_board yes)
+            (property "Reference" "U" (at 0 0 0) {font})
+            (property "Value" "Dual" (at 0 0 0) {font})
+            (property "Footprint" "Resistor_SMD:R_0402_1005Metric" (at 0 0 0)
+                (effects (font (size 1.27 1.27)) (hide yes)))
+            (symbol "Dual_1_1" (pin passive line (at -2.54 0 0) (length 2.54)
+                (name "A" {font}) (number "1" {font})))
+            (symbol "Dual_2_1" (pin passive line (at -2.54 0 0) (length 2.54)
+                (name "B" {font}) (number "2" {font})))))
+        (symbol (lib_id "Test:Dual") (at 50 30 0) (unit 1)
+            (in_bom no) (on_board yes) (dnp no)
+            (uuid "00000000-0000-0000-0000-000000000101")
+            (property "Reference" "U1" (at 50 30 0) {font})
+            (property "Value" "Dual" (at 50 30 0) {font})
+            (property "Footprint" "Resistor_SMD:R_0402_1005Metric" (at 50 30 0) {font})
+            (pin "1" (uuid "00000000-0000-0000-0000-000000000301"))
+            (instances (project "unused"
+                (path "/00000000-0000-0000-0000-000000000001" (reference "U1") (unit 1)))))
+        (global_label "ALPHA" (shape input) (at 47.46 30 0)
+            (effects (font (size 1.27 1.27)) (justify left))
+            (uuid "00000000-0000-0000-0000-000000000201"))
+        (sheet_instances (path "/" (page "1"))))"#
+    );
+    sandbox.write("source/unused.kicad_sch", &source);
+    let import = sandbox
+        .run("pcbc", ["import", "source/unused.kicad_sch", "out"])
+        .stdout_capture()
+        .stderr_capture()
+        .unchecked()
+        .run()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&import.stderr);
+    assert!(import.status.success(), "import failed:\n{stderr}");
+    let output = sandbox.root_path().join("out/eda/unused.kicad_sch");
+    assert_preserved_schematic(&output, &source, false);
+    // Neither build nor apply asks for the unused unit.
+    assert_repeated_schematic_apply(&mut sandbox, "out/unused.zen", &[]);
+    assert_preserved_schematic(&output, &source, true);
+}
+
+#[test]
+fn stale_only_unit_is_replaced_by_every_current_unit() {
+    let mut sandbox = sandbox();
+    let font = "(effects (font (size 1.27 1.27)))";
+    let source = format!(
+        r#"(kicad_sch (version 20250114) (generator "eeschema")
+        (uuid "00000000-0000-0000-0000-000000000001") (paper "A4")
+        (lib_symbols (symbol "Test:Dual" (in_bom no) (on_board yes)
+            (property "Reference" "U" (at 0 0 0) {font})
+            (property "Value" "Dual" (at 0 0 0) {font})
+            (property "Footprint" "Resistor_SMD:R_0402_1005Metric" (at 0 0 0)
+                (effects (font (size 1.27 1.27)) (hide yes)))
+            (symbol "Dual_1_1" (pin passive line (at -2.54 0 0) (length 2.54)
+                (name "A" {font}) (number "1" {font})))
+            (symbol "Dual_2_1" (pin passive line (at -2.54 0 0) (length 2.54)
+                (name "B" {font}) (number "2" {font})))))
+        (symbol (lib_id "Test:Dual") (at 50 30 0) (unit 1)
+            (in_bom no) (on_board yes) (dnp no)
+            (uuid "00000000-0000-0000-0000-000000000101")
+            (property "Reference" "U1" (at 50 30 0) {font})
+            (property "Value" "Dual" (at 50 30 0) {font})
+            (property "Footprint" "Resistor_SMD:R_0402_1005Metric" (at 50 30 0) {font})
+            (pin "1" (uuid "00000000-0000-0000-0000-000000000301"))
+            (instances (project "stale"
+                (path "/00000000-0000-0000-0000-000000000001" (reference "U1") (unit 1)))))
+        (no_connect (at 47.46 30) (uuid "00000000-0000-0000-0000-000000000401"))
+        (sheet_instances (path "/" (page "1"))))"#
+    );
+    sandbox.write("source/stale.kicad_sch", &source);
+    let import = sandbox
+        .run("pcbc", ["import", "source/stale.kicad_sch", "out"])
+        .stdout_capture()
+        .stderr_capture()
+        .unchecked()
+        .run()
+        .unwrap();
+    assert!(
+        import.status.success(),
+        "import failed:\n{}",
+        String::from_utf8_lossy(&import.stderr)
+    );
+    // A unit the definition no longer has does not make the current units optional.
+    let output = sandbox.root_path().join("out/eda/stale.kicad_sch");
+    let stale = fs::read_to_string(&output)
+        .unwrap()
+        .replace("(unit 1)", "(unit 3)");
+    fs::write(&output, stale).unwrap();
+    assert_repeated_schematic_apply(&mut sandbox, "out/stale.zen", &["-S", "warnings"]);
+    let project =
+        pcbc::kicad_schematic::KicadProject::load(sandbox.root_path().join("out/eda")).unwrap();
+    let units = project.document.pages[0]
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            pcb_kicad_sch::SchItem::Symbol(symbol) => Some(symbol.unit),
+            _ => None,
+        })
+        .collect::<BTreeSet<_>>();
+    assert_eq!(units, BTreeSet::from([1, 2]));
+}
+
+#[test]
 fn cross_sheet_units_ignore_stale_caches_of_units_they_do_not_place() {
     let root_uuid = "00000000-0000-0000-0000-000000000001";
     let font = "(effects (font (size 1.27 1.27)))";
