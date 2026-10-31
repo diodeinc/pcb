@@ -69,7 +69,7 @@ pub(super) fn generate(
     let board_name = &selection.board_name;
     // Use the same KiCad 9 -> 10 symbol normalization as the persistent editor.
     let project = pcbc::kicad_schematic::KicadProject::load(&materialized.layout_kicad_pro)?;
-    let port_to_net = build_port_to_net_map(&ir.nets)?;
+    let port_to_net = build_port_to_net_map(ir)?;
     let not_connected_nets = build_not_connected_nets(ir, &project.document)?;
     let net_decls = build_net_decls(&ir.nets, &not_connected_nets, &ir.semantic.net_kinds.by_net);
     let reserved_idents: BTreeSet<String> =
@@ -793,17 +793,20 @@ impl ImportedNetDecls {
     }
 }
 
-fn build_port_to_net_map(
-    netlist_nets: &BTreeMap<KiCadNetName, ImportNetData>,
-) -> Result<BTreeMap<ImportNetPort, KiCadNetName>> {
+fn build_port_to_net_map(ir: &ImportIr) -> Result<BTreeMap<ImportNetPort, KiCadNetName>> {
     let mut port_to_net: BTreeMap<ImportNetPort, KiCadNetName> = BTreeMap::new();
-    for (net_name, net) in netlist_nets {
+    for (net_name, net) in &ir.nets {
         for port in &net.ports {
-            if port_to_net.insert(port.clone(), net_name.clone()).is_some() {
+            if let Some(previous) = port_to_net.insert(port.clone(), net_name.clone()) {
+                let refdes = ir.components.get(&port.component).map_or_else(
+                    || port.component.pcb_path(),
+                    |component| component.netlist.refdes.to_string(),
+                );
                 anyhow::bail!(
-                    "KiCad netlist produced duplicate connectivity for port {}:{}",
-                    port.component.pcb_path(),
-                    port.pin.as_str()
+                    "KiCad netlist connects {refdes} pin {} to both {:?} and {:?}",
+                    port.pin.as_str(),
+                    previous.as_str(),
+                    net_name.as_str(),
                 );
             }
         }
