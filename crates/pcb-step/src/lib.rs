@@ -662,49 +662,8 @@ fn glob_match(pattern: &str, text: &str) -> bool {
 /// frame, skips skippable frames, and checks each frame's content size and
 /// checksum when present.
 pub(crate) fn decode_embedded(text: &[u8]) -> Result<Vec<u8>, Error> {
-    use ruzstd::decoding::StreamingDecoder;
-    use ruzstd::decoding::errors::{FrameDecoderError, ReadFrameHeaderError};
-    use std::io::Read;
     let compressed = base64_decode(text)?;
-    let zstd_error = |err: &dyn std::fmt::Display| Error::Zstd(err.to_string());
-    let mut input = compressed.as_slice();
-    let mut out = Vec::new();
-    let mut decoded = false;
-    while !decoded || !input.is_empty() {
-        let header = input;
-        let mut decoder = match StreamingDecoder::new(&mut input) {
-            Ok(decoder) => decoder,
-            Err(FrameDecoderError::ReadFrameHeaderError(ReadFrameHeaderError::SkipFrame {
-                length,
-                ..
-            })) => {
-                input = input
-                    .get(length as usize..)
-                    .ok_or_else(|| Error::Zstd("truncated skippable frame".to_owned()))?;
-                continue;
-            }
-            Err(err) => return Err(zstd_error(&err)),
-        };
-        // content_size() is zero both for an absent and an empty size; the
-        // descriptor's size flag or single-segment bit says one is present.
-        let expected = (header[4] & 0xe0 != 0).then(|| decoder.decoder.content_size());
-        let start = out.len();
-        // The size is untrusted, so one that cannot be reserved is ignored.
-        let _ = out.try_reserve_exact(expected.unwrap_or(0) as usize);
-        decoder.read_to_end(&mut out).map_err(|e| zstd_error(&e))?;
-        if expected.is_some_and(|size| size != (out.len() - start) as u64) {
-            return Err(Error::Zstd("content size mismatch".to_owned()));
-        }
-        let frame = &decoder.decoder;
-        if frame
-            .get_checksum_from_data()
-            .is_some_and(|sum| frame.get_calculated_checksum() != Some(sum))
-        {
-            return Err(Error::Zstd("checksum mismatch".to_owned()));
-        }
-        decoded = true;
-    }
-    Ok(out)
+    pcb_sexpr::kicad::embedded::decode_zstd_stream(&compressed).map_err(Error::Zstd)
 }
 
 fn base64_decode(text: &[u8]) -> Result<Vec<u8>, Error> {
