@@ -77,8 +77,8 @@ sheet that orders the least array area, excluding A3 whenever a smaller sheet
 fits the board. Ties favor the smaller sheet. `--format json` writes the same
 report as JSON.
 
-`board-array create --mouse-bite` uses routed slots and perforated tabs instead
-of V-scores; `--mouse-bite-placement` only analyzes placement and writes JSON.
+`board-array create` uses routed slots and perforated tabs by default;
+`--v-score` selects V-scores. `--mouse-bite-placement` only analyzes placement and writes JSON.
 The [experimental tab geometry and physical-acceptance limits](../pcb-ir/src/geom/mouse_bite/README.md)
 apply even when manufacturing files are generated.
 

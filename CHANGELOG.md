@@ -15,6 +15,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Changed
 
+- Board arrays default to tabs; use `--v-score` for V-cuts.
 - DFM reports isolated `TEXT` copper under warning-level `.text` width and clearance rules.
 - DFM stackup template mismatches fail only `SPECIFIED` stackups.
 - DFM copper-width findings name their consequence: severed connection, narrowed conductor or lost detail.

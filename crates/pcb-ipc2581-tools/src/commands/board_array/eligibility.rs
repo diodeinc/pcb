@@ -6,7 +6,8 @@ use ipc2581::{
 };
 use pcb_ir::{
     dialects::ipc::{
-        ArtworkScope, LayoutStepKind, PlatingKind, ProfileSet, profile_occurrences_for,
+        ArtworkScope, LayoutStepKind, PlatingKind, ProfileSet, layout_steps_by_kind,
+        profile_occurrences_for, root_step,
     },
     geom::{
         BBox, ContourBuf, ContourSet, FillRule, PathCmd, PathOp, Resolution, Segment,
@@ -77,8 +78,7 @@ struct CourtyardGroup {
 
 /// Analyze one canonical board, including profile cutouts. No coverage is
 /// inferred for unexported keep-outs, and no manufacturing allowances are
-/// selected here. Multiple board definitions and unresolved courtyard
-/// references are unsupported.
+/// selected here. Unresolved courtyard references are unsupported.
 pub fn analyze(xml: &str, footprint: OutlineFootprint, resolution: Resolution) -> Result<Value> {
     let ipc = Ipc2581::parse(xml).context("Failed to parse IPC-2581 input")?;
     let mut report = prepare(&ipc, footprint, resolution)?.report();
@@ -101,15 +101,8 @@ pub(super) fn prepare(
     let resolution = resolution.strict();
     let imported = import_design(ipc, resolution)?;
     let doc = &imported.geometry;
-    // Both BoardOutlines and ArtworkScope::Board must select the same board.
-    // Do not resolve mixed-board panels in this analysis-only phase.
-    if doc
-        .layout
-        .steps
-        .iter()
-        .filter(|step| step.kind == LayoutStepKind::Board)
-        .count()
-        != 1
+    if !root_step(doc).is_some_and(|(_, step)| step.kind == LayoutStepKind::Board)
+        && layout_steps_by_kind(doc, LayoutStepKind::Board).count() != 1
     {
         bail!("unsupported input: outline eligibility requires exactly one board definition");
     }
@@ -381,6 +374,10 @@ fn edge_plating_evidence(
 // including nested shapes without diagnostics. Check source evidence first:
 // a surviving sibling must not make an incomplete courtyard appear complete.
 fn validate_courtyard_references(ipc: &Ipc2581) -> Result<()> {
+    let layout = crate::geometry::extract_layout(ipc)?;
+    let (_, board) = layout_steps_by_kind(&layout, LayoutStepKind::Board)
+        .next()
+        .context("IPC-2581 primary step has no board definition")?;
     let cad = &ipc
         .ecad()
         .context("IPC-2581 file has no ECAD section")?
@@ -388,6 +385,7 @@ fn validate_courtyard_references(ipc: &Ipc2581) -> Result<()> {
     let mut features = cad
         .steps
         .iter()
+        .filter(|step| step.name == board.source_step_ref)
         .flat_map(|step| &step.layer_features)
         .filter(|features| {
             cad.layers.iter().any(|layer| {
