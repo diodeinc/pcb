@@ -10,7 +10,6 @@ env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: 0
   CARGO_PROFILE_TEST_DEBUG: 0
-  KICAD_VERSION: 10.0.5
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -18,7 +17,6 @@ concurrency:
 
 permissions:
   contents: read
-  packages: read
 
 jobs:
   lint:
@@ -61,7 +59,7 @@ jobs:
           - name: Ubuntu
             runs-on: blacksmith-16vcpu-ubuntu-2404
             container:
-              image: ghcr.io/diodeinc/kicad:10.0.5
+              image: debian:trixie-slim
               options: --user root
     steps:
       - name: Enable Windows long paths
@@ -73,9 +71,9 @@ jobs:
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: /tmp/apt-cache/archives
-          key: apt-${{ runner.os }}-${{ runner.arch }}-debian-trixie-${{ env.KICAD_VERSION }}-ca-certificates-curl-build-essential-pkg-config
+          key: apt-${{ runner.os }}-${{ runner.arch }}-debian-trixie-ca-certificates-curl-build-essential-pkg-config-git-diode-kicad
           restore-keys: |
-            apt-${{ runner.os }}-${{ runner.arch }}-debian-trixie-${{ env.KICAD_VERSION }}-
+            apt-${{ runner.os }}-${{ runner.arch }}-debian-trixie-
 
       - name: Install Dependencies (Ubuntu)
         if: matrix.config.name == 'Ubuntu'
@@ -83,11 +81,21 @@ jobs:
           apt_cache_dir=/tmp/apt-cache/archives
           mkdir -p "$apt_cache_dir/partial"
           apt-get -o Dir::Cache::archives="$apt_cache_dir/" update
-          apt-get -o Dir::Cache::archives="$apt_cache_dir/" install -y --no-install-recommends ca-certificates curl build-essential pkg-config
+          apt-get -o Dir::Cache::archives="$apt_cache_dir/" install -y --no-install-recommends ca-certificates curl build-essential pkg-config git
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+
+      - name: Install KiCad from the Diode APT repository
+        if: matrix.config.name == 'Ubuntu'
+        run: |
+          apt_cache_dir=/tmp/apt-cache/archives
+          install -m 0644 .github/diode-kicad-archive-keyring.asc /usr/share/keyrings/diode-kicad-archive-keyring.asc
+          echo "deb [signed-by=/usr/share/keyrings/diode-kicad-archive-keyring.asc] https://kicad-mirror.api.diode.computer/apt trixie main" \
+            > /etc/apt/sources.list.d/diode-kicad.list
+          apt-get -o Dir::Cache::archives="$apt_cache_dir/" update
+          apt-get -o Dir::Cache::archives="$apt_cache_dir/" install -y --no-install-recommends kicad
 
       - name: Remove unused Homebrew taps (macOS)
         if: runner.os == 'macOS'
@@ -105,13 +113,18 @@ jobs:
             fi
           done
 
+      - name: Resolve KiCad cask version (macOS)
+        if: contains(matrix.config.name, 'macOS')
+        id: kicad-cask
+        run: echo "version=$(brew info --cask --json=v2 kicad | jq -r '.casks[0].version')" >> "$GITHUB_OUTPUT"
+
       - name: Cache KiCad (macOS)
         if: contains(matrix.config.name, 'macOS')
         id: cache-kicad-mac
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: /Applications/KiCad
-          key: ${{ runner.os }}-kicad-${{ env.KICAD_VERSION }}
+          key: ${{ runner.os }}-kicad-${{ steps.kicad-cask.outputs.version }}
 
       - name: Install KiCad (macOS)
         if: contains(matrix.config.name, 'macOS') && steps.cache-kicad-mac.outputs.cache-hit != 'true'
