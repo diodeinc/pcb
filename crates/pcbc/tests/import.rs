@@ -80,6 +80,17 @@ fn import_explains_how_to_upgrade_pre_kicad_9_projects() {
         (uuid "00000000-0000-0000-0000-000000000003") (paper "A4") (lib_symbols))"#,
     );
     sandbox.write("legacy/board.pro", "update=legacy\n");
+    // KiCad 10 nightlies (10.99) write formats newer than any release.
+    sandbox.write(
+        "nightly-sch/board.kicad_sch",
+        STANDALONE_FIXTURE.replace("(version 20250114)", "(version 20260701)"),
+    );
+    sandbox.write("nightly-pcb/board.kicad_sch", STANDALONE_FIXTURE);
+    sandbox.write("nightly-pcb/board.kicad_pro", PROJECT_FIXTURE);
+    sandbox.write(
+        "nightly-pcb/board.kicad_pcb",
+        PCB_FIXTURE.replacen("(version 20241229)", "(version 20260701)", 1),
+    );
 
     for (input, expected) in [
         (
@@ -87,6 +98,14 @@ fn import_explains_how_to_upgrade_pre_kicad_9_projects() {
             "failed to parse child.kicad_sch\n  KiCad schematic version 20231120 is older than KiCad 9; upgrade it with `kicad-cli sch upgrade <file>`",
         ),
         ("legacy/board.pro", "board.pro is a KiCad 5 legacy file"),
+        (
+            "nightly-sch/board.kicad_sch",
+            "failed to parse board.kicad_sch\n  KiCad schematic version 20260701 is newer than KiCad 10, as saved by a KiCad nightly; expected KiCad 9 version 20250114 or KiCad 10 version 20260306",
+        ),
+        (
+            "nightly-pcb/board.kicad_pro",
+            "board.kicad_pcb\n  KiCad board version 20260701 is newer than KiCad 10 (version 20260206)",
+        ),
     ] {
         let import = sandbox
             .run("pcbc", ["import", input, "out"])
@@ -98,6 +117,9 @@ fn import_explains_how_to_upgrade_pre_kicad_9_projects() {
         let stderr = String::from_utf8_lossy(&import.stderr);
         assert!(!import.status.success());
         assert!(stderr.contains(expected), "unexpected stderr:\n{stderr}");
+        // Rejected before KiCad runs, and a failed import leaves no output behind.
+        assert!(!stderr.contains("ERC"), "unexpected stderr:\n{stderr}");
+        assert!(!sandbox.root_path().join("out").exists());
     }
 }
 
@@ -111,21 +133,7 @@ fn validation_extraction_and_materialization_share_one_source_snapshot() {
     sandbox.write("mutated-project", "not a KiCad project\n");
     sandbox.write("mutated-pcb", "not a KiCad PCB\n");
 
-    let real_kicad_cli = std::env::var_os("KICAD_CLI")
-        .map(std::path::PathBuf::from)
-        .filter(|path| path.is_file())
-        .or_else(|| {
-            std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
-                .map(|dir| dir.join("kicad-cli"))
-                .find(|path| path.is_file())
-        })
-        .or_else(platform_kicad_cli);
-    assert!(
-        real_kicad_cli.as_ref().is_some_and(|path| path.is_file()),
-        "could not locate the real kicad-cli"
-    );
-    let real_kicad_cli = real_kicad_cli.unwrap();
-
+    let real_kicad_cli = real_kicad_cli();
     let wrapper = write_kicad_cli_wrapper(sandbox.root_path());
 
     let source_root = sandbox.root_path().join("source");
@@ -215,6 +223,19 @@ fn read_zip_entry(archive_path: &std::path::Path, entry_name: &str) -> Vec<u8> {
     let mut bytes = Vec::new();
     entry.read_to_end(&mut bytes).expect("read archived source");
     bytes
+}
+
+fn real_kicad_cli() -> std::path::PathBuf {
+    std::env::var_os("KICAD_CLI")
+        .map(std::path::PathBuf::from)
+        .filter(|path| path.is_file())
+        .or_else(|| {
+            std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
+                .map(|dir| dir.join("kicad-cli"))
+                .find(|path| path.is_file())
+        })
+        .or_else(platform_kicad_cli)
+        .expect("could not locate the real kicad-cli")
 }
 
 #[cfg(target_os = "linux")]
@@ -751,7 +772,10 @@ fn reimport_refuses_without_force_and_force_regenerates() {
         .unwrap();
     assert!(!conflict.status.success());
     assert!(
-        String::from_utf8_lossy(&conflict.stderr).contains("conflicts with retained KiCad project")
+        String::from_utf8_lossy(&conflict.stderr)
+            .contains("conflicts with retained KiCad project",)
+            && String::from_utf8_lossy(&conflict.stderr)
+                .contains("The source has no board, so --force keeps the existing eda/ layout")
     );
     assert!(!output.join("eda/layout.kicad_pro").exists());
     assert_eq!(fs::read_to_string(component).unwrap(), regenerated);
@@ -795,6 +819,128 @@ fn force_reimports_from_its_own_project_directory() {
             "models/KIPRJMOD/m.step"
         ),
         b"model"
+    );
+}
+
+#[test]
+fn power_flags_with_real_references_stay_schematic_only() {
+    // A PWR_FLAG renamed from `#FLG` to `FLG1` reaches KiCad's netlist like a part, but it is a
+    // footprintless power symbol and must not become a physical component.
+    let font = "(effects (font (size 1.27 1.27)))";
+    let definition = format!(
+        r##"(lib_symbols
+        (symbol "power:PWR_FLAG" (power) (in_bom yes) (on_board yes)
+            (property "Reference" "#FLG" (at 0 0 0) {font})
+            (property "Value" "PWR_FLAG" (at 0 0 0) {font})
+            (symbol "PWR_FLAG_0_0" (pin power_out line (at 0 0 90) (length 0)
+                (name "~" {font}) (number "1" {font}))))
+"##
+    );
+    // R1's pins are at y = 104.14 and 111.76.
+    let flags = [("FLG1", 104.14), ("FLG2", 111.76)]
+        .map(|(reference, y)| {
+            format!(
+                r#"(symbol (lib_id "power:PWR_FLAG") (at 101.6 {y} 0) (unit 1)
+                (in_bom yes) (on_board yes) (dnp no) (uuid "00000000-0000-0000-0000-0000000f1a{y:03.0}")
+                (property "Reference" "{reference}" (at 101.6 {y} 0) {font})
+                (property "Value" "PWR_FLAG" (at 101.6 {y} 0) {font})
+                (pin "1" (uuid "00000000-0000-0000-0000-0000000f1b{y:03.0}"))
+                (instances (project "layout" (path "/7cb90b3f-e87a-4fd9-8f47-56f0aef646ac"
+                    (reference "{reference}") (unit 1)))))
+"#
+            )
+        })
+        .concat();
+    let schematic = STANDALONE_FIXTURE
+        .replacen("(lib_symbols\n", &definition, 1)
+        .replacen(
+            "\t(sheet_instances",
+            &format!("{flags}\t(sheet_instances"),
+            1,
+        );
+    let mut sandbox = sandbox();
+    sandbox.write("layout.kicad_sch", &schematic);
+
+    let import = sandbox
+        .run("pcbc", ["import", "layout.kicad_sch", "out"])
+        .stderr_capture()
+        .unchecked()
+        .run()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&import.stderr);
+    assert!(import.status.success(), "import failed:\n{stderr}");
+    // The flags join R1's nets without adding endpoints: the same six single-pin partitions.
+    assert!(stderr.contains("Validated generated Zener against 6 physical-pin partition(s)"));
+    let report: serde_json::Value =
+        serde_json::from_slice(&fs::read(extraction_report(&stderr)).unwrap()).unwrap();
+    assert!(
+        source_physical_partitions(&report)
+            .iter()
+            .flatten()
+            .all(|pin| pin.starts_with('R')),
+        "power flags became components"
+    );
+    let output = sandbox.root_path().join("out");
+    assert!(
+        !fs::read_to_string(output.join("layout.zen"))
+            .unwrap()
+            .contains("FLG")
+    );
+    let native = fs::read_to_string(output.join("eda/layout.kicad_sch")).unwrap();
+    assert!(native.contains(r#""FLG1""#) && native.contains(r#""FLG2""#));
+}
+
+#[test]
+fn skip_drc_imports_a_board_without_running_kicad_drc() {
+    let mut sandbox = sandbox();
+    sandbox.write("source/layout.kicad_sch", STANDALONE_FIXTURE);
+    sandbox.write("source/layout.kicad_pro", PROJECT_FIXTURE);
+    sandbox.write("source/layout.kicad_pcb", PCB_FIXTURE);
+    // Stands in for a DRC run that never finishes in time.
+    let wrapper = sandbox.root_path().join("kicad-cli-no-drc");
+    fs::write(
+        &wrapper,
+        r#"#!/bin/sh
+[ "$1 $2" = "pcb drc" ] && { echo "DRC must not run" >&2; exit 1; }
+exec "$PCB_TEST_REAL_KICAD_CLI" "$@"
+"#,
+    )
+    .unwrap();
+    let mut permissions = fs::metadata(&wrapper).unwrap().permissions();
+    std::os::unix::fs::PermissionsExt::set_mode(&mut permissions, 0o755);
+    fs::set_permissions(&wrapper, permissions).unwrap();
+    sandbox.env("KICAD_CLI", wrapper.to_string_lossy()).env(
+        "PCB_TEST_REAL_KICAD_CLI",
+        real_kicad_cli().to_string_lossy(),
+    );
+
+    let mut import = |extra: &[&str]| {
+        sandbox
+            .run(
+                "pcbc",
+                [&["import", "source/layout.kicad_pro", "out"], extra].concat(),
+            )
+            .stderr_capture()
+            .unchecked()
+            .run()
+            .unwrap()
+    };
+    let with_drc = import(&[]);
+    assert!(!with_drc.status.success());
+    assert!(String::from_utf8_lossy(&with_drc.stderr).contains("DRC must not run"));
+
+    let skipped = import(&["--skip-drc"]);
+    let stderr = String::from_utf8_lossy(&skipped.stderr);
+    assert!(skipped.status.success(), "import failed:\n{stderr}");
+    assert!(stderr.contains("Skipping KiCad DRC"));
+    let report: serde_json::Value =
+        serde_json::from_slice(&fs::read(extraction_report(&stderr)).unwrap()).unwrap();
+    assert_eq!(report["validation"]["drc_skipped"], true);
+    assert!(
+        sandbox
+            .root_path()
+            .join("out/eda/layout.kicad_pcb")
+            .is_file()
     );
 }
 
@@ -1586,6 +1732,61 @@ fn cross_sheet_multi_unit_components_survive_import_and_apply() {
     for (file, source) in &sources {
         assert_preserved_schematic(&output.join(file), source, true);
     }
+
+    // A forced reimport that fails during generation, after replacing the generated files,
+    // restores the board repository exactly.
+    let before = directory_contents(&sandbox.root_path().join("out"));
+    sandbox.write(
+        "source/B.kicad_sch",
+        sources["B.kicad_sch"].replacen(r#""Value" "Dual" (at 50"#, r#""Value" "Other" (at 50"#, 1),
+    );
+    let failed = sandbox
+        .run(
+            "pcbc",
+            ["import", "source/split.kicad_sch", "out", "--force"],
+        )
+        .stderr_capture()
+        .unchecked()
+        .run()
+        .unwrap();
+    assert!(!failed.status.success());
+    assert!(
+        String::from_utf8_lossy(&failed.stderr).contains("differing Value across schematic units"),
+        "{}",
+        String::from_utf8_lossy(&failed.stderr)
+    );
+    assert_eq!(directory_contents(&sandbox.root_path().join("out")), before);
+}
+
+/// Every file and symlink under `root` except Git metadata and the `.pcb` cache.
+fn directory_contents(root: &std::path::Path) -> BTreeMap<std::path::PathBuf, Vec<u8>> {
+    let mut contents = BTreeMap::new();
+    let mut pending = vec![root.to_path_buf()];
+    while let Some(dir) = pending.pop() {
+        for entry in fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path == root.join(".git") || path == root.join(".pcb") {
+                continue;
+            }
+            let file_type = fs::symlink_metadata(&path).unwrap().file_type();
+            let relative = path.strip_prefix(root).unwrap().to_path_buf();
+            if file_type.is_dir() {
+                contents.insert(relative, Vec::new());
+                pending.push(path);
+            } else if file_type.is_symlink() {
+                contents.insert(
+                    relative,
+                    fs::read_link(&path)
+                        .unwrap()
+                        .into_os_string()
+                        .into_encoded_bytes(),
+                );
+            } else {
+                contents.insert(relative, fs::read(&path).unwrap());
+            }
+        }
+    }
+    contents
 }
 
 #[test]

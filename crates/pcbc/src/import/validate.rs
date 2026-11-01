@@ -7,6 +7,7 @@ pub(super) fn validate(
     paths: &ImportPaths,
     selection: &ImportSelection,
     staged_root: &Path,
+    skip_drc: bool,
 ) -> Result<ImportValidationRun> {
     // KiCad CLI can update project-local preference files while running ERC/DRC. Validate the
     // retained source snapshot so import never changes its source repository.
@@ -24,7 +25,12 @@ pub(super) fn validate(
     let mut drc_errors = 0;
     let mut drc_warnings = 0;
 
-    if let Some(kicad_pcb) = &selection.selected.kicad_pcb {
+    let drc_pcb = selection.selected.kicad_pcb.as_ref();
+    let drc_skipped = skip_drc && drc_pcb.is_some();
+    if drc_skipped {
+        eprintln!("Skipping KiCad DRC and schematic/PCB parity checks (--skip-drc).");
+    }
+    if let Some(kicad_pcb) = drc_pcb.filter(|_| !skip_drc) {
         let validation_pcb = staged_root.join(kicad_pcb);
         let source_pcb = paths.kicad_project_root.join(kicad_pcb);
         let drc_output = tempfile::NamedTempFile::new()
@@ -50,6 +56,7 @@ pub(super) fn validate(
         erc_warnings,
         drc_errors,
         drc_warnings,
+        drc_skipped,
     };
 
     // Persist a copy of the raw diagnostics (before render filters mutate suppression state).

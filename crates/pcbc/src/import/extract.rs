@@ -39,6 +39,13 @@ pub(super) fn extract_ir(
         &sheet_symbols,
         &mut netlist.components,
     )?;
+    netlist
+        .components
+        .retain(|anchor, _| !schematic.schematic_only.contains(anchor));
+    for net in netlist.nets.values_mut() {
+        net.ports
+            .retain(|port| !schematic.schematic_only.contains(&port.component));
+    }
     netlist.unit_to_anchor = netlist
         .components
         .iter()
@@ -88,6 +95,8 @@ pub(super) fn extract_ir(
 struct KiCadSchematicExtraction {
     lib_symbol_ids: BTreeSet<KiCadLibId>,
     power_symbol_decls: Vec<ImportSchematicPowerSymbolDecl>,
+    /// Netlist components that are power symbols, which never become physical components.
+    schematic_only: BTreeSet<KiCadUuidPathKey>,
 }
 
 #[derive(Debug, Clone)]
@@ -241,6 +250,7 @@ fn extract_kicad_schematic_data(
         .map(|(key, component)| (component.netlist.refdes.clone(), key.clone()))
         .collect::<BTreeMap<_, _>>();
     let mut power_symbol_decls = Vec::new();
+    let mut schematic_only = BTreeSet::new();
     for page in pages {
         let file = page_file(page);
         let targets_file = |instance_path: &str| {
@@ -281,6 +291,20 @@ fn extract_kicad_schematic_data(
                     .is_some_and(|reference| reference.trim_start().starts_with("#PWR"));
 
             if is_power_symbol {
+                // KiCad exports power symbols only when their reference lacks the usual `#`
+                // (e.g. a PWR_FLAG renamed FLG1). They have no footprint either way, so they stay
+                // schematic-only documentation rather than becoming physical components.
+                schematic_only.extend(
+                    symbol
+                        .instances
+                        .iter()
+                        .filter_map(|instance| instance.reference.as_deref())
+                        .chain(symbol.reference())
+                        .filter_map(|reference| {
+                            refdes_to_anchor.get(&KiCadRefDes::from(reference.to_string()))
+                        })
+                        .cloned(),
+                );
                 // Power symbols are usually absent from the KiCad netlist export.
                 let sheet_paths: BTreeSet<KiCadSheetPath> = if symbol.instances.is_empty() {
                     BTreeSet::from([KiCadSheetPath::root()])
@@ -397,6 +421,7 @@ fn extract_kicad_schematic_data(
             .map(|lib_id| KiCadLibId::from(lib_id.clone()))
             .collect(),
         power_symbol_decls,
+        schematic_only,
     })
 }
 

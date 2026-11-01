@@ -781,9 +781,24 @@ fn parse_library_table(path: &Path, table_tag: &str) -> Result<BTreeMap<String, 
     Ok(map)
 }
 
+/// KiCad 10's board format. Validation runs KiCad 10, which rejects newer (nightly) boards only
+/// after ERC and without naming the file, so they are rejected during discovery instead.
+const KICAD_10_PCB_VERSION: i64 = 20260206;
+
 fn discover_from_sexpr_text(content: &str) -> Result<SexprDiscovery> {
     let mut discovery = SexprDiscovery::default();
     let root = parse_sexpr(content)?;
+    let version = root
+        .as_list()
+        .and_then(|items| pcb_sexpr::find_child_list(items, "version"))
+        .and_then(|version| version.get(1))
+        .and_then(Sexpr::as_int);
+    if let Some(version) = version {
+        anyhow::ensure!(
+            version <= KICAD_10_PCB_VERSION,
+            "KiCad board version {version} is newer than KiCad 10 (version {KICAD_10_PCB_VERSION}), as saved by a KiCad nightly; import supports boards from KiCad 10 or older"
+        );
+    }
     walk_sexpr(&root, &mut discovery);
     Ok(discovery)
 }

@@ -1,9 +1,21 @@
 use super::*;
 use anyhow::{Context, Result};
+use std::path::PathBuf;
 
 pub(super) fn execute(args: ImportArgs) -> Result<()> {
+    let created_output = !args.output_dir.exists();
     let ctx = ImportContext::new(args)?;
+    let snapshot = OutputSnapshot::capture(&ctx.paths.workspace_root, created_output)?;
+    let result = run(ctx);
+    if let Err(error) = &result
+        && let Err(restore) = snapshot.restore()
+    {
+        anyhow::bail!("{error:#}\nAlso failed to restore the output directory: {restore:#}");
+    }
+    result
+}
 
+fn run(ctx: ImportContext) -> Result<()> {
     let discovered = Discovered::run(ctx)?;
     prepare_output(
         &discovered.ctx.paths,
@@ -117,8 +129,9 @@ fn prepare_output(
                 path.extension()
                     .is_none_or(|extension| extension != "kicad_pro")
                     || path == expected,
-                "Import conflicts with retained KiCad project {}. Import its matching schematic or choose a new output directory.",
-                path.display()
+                "Import conflicts with retained KiCad project {}. The source has no board, so --force keeps the existing {}/ layout rather than replacing it. Import that project's matching schematic, remove the project to discard its layout, or choose a new output directory.",
+                path.display(),
+                crate::codegen::board::BOARD_PROJECT_DIR
             );
         }
     }
@@ -131,6 +144,123 @@ fn prepare_output(
     }
 
     Ok(())
+}
+
+/// The output directory as it was before import, restored when import fails so a failed import
+/// leaves no partial output. Git metadata and the `.pcb` cache are neither saved nor restored.
+enum OutputSnapshot {
+    /// Import created the directory; remove it.
+    Created(PathBuf),
+    /// The directory was empty apart from `.DS_Store`; empty it again.
+    Empty(PathBuf),
+    /// An existing board repository; replace its contents with this copy.
+    Saved {
+        dir: PathBuf,
+        copy: tempfile::TempDir,
+    },
+}
+
+const UNSNAPSHOTTED: [&str; 3] = [".git", ".pcb", ".DS_Store"];
+
+impl OutputSnapshot {
+    fn capture(dir: &Path, created: bool) -> Result<Self> {
+        let dir = dir.to_path_buf();
+        if created {
+            return Ok(Self::Created(dir));
+        }
+        if !dir.join("pcb.toml").exists() {
+            return Ok(Self::Empty(dir));
+        }
+        let copy = tempfile::tempdir().context("Failed to create import backup directory")?;
+        for entry in snapshot_entries(&dir)? {
+            copy_tree(&entry, &copy.path().join(entry.file_name().unwrap()))?;
+        }
+        Ok(Self::Saved { dir, copy })
+    }
+
+    fn restore(self) -> Result<()> {
+        let dir = match &self {
+            Self::Created(dir) => {
+                return std::fs::remove_dir_all(dir)
+                    .with_context(|| format!("Failed to remove partial import {}", dir.display()));
+            }
+            Self::Empty(dir) => {
+                // Includes the new repository's `.git`.
+                for entry in std::fs::read_dir(dir)? {
+                    let entry = entry?;
+                    if entry.file_name() != ".DS_Store" {
+                        remove_path(&entry.path())?;
+                    }
+                }
+                return Ok(());
+            }
+            Self::Saved { dir, .. } => dir,
+        };
+        for entry in snapshot_entries(dir)? {
+            remove_path(&entry)?;
+        }
+        if let Self::Saved { dir, copy } = self {
+            let backup = copy.keep();
+            for entry in snapshot_entries(&backup)? {
+                copy_tree(&entry, &dir.join(entry.file_name().unwrap())).with_context(|| {
+                    format!(
+                        "Failed to restore {} after a failed import; its previous contents are in {}",
+                        dir.display(),
+                        backup.display()
+                    )
+                })?;
+            }
+            std::fs::remove_dir_all(&backup)?;
+        }
+        Ok(())
+    }
+}
+
+fn snapshot_entries(dir: &Path) -> Result<Vec<PathBuf>> {
+    let mut entries = Vec::new();
+    for entry in
+        std::fs::read_dir(dir).with_context(|| format!("Failed to read {}", dir.display()))?
+    {
+        let entry = entry?;
+        if !UNSNAPSHOTTED.iter().any(|name| entry.file_name() == *name) {
+            entries.push(entry.path());
+        }
+    }
+    Ok(entries)
+}
+
+/// Copy a file, symlink, or directory tree exactly, keeping symlinks as links.
+fn copy_tree(src: &Path, dst: &Path) -> Result<()> {
+    let metadata = std::fs::symlink_metadata(src)
+        .with_context(|| format!("Failed to inspect {}", src.display()))?;
+    if metadata.file_type().is_symlink() {
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(std::fs::read_link(src)?, dst)
+            .with_context(|| format!("Failed to copy symlink {}", src.display()))?;
+    } else if metadata.is_dir() {
+        std::fs::create_dir(dst).with_context(|| format!("Failed to create {}", dst.display()))?;
+        for entry in std::fs::read_dir(src)? {
+            let entry = entry?;
+            copy_tree(&entry.path(), &dst.join(entry.file_name()))?;
+        }
+    } else {
+        std::fs::copy(src, dst)
+            .with_context(|| format!("Failed to copy {} -> {}", src.display(), dst.display()))?;
+    }
+    Ok(())
+}
+
+fn remove_path(path: &Path) -> Result<()> {
+    match std::fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => {
+            std::fs::remove_dir_all(path)
+                .with_context(|| format!("Failed to remove {}", path.display()))
+        }
+        Ok(_) => std::fs::remove_file(path)
+            .with_context(|| format!("Failed to remove {}", path.display())),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error).with_context(|| format!("Failed to inspect {}", path.display())),
+    }
 }
 
 fn remove_generated_output(
@@ -151,23 +281,7 @@ fn remove_generated_output(
         paths.push(import_paths.project_dir());
     }
 
-    for path in paths {
-        match std::fs::symlink_metadata(&path) {
-            Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => {
-                std::fs::remove_dir_all(&path)
-                    .with_context(|| format!("Failed to remove {}", path.display()))?;
-            }
-            Ok(_) => {
-                std::fs::remove_file(&path)
-                    .with_context(|| format!("Failed to remove {}", path.display()))?;
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => {
-                return Err(error).with_context(|| format!("Failed to inspect {}", path.display()));
-            }
-        }
-    }
-    Ok(())
+    paths.iter().try_for_each(|path| remove_path(path))
 }
 
 struct Validated {
@@ -184,7 +298,12 @@ impl Validated {
             selection,
             staged_sources,
         } = discovered;
-        let validation = validate::validate(&ctx.paths, &selection, staged_sources.path())?;
+        let validation = validate::validate(
+            &ctx.paths,
+            &selection,
+            staged_sources.path(),
+            ctx.args.skip_drc,
+        )?;
         Ok(Self {
             ctx,
             selection,
