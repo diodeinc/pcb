@@ -1398,11 +1398,13 @@ pub(super) enum ConductorId {
         source_set_index: u32,
     },
     /// An island of declared text touching no other copper or drill.
-    /// `occurrence` is its first source feature.
+    /// `occurrence` is its first source feature, which other islands of the
+    /// layer may share; `island` tells them apart.
     Text {
         step: Option<Symbol>,
         instance: Option<u32>,
         occurrence: FeatureOccurrenceId,
+        island: u32,
     },
     Unattributed {
         step: Option<Symbol>,
@@ -2402,6 +2404,7 @@ fn text_islands(
                 step: text[owned[0]].id.step(),
                 instance: None,
                 occurrence,
+                island: merged.len() as u32,
             },
             branch: None,
             image: island,

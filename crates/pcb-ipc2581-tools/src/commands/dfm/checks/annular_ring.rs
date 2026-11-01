@@ -197,13 +197,15 @@ fn npth_lands(
                 continue;
             };
             checked += 1;
+            let images = lands.iter().filter_map(|land| land.image.as_ref());
+            // Copper a later clear feature removed from the land is no ring.
+            let cleared = ContourSet::union_all(design.resolution, images.clone().cloned())?
+                .difference(&copper.image)?;
             let filled = ContourSet::union_all(
                 design.resolution,
-                lands
-                    .iter()
-                    .filter_map(|land| land.image.as_ref())
-                    .map(crate::commands::dfm::design::filled_outline),
-            )?;
+                images.map(crate::commands::dfm::design::filled_outline),
+            )?
+            .difference(&cleared)?;
             let subject = RingSubject {
                 copper,
                 ring_index: &no_rings,

@@ -629,6 +629,16 @@ limit = { minimum = "0.15 mm" }"#,
                 "{component}"
             );
         }
+        // Two islands one feature draws are still two islands.
+        let one_feature = format!(
+            r#"<Set geometryUsage="TEXT"><Features><UserSpecial>{}{}</UserSpecial></Features></Set>"#,
+            rect(0.0, 0.0, 1.0, 1.0),
+            rect(0.0, 1.05, 1.0, 2.05)
+        );
+        assert_eq!(
+            judged(&one_feature),
+            (found(&[("gap.text", warning)]), Vec::new())
+        );
         // Text touching N1 stays functional.
         let touching = format!(
             "{}<Set net=\"N1\"><Features>{}</Features></Set>",

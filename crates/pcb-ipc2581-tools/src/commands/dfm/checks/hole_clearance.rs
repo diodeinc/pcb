@@ -646,6 +646,16 @@ limit = { minimum = "0.45 mm" }"#,
             (1, vec![0.05])
         );
         assert_eq!(rings(&xml(2.4, 1.0, 0.3, 0.0, "H2", &["H1"], &[])).0, 0);
+        // Copper a clear feature removes from the land is no ring.
+        let clear = r#"<LayerFeature layerRef="L0"><Set polarity="NEGATIVE"><Features><Contour><Polygon>
+              <PolyBegin x="0.55" y="-2"/><PolyStepSegment x="3" y="-2"/>
+              <PolyStepSegment x="3" y="2"/><PolyStepSegment x="0.55" y="2"/>
+              <PolyStepSegment x="0.55" y="-2"/>
+            </Polygon></Contour></Features></Set></LayerFeature>"#;
+        assert_eq!(
+            rings(&xml(2.4, 1.0, 0.3, 0.0, "H1", &["H1"], &[clear.to_owned()])),
+            (1, vec![0.05])
+        );
     }
 
     #[test]
