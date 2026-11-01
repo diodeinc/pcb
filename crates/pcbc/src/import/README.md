@@ -22,6 +22,9 @@ pcb import <design.kicad_sch|project.kicad_pro> <output-directory>
 
 KiCad CLI validation and netlist export run on temporary source copies.
 Source ERC, DRC, and schematic/PCB parity findings are reported, not import blockers.
+`--skip-drc` skips DRC and parity, which can take long on large boards; the report
+records `drc_skipped`. Sources newer than KiCad 10 (schematic 20260306, board 20260206),
+as saved by KiCad nightlies, are rejected during discovery, before KiCad runs.
 Connectivity follows the schematic even when the PCB is out of sync; import retains
 the existing PCB placement and routing. Individual parity findings go in the diagnostics
 JSON; the extraction report records their count.
@@ -32,6 +35,8 @@ A new output directory receives a Git repository, README, manifest, and
 standard-library setup. Import refuses an existing board repository unless
 `--force` is supplied. That flag removes generated board, module, component,
 report, and archive files before regeneration, and replaces project layout output.
+A failed import restores the output directory: a directory it created is removed, and an
+existing one gets its previous contents back, apart from `.git` and the `.pcb` cache.
 
 As in KiCad, a `.kicad_sch` belongs to the same-name `.kicad_pro` beside it, and a
 project's board is its same-name `.kicad_pcb`, so `<board>.kicad_sch` and
@@ -172,6 +177,8 @@ local geometry, converting back-side geometry and layers, and making zones and p
   generated components do not yet represent per-unit display overrides.
 - Wires, graphics, sheet relationships, native no-connects, and symbol geometry
   remain native; symbols are not substituted and no `pcb:sch` comments are written.
+- Power symbols (library `(power)` or `power:` symbols) never become components,
+  even when their reference lacks the usual `#`, as with a PWR_FLAG named `FLG1`.
 - Off-board symbols without a `Path` (artwork, excluded test points or alternate
   parts) remain native documentation, outside KiCad's PCB netlist. Their pins still
   join wiring as in KiCad's connection graph but contribute no component terminals.

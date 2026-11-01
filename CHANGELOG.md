@@ -11,6 +11,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ### Added
 
 - DFM PDK profiles list the blind and buried spans they drill with `support.drill_spans`.
+- `pcb import --skip-drc` skips KiCad DRC and schematic/PCB parity checks of the source board.
 - The JLCPCB DFM PDK accepts 2.5–4.5 mm boards from 12 layers and recommends a 0.45 mm NPTH annular ring.
 
 ### Changed
@@ -23,6 +24,9 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Fixed
 
+- `pcb import` keeps power symbols with real references, such as a PWR_FLAG named `FLG1`, schematic-only instead of failing its consistency check.
+- `pcb import` rejects KiCad nightly schematics and boards before running KiCad, naming the file, its version, and the supported versions.
+- A failed `pcb import` restores the output directory instead of leaving partial output.
 - DFM recognizes NPTH lands anchored off the hole.
 - DFM hole clearance honours `NetShort` ties for vias inside the tied pad.
 - Crystal, TVS, and Zener SPICE models pass their parameters as physical values, so netlists read `Cp=2.4p` and `FREQ=16meg` instead of float strings.

@@ -107,6 +107,11 @@ pub struct ImportArgs {
     /// Overwrite generated files if the board repository already exists
     #[arg(long = "force")]
     pub force: bool,
+
+    /// Skip KiCad DRC and schematic/PCB parity checks of the source board, which can take
+    /// a long time on large boards. Their findings never block import.
+    #[arg(long = "skip-drc")]
+    pub skip_drc: bool,
 }
 
 pub(super) struct ImportPaths {
@@ -631,12 +636,15 @@ pub(super) struct KicadDiscoveredFiles {
 #[derive(Debug, Serialize, Clone)]
 pub(super) struct ImportValidation {
     pub(super) selected: SelectedKicadFiles,
-    pub(super) schematic_parity_ok: bool,
+    /// `None` when parity was not checked (`--skip-drc`).
+    pub(super) schematic_parity_ok: Option<bool>,
     pub(super) schematic_parity_violations: usize,
     pub(super) erc_errors: usize,
     pub(super) erc_warnings: usize,
     pub(super) drc_errors: usize,
     pub(super) drc_warnings: usize,
+    /// DRC and parity were not run (`--skip-drc`); their counts are zero and parity is unknown.
+    pub(super) drc_skipped: bool,
 }
 
 #[derive(Debug, Serialize, Clone)]

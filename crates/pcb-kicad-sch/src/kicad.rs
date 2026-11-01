@@ -129,6 +129,9 @@ pub fn parse_kicad_sch_page(file_name: Option<&str>, content: &str) -> Result<Sc
         20230121..20250114 => bail!(
             "KiCad schematic version {version} is older than KiCad 9; upgrade it with `kicad-cli sch upgrade <file>` or save it in KiCad 9 or newer"
         ),
+        _ if version > KICAD_SCH_VERSION => bail!(
+            "KiCad schematic version {version} is newer than KiCad 10, as saved by a KiCad nightly; expected KiCad 9 version 20250114 or KiCad 10 version {KICAD_SCH_VERSION}"
+        ),
         _ => bail!(
             "unsupported KiCad schematic version {version}; expected KiCad 9 version 20250114 or KiCad 10 version {KICAD_SCH_VERSION}"
         ),
@@ -2537,7 +2540,11 @@ mod tests {
         for (version, expected) in [
             ("20211123", "open and save the project in KiCad 9"),
             ("20231120", "kicad-cli sch upgrade"),
-            ("20270101", "expected KiCad 9"),
+            (
+                "20260101",
+                "unsupported KiCad schematic version 20260101; expected KiCad 9",
+            ),
+            ("20270101", "20270101 is newer than KiCad 10"),
         ] {
             let error =
                 SchDocument::from_kicad_sch(&SAMPLE.replace("20260306", version)).unwrap_err();
