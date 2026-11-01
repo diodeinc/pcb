@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Fixed
+
+- Linux builds no longer fail every `Board()` with "nested too deeply to serialize to JSON".
+
 ## [0.4.96] - 2026-11-01
 
 ### Added

@@ -11,9 +11,9 @@ authors = ["Diode Computers, Inc. <founders@diode.computer>"]
 
 [workspace.dependencies]
 glam = { version = "0.34.1", default-features = false, features = ["std", "f64", "u32"] }
-starlark = { git = "https://github.com/diodeinc/starlark-rust", rev = "94703e06056eb1e91b115ecd2b6fcdc39450e32f", default-features = false }
-starlark_map = { git = "https://github.com/diodeinc/starlark-rust", rev = "94703e06056eb1e91b115ecd2b6fcdc39450e32f", default-features = false }
-starlark_syntax = { git = "https://github.com/diodeinc/starlark-rust", rev = "94703e06056eb1e91b115ecd2b6fcdc39450e32f", default-features = false }
+starlark = { git = "https://github.com/diodeinc/starlark-rust", rev = "5e2d9fddffb0804d7b56eb4ab8114a54b316cea3", default-features = false }
+starlark_map = { git = "https://github.com/diodeinc/starlark-rust", rev = "5e2d9fddffb0804d7b56eb4ab8114a54b316cea3", default-features = false }
+starlark_syntax = { git = "https://github.com/diodeinc/starlark-rust", rev = "5e2d9fddffb0804d7b56eb4ab8114a54b316cea3", default-features = false }
 allocative = { git = "https://github.com/facebook/buck2.git", branch = "main", default-features = false }
 mini_map = { git = "https://github.com/facebook/buck2.git", branch = "main" }
 pagable = { git = "https://github.com/facebook/buck2.git", branch = "main", default-features = false }
