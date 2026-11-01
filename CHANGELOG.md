@@ -21,6 +21,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - DFM stackup template mismatches fail only `SPECIFIED` stackups.
 - DFM copper-width findings name their consequence: severed connection, narrowed conductor or lost detail.
 - `str()` of a float prints the shortest decimal that round-trips, e.g. `str(12e-12 / 5)` is `2.4000000000000003e-12`.
+- `pcb quote --route global`: Diode now assembles every order in the US; quote `global-us` or `us`. BOM matching still covers US and global offers.
 
 ### Fixed
 
@@ -30,10 +31,6 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - DFM recognizes NPTH lands anchored off the hole.
 - DFM hole clearance honours `NetShort` ties for vias inside the tied pad.
 - Crystal, TVS, and Zener SPICE models pass their parameters as physical values, so netlists read `Cp=2.4p` and `FREQ=16meg` instead of float strings.
-
-### Removed
-
-- `pcb quote --route global`: Diode now assembles every order in the US; quote `global-us` or `us`. BOM matching still covers US and global offers.
 
 ## [0.4.95] - 2026-10-29
 
