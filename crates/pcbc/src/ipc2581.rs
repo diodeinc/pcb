@@ -345,12 +345,15 @@ impl CopperBalanceArgs {
 enum BoardArrayCommands {
     /// Create a rectangular board array. Generated array size must be 70-420 mm per side.
     Create {
-        /// Input IPC-2581 XML; --mouse-bite requires one board definition.
+        /// Input IPC-2581 XML
         #[arg(value_hint = clap::ValueHint::FilePath)]
         input: PathBuf,
-        /// Separate boards with routed slots and perforated mouse-bite tabs instead of V-scores.
-        #[arg(long, conflicts_with = "mouse_bite_placement")]
+        /// Use mouse-bite tabs (default).
+        #[arg(long, conflicts_with_all = ["mouse_bite_placement", "v_score"])]
         mouse_bite: bool,
+        /// Use V-scores instead of tabs.
+        #[arg(long, conflicts_with = "mouse_bite_placement")]
+        v_score: bool,
         /// Analyze where mouse-bite tabs would go on the board: writes JSON, not a panel.
         #[arg(long, conflicts_with_all = ["auto", "sheet", "columns", "rows", "board_margin", "edge_rail", "copper_balance", "no_copper_balance"])]
         mouse_bite_placement: bool,
@@ -623,7 +626,8 @@ pub fn execute(args: Ipc2581Args, resolution: Resolution) -> anyhow::Result<()> 
         Commands::BoardArray { command } => match command {
             BoardArrayCommands::Create {
                 input,
-                mouse_bite,
+                mouse_bite: _,
+                v_score,
                 mouse_bite_placement,
                 auto,
                 sheet,
@@ -637,10 +641,10 @@ pub fn execute(args: Ipc2581Args, resolution: Resolution) -> anyhow::Result<()> 
                 if mouse_bite_placement {
                     return commands::board_array::placement::execute(&input, &output, resolution);
                 }
-                let separation = if mouse_bite {
-                    commands::board_array::Separation::MouseBite
-                } else {
+                let separation = if v_score {
                     commands::board_array::Separation::VScore
+                } else {
+                    commands::board_array::Separation::MouseBite
                 };
                 let copper_balance = copper_balance.resolve(true);
                 if auto || sheet.is_some() {
