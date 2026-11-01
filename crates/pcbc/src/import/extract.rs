@@ -293,17 +293,19 @@ fn extract_kicad_schematic_data(
             if is_power_symbol {
                 // KiCad exports power symbols only when their reference lacks the usual `#`
                 // (e.g. a PWR_FLAG renamed FLG1). They have no footprint either way, so they stay
-                // schematic-only documentation rather than becoming physical components.
+                // schematic-only documentation rather than becoming physical components. Match the
+                // export by symbol UUID: a stale reference may name an unrelated physical part.
                 schematic_only.extend(
-                    symbol
-                        .instances
+                    netlist_components
                         .iter()
-                        .filter_map(|instance| instance.reference.as_deref())
-                        .chain(symbol.reference())
-                        .filter_map(|reference| {
-                            refdes_to_anchor.get(&KiCadRefDes::from(reference.to_string()))
+                        .filter(|(_, component)| {
+                            component
+                                .netlist
+                                .unit_pcb_paths
+                                .iter()
+                                .any(|unit| unit.symbol_uuid == symbol.id)
                         })
-                        .cloned(),
+                        .map(|(anchor, _)| anchor.clone()),
                 );
                 // Power symbols are usually absent from the KiCad netlist export.
                 let sheet_paths: BTreeSet<KiCadSheetPath> = if symbol.instances.is_empty() {

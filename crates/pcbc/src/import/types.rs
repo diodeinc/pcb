@@ -636,13 +636,14 @@ pub(super) struct KicadDiscoveredFiles {
 #[derive(Debug, Serialize, Clone)]
 pub(super) struct ImportValidation {
     pub(super) selected: SelectedKicadFiles,
-    pub(super) schematic_parity_ok: bool,
+    /// `None` when parity was not checked (`--skip-drc`).
+    pub(super) schematic_parity_ok: Option<bool>,
     pub(super) schematic_parity_violations: usize,
     pub(super) erc_errors: usize,
     pub(super) erc_warnings: usize,
     pub(super) drc_errors: usize,
     pub(super) drc_warnings: usize,
-    /// DRC and parity were not run (`--skip-drc`), so their counts are zero.
+    /// DRC and parity were not run (`--skip-drc`); their counts are zero and parity is unknown.
     pub(super) drc_skipped: bool,
 }
 

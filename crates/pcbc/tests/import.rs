@@ -837,16 +837,20 @@ fn power_flags_with_real_references_stay_schematic_only() {
 "##
     );
     // R1's pins are at y = 104.14 and 111.76.
+    // Each flag also carries a stale `R1` annotation from another project, which must not
+    // remove the real R1.
     let flags = [("FLG1", 104.14), ("FLG2", 111.76)]
         .map(|(reference, y)| {
             format!(
                 r#"(symbol (lib_id "power:PWR_FLAG") (at 101.6 {y} 0) (unit 1)
-                (in_bom yes) (on_board yes) (dnp no) (uuid "00000000-0000-0000-0000-0000000f1a{y:03.0}")
+                (in_bom yes) (on_board yes) (dnp no) (uuid "00000000-0000-0000-0000-000000f1a{y:03.0}")
                 (property "Reference" "{reference}" (at 101.6 {y} 0) {font})
                 (property "Value" "PWR_FLAG" (at 101.6 {y} 0) {font})
-                (pin "1" (uuid "00000000-0000-0000-0000-0000000f1b{y:03.0}"))
+                (pin "1" (uuid "00000000-0000-0000-0000-000000f1b{y:03.0}"))
                 (instances (project "layout" (path "/7cb90b3f-e87a-4fd9-8f47-56f0aef646ac"
-                    (reference "{reference}") (unit 1)))))
+                    (reference "{reference}") (unit 1)))
+                    (project "other" (path "/00000000-0000-0000-0000-00000000dead"
+                        (reference "R1") (unit 1)))))
 "#
             )
         })
@@ -880,6 +884,7 @@ fn power_flags_with_real_references_stay_schematic_only() {
             .all(|pin| pin.starts_with('R')),
         "power flags became components"
     );
+    assert!(source_physical_partitions(&report).contains(&vec!["R1:1".to_string()]));
     let output = sandbox.root_path().join("out");
     assert!(
         !fs::read_to_string(output.join("layout.zen"))
@@ -936,6 +941,7 @@ exec "$PCB_TEST_REAL_KICAD_CLI" "$@"
     let report: serde_json::Value =
         serde_json::from_slice(&fs::read(extraction_report(&stderr)).unwrap()).unwrap();
     assert_eq!(report["validation"]["drc_skipped"], true);
+    assert!(report["validation"]["schematic_parity_ok"].is_null());
     assert!(
         sandbox
             .root_path()

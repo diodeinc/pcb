@@ -3,8 +3,14 @@ use anyhow::{Context, Result};
 use std::path::PathBuf;
 
 pub(super) fn execute(args: ImportArgs) -> Result<()> {
-    let created_output = !args.output_dir.exists();
-    let ctx = ImportContext::new(args)?;
+    let output_dir = args.output_dir.clone();
+    let created_output = !output_dir.exists();
+    let ctx = ImportContext::new(args).inspect_err(|_| {
+        // Path resolution may create the output directory before failing; it is still empty.
+        if created_output {
+            let _ = std::fs::remove_dir(&output_dir);
+        }
+    })?;
     let snapshot = OutputSnapshot::capture(&ctx.paths.workspace_root, created_output)?;
     let result = run(ctx);
     if let Err(error) = &result

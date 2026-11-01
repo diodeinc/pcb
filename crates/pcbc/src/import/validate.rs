@@ -50,7 +50,7 @@ pub(super) fn validate(
 
     let summary = ImportValidation {
         selected: selection.selected.clone(),
-        schematic_parity_ok: schematic_parity_violations == 0,
+        schematic_parity_ok: (!drc_skipped).then_some(schematic_parity_violations == 0),
         schematic_parity_violations,
         erc_errors,
         erc_warnings,
