@@ -11,11 +11,12 @@ authors = ["Diode Computers, Inc. <founders@diode.computer>"]
 
 [workspace.dependencies]
 glam = { version = "0.34.1", default-features = false, features = ["std", "f64", "u32"] }
-starlark = { git = "https://github.com/diodeinc/starlark-rust", rev = "c3d776bcd0bf074b00fc059d7700b82ab8dcc010", default-features = false }
-starlark_map = { git = "https://github.com/diodeinc/starlark-rust", rev = "c3d776bcd0bf074b00fc059d7700b82ab8dcc010", default-features = false }
-starlark_syntax = { git = "https://github.com/diodeinc/starlark-rust", rev = "c3d776bcd0bf074b00fc059d7700b82ab8dcc010", default-features = false }
-allocative = { git = "https://github.com/diodeinc/starlark-rust", rev = "c3d776bcd0bf074b00fc059d7700b82ab8dcc010", default-features = false }
-pagable = { git = "https://github.com/diodeinc/starlark-rust", rev = "c3d776bcd0bf074b00fc059d7700b82ab8dcc010", default-features = false }
+starlark = { git = "https://github.com/diodeinc/starlark-rust", rev = "94703e06056eb1e91b115ecd2b6fcdc39450e32f", default-features = false }
+starlark_map = { git = "https://github.com/diodeinc/starlark-rust", rev = "94703e06056eb1e91b115ecd2b6fcdc39450e32f", default-features = false }
+starlark_syntax = { git = "https://github.com/diodeinc/starlark-rust", rev = "94703e06056eb1e91b115ecd2b6fcdc39450e32f", default-features = false }
+allocative = { git = "https://github.com/facebook/buck2.git", branch = "main", default-features = false }
+mini_map = { git = "https://github.com/facebook/buck2.git", branch = "main" }
+pagable = { git = "https://github.com/facebook/buck2.git", branch = "main", default-features = false }
 
 ruff_python_formatter = { git = "https://github.com/astral-sh/ruff", tag = "0.17.3" }
 ruff_formatter = { git = "https://github.com/astral-sh/ruff", tag = "0.17.3" }
@@ -61,7 +62,7 @@ clap = { version = "4.6.7", features = ["derive", "wrap_help"] }
 colored = "3"
 derive_more = { version = "2.1.1", features = ["display", "from"] }
 dirs = "7"
-dupe = { git = "https://github.com/diodeinc/starlark-rust", rev = "c3d776bcd0bf074b00fc059d7700b82ab8dcc010" }
+dupe = { git = "https://github.com/facebook/buck2.git", branch = "main" }
 duct = "1.1.2"
 env_logger = "0.11"
 indicatif = "0.18"

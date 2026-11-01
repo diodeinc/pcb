@@ -1,6 +1,5 @@
 ---
 source: crates/pcb-zen-core/tests/enum_component_properties.rs
-assertion_line: 4
 expression: output
 ---
 {
@@ -8,19 +7,19 @@ expression: output
         path: <root>,
         source: "test.zen",
         children: [
-            FrozenValue(
+            Value(
                 Component {
                     name: "U1",
                     footprint: "package://stdlib/kicad-footprints/Resistor_SMD.pretty/R_0402_1005Metric.kicad_mod",
                     prefix: "U",
                     connections: {
-                        "IN": FrozenValue(
+                        "IN": Value(
                             Net {
                                 name: "INPUT",
                                 id: "<ID>",
                             },
                         ),
-                        "OUT": FrozenValue(
+                        "OUT": Value(
                             Net {
                                 name: "OUTPUT",
                                 id: "<ID>",
@@ -28,10 +27,10 @@ expression: output
                         ),
                     },
                     properties: {
-                        "count": FrozenValue(
+                        "count": Value(
                             42,
                         ),
-                        "logic_level": FrozenValue(
+                        "logic_level": Value(
                             EnumValue {
                                 type: EnumType {
                                     variants: [
@@ -43,7 +42,7 @@ expression: output
                                 index: 1,
                             },
                         ),
-                        "orientation": FrozenValue(
+                        "orientation": Value(
                             EnumValue {
                                 type: EnumType {
                                     variants: [
@@ -56,11 +55,11 @@ expression: output
                                 index: 0,
                             },
                         ),
-                        "voltage": FrozenValue(
+                        "voltage": Value(
                             "3.3V",
                         ),
                     },
-                    symbol: FrozenValue(
+                    symbol: Value(
                         Symbol {
                             name: None,
                             pins: {

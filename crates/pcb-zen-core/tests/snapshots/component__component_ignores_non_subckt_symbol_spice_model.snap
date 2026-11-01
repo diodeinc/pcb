@@ -7,19 +7,19 @@ expression: output
         path: <root>,
         source: "test.zen",
         children: [
-            FrozenValue(
+            Value(
                 Component {
                     name: "R1",
                     footprint: "0603",
                     prefix: "R",
                     connections: {
-                        "P1": FrozenValue(
+                        "P1": Value(
                             Net {
                                 name: "A",
                                 id: "<ID>",
                             },
                         ),
-                        "P2": FrozenValue(
+                        "P2": Value(
                             Net {
                                 name: "B",
                                 id: "<ID>",
@@ -27,11 +27,11 @@ expression: output
                         ),
                     },
                     properties: {
-                        "symbol_name": FrozenValue(
+                        "symbol_name": Value(
                             "TestSim",
                         ),
                     },
-                    symbol: FrozenValue(
+                    symbol: Value(
                         Symbol {
                             name: Some(
                                 "TestSim",

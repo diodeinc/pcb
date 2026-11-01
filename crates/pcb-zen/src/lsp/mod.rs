@@ -22,7 +22,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use serde_json::json;
 use starlark::docs::DocModule;
-use starlark::values::ValueLike;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
@@ -467,8 +466,7 @@ impl LspEvalContext {
 
         let mut analysis = FileAnalysis::default();
         for name in module.names() {
-            let name = name.as_str();
-            if let Ok(Some(owned)) = module.get_option(name) {
+            if let Ok(Some(owned)) = module.get_option_ref(name) {
                 let value = owned.value();
                 let info = if let Some(loader) = value.downcast_ref::<ModuleLoader>() {
                     let mut target = PathBuf::from(&loader.source_path);

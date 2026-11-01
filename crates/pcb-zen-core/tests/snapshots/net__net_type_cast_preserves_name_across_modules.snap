@@ -1,6 +1,5 @@
 ---
 source: crates/pcb-zen-core/tests/net.rs
-assertion_line: 286
 expression: output
 ---
 Created Power: 3V3
@@ -18,20 +17,20 @@ Created Ground: GND
         path: child.R1,
         source: "/component.zen",
         children: [
-            FrozenValue(
+            Value(
                 Component {
                     name: "R",
                     type: "resistor",
                     footprint: "package://stdlib/kicad-footprints/Resistor_SMD.pretty/R_0402_1005Metric.kicad_mod",
                     prefix: "R",
                     connections: {
-                        "P1": FrozenValue(
+                        "P1": Value(
                             Net {
                                 name: "3V3",
                                 id: "<ID>",
                             },
                         ),
-                        "P2": FrozenValue(
+                        "P2": Value(
                             Net {
                                 name: "GND",
                                 id: "<ID>",
@@ -39,11 +38,11 @@ Created Ground: GND
                         ),
                     },
                     properties: {
-                        "value": FrozenValue(
+                        "value": Value(
                             "10kOhm",
                         ),
                     },
-                    symbol: FrozenValue(
+                    symbol: Value(
                         Symbol {
                             name: None,
                             pins: {

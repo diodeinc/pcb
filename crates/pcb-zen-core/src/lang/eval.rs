@@ -17,7 +17,7 @@ use starlark::{
     errors::{EvalMessage, EvalSeverity},
     eval::{Evaluator, FileLoader},
     syntax::{AstModule, Dialect},
-    values::{FrozenHeapName, Value, ValueLike},
+    values::{FrozenHeapName, Heap, Value},
 };
 use starlark::{codemap::ResolvedSpan, collections::SmallMap};
 use starlark_syntax::syntax::{
@@ -41,18 +41,18 @@ use crate::lang::{
     type_info::{ParameterInfo, TypeInfo},
 };
 use crate::lang::{
-    electrical_check::FrozenElectricalCheck,
+    electrical_check::ElectricalCheck,
     evaluator_ext::EvaluatorExt,
     file::file_globals,
     footprint::validate_footprints,
-    module::{FrozenModuleValue, ModulePath},
+    module::{ModulePath, ModuleValue},
     symbol_check::{check_symbols, fix_symbols},
 };
 use crate::load_spec::LoadSpec;
 use crate::resolution::{PackageScopeKey, PackageUrlResolution, ResolutionResult};
 use crate::{Diagnostic, Diagnostics, WithDiagnostics};
 use crate::{FileProvider, ResolveContext};
-use crate::{convert::ModuleConverter, lang::context::FrozenPendingChild};
+use crate::{convert::ModuleConverter, lang::context::PendingChildInfo};
 
 pub use super::evaluator_ext::EvalContextRef;
 
@@ -321,7 +321,7 @@ impl EvalOutput {
         &self.modules[&self.root_path]
     }
 
-    pub fn sch_module(&self) -> &FrozenModuleValue {
+    pub fn sch_module(&self) -> &ModuleValue<'_> {
         &frozen_context(self.star_module()).module
     }
 
@@ -342,10 +342,27 @@ impl EvalOutput {
     }
 
     /// Borrow circuit values; their frozen heaps belong to this output.
-    pub fn module_tree(&self) -> BTreeMap<ModulePath, &FrozenModuleValue> {
+    pub fn module_tree(&self) -> BTreeMap<ModulePath, &ModuleValue<'_>> {
         self.modules
             .iter()
             .map(|(path, module)| (path.clone(), &frozen_context(module).module))
+            .collect()
+    }
+
+    /// The module tree with each module's frozen heap recorded as a reference of `heap`, so the
+    /// values are usable at that heap's brand.
+    pub fn module_tree_at<'v>(&self, heap: Heap<'v>) -> BTreeMap<ModulePath, &'v ModuleValue<'v>> {
+        self.modules
+            .iter()
+            .map(|(path, module)| {
+                let ctx = module
+                    .extra_value_ref()
+                    .expect("extra value should be set before freezing")
+                    .add_to_heap(heap)
+                    .downcast_ref::<FrozenContextValue>()
+                    .expect("extra value should be a FrozenContextValue");
+                (path.clone(), &ctx.module)
+            })
             .collect()
     }
 
@@ -443,7 +460,7 @@ impl EvalOutput {
     }
 
     /// Collect all testbenches from all modules in the tree
-    pub fn collect_testbenches(&self) -> Vec<&crate::lang::test_bench::FrozenTestBenchValue> {
+    pub fn collect_testbenches(&self) -> Vec<&crate::lang::test_bench::TestBenchValue<'_>> {
         let mut result = Vec::new();
         let module_tree = self.module_tree();
 
@@ -458,8 +475,30 @@ impl EvalOutput {
         result
     }
 
+    /// Like [`Self::collect_testbenches`], at the brand of `heap`.
+    pub fn collect_testbenches_at<'v>(
+        &self,
+        heap: Heap<'v>,
+    ) -> Vec<&'v crate::lang::test_bench::TestBenchValue<'v>> {
+        self.module_tree_at(heap)
+            .into_values()
+            .flat_map(|module| module.testbenches())
+            .collect()
+    }
+
+    /// Like [`Self::collect_electrical_checks`], at the brand of `heap`.
+    pub fn collect_electrical_checks_at<'v>(
+        &self,
+        heap: Heap<'v>,
+    ) -> Vec<(&'v ElectricalCheck<'v>, &'v ModuleValue<'v>)> {
+        self.module_tree_at(heap)
+            .into_values()
+            .flat_map(|module| module.electrical_checks().map(move |check| (check, module)))
+            .collect()
+    }
+
     /// Collect all electrical checks from all modules in the tree
-    pub fn collect_electrical_checks(&self) -> Vec<(&FrozenElectricalCheck, &FrozenModuleValue)> {
+    pub fn collect_electrical_checks(&self) -> Vec<(&ElectricalCheck<'_>, &ModuleValue<'_>)> {
         let mut result = Vec::new();
         let module_tree = self.module_tree();
         for module in module_tree.values() {
@@ -471,10 +510,11 @@ impl EvalOutput {
     }
 }
 
-fn frozen_context(module: &FrozenModule) -> &FrozenContextValue {
+pub(crate) fn frozen_context(module: &FrozenModule) -> &FrozenContextValue<'_> {
     module
-        .extra_value()
+        .extra_value_ref()
         .unwrap()
+        .value()
         .downcast_ref::<FrozenContextValue>()
         .unwrap()
 }
@@ -935,8 +975,8 @@ pub struct EvalContext {
     /// Diagnostics collected during load() calls in this context.
     load_diagnostics: RefCell<Vec<Diagnostic>>,
 
-    /// Instantiation values and the frozen parent that owns them.
-    parent: Option<(FrozenModule, FrozenPendingChild)>,
+    /// The frozen parent and the index of this child among its pending children.
+    parent: Option<(FrozenModule, usize)>,
     json_inputs: SmallMap<String, serde_json::Value>,
 }
 
@@ -1093,27 +1133,30 @@ impl EvalContext {
             }
         }
 
-        if let Some((parent, pending)) = &self.parent {
-            // Every value transferred below belongs to the frozen parent.
-            heap.add_reference(parent.frozen_heap());
+        if let Some((parent, index)) = &self.parent {
+            // Bring the parent's context to this heap's brand; this also records the reference
+            // that keeps every value transferred below alive.
+            let parent_ctx = parent
+                .extra_value_ref()
+                .expect("parent extra value should be set")
+                .add_to_heap(heap)
+                .downcast_ref::<FrozenContextValue>()
+                .expect("parent extra value should be a FrozenContextValue");
+            let pending = &parent_ctx.pending_children[*index];
             {
                 let mut module_value = ctx_value.module_mut();
                 for (name, value) in &pending.inputs {
-                    module_value.add_input(name.clone(), value.to_value());
+                    module_value.add_input(name.clone(), *value);
                 }
-                module_value.set_parent_component_modifiers(
-                    pending
-                        .component_modifiers
-                        .iter()
-                        .map(|v| v.to_value())
-                        .collect(),
-                );
-                module_value.call_site =
-                    Some((pending.call_site_path.clone(), pending.call_site_span));
+                module_value.set_parent_component_modifiers(pending.component_modifiers.clone());
+                module_value.call_site = Some((
+                    pending.info.call_site_path.clone(),
+                    pending.info.call_site_span,
+                ));
             }
             if let Some(properties) = &pending.properties {
                 for (name, value) in properties {
-                    ctx_value.add_property(name.clone(), value.to_value());
+                    ctx_value.add_property(name.clone(), *value);
                 }
             }
         }
@@ -1219,19 +1262,24 @@ impl EvalContext {
         let caches = self.caches.clone();
         let mut result = self.eval_body();
         if let Some(output) = &mut result.output {
-            let parent = output.star_module();
-            let pending = &frozen_context(parent).pending_children;
+            let parent = output.star_module().clone();
+            let pending: Vec<PendingChildInfo> = frozen_context(&parent)
+                .pending_children
+                .iter()
+                .map(|pending| pending.info.clone())
+                .collect();
             #[cfg(feature = "native")]
-            let children = pending.par_iter();
+            let children = pending.into_par_iter();
             #[cfg(not(feature = "native"))]
-            let children = pending.iter();
+            let children = pending.into_iter();
             let children: Vec<_> = children
-                .map(|pending| {
+                .enumerate()
+                .map(|(index, pending)| {
                     Self::from_caches_and_config(
                         caches.clone(),
                         config.child_for_pending(&pending.final_name),
                     )
-                    .process_pending_child(parent.clone(), pending.clone())
+                    .process_pending_child(parent.clone(), pending, index)
                 })
                 .collect();
             for child in children {
@@ -1312,11 +1360,7 @@ impl EvalContext {
                             .freeze_named(self.frozen_heap_name())
                             .expect("failed to freeze module")
                     };
-                    let extra = frozen_module
-                        .extra_value()
-                        .expect("extra value should be set before freezing")
-                        .downcast_ref::<FrozenContextValue>()
-                        .expect("extra value should be a FrozenContextValue");
+                    let extra = frozen_context(&frozen_module);
 
                     for (_id, net_info) in extra.module.introduced_nets() {
                         if net_info.kind != "NotConnected" && net_info.name.is_pending_inference() {
@@ -1497,7 +1541,7 @@ impl EvalContext {
 
             for &name in symbols {
                 if let Ok(owned) = frozen_module.get(name) {
-                    module.set(name, module.heap().access_owned_frozen_value(&owned));
+                    module.set(name, owned.add_to_heap(module.heap()));
                 }
             }
         }
@@ -1666,11 +1710,12 @@ impl EvalContext {
     fn process_pending_child(
         mut self,
         parent: FrozenModule,
-        pending: FrozenPendingChild,
+        pending: PendingChildInfo,
+        index: usize,
     ) -> WithDiagnostics<EvalOutput> {
         self.config.strict_io_config = true;
         self = self.set_source_path(PathBuf::from(&pending.loader.source_path));
-        self.parent = Some((parent, pending.clone()));
+        self.parent = Some((parent, index));
 
         let child_result = self.eval();
 
@@ -1874,7 +1919,12 @@ mod tests {
                 );
                 if success {
                     assert_eq!(
-                        child.get("data").unwrap().value().unpack_str(),
+                        child
+                            .get_option_ref("data")
+                            .unwrap()
+                            .unwrap()
+                            .value()
+                            .unpack_str(),
                         Some("parent payload")
                     );
                 }

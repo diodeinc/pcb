@@ -7,7 +7,7 @@ expression: output
         path: <root>,
         source: "test.zen",
         children: [
-            FrozenValue(
+            Value(
                 Component {
                     name: "R1",
                     mpn: "10K_PART",
@@ -15,13 +15,13 @@ expression: output
                     footprint: "0603",
                     prefix: "U",
                     connections: {
-                        "1": FrozenValue(
+                        "1": Value(
                             Net {
                                 name: "A",
                                 id: "<ID>",
                             },
                         ),
-                        "2": FrozenValue(
+                        "2": Value(
                             Net {
                                 name: "B",
                                 id: "<ID>",
@@ -29,11 +29,11 @@ expression: output
                         ),
                     },
                     properties: {
-                        "resistance": FrozenValue(
+                        "resistance": Value(
                             "10k",
                         ),
                     },
-                    symbol: FrozenValue(
+                    symbol: Value(
                         Symbol {
                             name: None,
                             pins: {
@@ -44,7 +44,7 @@ expression: output
                     ),
                 },
             ),
-            FrozenValue(
+            Value(
                 Component {
                     name: "R2",
                     mpn: "100K_PART",
@@ -52,13 +52,13 @@ expression: output
                     footprint: "0603",
                     prefix: "U",
                     connections: {
-                        "1": FrozenValue(
+                        "1": Value(
                             Net {
                                 name: "C",
                                 id: "<ID>",
                             },
                         ),
-                        "2": FrozenValue(
+                        "2": Value(
                             Net {
                                 name: "D",
                                 id: "<ID>",
@@ -66,11 +66,11 @@ expression: output
                         ),
                     },
                     properties: {
-                        "resistance": FrozenValue(
+                        "resistance": Value(
                             "100k",
                         ),
                     },
-                    symbol: FrozenValue(
+                    symbol: Value(
                         Symbol {
                             name: None,
                             pins: {
@@ -81,19 +81,19 @@ expression: output
                     ),
                 },
             ),
-            FrozenValue(
+            Value(
                 Component {
                     name: "R3",
                     footprint: "0603",
                     prefix: "U",
                     connections: {
-                        "1": FrozenValue(
+                        "1": Value(
                             Net {
                                 name: "E",
                                 id: "<ID>",
                             },
                         ),
-                        "2": FrozenValue(
+                        "2": Value(
                             Net {
                                 name: "F",
                                 id: "<ID>",
@@ -101,11 +101,11 @@ expression: output
                         ),
                     },
                     properties: {
-                        "resistance": FrozenValue(
+                        "resistance": Value(
                             "1k",
                         ),
                     },
-                    symbol: FrozenValue(
+                    symbol: Value(
                         Symbol {
                             name: None,
                             pins: {

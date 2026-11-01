@@ -1,11 +1,10 @@
 use crate::common::{InMemoryFileProvider, eval_zen, stdlib_test_files, test_resolution};
 use pcb_zen_core::lang::error::CategorizedDiagnostic;
 use pcb_zen_core::lang::io_direction::IoDirection;
-use pcb_zen_core::lang::net::FrozenNetValue;
+use pcb_zen_core::lang::net::NetValue;
 use pcb_zen_core::{DiagnosticsPass, SortPass};
 use starlark::collections::SmallMap;
 use starlark::errors::EvalSeverity;
-use starlark::values::ValueLike;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -67,9 +66,9 @@ fn json_config_preserves_numeric_inputs() {
         );
         let output = result.output.unwrap();
         let value = output.star_module().get("value").unwrap();
-        assert_eq!(value.value().get_type(), typ, "input {raw}");
+        assert_eq!(value.as_ref().value().get_type(), typ, "input {raw}");
         let actual: serde_json::Value =
-            serde_json::from_str(&value.value().to_json().unwrap()).unwrap();
+            serde_json::from_str(&value.as_ref().value().to_json().unwrap()).unwrap();
         assert_eq!(actual, input, "{typ} input {raw} changed during evaluation");
     }
 }
@@ -284,7 +283,7 @@ fn io_template_implicit_check_warning_preserves_child_instantiation() {
     let net = component
         .connections()
         .get("VDD")
-        .and_then(|value| value.downcast_ref::<FrozenNetValue>())
+        .and_then(|value| value.downcast_ref::<NetValue>())
         .expect("expected connected VDD net");
 
     assert_eq!(net.name(), "VIN");
@@ -679,7 +678,7 @@ fn io_name_infers_from_assignment() {
     let net = component
         .connections()
         .get("P")
-        .and_then(|value| value.downcast_ref::<FrozenNetValue>())
+        .and_then(|value| value.downcast_ref::<NetValue>())
         .expect("expected connected net");
 
     assert_eq!(net.name(), "INPUT");
@@ -722,8 +721,9 @@ fn net_cast_from_inferred_net_preserves_runtime_name_without_setting_original_na
     let output = eval_result.output.expect("expected eval output");
     let copy = output.star_module().get("COPY").expect("expected COPY");
     let net = copy
+        .as_ref()
         .value()
-        .downcast_ref::<FrozenNetValue>()
+        .downcast_ref::<NetValue>()
         .expect("expected COPY to be a net");
 
     assert_eq!(net.name(), "AUTO");

@@ -14,46 +14,46 @@ use starlark::{
     eval::Evaluator,
     starlark_complex_value, starlark_module,
     values::{
-        Coerce, Freeze, NoSerialize, StarlarkValue, Trace, Value, ValueLifetimeless, ValueLike,
-        dict::DictRef, list::ListRef, starlark_value, tuple::TupleRef,
+        Freeze, NoSerialize, StarlarkValue, Trace, Value, dict::DictRef, list::ListRef,
+        starlark_value, tuple::TupleRef,
     },
 };
 
 /// A single deferred check function with optional custom name
-#[derive(Clone, Coerce, Trace, ProvidesStaticType, NoSerialize, Allocative, Freeze)]
+#[derive(Clone, Trace, ProvidesStaticType, NoSerialize, Allocative, Freeze)]
 #[repr(C)]
-pub struct DeferredCheckGen<V: ValueLifetimeless> {
+pub struct DeferredCheck<'v> {
     /// The check function to execute later
-    pub check_func: V,
+    pub check_func: Value<'v>,
     /// Optional custom name for the check (from tuple syntax)
     pub custom_name: Option<String>,
 }
 
 /// A test case with deferred check execution
-#[derive(Clone, Coerce, Trace, ProvidesStaticType, NoSerialize, Allocative, Freeze)]
+#[derive(Clone, Trace, ProvidesStaticType, NoSerialize, Allocative, Freeze)]
 #[repr(C)]
-pub struct DeferredTestCaseGen<V: ValueLifetimeless> {
+pub struct DeferredTestCase<'v> {
     /// The name of this test case
     pub case_name: String,
     /// The final module name (e.g., "bench__case")
     pub case_final_name: String,
     /// The test case parameters that were provided (for check execution)
-    pub params: SmallMap<String, V>,
+    pub params: SmallMap<String, Value<'v>>,
     /// Check functions to run later
-    pub checks: Vec<DeferredCheckGen<V>>,
+    pub checks: Vec<DeferredCheck<'v>>,
 }
 
 /// TestBench value that evaluates modules with explicit test cases
-#[derive(Clone, Coerce, Trace, ProvidesStaticType, NoSerialize, Allocative, Freeze)]
+#[derive(Clone, Trace, ProvidesStaticType, NoSerialize, Allocative, Freeze)]
 #[repr(C)]
-pub struct TestBenchValueGen<V: ValueLifetimeless> {
+pub struct TestBenchValue<'v> {
     /// Name of this TestBench instance
     pub(crate) name: String,
     /// The module loader that was used
     #[freeze(identity)]
     module_loader: ModuleLoader,
     /// Deferred test cases (used when checks are deferred)
-    pub(crate) deferred_cases: Vec<DeferredTestCaseGen<V>>,
+    pub(crate) deferred_cases: Vec<DeferredTestCase<'v>>,
     /// Source file path where TestBench was defined (for diagnostic context)
     source_path: String,
     /// Span of the TestBench() call for diagnostic context
@@ -69,18 +69,15 @@ pub struct TestBenchValueGen<V: ValueLifetimeless> {
 starlark_complex_value!(pub TestBenchValue);
 
 #[starlark_value(type = "TestBench")]
-impl<'v, V: ValueLike<'v>> StarlarkValue<'v> for TestBenchValueGen<V> where
-    Self: ProvidesStaticType<'v>
-{
-}
+impl<'v> StarlarkValue<'v> for TestBenchValue<'v> where Self: ProvidesStaticType<'v> {}
 
-impl<'v, V: ValueLike<'v>> std::fmt::Display for TestBenchValueGen<V> {
+impl<'v> std::fmt::Display for TestBenchValue<'v> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "TestBench({})", self.name)
     }
 }
 
-impl<'v, V: ValueLike<'v>> std::fmt::Debug for TestBenchValueGen<V> {
+impl<'v> std::fmt::Debug for TestBenchValue<'v> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mut debug = f.debug_struct("TestBench");
         debug.field("name", &self.name);
@@ -90,7 +87,7 @@ impl<'v, V: ValueLike<'v>> std::fmt::Debug for TestBenchValueGen<V> {
     }
 }
 
-impl<'v, V: ValueLike<'v>> TestBenchValueGen<V> {
+impl<'v> TestBenchValue<'v> {
     pub fn name(&self) -> &str {
         &self.name
     }
@@ -99,7 +96,7 @@ impl<'v, V: ValueLike<'v>> TestBenchValueGen<V> {
         &self.module_loader
     }
 
-    pub fn deferred_cases(&self) -> &Vec<DeferredTestCaseGen<V>> {
+    pub fn deferred_cases(&self) -> &Vec<DeferredTestCase<'v>> {
         &self.deferred_cases
     }
 
@@ -241,7 +238,7 @@ pub fn test_bench_globals(builder: &mut GlobalsBuilder) {
                                 (check_item, None)
                             };
 
-                        Ok(DeferredCheckGen {
+                        Ok(DeferredCheck {
                             check_func,
                             custom_name,
                         })
@@ -251,7 +248,7 @@ pub fn test_bench_globals(builder: &mut GlobalsBuilder) {
                 Vec::new()
             };
 
-            deferred_cases.push(DeferredTestCaseGen {
+            deferred_cases.push(DeferredTestCase {
                 case_name: case_name_str.to_string(),
                 case_final_name,
                 params,
@@ -266,7 +263,7 @@ pub fn test_bench_globals(builder: &mut GlobalsBuilder) {
         );
 
         // Create and return the TestBenchValue with deferred checks
-        let testbench = TestBenchValueGen::<Value> {
+        let testbench = TestBenchValue {
             name,
             module_loader: loader.clone(),
             deferred_cases,
@@ -296,9 +293,9 @@ pub struct CheckContext<'a> {
 }
 
 /// Execute a single deferred check and create diagnostic
-pub fn execute_deferred_check<'v, V: ValueLike<'v>>(
+pub fn execute_deferred_check<'v>(
     eval: &mut Evaluator<'v, '_, '_>,
-    check: &DeferredCheckGen<V>,
+    check: &DeferredCheck<'v>,
     module_value: Value<'v>,
     inputs_dict: Value<'v>,
     ctx: &CheckContext,

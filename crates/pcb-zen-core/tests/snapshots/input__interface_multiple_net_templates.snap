@@ -1,6 +1,5 @@
 ---
 source: crates/pcb-zen-core/tests/input.rs
-assertion_line: 260
 expression: output
 ---
 {
@@ -8,33 +7,33 @@ expression: output
         path: <root>,
         source: "test.zen",
         children: [
-            FrozenValue(
+            Value(
                 Component {
                     name: "U1",
                     type: "mcu",
                     footprint: "package://stdlib/kicad-footprints/Resistor_SMD.pretty/R_0402_1005Metric.kicad_mod",
                     prefix: "U",
                     connections: {
-                        "EN": FrozenValue(
+                        "EN": Value(
                             Net {
                                 name: "MCU_EN",
                                 id: "<ID>",
                             },
                         ),
-                        "GND": FrozenValue(
+                        "GND": Value(
                             Net {
                                 name: "MCU_GND",
                                 id: "<ID>",
                             },
                         ),
-                        "VCC": FrozenValue(
+                        "VCC": Value(
                             Net {
                                 name: "MCU_3V3",
                                 id: "<ID>",
                             },
                         ),
                     },
-                    symbol: FrozenValue(
+                    symbol: Value(
                         Symbol {
                             name: None,
                             pins: {
@@ -46,33 +45,33 @@ expression: output
                     ),
                 },
             ),
-            FrozenValue(
+            Value(
                 Component {
                     name: "U2",
                     type: "sensor",
                     footprint: "package://stdlib/kicad-footprints/Resistor_SMD.pretty/R_0402_1005Metric.kicad_mod",
                     prefix: "U",
                     connections: {
-                        "ENABLE": FrozenValue(
+                        "ENABLE": Value(
                             Net {
                                 name: "SENSOR_EN",
                                 id: "<ID>",
                             },
                         ),
-                        "VDD": FrozenValue(
+                        "VDD": Value(
                             Net {
                                 name: "SENSOR_3V3",
                                 id: "<ID>",
                             },
                         ),
-                        "VSS": FrozenValue(
+                        "VSS": Value(
                             Net {
                                 name: "SENSOR_GND",
                                 id: "<ID>",
                             },
                         ),
                     },
-                    symbol: FrozenValue(
+                    symbol: Value(
                         Symbol {
                             name: None,
                             pins: {

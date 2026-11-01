@@ -4,16 +4,13 @@ use pcb_zen_core::DiagnosticsPass;
 use pcb_zen_core::SortPass;
 use pcb_zen_core::lang::component::FrozenComponentValue;
 use pcb_zen_core::lang::error::CategorizedDiagnostic;
-use pcb_zen_core::lang::net::FrozenNetValue;
+use pcb_zen_core::lang::net::NetValue;
 use starlark::errors::EvalSeverity;
-use starlark::values::{FrozenValue, ValueLike};
 
 struct TestComponent(pcb_zen_core::EvalOutput);
 
-impl std::ops::Deref for TestComponent {
-    type Target = FrozenComponentValue;
-
-    fn deref(&self) -> &Self::Target {
+impl TestComponent {
+    fn get(&self) -> &FrozenComponentValue<'_> {
         self.0.sch_module().components().next().unwrap()
     }
 }
@@ -41,9 +38,9 @@ fn eval_single_root_component_with_files(files: Vec<(&str, &str)>) -> TestCompon
     TestComponent(output)
 }
 
-fn frozen_net_id(value: FrozenValue) -> u64 {
+fn frozen_net_id(value: starlark::values::Value<'_>) -> u64 {
     value
-        .downcast_ref::<FrozenNetValue>()
+        .downcast_ref::<NetValue>()
         .expect("expected frozen net")
         .net_id()
 }
@@ -84,6 +81,7 @@ fn unnamed_native_stack_requires_one_net() {
             ("stack.kicad_sym", &symbol),
             ("test.zen", &source),
         ]);
+        let component = component.get();
         assert_eq!(
             frozen_net_id(*component.connections().get("1").unwrap()),
             frozen_net_id(*component.connections().get("2").unwrap()),
@@ -123,6 +121,7 @@ Component(
 "#,
         ),
     ]);
+    let component = component.get();
 
     assert_eq!(component.description(), Some("Symbol description"));
 }
@@ -145,6 +144,7 @@ Component(
 "#,
         ),
     ]);
+    let component = component.get();
 
     assert_eq!(component.description(), Some("1k"));
 }
@@ -168,6 +168,7 @@ Component(
 "#,
         ),
     ]);
+    let component = component.get();
 
     assert_eq!(component.description(), Some("Explicit description"));
 }
@@ -189,6 +190,7 @@ Component(
 "#,
         ),
     ]);
+    let component = component.get();
 
     assert_eq!(component.description(), Some("Symbol description"));
 }
@@ -228,6 +230,7 @@ Component(
 )
 "#,
     );
+    let component = component.get();
 
     assert_eq!(
         component.datasheet(),
@@ -259,6 +262,7 @@ Component(
 )
 "#,
     );
+    let component = component.get();
 
     assert_eq!(
         component.datasheet(),
@@ -602,6 +606,7 @@ Component(
 )
 "#,
     );
+    let component = component.get();
 
     assert_eq!(component.datasheet(), None);
 }
@@ -691,6 +696,7 @@ Component(
 "#,
         ),
     ]);
+    let component = component.get();
 
     assert!(component.connections().contains_key("A"));
     assert!(component.connections().contains_key("B"));
@@ -1056,6 +1062,7 @@ fn simulation_leaves_generic_part_unassigned() {
         )
     "#,
     );
+    let component = component.get();
 
     assert_eq!(component.mpn(), None);
     assert_eq!(component.manufacturer(), None);
@@ -1088,6 +1095,7 @@ fn simulation_applies_component_modifiers() {
         )
     "#,
     );
+    let component = component.get();
 
     assert_eq!(component.mpn(), Some("CUSTOM_MPN"));
     assert_eq!(component.manufacturer(), Some("ACME"));

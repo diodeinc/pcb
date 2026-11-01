@@ -11,8 +11,7 @@ use starlark::{
     eval::{Arguments, Evaluator, ParametersSpec, ParametersSpecParam},
     starlark_module, starlark_simple_value,
     values::{
-        Coerce, Freeze, FrozenValue, Heap, NoSerialize, StarlarkValue, Trace, Value,
-        ValueLifetimeless, ValueLike,
+        Freeze, Heap, NoSerialize, StarlarkValue, Trace, Value,
         dict::{AllocDict, DictRef},
         list::ListRef,
         starlark_value,
@@ -22,7 +21,6 @@ use std::{cell::RefCell, collections::BTreeSet, path::Path};
 use tracing::info_span;
 
 use crate::{
-    FrozenSpiceModelValue,
     config::ManifestPart,
     lang::{
         evaluator_ext::EvaluatorExt,
@@ -31,7 +29,7 @@ use crate::{
     },
 };
 
-use super::net::{ConnectionIntent, FrozenNetValue, NetValue, generate_net_id};
+use super::net::{ConnectionIntent, NetValue, generate_net_id};
 use super::part::PartValue;
 use super::path::normalize_path_to_package_uri;
 use super::symbol::{SymbolType, SymbolValue, symbol_pins_from_pad_map};
@@ -76,56 +74,50 @@ impl From<ComponentError> for starlark::Error {
     }
 }
 
-#[derive(Clone, Debug, Coerce, Trace, ProvidesStaticType, Allocative, Freeze)]
+#[derive(Clone, Debug, Trace, ProvidesStaticType, Allocative, Freeze)]
 #[repr(C)]
-pub struct ComponentDataGen<V: ValueLifetimeless> {
+pub struct ComponentData<'v> {
     pub(crate) part: Option<PartValue>,
     pub(crate) bom_mpn: Option<String>,
-    pub(crate) spice_model: Option<V>,
+    pub(crate) spice_model: Option<Value<'v>>,
     pub(crate) dnp: bool,
     pub(crate) skip_bom: bool,
     pub(crate) skip_pos: bool,
     pub(crate) datasheet: Option<String>,
     pub(crate) component_datasheet: Option<String>,
     pub(crate) symbol_datasheet: Option<String>,
-    pub(crate) properties: SmallMap<String, V>,
+    pub(crate) properties: SmallMap<String, Value<'v>>,
 }
-
-pub type ComponentData<'v> = ComponentDataGen<Value<'v>>;
-pub type FrozenComponentData = ComponentDataGen<FrozenValue>;
 
 // Generic component wrapper - T is either RefCell<ComponentData<'v>> or FrozenComponentData
 #[derive(Clone, Trace, ProvidesStaticType, NoSerialize, Allocative)]
 #[repr(C)]
-pub struct ComponentGen<V, T> {
+pub struct ComponentGen<'v, T> {
     name: String,
     ctype: Option<String>,
     footprint: String,
     prefix: String,
-    connections: SmallMap<String, V>,
+    connections: SmallMap<String, Value<'v>>,
     data: T,
     source_path: String,
     #[allocative(skip)]
     declaration_span: Option<ResolvedSpan>,
-    symbol: V,
+    symbol: Value<'v>,
     description: Option<String>,
 }
 
 // Type aliases for mutable and frozen versions
-pub type ComponentValue<'v> = ComponentGen<Value<'v>, RefCell<ComponentData<'v>>>;
-pub type FrozenComponentValue = ComponentGen<FrozenValue, FrozenComponentData>;
-
-// Implement Coerce for ComponentGen
-unsafe impl<'v> Coerce<ComponentValue<'v>> for FrozenComponentValue {}
+pub type ComponentValue<'v> = ComponentGen<'v, RefCell<ComponentData<'v>>>;
+pub type FrozenComponentValue<'v> = ComponentGen<'v, ComponentData<'v>>;
 
 // Freeze implementation
-impl<'v> Freeze for ComponentValue<'v> {
-    type Frozen = FrozenComponentValue;
+impl<'v> Freeze<'v> for ComponentValue<'v> {
+    type Frozen<'fv> = FrozenComponentValue<'fv>;
 
-    fn freeze(
+    fn freeze<'fv>(
         self,
-        freezer: &starlark::values::Freezer,
-    ) -> starlark::values::FreezeResult<Self::Frozen> {
+        freezer: &starlark::values::Freezer<'v, 'fv>,
+    ) -> starlark::values::FreezeResult<FrozenComponentValue<'fv>> {
         let data = self.data.into_inner();
         Ok(FrozenComponentValue {
             name: self.name,
@@ -189,7 +181,7 @@ impl std::fmt::Debug for ComponentValue<'_> {
     }
 }
 
-impl std::fmt::Debug for FrozenComponentValue {
+impl std::fmt::Debug for FrozenComponentValue<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mut debug = f.debug_struct("Component");
         debug.field("name", &self.name);
@@ -809,22 +801,10 @@ fn net_kind_and_name<'v>(value: Value<'v>) -> Option<(&'v str, &'v str)> {
     value
         .downcast_ref::<NetValue>()
         .map(|net| (net.net_kind_name(), net.name()))
-        .or_else(|| {
-            value
-                .downcast_ref::<FrozenNetValue>()
-                .map(|net| (net.net_kind_name(), net.name()))
-        })
 }
 
 fn net_id_from_value<'v>(value: Value<'v>) -> Option<u64> {
-    value
-        .downcast_ref::<NetValue>()
-        .map(|net| net.net_id())
-        .or_else(|| {
-            value
-                .downcast_ref::<FrozenNetValue>()
-                .map(|net| net.net_id())
-        })
+    value.downcast_ref::<NetValue>().map(|net| net.net_id())
 }
 
 /// Expand explicit jumper groups (symbol pins the part internally bridges) into
@@ -881,12 +861,6 @@ fn net_diagnostic_location<'v>(
     value: Value<'v>,
 ) -> (String, Option<starlark::codemap::ResolvedSpan>) {
     if let Some(net) = value.downcast_ref::<NetValue>()
-        && let Some(path) = net.declaration_path()
-    {
-        return (path.to_string(), net.declaration_span());
-    }
-
-    if let Some(net) = value.downcast_ref::<FrozenNetValue>()
         && let Some(path) = net.declaration_path()
     {
         return (path.to_string(), net.declaration_span());
@@ -1182,9 +1156,7 @@ fn resolve_component_footprint(
 }
 
 fn validate_spice_model_value<'v>(value: Value<'v>) -> starlark::Result<()> {
-    if value.downcast_ref::<SpiceModelValue>().is_none()
-        && value.downcast_ref::<FrozenSpiceModelValue>().is_none()
-    {
+    if value.downcast_ref::<SpiceModelValue>().is_none() {
         return Err(starlark::Error::new_other(anyhow!(format!(
             "`spice_model` must be a SpiceModel, got {}",
             value.get_type()
@@ -1447,9 +1419,9 @@ impl<'v> StarlarkValue<'v> for ComponentValue<'v> {
 }
 
 // StarlarkValue implementation for frozen FrozenComponentValue
-#[starlark_value(type = "Component")]
-impl<'v> StarlarkValue<'v> for FrozenComponentValue {
-    type Canonical = FrozenComponentValue;
+#[starlark_value(type = "Component", frozen_vtable)]
+impl<'v> StarlarkValue<'v> for FrozenComponentValue<'v> {
+    type Canonical = FrozenComponentValue<'v>;
 
     fn get_attr(&self, attr: &str, heap: Heap<'v>) -> Option<Value<'v>> {
         match attr {
@@ -1618,7 +1590,7 @@ impl std::fmt::Display for ComponentValue<'_> {
     }
 }
 
-impl std::fmt::Display for FrozenComponentValue {
+impl std::fmt::Display for FrozenComponentValue<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let name = self
             .data
@@ -1723,7 +1695,7 @@ impl<'v> ComponentValue<'v> {
 }
 
 // Accessor methods for FrozenComponentValue
-impl FrozenComponentValue {
+impl<'v> FrozenComponentValue<'v> {
     pub fn mpn(&self) -> Option<&str> {
         self.data.part.as_ref().map(|p| p.mpn())
     }
@@ -1775,11 +1747,11 @@ impl FrozenComponentValue {
         &self.footprint
     }
 
-    pub fn properties(&self) -> &SmallMap<String, FrozenValue> {
+    pub fn properties(&self) -> &SmallMap<String, Value<'v>> {
         &self.data.properties
     }
 
-    pub fn connections(&self) -> &SmallMap<String, FrozenValue> {
+    pub fn connections(&self) -> &SmallMap<String, Value<'v>> {
         &self.connections
     }
 
@@ -1795,11 +1767,11 @@ impl FrozenComponentValue {
         self.declaration_span
     }
 
-    pub fn symbol(&self) -> &FrozenValue {
+    pub fn symbol(&self) -> &Value<'v> {
         &self.symbol
     }
 
-    pub fn spice_model(&self) -> Option<&FrozenValue> {
+    pub fn spice_model(&self) -> Option<&Value<'v>> {
         self.data.spice_model.as_ref()
     }
 }
@@ -1812,10 +1784,7 @@ pub struct ComponentType;
 starlark_simple_value!(ComponentType);
 
 #[starlark_value(type = "Component")]
-impl<'v> StarlarkValue<'v> for ComponentType
-where
-    Self: ProvidesStaticType<'v>,
-{
+impl<'v> StarlarkValue<'v> for ComponentType {
     fn invoke(
         &self,
         _me: Value<'v>,

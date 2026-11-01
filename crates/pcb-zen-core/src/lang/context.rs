@@ -8,16 +8,14 @@ use starlark::{
     any::ProvidesStaticType,
     codemap::ResolvedSpan,
     eval::CallStack,
-    values::{
-        Freeze, FreezeResult, Freezer, FrozenValue, StarlarkValue, Trace, Value, starlark_value,
-    },
+    values::{Freeze, FreezeResult, Freezer, StarlarkValue, Trace, Value, starlark_value},
 };
 
 use starlark::collections::SmallMap;
 
 use crate::lang::eval::EvalContext;
 
-use super::module::{FrozenModuleValue, ModuleLoader, ModuleValue, parse_positions};
+use super::module::{ModuleLoader, ModuleValue, parse_positions};
 use super::net::NetId;
 
 #[derive(Debug, Trace)]
@@ -33,35 +31,43 @@ pub(crate) struct PendingChild<'v> {
     pub(crate) call_stack: CallStack,
 }
 
-impl<'v> Freeze for PendingChild<'v> {
-    type Frozen = FrozenPendingChild;
+impl<'v> Freeze<'v> for PendingChild<'v> {
+    type Frozen<'fv> = FrozenPendingChild<'fv>;
 
-    fn freeze(self, freezer: &Freezer) -> FreezeResult<Self::Frozen> {
+    fn freeze<'fv>(self, freezer: &Freezer<'v, 'fv>) -> FreezeResult<FrozenPendingChild<'fv>> {
         Ok(FrozenPendingChild {
-            loader: self.loader,
-            final_name: self.final_name,
+            info: PendingChildInfo {
+                loader: self.loader,
+                final_name: self.final_name,
+                provided_names: self.provided_names,
+                call_site_path: self.call_site_path,
+                call_site_span: self.call_site_span,
+                call_stack: self.call_stack,
+            },
             inputs: self.inputs.freeze(freezer)?,
-            properties: self.properties.map(|m| m.freeze(freezer)).transpose()?,
+            properties: self.properties.freeze(freezer)?,
             component_modifiers: self.component_modifiers.freeze(freezer)?,
-            provided_names: self.provided_names,
-            call_site_path: self.call_site_path,
-            call_site_span: self.call_site_span,
-            call_stack: self.call_stack,
         })
     }
 }
 
-#[derive(Debug, Clone)]
-pub(crate) struct FrozenPendingChild {
+/// The parts of a pending child that hold no Starlark values.
+#[derive(Debug, Clone, Trace)]
+pub(crate) struct PendingChildInfo {
     pub(crate) loader: ModuleLoader,
     pub(crate) final_name: String,
-    pub(crate) inputs: SmallMap<String, FrozenValue>,
-    pub(crate) properties: Option<SmallMap<String, FrozenValue>>,
-    pub(crate) component_modifiers: Vec<FrozenValue>,
     pub(crate) provided_names: Vec<String>,
     pub(crate) call_site_path: String,
     pub(crate) call_site_span: ResolvedSpan,
     pub(crate) call_stack: CallStack,
+}
+
+#[derive(Debug, Trace)]
+pub(crate) struct FrozenPendingChild<'v> {
+    pub(crate) info: PendingChildInfo,
+    pub(crate) inputs: SmallMap<String, Value<'v>>,
+    pub(crate) properties: Option<SmallMap<String, Value<'v>>>,
+    pub(crate) component_modifiers: Vec<Value<'v>>,
 }
 
 #[derive(Debug, Trace, ProvidesStaticType, Allocative, Serialize)]
@@ -84,21 +90,21 @@ pub struct ContextValue<'v> {
 
 #[derive(Debug, Trace, ProvidesStaticType, Allocative, Serialize)]
 #[repr(C)]
-pub struct FrozenContextValue {
-    pub(crate) module: FrozenModuleValue,
+pub struct FrozenContextValue<'v> {
+    pub(crate) module: ModuleValue<'v>,
     pub(crate) strict_io_config: bool,
     #[allocative(skip)]
     pub(crate) diagnostics: Vec<crate::Diagnostic>,
     /// Pending children to process after this module is frozen
     #[serde(skip)]
     #[allocative(skip)]
-    pub(crate) pending_children: Vec<FrozenPendingChild>,
+    pub(crate) pending_children: Vec<FrozenPendingChild<'v>>,
 }
 
-impl Freeze for ContextValue<'_> {
-    type Frozen = FrozenContextValue;
+impl<'v> Freeze<'v> for ContextValue<'v> {
+    type Frozen<'fv> = FrozenContextValue<'fv>;
 
-    fn freeze(self, freezer: &Freezer) -> FreezeResult<Self::Frozen> {
+    fn freeze<'fv>(self, freezer: &Freezer<'v, 'fv>) -> FreezeResult<FrozenContextValue<'fv>> {
         Ok(FrozenContextValue {
             module: self.module.freeze(freezer)?,
             strict_io_config: self.strict_io_config,
@@ -114,24 +120,21 @@ impl Display for ContextValue<'_> {
     }
 }
 
-impl Display for FrozenContextValue {
+impl Display for FrozenContextValue<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "FrozenContextValue")
     }
 }
 
 #[starlark_value(type = "ContextValue")]
-impl<'v> StarlarkValue<'v> for ContextValue<'v> where Self: ProvidesStaticType<'v> {}
+impl<'v> StarlarkValue<'v> for ContextValue<'v> {}
 
-#[starlark_value(type = "FrozenContextValue")]
-impl<'v> StarlarkValue<'v> for FrozenContextValue
-where
-    Self: ProvidesStaticType<'v>,
-{
+#[starlark_value(type = "FrozenContextValue", frozen_vtable)]
+impl<'v> StarlarkValue<'v> for FrozenContextValue<'v> {
     type Canonical = ContextValue<'v>;
 }
 
-impl FrozenContextValue {
+impl FrozenContextValue<'_> {
     pub(crate) fn diagnostics(&self) -> &Vec<crate::Diagnostic> {
         &self.diagnostics
     }

@@ -15,19 +15,19 @@ expression: output
         path: ParentInstance.ChildInstance,
         source: "/Child.zen",
         children: [
-            FrozenValue(
+            Value(
                 Component {
                     name: "R1",
                     footprint: "0603",
                     prefix: "U",
                     connections: {
-                        "1": FrozenValue(
+                        "1": Value(
                             Net {
                                 name: "A",
                                 id: "<ID>",
                             },
                         ),
-                        "2": FrozenValue(
+                        "2": Value(
                             Net {
                                 name: "B",
                                 id: "<ID>",
@@ -35,20 +35,20 @@ expression: output
                         ),
                     },
                     properties: {
-                        "child_modified": FrozenValue(
+                        "child_modified": Value(
                             "yes",
                         ),
-                        "gp_modified": FrozenValue(
+                        "gp_modified": Value(
                             "yes",
                         ),
-                        "parent_modified": FrozenValue(
+                        "parent_modified": Value(
                             "yes",
                         ),
-                        "resistance": FrozenValue(
+                        "resistance": Value(
                             "10k",
                         ),
                     },
-                    symbol: FrozenValue(
+                    symbol: Value(
                         Symbol {
                             name: None,
                             pins: {

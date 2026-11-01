@@ -1,6 +1,5 @@
 ---
 source: crates/pcb-zen-core/tests/enum_component_properties.rs
-assertion_line: 24
 expression: output
 ---
 {
@@ -8,13 +7,13 @@ expression: output
         path: <root>,
         source: "test.zen",
         children: [
-            FrozenValue(
+            Value(
                 Component {
                     name: "U2",
                     footprint: "package://stdlib/kicad-footprints/Resistor_SMD.pretty/R_0402_1005Metric.kicad_mod",
                     prefix: "U",
                     connections: {
-                        "IN": FrozenValue(
+                        "IN": Value(
                             Net {
                                 name: "INPUT",
                                 id: "<ID>",
@@ -22,11 +21,11 @@ expression: output
                         ),
                     },
                     properties: {
-                        "mixed_list": FrozenValue(
+                        "mixed_list": Value(
                             ListGen(
                                 FrozenList {
                                     content: [
-                                        FrozenValue(
+                                        Value(
                                             EnumValue {
                                                 type: EnumType {
                                                     variants: [
@@ -38,21 +37,21 @@ expression: output
                                                 index: 0,
                                             },
                                         ),
-                                        FrozenValue(
+                                        Value(
                                             "string",
                                         ),
-                                        FrozenValue(
+                                        Value(
                                             123,
                                         ),
                                     ],
                                 },
                             ),
                         ),
-                        "valid_states": FrozenValue(
+                        "valid_states": Value(
                             ListGen(
                                 FrozenList {
                                     content: [
-                                        FrozenValue(
+                                        Value(
                                             EnumValue {
                                                 type: EnumType {
                                                     variants: [
@@ -64,7 +63,7 @@ expression: output
                                                 index: 0,
                                             },
                                         ),
-                                        FrozenValue(
+                                        Value(
                                             EnumValue {
                                                 type: EnumType {
                                                     variants: [
@@ -76,7 +75,7 @@ expression: output
                                                 index: 1,
                                             },
                                         ),
-                                        FrozenValue(
+                                        Value(
                                             EnumValue {
                                                 type: EnumType {
                                                     variants: [
@@ -93,7 +92,7 @@ expression: output
                             ),
                         ),
                     },
-                    symbol: FrozenValue(
+                    symbol: Value(
                         Symbol {
                             name: None,
                             pins: {

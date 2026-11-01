@@ -1,18 +1,18 @@
 use crate::lang::r#enum::EnumValue;
-use crate::lang::interface::FrozenInterfaceValue;
+use crate::lang::interface::InterfaceValue;
 use crate::lang::io_direction::IoDirection;
 use crate::lang::module::{ModulePath, find_moved_span};
+use crate::lang::net::NetValue;
 use crate::lang::net::net_kind_requires_name;
 use crate::lang::part::PartValue;
+use crate::lang::spice_model::SpiceModelValue;
 use crate::lang::symbol::SymbolValue;
 use crate::lang::type_info::TypeInfo;
 use crate::moved::{
     Remapper, collect_existing_paths, is_valid_moved_depth, path_depth, scoped_path,
 };
 use crate::{Diagnostic, Diagnostics, WithDiagnostics};
-use crate::{
-    FrozenComponentValue, FrozenModuleValue, FrozenNetValue, FrozenSpiceModelValue, NetId,
-};
+use crate::{FrozenComponentValue, ModuleValue, NetId};
 use itertools::Itertools;
 use pcb_sch::physical::PhysicalValue;
 use pcb_sch::position::{MirrorAxis, Position};
@@ -20,7 +20,7 @@ use pcb_sch::{AttributeValue, Instance, InstanceKind, InstanceRef, ModuleRef, Ne
 use serde::{Deserialize, Serialize};
 use serde_json::{Map as JsonMap, Number as JsonNumber, Value as JsonValue};
 use starlark::values::list::ListRef;
-use starlark::values::{FrozenValue, Value, ValueLike, dict::DictRef};
+use starlark::values::{Value, dict::DictRef};
 use starlark::{codemap::ResolvedSpan, errors::EvalSeverity};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::Path;
@@ -49,14 +49,14 @@ fn net_info_requires_name(kind: Option<&str>) -> bool {
     kind.is_none_or(net_kind_requires_name)
 }
 
-/// Convert a [`FrozenModuleValue`] to a [`Schematic`].
-pub(crate) struct ModuleConverter {
+/// Convert a [`ModuleValue`] to a [`Schematic`].
+pub(crate) struct ModuleConverter<'v> {
     schematic: Schematic,
     net_to_info: HashMap<NetId, NetInfo>,
     // Mapping <ref to component instance> -> <spice model>
-    comp_models: Vec<(InstanceRef, FrozenSpiceModelValue)>,
+    comp_models: Vec<(InstanceRef, SpiceModelValue<'v>)>,
     // Mapping <module instance ref> -> <module value> for position processing
-    module_instances: Vec<(InstanceRef, FrozenModuleValue)>,
+    module_instances: Vec<(InstanceRef, ModuleValue<'v>)>,
     // Net name aliases: when a net appears in multiple modules' introduced_nets,
     // the child's scoped name maps to the parent's canonical name.
     // Format: scoped_child_name -> canonical_name
@@ -90,11 +90,11 @@ struct ParameterInfo {
     allowed_display: Option<Vec<String>>,
 }
 
-fn serialize_signature_value(value: FrozenValue) -> Option<JsonValue> {
+fn serialize_signature_value(value: Value<'_>) -> Option<JsonValue> {
     Some(serialize_value(value.to_value()))
 }
 
-fn serialize_signature_values(values: Option<&Vec<FrozenValue>>) -> Option<Vec<JsonValue>> {
+fn serialize_signature_values(values: Option<&Vec<Value<'_>>>) -> Option<Vec<JsonValue>> {
     values.map(|values| {
         values
             .iter()
@@ -122,11 +122,11 @@ fn serialize_value(value: Value) -> JsonValue {
         );
     }
 
-    if let Some(net) = value.downcast_ref::<FrozenNetValue>() {
+    if let Some(net) = value.downcast_ref::<NetValue<'_>>() {
         return serialize_net(net);
     }
 
-    if let Some(interface) = value.downcast_ref::<FrozenInterfaceValue>() {
+    if let Some(interface) = value.downcast_ref::<InterfaceValue<'_>>() {
         return serialize_interface(interface);
     }
 
@@ -151,7 +151,7 @@ fn serialize_value(value: Value) -> JsonValue {
     }
 }
 
-fn serialize_net(net: &FrozenNetValue) -> JsonValue {
+fn serialize_net(net: &NetValue) -> JsonValue {
     let properties = JsonValue::Object(
         net.properties()
             .iter()
@@ -176,7 +176,7 @@ fn serialize_net(net: &FrozenNetValue) -> JsonValue {
     )
 }
 
-fn serialize_interface(interface: &FrozenInterfaceValue) -> JsonValue {
+fn serialize_interface(interface: &InterfaceValue) -> JsonValue {
     let inner = JsonMap::from_iter([(
         "fields".to_string(),
         JsonValue::Object(
@@ -198,11 +198,11 @@ fn wrap(tag: &str, inner: JsonValue) -> JsonValue {
 /// Walk a signature parameter's default value (Net or Interface, possibly nested) and return the
 /// path of field names leading to a net whose name equals `target_net_name`. Returns `Some(vec![])`
 /// when the value itself is a matching net.
-fn find_net_field_path(value: FrozenValue, target_net_name: &str) -> Option<Vec<String>> {
-    if let Some(net) = value.downcast_ref::<FrozenNetValue>() {
+fn find_net_field_path(value: Value<'_>, target_net_name: &str) -> Option<Vec<String>> {
+    if let Some(net) = value.downcast_ref::<NetValue<'_>>() {
         return (net.name() == target_net_name).then(Vec::new);
     }
-    let interface = value.downcast_ref::<FrozenInterfaceValue>()?;
+    let interface = value.downcast_ref::<InterfaceValue<'_>>()?;
     for (field_name, field_value) in interface.fields().iter() {
         if let Some(mut path) = find_net_field_path(*field_value, target_net_name) {
             path.insert(0, field_name.clone());
@@ -213,17 +213,17 @@ fn find_net_field_path(value: FrozenValue, target_net_name: &str) -> Option<Vec<
 }
 
 /// Resolve a field path (as produced by [`find_net_field_path`]) against a value, returning the
-/// net id at the end of the path. The terminal value must be a [`FrozenNetValue`].
-fn resolve_net_id_along_path(value: FrozenValue, path: &[String]) -> Option<NetId> {
+/// net id at the end of the path. The terminal value must be a [`NetValue`].
+fn resolve_net_id_along_path(value: Value<'_>, path: &[String]) -> Option<NetId> {
     let Some((head, tail)) = path.split_first() else {
-        return value.downcast_ref::<FrozenNetValue>().map(|n| n.id());
+        return value.downcast_ref::<NetValue<'_>>().map(|n| n.id());
     };
-    let interface = value.downcast_ref::<FrozenInterfaceValue>()?;
+    let interface = value.downcast_ref::<InterfaceValue<'_>>()?;
     let next_value = *interface.fields().get(head)?;
     resolve_net_id_along_path(next_value, tail)
 }
 
-impl ModuleConverter {
+impl<'v> ModuleConverter<'v> {
     pub(crate) fn new() -> Self {
         Self {
             schematic: Schematic::new(),
@@ -241,7 +241,7 @@ impl ModuleConverter {
 
     pub(crate) fn build(
         mut self,
-        module_tree: BTreeMap<ModulePath, &FrozenModuleValue>,
+        module_tree: BTreeMap<ModulePath, &'v ModuleValue<'v>>,
     ) -> crate::WithDiagnostics<Schematic> {
         let _span = info_span!("schematic_convert", modules = module_tree.len()).entered();
         let root_module = module_tree.get(&ModulePath::root()).unwrap();
@@ -329,7 +329,7 @@ impl ModuleConverter {
             comp_inst.add_attribute(crate::attrs::MODEL_NAME, model.name.clone());
             let mut net_names = Vec::new();
             for net in model.nets() {
-                let net_id = net.downcast_ref::<FrozenNetValue>().unwrap().id();
+                let net_id = net.downcast_ref::<NetValue<'_>>().unwrap().id();
                 let net_info = self
                     .net_to_info
                     .get(&net_id)
@@ -497,7 +497,7 @@ impl ModuleConverter {
 
     fn diagnose_unused_module_io(
         &self,
-        module_tree: &BTreeMap<ModulePath, &FrozenModuleValue>,
+        module_tree: &BTreeMap<ModulePath, &'v ModuleValue<'v>>,
         diagnostics: &mut Diagnostics,
     ) {
         for (path, module) in module_tree {
@@ -557,7 +557,7 @@ impl ModuleConverter {
 
     fn add_module_at(
         &mut self,
-        module: &FrozenModuleValue,
+        module: &'v ModuleValue<'v>,
         instance_ref: &InstanceRef,
     ) -> anyhow::Result<()> {
         // Create instance for this module type.
@@ -674,7 +674,7 @@ impl ModuleConverter {
         Ok(())
     }
 
-    fn update_net(&mut self, net: &FrozenNetValue, instance_ref: &InstanceRef) {
+    fn update_net(&mut self, net: &NetValue, instance_ref: &InstanceRef) {
         let net_info = self.net_info_mut(net.id());
         net_info.ports.push(instance_ref.clone());
         net_info
@@ -739,7 +739,7 @@ impl ModuleConverter {
 
     fn add_component_at(
         &mut self,
-        component: &FrozenComponentValue,
+        component: &'v FrozenComponentValue<'v>,
         instance_ref: &InstanceRef,
     ) -> anyhow::Result<()> {
         // Child is a component.
@@ -819,13 +819,12 @@ impl ModuleConverter {
         add_bool_attribute_if_true(&mut comp_inst, crate::attrs::SKIP_POS, component.skip_pos());
 
         if let Some(model_val) = component.spice_model() {
-            let model =
-                model_val
-                    .downcast_ref::<FrozenSpiceModelValue>()
-                    .ok_or(anyhow::anyhow!(
-                        "Expected spice model for component {}",
-                        component.name()
-                    ))?;
+            let model = model_val
+                .downcast_ref::<SpiceModelValue<'_>>()
+                .ok_or(anyhow::anyhow!(
+                    "Expected spice model for component {}",
+                    component.name()
+                ))?;
             self.comp_models.push((instance_ref.clone(), model.clone()));
         }
 
@@ -903,7 +902,7 @@ impl ModuleConverter {
                 // If this signal is connected, record it in net_map
                 if let Some(net_val) = component.connections().get(signal_name) {
                     let net = net_val
-                        .downcast_ref::<FrozenNetValue>()
+                        .downcast_ref::<NetValue<'_>>()
                         .ok_or(anyhow::anyhow!(
                             "Expected net value for pin '{}' , found '{}'",
                             signal_name,
@@ -986,7 +985,7 @@ impl ModuleConverter {
     fn find_net_symbol_key(
         &self,
         key: &str,
-        module: &FrozenModuleValue,
+        module: &ModuleValue,
         instance_ref: &InstanceRef,
     ) -> Option<String> {
         let (net_part, suffix) = key.rsplit_once('.').unwrap_or((key, "1"));
@@ -1153,11 +1152,11 @@ impl ModuleConverter {
 }
 
 /// In a linked KiCad schematic, `Project()` alone decides which modules are sheets.
-fn diagnose_ignored_schematic_option(
-    module_tree: &BTreeMap<ModulePath, &FrozenModuleValue>,
+fn diagnose_ignored_schematic_option<'v>(
+    module_tree: &BTreeMap<ModulePath, &'v ModuleValue<'v>>,
     diagnostics: &mut Diagnostics,
 ) {
-    let linked = |module: &FrozenModuleValue| {
+    let linked = |module: &ModuleValue| {
         module
             .properties()
             .contains_key(pcb_sch::ATTR_SCHEMATIC_PATH)
@@ -1230,12 +1229,12 @@ fn collect_net_ids_from_value(value: Value) -> HashSet<NetId> {
 }
 
 fn collect_net_ids_into(value: Value, net_ids: &mut HashSet<NetId>) {
-    if let Some(net) = value.downcast_ref::<FrozenNetValue>() {
+    if let Some(net) = value.downcast_ref::<NetValue<'_>>() {
         net_ids.insert(net.id());
         return;
     }
 
-    if let Some(interface) = value.downcast_ref::<FrozenInterfaceValue>() {
+    if let Some(interface) = value.downcast_ref::<InterfaceValue<'_>>() {
         for field in interface.fields().values() {
             collect_net_ids_into(field.to_value(), net_ids);
         }
@@ -1249,7 +1248,7 @@ fn add_bool_attribute_if_true(instance: &mut Instance, attr_name: &str, value: b
     }
 }
 
-fn to_attribute_value(v: starlark::values::FrozenValue) -> anyhow::Result<AttributeValue> {
+fn to_attribute_value(v: Value<'_>) -> anyhow::Result<AttributeValue> {
     // Handle scalars first
     if let Some(s) = v.to_value().unpack_str() {
         return Ok(AttributeValue::String(s.to_string()));

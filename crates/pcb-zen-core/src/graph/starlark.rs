@@ -1,22 +1,21 @@
+use crate::downcast_frozen_module;
 use crate::graph::CircuitGraph;
 use crate::lang::evaluator_ext::EvaluatorExt;
-use crate::{downcast_frozen_module, lang::module::FrozenModuleValue};
 use allocative::Allocative;
 use starlark::{
     eval::{Arguments, Evaluator},
     starlark_complex_value,
     values::{
-        Coerce, Freeze, Heap, NoSerialize, ProvidesStaticType, StarlarkValue, Trace, Value,
-        ValueLifetimeless, ValueLike, starlark_value,
+        Freeze, Heap, NoSerialize, ProvidesStaticType, StarlarkValue, Trace, Value, starlark_value,
     },
 };
 use std::sync::Arc;
 
 /// ModuleGraph that contains the circuit graph and module reference
-#[derive(Clone, Debug, Coerce, Trace, ProvidesStaticType, NoSerialize, Allocative, Freeze)]
+#[derive(Clone, Debug, Trace, ProvidesStaticType, NoSerialize, Allocative, Freeze)]
 #[repr(C)]
-pub struct ModuleGraphValueGen<V: ValueLifetimeless> {
-    pub module: V,
+pub struct ModuleGraphValue<'v> {
+    pub module: Value<'v>,
     #[freeze(identity)]
     pub graph: Arc<CircuitGraph>,
 }
@@ -24,10 +23,10 @@ pub struct ModuleGraphValueGen<V: ValueLifetimeless> {
 starlark_complex_value!(pub ModuleGraphValue);
 
 /// PathsCallable for the ModuleGraph.paths() method
-#[derive(Clone, Debug, Coerce, Trace, ProvidesStaticType, NoSerialize, Allocative, Freeze)]
+#[derive(Clone, Debug, Trace, ProvidesStaticType, NoSerialize, Allocative, Freeze)]
 #[repr(C)]
-pub struct PathsCallableGen<V: ValueLifetimeless> {
-    pub module: V,
+pub struct PathsCallable<'v> {
+    pub module: Value<'v>,
     #[freeze(identity)]
     pub graph: Arc<CircuitGraph>,
 }
@@ -35,17 +34,17 @@ pub struct PathsCallableGen<V: ValueLifetimeless> {
 starlark_complex_value!(pub PathsCallable);
 
 /// Path object representing a circuit path with pre-computed data
-#[derive(Clone, Debug, Coerce, Trace, ProvidesStaticType, NoSerialize, Allocative, Freeze)]
+#[derive(Clone, Debug, Trace, ProvidesStaticType, NoSerialize, Allocative, Freeze)]
 #[repr(C)]
-pub struct PathValueGen<V: ValueLifetimeless> {
-    pub ports: Vec<V>,      // List of port tuples
-    pub components: Vec<V>, // List of component objects
-    pub nets: Vec<V>,       // List of net objects
+pub struct PathValue<'v> {
+    pub ports: Vec<Value<'v>>,      // List of port tuples
+    pub components: Vec<Value<'v>>, // List of component objects
+    pub nets: Vec<Value<'v>>,       // List of net objects
 }
 
 starlark_complex_value!(pub PathValue);
 
-impl<V: ValueLifetimeless> PathValueGen<V> {
+impl<'v> PathValue<'v> {
     pub fn description(&self) -> String {
         let port_names: Vec<String> = self.ports.iter().map(|port| format!("{}", port)).collect();
         format!("Path [{}]", port_names.join(", "))
@@ -62,42 +61,35 @@ pub enum PathValidationOp {
     Matches,
 }
 
-#[derive(Clone, Debug, Coerce, Trace, ProvidesStaticType, NoSerialize, Allocative, Freeze)]
+#[derive(Clone, Debug, Trace, ProvidesStaticType, NoSerialize, Allocative, Freeze)]
 #[repr(C)]
-pub struct PathValidationCallableGen<V: ValueLifetimeless> {
-    pub path_value: V,
+pub struct PathValidationCallable<'v> {
+    pub path_value: Value<'v>,
     pub operation: PathValidationOp,
 }
 
 starlark_complex_value!(pub PathValidationCallable);
 
 /// PathMatchesCallable for sequential component matching
-#[derive(Clone, Debug, Coerce, Trace, ProvidesStaticType, NoSerialize, Allocative, Freeze)]
+#[derive(Clone, Debug, Trace, ProvidesStaticType, NoSerialize, Allocative, Freeze)]
 #[repr(C)]
-pub struct PathMatchesCallableGen<V: ValueLifetimeless> {
-    pub path_value: V,
+pub struct PathMatchesCallable<'v> {
+    pub path_value: Value<'v>,
 }
 
 starlark_complex_value!(pub PathMatchesCallable);
 
-impl<V: ValueLifetimeless> PathMatchesCallableGen<V> {
-    fn wrap_matcher_error<'v>(
+impl<'v> PathMatchesCallable<'v> {
+    fn wrap_matcher_error(
         &self,
         original_error: starlark::Error,
         eval: &mut Evaluator<'v, '_, '_>,
-    ) -> starlark::Error
-    where
-        V: ValueLike<'v>,
-    {
+    ) -> starlark::Error {
         let Some(cs) = eval.call_stack_top_location() else {
             return original_error;
         };
 
-        let Some(path_val) = self
-            .path_value
-            .to_value()
-            .downcast_ref::<PathValueGen<Value>>()
-        else {
+        let Some(path_val) = self.path_value.to_value().downcast_ref::<PathValue<'_>>() else {
             return original_error;
         };
 
@@ -123,22 +115,18 @@ impl<V: ValueLifetimeless> PathMatchesCallableGen<V> {
 }
 
 // Implementations for ModuleGraphValue
-impl<V: ValueLifetimeless> std::fmt::Display for ModuleGraphValueGen<V> {
+impl<'v> std::fmt::Display for ModuleGraphValue<'v> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "ModuleGraph")
     }
 }
 
 #[starlark_value(type = "ModuleGraph")]
-impl<'v, V: ValueLike<'v>> StarlarkValue<'v> for ModuleGraphValueGen<V>
-where
-    Self: ProvidesStaticType<'v>,
-    <Self as ProvidesStaticType<'v>>::StaticType: Send,
-{
+impl<'v> StarlarkValue<'v> for ModuleGraphValue<'v> {
     fn get_attr(&self, attr: &str, heap: Heap<'v>) -> Option<Value<'v>> {
         match attr {
             "paths" => {
-                let callable = PathsCallableGen {
+                let callable = PathsCallable {
                     module: self.module.to_value(),
                     graph: self.graph.clone(),
                 };
@@ -150,17 +138,14 @@ where
 }
 
 // PathsCallable implementation
-impl<V: ValueLifetimeless> std::fmt::Display for PathsCallableGen<V> {
+impl<'v> std::fmt::Display for PathsCallable<'v> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "paths")
     }
 }
 
 #[starlark_value(type = "builtin_function_or_method")]
-impl<'v, V: ValueLike<'v>> StarlarkValue<'v> for PathsCallableGen<V>
-where
-    Self: ProvidesStaticType<'v>,
-{
+impl<'v> StarlarkValue<'v> for PathsCallable<'v> {
     fn invoke(
         &self,
         _me: Value<'v>,
@@ -217,18 +202,14 @@ where
 }
 
 // PathValue implementation
-impl<V: ValueLifetimeless> std::fmt::Display for PathValueGen<V> {
+impl<'v> std::fmt::Display for PathValue<'v> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "Path({} components)", self.components.len())
     }
 }
 
 #[starlark_value(type = "Path")]
-impl<'v, V: ValueLike<'v>> StarlarkValue<'v> for PathValueGen<V>
-where
-    Self: ProvidesStaticType<'v>,
-    <Self as ProvidesStaticType<'v>>::StaticType: Send,
-{
+impl<'v> StarlarkValue<'v> for PathValue<'v> {
     fn get_attr(&self, attr: &str, heap: Heap<'v>) -> Option<Value<'v>> {
         match attr {
             "ports" => {
@@ -253,13 +234,9 @@ where
     }
 }
 
-impl<'v, V: ValueLike<'v>> PathValueGen<V>
-where
-    Self: ProvidesStaticType<'v>,
-    <Self as ProvidesStaticType<'v>>::StaticType: Send,
-{
+impl<'v> PathValue<'v> {
     fn create_validation_callable(&self, heap: Heap<'v>, operation: PathValidationOp) -> Value<'v> {
-        let callable = PathValidationCallableGen {
+        let callable = PathValidationCallable {
             path_value: heap.alloc_complex(self.clone()).to_value(),
             operation,
         };
@@ -267,7 +244,7 @@ where
     }
 
     fn create_matches_callable(&self, heap: Heap<'v>) -> Value<'v> {
-        let callable = PathMatchesCallableGen {
+        let callable = PathMatchesCallable {
             path_value: heap.alloc_complex(self.clone()).to_value(),
         };
         heap.alloc_complex(callable)
@@ -275,7 +252,7 @@ where
 }
 
 // PathValidationCallable implementation
-impl<V: ValueLifetimeless> std::fmt::Display for PathValidationCallableGen<V> {
+impl<'v> std::fmt::Display for PathValidationCallable<'v> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self.operation {
             PathValidationOp::Count => write!(f, "count"),
@@ -288,10 +265,7 @@ impl<V: ValueLifetimeless> std::fmt::Display for PathValidationCallableGen<V> {
 }
 
 #[starlark_value(type = "builtin_function_or_method")]
-impl<'v, V: ValueLike<'v>> StarlarkValue<'v> for PathValidationCallableGen<V>
-where
-    Self: ProvidesStaticType<'v>,
-{
+impl<'v> StarlarkValue<'v> for PathValidationCallable<'v> {
     fn invoke(
         &self,
         _me: Value<'v>,
@@ -307,7 +281,7 @@ where
         let path_value = self
             .path_value
             .to_value()
-            .downcast_ref::<PathValueGen<Value>>()
+            .downcast_ref::<PathValue<'_>>()
             .ok_or_else(|| starlark::Error::new_other(anyhow::anyhow!("Invalid path value")))?;
 
         match self.operation {
@@ -373,17 +347,14 @@ where
 }
 
 // PathMatchesCallable implementation
-impl<V: ValueLifetimeless> std::fmt::Display for PathMatchesCallableGen<V> {
+impl<'v> std::fmt::Display for PathMatchesCallable<'v> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "matches")
     }
 }
 
 #[starlark_value(type = "builtin_function_or_method")]
-impl<'v, V: ValueLike<'v>> StarlarkValue<'v> for PathMatchesCallableGen<V>
-where
-    Self: ProvidesStaticType<'v>,
-{
+impl<'v> StarlarkValue<'v> for PathMatchesCallable<'v> {
     fn invoke(
         &self,
         _me: Value<'v>,
@@ -412,7 +383,7 @@ where
         let path_value = self
             .path_value
             .to_value()
-            .downcast_ref::<PathValueGen<Value>>()
+            .downcast_ref::<PathValue<'_>>()
             .ok_or_else(|| starlark::Error::new_other(anyhow::anyhow!("Invalid path value")))?;
 
         let components = &path_value.components;

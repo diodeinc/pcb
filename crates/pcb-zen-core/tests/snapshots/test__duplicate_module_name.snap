@@ -1,6 +1,5 @@
 ---
 source: crates/pcb-zen-core/tests/test.rs
-assertion_line: 164
 expression: output
 ---
 Warning: test.zen:11:1-19 Duplicate child name 'sub1': a module with this name already exists.
@@ -13,26 +12,26 @@ Warning: test.zen:11:1-19 Duplicate child name 'sub1': a module with this name a
         path: sub1,
         source: "/sub.zen",
         children: [
-            FrozenValue(
+            Value(
                 Component {
                     name: "R1",
                     footprint: "package://stdlib/kicad-footprints/Resistor_SMD.pretty/R_0402_1005Metric.kicad_mod",
                     prefix: "U",
                     connections: {
-                        "1": FrozenValue(
+                        "1": Value(
                             Net {
                                 name: "VCC",
                                 id: "<ID>",
                             },
                         ),
-                        "2": FrozenValue(
+                        "2": Value(
                             Net {
                                 name: "GND",
                                 id: "<ID>",
                             },
                         ),
                     },
-                    symbol: FrozenValue(
+                    symbol: Value(
                         Symbol {
                             name: None,
                             pins: {

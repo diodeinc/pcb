@@ -112,8 +112,6 @@ mod tests {
 
     #[test]
     fn test_moved_directive_storage() {
-        use starlark::values::ValueLike;
-
         let test_content = r#"
 moved("old.path.component", "new.path.component")
 moved("POW.PS1", "PS1")
@@ -133,11 +131,8 @@ moved("Power.Reg1", "PowerMgmt.Reg1")
         assert!(result.output.is_some(), "Evaluation should succeed");
         let output = result.output.unwrap();
 
-        if let Some(frozen_ctx) = output
-            .star_module()
-            .extra_value()
-            .and_then(|extra| extra.downcast_ref::<crate::lang::context::FrozenContextValue>())
         {
+            let frozen_ctx = crate::lang::eval::frozen_context(output.star_module());
             let moved_directives = frozen_ctx.module.moved_directives();
             assert_eq!(moved_directives.len(), 3, "Should have 3 moved directives");
 
@@ -150,8 +145,6 @@ moved("Power.Reg1", "PowerMgmt.Reg1")
                 moved_directives.get("Power.Reg1").unwrap().0,
                 "PowerMgmt.Reg1"
             );
-        } else {
-            panic!("Could not access frozen context");
         }
     }
 

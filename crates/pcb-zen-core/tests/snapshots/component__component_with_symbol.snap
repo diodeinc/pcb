@@ -7,31 +7,31 @@ expression: output
         path: <root>,
         source: "test.zen",
         children: [
-            FrozenValue(
+            Value(
                 Component {
                     name: "I2C_Device",
                     footprint: "SOIC-8",
                     prefix: "U",
                     connections: {
-                        "GND": FrozenValue(
+                        "GND": Value(
                             Net {
                                 name: "GND",
                                 id: "<ID>",
                             },
                         ),
-                        "SCL": FrozenValue(
+                        "SCL": Value(
                             Net {
                                 name: "SCL",
                                 id: "<ID>",
                             },
                         ),
-                        "SDA": FrozenValue(
+                        "SDA": Value(
                             Net {
                                 name: "SDA",
                                 id: "<ID>",
                             },
                         ),
-                        "VDD": FrozenValue(
+                        "VDD": Value(
                             Net {
                                 name: "VDD",
                                 id: "<ID>",
@@ -39,11 +39,11 @@ expression: output
                         ),
                     },
                     properties: {
-                        "symbol_name": FrozenValue(
+                        "symbol_name": Value(
                             "I2C",
                         ),
                     },
-                    symbol: FrozenValue(
+                    symbol: Value(
                         Symbol {
                             name: Some(
                                 "I2C",

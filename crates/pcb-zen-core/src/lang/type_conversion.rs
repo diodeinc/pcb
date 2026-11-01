@@ -1,12 +1,10 @@
 use pcb_sch::PhysicalUnit;
 use pcb_sch::physical::{PhysicalUnitDims, PhysicalValue, PhysicalValueType};
 use starlark::eval::Evaluator;
-use starlark::values::{Value, ValueLike, float::StarlarkFloat, typing::TypeCompiled};
+use starlark::values::{Value, float::StarlarkFloat, typing::TypeCompiled};
 
 use crate::lang::r#enum::{EnumType, EnumValue};
-use crate::lang::net::{
-    FrozenNetType, FrozenNetValue, NetType, NetValue, compatible_net_type_view,
-};
+use crate::lang::net::{NetType, NetValue, compatible_net_type_view};
 
 fn has_type_name<'v>(typ: Value<'v>, names: &[&str]) -> bool {
     names.contains(&typ.get_type()) || names.contains(&typ.to_string().as_str())
@@ -41,12 +39,7 @@ pub(crate) fn try_net_conversion<'v>(
 ) -> anyhow::Result<Option<Value<'v>>> {
     let expected = expected_typ
         .downcast_ref::<NetType>()
-        .map(|nt| nt.type_name.as_str())
-        .or_else(|| {
-            expected_typ
-                .downcast_ref::<FrozenNetType>()
-                .map(|fnt| fnt.type_name.as_str())
-        });
+        .map(|nt| nt.type_name.as_str());
 
     let Some(expected) = expected else {
         return Ok(None);
@@ -58,13 +51,6 @@ pub(crate) fn try_net_conversion<'v>(
         }
         if let Some(target) = compatible_net_type_view(nv.net_type_name(), expected) {
             return Ok(Some(nv.with_net_type(target, eval.heap())));
-        }
-    } else if let Some(fnv) = value.downcast_ref::<FrozenNetValue>() {
-        if fnv.is_open() {
-            return Ok(None);
-        }
-        if let Some(target) = compatible_net_type_view(fnv.net_type_name(), expected) {
-            return Ok(Some(fnv.with_net_type(target, eval.heap())));
         }
     }
 
@@ -130,7 +116,7 @@ fn physical_unit_from_type_name(type_name: &str) -> Option<PhysicalUnitDims> {
 /// value, so `field(Voltage | None, default=None)` needs this fallback path.
 pub(crate) fn try_physical_conversion_from_compiled_type<'v>(
     value: Value<'v>,
-    typ: &TypeCompiled<Value<'v>>,
+    typ: &TypeCompiled<'v>,
     eval: &mut Evaluator<'v, '_, '_>,
 ) -> anyhow::Result<Option<Value<'v>>> {
     for variant in typ.as_ty().iter_union() {

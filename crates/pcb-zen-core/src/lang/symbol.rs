@@ -1,7 +1,8 @@
 #![allow(clippy::needless_lifetimes)]
 
+use pcb_sch::physical::PcbTypeIdDomain;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, OnceLock, RwLock};
+use std::sync::{Arc, RwLock};
 
 use allocative::Allocative;
 use starlark::{
@@ -116,10 +117,7 @@ impl std::fmt::Debug for SymbolValue {
 starlark_simple_value!(SymbolValue);
 
 #[starlark_value(type = "Symbol")]
-impl<'v> StarlarkValue<'v> for SymbolValue
-where
-    Self: ProvidesStaticType<'v>,
-{
+impl<'v> StarlarkValue<'v> for SymbolValue {
     fn get_attr(&self, attr: &str, heap: Heap<'v>) -> Option<Value<'v>> {
         match attr {
             "properties" => {
@@ -529,18 +527,13 @@ impl std::fmt::Display for SymbolType {
 }
 
 impl SymbolType {
-    /// Return a stable TypeInstanceId for Symbol across all evaluations
     fn type_instance_id() -> TypeInstanceId {
-        static SYMBOL_TYPE_ID: OnceLock<TypeInstanceId> = OnceLock::new();
-        *SYMBOL_TYPE_ID.get_or_init(TypeInstanceId::r#gen)
+        TypeInstanceId::from_identity(PcbTypeIdDomain::Symbol, &())
     }
 }
 
 #[starlark_value(type = "Symbol")]
-impl<'v> StarlarkValue<'v> for SymbolType
-where
-    Self: ProvidesStaticType<'v>,
-{
+impl<'v> StarlarkValue<'v> for SymbolType {
     fn invoke(
         &self,
         _me: Value<'v>,

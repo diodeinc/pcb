@@ -86,10 +86,10 @@ impl BuildEvalState {
 
         let output = if let Some(eval_output) = eval_result.output {
             let span = info_span!("electrical_checks").entered();
-            for (check, defining_module) in eval_output.collect_electrical_checks() {
+            for index in 0..eval_output.collect_electrical_checks().len() {
                 diagnostics
                     .diagnostics
-                    .push(execute_electrical_check(check, defining_module));
+                    .push(execute_electrical_check(&eval_output, index));
             }
             drop(span);
             diagnostics
@@ -168,16 +168,19 @@ impl BuildEvalState {
     }
 }
 
+/// Run the `index`th electrical check of `eval_output` in a fresh heap.
 fn execute_electrical_check(
-    check: &pcb_zen_core::lang::electrical_check::FrozenElectricalCheck,
-    defining_module: &pcb_zen_core::lang::module::FrozenModuleValue,
+    eval_output: &pcb_zen_core::EvalOutput,
+    index: usize,
 ) -> pcb_zen_core::Diagnostic {
     use starlark::environment::Module;
     use starlark::eval::Evaluator;
 
     Module::with_temp_heap(|module| {
+        let (check, defining_module) =
+            eval_output.collect_electrical_checks_at(module.heap())[index];
         let mut eval = Evaluator::new(&module);
-        let module_value = module.heap().alloc_simple(defining_module.clone());
+        let module_value = module.heap().alloc_complex(defining_module.clone());
 
         pcb_zen_core::lang::electrical_check::execute_electrical_check(
             &mut eval,

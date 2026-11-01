@@ -7,55 +7,55 @@ expression: output
         path: <root>,
         source: "test_props.zen",
         children: [
-            FrozenValue(
+            Value(
                 Component {
                     name: "U1",
                     footprint: "package://stdlib/kicad-footprints/Capacitor_SMD.pretty/C_0805_2012Metric.kicad_mod",
                     prefix: "U",
                     connections: {
-                        "GND": FrozenValue(
+                        "GND": Value(
                             Net {
                                 name: "GND",
                                 id: "<ID>",
                             },
                         ),
-                        "ICLK": FrozenValue(
+                        "ICLK": Value(
                             Net {
                                 name: "ICLK",
                                 id: "<ID>",
                             },
                         ),
-                        "OE": FrozenValue(
+                        "OE": Value(
                             Net {
                                 name: "OE",
                                 id: "<ID>",
                             },
                         ),
-                        "Q1": FrozenValue(
+                        "Q1": Value(
                             Net {
                                 name: "Q1",
                                 id: "<ID>",
                             },
                         ),
-                        "Q2": FrozenValue(
+                        "Q2": Value(
                             Net {
                                 name: "Q2",
                                 id: "<ID>",
                             },
                         ),
-                        "Q3": FrozenValue(
+                        "Q3": Value(
                             Net {
                                 name: "Q3",
                                 id: "<ID>",
                             },
                         ),
-                        "Q4": FrozenValue(
+                        "Q4": Value(
                             Net {
                                 name: "Q4",
                                 id: "<ID>",
                             },
                         ),
-                        "VDD": FrozenValue(
+                        "VDD": Value(
                             Net {
                                 name: "VDD",
                                 id: "<ID>",
@@ -63,14 +63,14 @@ expression: output
                         ),
                     },
                     properties: {
-                        "CustomProp": FrozenValue(
+                        "CustomProp": Value(
                             "Value123",
                         ),
-                        "symbol_name": FrozenValue(
+                        "symbol_name": Value(
                             "NB3N551DG",
                         ),
                     },
-                    symbol: FrozenValue(
+                    symbol: Value(
                         Symbol {
                             name: Some(
                                 "NB3N551DG",

@@ -11,22 +11,22 @@ expression: output
         path: sub_dnp,
         source: "/SubModule.zen",
         properties: {
-            "dnp": "FrozenValue(StarlarkBool(true))",
+            "dnp": "Value(StarlarkBool(true))",
         },
         children: [
-            FrozenValue(
+            Value(
                 Component {
                     name: "R1",
                     footprint: "0402",
                     prefix: "U",
                     connections: {
-                        "1": FrozenValue(
+                        "1": Value(
                             Net {
                                 name: "VCC",
                                 id: "<ID>",
                             },
                         ),
-                        "2": FrozenValue(
+                        "2": Value(
                             Net {
                                 name: "GND",
                                 id: "<ID>",
@@ -34,11 +34,11 @@ expression: output
                         ),
                     },
                     properties: {
-                        "resistance": FrozenValue(
+                        "resistance": Value(
                             "10k",
                         ),
                     },
-                    symbol: FrozenValue(
+                    symbol: Value(
                         Symbol {
                             name: None,
                             pins: {
@@ -49,19 +49,19 @@ expression: output
                     ),
                 },
             ),
-            FrozenValue(
+            Value(
                 Component {
                     name: "C1",
                     footprint: "0402",
                     prefix: "U",
                     connections: {
-                        "1": FrozenValue(
+                        "1": Value(
                             Net {
                                 name: "VCC",
                                 id: "<ID>",
                             },
                         ),
-                        "2": FrozenValue(
+                        "2": Value(
                             Net {
                                 name: "GND",
                                 id: "<ID>",
@@ -69,11 +69,11 @@ expression: output
                         ),
                     },
                     properties: {
-                        "capacitance": FrozenValue(
+                        "capacitance": Value(
                             "100nF",
                         ),
                     },
-                    symbol: FrozenValue(
+                    symbol: Value(
                         Symbol {
                             name: None,
                             pins: {
@@ -90,19 +90,19 @@ expression: output
         path: sub_normal,
         source: "/SubModule.zen",
         children: [
-            FrozenValue(
+            Value(
                 Component {
                     name: "R1",
                     footprint: "0402",
                     prefix: "U",
                     connections: {
-                        "1": FrozenValue(
+                        "1": Value(
                             Net {
                                 name: "VCC",
                                 id: "<ID>",
                             },
                         ),
-                        "2": FrozenValue(
+                        "2": Value(
                             Net {
                                 name: "GND",
                                 id: "<ID>",
@@ -110,11 +110,11 @@ expression: output
                         ),
                     },
                     properties: {
-                        "resistance": FrozenValue(
+                        "resistance": Value(
                             "10k",
                         ),
                     },
-                    symbol: FrozenValue(
+                    symbol: Value(
                         Symbol {
                             name: None,
                             pins: {
@@ -125,19 +125,19 @@ expression: output
                     ),
                 },
             ),
-            FrozenValue(
+            Value(
                 Component {
                     name: "C1",
                     footprint: "0402",
                     prefix: "U",
                     connections: {
-                        "1": FrozenValue(
+                        "1": Value(
                             Net {
                                 name: "VCC",
                                 id: "<ID>",
                             },
                         ),
-                        "2": FrozenValue(
+                        "2": Value(
                             Net {
                                 name: "GND",
                                 id: "<ID>",
@@ -145,11 +145,11 @@ expression: output
                         ),
                     },
                     properties: {
-                        "capacitance": FrozenValue(
+                        "capacitance": Value(
                             "100nF",
                         ),
                     },
-                    symbol: FrozenValue(
+                    symbol: Value(
                         Symbol {
                             name: None,
                             pins: {

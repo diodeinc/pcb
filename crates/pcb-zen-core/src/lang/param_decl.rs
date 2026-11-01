@@ -10,7 +10,7 @@ use starlark::{
     errors::EvalSeverity,
     eval::{Arguments, Evaluator},
     values::record::{FrozenRecordType, RecordType},
-    values::{Freeze, Heap, NoSerialize, StarlarkValue, Trace, Value, ValueLike, starlark_value},
+    values::{Freeze, Heap, NoSerialize, StarlarkValue, Trace, Value, starlark_value},
 };
 
 use crate::lang::{
@@ -19,8 +19,7 @@ use crate::lang::{
 
 use super::context::ContextValue;
 use super::interface::{
-    FrozenInterfaceValue, InstancePrefix, InterfaceValue, instantiate_interface,
-    unregister_template_owned_nets,
+    InstancePrefix, InterfaceValue, instantiate_interface, unregister_template_owned_nets,
 };
 use super::module::{
     DeclarationSite, MissingInputError, ParameterMetadataInput, current_declaration_site,
@@ -28,10 +27,7 @@ use super::module::{
     normalize_config_default, record_parameter_metadata, run_checks, validate_allowed_config_value,
     validate_or_convert,
 };
-use super::net::{
-    FrozenNetType, FrozenNetValue, NetInstantiateIntent, NetInstantiateOptions, NetType,
-    NetTypeGen, NetValue,
-};
+use super::net::{NetInstantiateIntent, NetInstantiateOptions, NetType, NetValue};
 
 #[derive(Debug, Clone, Trace, Allocative)]
 struct DeclArgs<'v> {
@@ -140,13 +136,13 @@ impl<'v> starlark::values::AllocValue<'v> for DeferredParam<'v> {
     }
 }
 
-impl<'v> Freeze for DeferredParam<'v> {
-    type Frozen = starlark::values::none::NoneType;
+impl<'v> Freeze<'v> for DeferredParam<'v> {
+    type Frozen<'fv> = starlark::values::none::NoneType;
 
-    fn freeze(
+    fn freeze<'fv>(
         self,
-        _freezer: &starlark::values::Freezer,
-    ) -> starlark::values::FreezeResult<Self::Frozen> {
+        _freezer: &starlark::values::Freezer<'v, 'fv>,
+    ) -> starlark::values::FreezeResult<starlark::values::none::NoneType> {
         Err(starlark::values::FreezeError::new(
             self.kind.unresolved_error().to_owned(),
         ))
@@ -160,10 +156,7 @@ impl<'v> Display for DeferredParam<'v> {
 }
 
 #[starlark_value(type = "DeferredParameter")]
-impl<'v> StarlarkValue<'v> for DeferredParam<'v>
-where
-    Self: ProvidesStaticType<'v>,
-{
+impl<'v> StarlarkValue<'v> for DeferredParam<'v> {
     fn export_as(
         &self,
         variable_name: &str,
@@ -473,8 +466,6 @@ fn resolve_io<'v>(
     let stamp_io_declaration_site = |value: Value<'v>, eval: &mut Evaluator<'v, '_, '_>| {
         if let Some(net) = value.downcast_ref::<NetValue<'v>>() {
             net.with_declaration_site(&declaration_site.path, declaration_site.span, eval.heap())
-        } else if let Some(net) = value.downcast_ref::<FrozenNetValue>() {
-            net.with_declaration_site(&declaration_site.path, declaration_site.span, eval.heap())
         } else {
             value
         }
@@ -576,14 +567,7 @@ impl<'v> IoTemplateValue<'v> {
                 return None;
             }
             Some(Self::Net(value))
-        } else if let Some(net) = value.downcast_ref::<FrozenNetValue>() {
-            if net.is_open() {
-                return None;
-            }
-            Some(Self::Net(value))
-        } else if value.downcast_ref::<InterfaceValue<'v>>().is_some()
-            || value.downcast_ref::<FrozenInterfaceValue>().is_some()
-        {
+        } else if value.downcast_ref::<InterfaceValue<'v>>().is_some() {
             Some(Self::Interface(value))
         } else {
             None
@@ -637,9 +621,6 @@ fn interface_template_factory<'v>(template: Value<'v>) -> starlark::Result<Value
     if let Some(interface) = template.downcast_ref::<InterfaceValue<'v>>() {
         return Ok(interface.factory().to_value());
     }
-    if let Some(interface) = template.downcast_ref::<FrozenInterfaceValue>() {
-        return Ok(interface.factory().to_value());
-    }
     Err(anyhow::anyhow!(
         "builtin.io() requires an interface template, got {}.",
         template.get_type()
@@ -649,8 +630,6 @@ fn interface_template_factory<'v>(template: Value<'v>) -> starlark::Result<Value
 
 fn net_template_type_name<'v>(template: Value<'v>) -> starlark::Result<String> {
     if let Some(net) = template.downcast_ref::<NetValue<'v>>() {
-        Ok(net.net_type_name().to_owned())
-    } else if let Some(net) = template.downcast_ref::<FrozenNetValue>() {
         Ok(net.net_type_name().to_owned())
     } else {
         Err(anyhow::anyhow!(
@@ -664,8 +643,6 @@ fn net_template_type_name<'v>(template: Value<'v>) -> starlark::Result<String> {
 fn net_template_name<'v>(template: Value<'v>) -> Option<&'v str> {
     if let Some(net) = template.downcast_ref::<NetValue<'v>>() {
         net.template_name_opt()
-    } else if let Some(net) = template.downcast_ref::<FrozenNetValue>() {
-        net.template_name_opt()
     } else {
         None
     }
@@ -674,8 +651,6 @@ fn net_template_name<'v>(template: Value<'v>) -> Option<&'v str> {
 fn net_property_value<'v>(value: Value<'v>, property: &str) -> Option<Value<'v>> {
     if let Some(net) = value.downcast_ref::<NetValue<'v>>() {
         net.properties().get(property).map(|v| v.to_value())
-    } else if let Some(net) = value.downcast_ref::<FrozenNetValue>() {
-        net.properties().get(property).map(|v| v.to_value())
     } else {
         None
     }
@@ -683,8 +658,6 @@ fn net_property_value<'v>(value: Value<'v>, property: &str) -> Option<Value<'v>>
 
 fn net_skips_implicit_checks<'v>(value: Value<'v>) -> bool {
     if let Some(net) = value.downcast_ref::<NetValue<'v>>() {
-        net.skips_implicit_checks()
-    } else if let Some(net) = value.downcast_ref::<FrozenNetValue>() {
         net.skips_implicit_checks()
     } else {
         false
@@ -696,12 +669,6 @@ fn materialize_net_template<'v>(
     heap: Heap<'v>,
 ) -> starlark::Result<Value<'v>> {
     if let Some(net) = template.downcast_ref::<NetValue<'v>>() {
-        Ok(net.with_declaration_site(
-            net.declaration_path().unwrap_or_default(),
-            net.declaration_span(),
-            heap,
-        ))
-    } else if let Some(net) = template.downcast_ref::<FrozenNetValue>() {
         Ok(net.with_declaration_site(
             net.declaration_path().unwrap_or_default(),
             net.declaration_span(),
@@ -776,25 +743,25 @@ fn register_provided_io_net<'v>(
         return register_provided_io_net_type(name, value, net_type, eval);
     }
 
-    if let Some(net_type) = typ.downcast_ref::<FrozenNetType>() {
-        return register_provided_io_net_type(name, value, net_type, eval);
-    }
-
     Ok(value)
 }
 
-fn register_provided_io_net_type<'v, V: ValueLike<'v>>(
+fn register_provided_io_net_type<'v>(
     name: &str,
     value: Value<'v>,
-    net_type: &NetTypeGen<V>,
+    net_type: &NetType<'v>,
     eval: &mut Evaluator<'v, '_, '_>,
 ) -> starlark::Result<Value<'v>> {
-    let value = if let Some(net) = value.downcast_ref::<NetValue<'v>>() {
+    let value = if let Some(net) = value.downcast_ref::<NetValue<'v>>()
+        && !value.is_frozen()
+    {
         if net.is_open() {
             return Ok(value);
         }
         value
-    } else if let Some(net) = value.downcast_ref::<FrozenNetValue>() {
+    } else if let Some(net) = value.downcast_ref::<NetValue<'_>>()
+        && value.is_frozen()
+    {
         if net.is_open() {
             return Ok(net.to_current_heap(eval.heap()));
         }
