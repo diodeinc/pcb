@@ -8,7 +8,6 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
-  KICAD_VERSION: 10.0.5
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -79,13 +78,18 @@ jobs:
             fi
           done
 
+      - name: Resolve KiCad cask version (macOS)
+        if: matrix.config.name == 'macOS'
+        id: kicad-cask
+        run: echo "version=$(brew info --cask --json=v2 kicad | jq -r '.casks[0].version')" >> "$GITHUB_OUTPUT"
+
       - name: Cache KiCad (macOS)
         if: matrix.config.name == 'macOS'
         id: cache-kicad-mac
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: /Applications/KiCad
-          key: ${{ runner.os }}-kicad-${{ env.KICAD_VERSION }}
+          key: ${{ runner.os }}-kicad-${{ steps.kicad-cask.outputs.version }}
 
       - name: Install KiCad (macOS)
         if: matrix.config.name == 'macOS' && steps.cache-kicad-mac.outputs.cache-hit != 'true'
