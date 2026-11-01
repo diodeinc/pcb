@@ -64,17 +64,18 @@ jobs:
         run: |
           apt-get update
           apt-get install -y ca-certificates curl build-essential pkg-config libssl-dev jq git openssh-client zstd
-          # publish checks the board against the installed KiCad.
-          curl -fsSL https://kicad-mirror.api.diode.computer/apt/diode-kicad-archive-keyring.asc \
-            -o /usr/share/keyrings/diode-kicad-archive-keyring.asc
-          echo "deb [signed-by=/usr/share/keyrings/diode-kicad-archive-keyring.asc] https://kicad-mirror.api.diode.computer/apt trixie main" \
-            > /etc/apt/sources.list.d/diode-kicad.list
-          apt-get update
-          apt-get install -y --no-install-recommends kicad
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+
+      - name: Install KiCad from the Diode APT repository
+        run: |
+          install -m 0644 .github/diode-kicad-archive-keyring.asc /usr/share/keyrings/diode-kicad-archive-keyring.asc
+          echo "deb [signed-by=/usr/share/keyrings/diode-kicad-archive-keyring.asc] https://kicad-mirror.api.diode.computer/apt trixie main" \
+            > /etc/apt/sources.list.d/diode-kicad.list
+          apt-get update
+          apt-get install -y --no-install-recommends kicad
 
       - name: Install Rust
         uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1.17.0
