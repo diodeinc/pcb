@@ -18,6 +18,7 @@ use crate::{
     },
 };
 
+#[derive(ProvidesStaticType)]
 pub struct EvalContextRef<'a> {
     context: &'a EvalContext,
     output: Option<&'a EvalOutput>,
@@ -37,12 +38,6 @@ impl<'a> EvalContextRef<'a> {
             output: Some(output),
         }
     }
-}
-
-// SAFETY: `EvalContextRef` only carries a lifetime on its borrowed context.
-// Replacing that lifetime with `'static` gives the corresponding static shape.
-unsafe impl<'a> ProvidesStaticType<'a> for EvalContextRef<'a> {
-    type StaticType = EvalContextRef<'static>;
 }
 
 /// Convenience trait that adds helper methods to Starlark `Evaluator`s so they can
