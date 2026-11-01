@@ -641,27 +641,21 @@ fn net_template_type_name<'v>(template: Value<'v>) -> starlark::Result<String> {
 }
 
 fn net_template_name<'v>(template: Value<'v>) -> Option<&'v str> {
-    if let Some(net) = template.downcast_ref::<NetValue<'v>>() {
-        net.template_name_opt()
-    } else {
-        None
-    }
+    template.downcast_ref::<NetValue<'v>>()?.template_name_opt()
 }
 
 fn net_property_value<'v>(value: Value<'v>, property: &str) -> Option<Value<'v>> {
-    if let Some(net) = value.downcast_ref::<NetValue<'v>>() {
-        net.properties().get(property).map(|v| v.to_value())
-    } else {
-        None
-    }
+    value
+        .downcast_ref::<NetValue<'v>>()?
+        .properties()
+        .get(property)
+        .map(|v| v.to_value())
 }
 
 fn net_skips_implicit_checks<'v>(value: Value<'v>) -> bool {
-    if let Some(net) = value.downcast_ref::<NetValue<'v>>() {
-        net.skips_implicit_checks()
-    } else {
-        false
-    }
+    value
+        .downcast_ref::<NetValue<'v>>()
+        .is_some_and(|net| net.skips_implicit_checks())
 }
 
 fn materialize_net_template<'v>(

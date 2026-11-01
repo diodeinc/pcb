@@ -461,18 +461,10 @@ impl EvalOutput {
 
     /// Collect all testbenches from all modules in the tree
     pub fn collect_testbenches(&self) -> Vec<&crate::lang::test_bench::TestBenchValue<'_>> {
-        let mut result = Vec::new();
-        let module_tree = self.module_tree();
-
-        // Iterate through all modules in the tree
-        for module in module_tree.values() {
-            // Get testbenches from this module
-            for testbench in module.testbenches() {
-                result.push(testbench);
-            }
-        }
-
-        result
+        self.module_tree()
+            .into_values()
+            .flat_map(|module| module.testbenches())
+            .collect()
     }
 
     /// Like [`Self::collect_testbenches`], at the brand of `heap`.
@@ -499,14 +491,10 @@ impl EvalOutput {
 
     /// Collect all electrical checks from all modules in the tree
     pub fn collect_electrical_checks(&self) -> Vec<(&ElectricalCheck<'_>, &ModuleValue<'_>)> {
-        let mut result = Vec::new();
-        let module_tree = self.module_tree();
-        for module in module_tree.values() {
-            for check in module.electrical_checks() {
-                result.push((check, *module));
-            }
-        }
-        result
+        self.module_tree()
+            .into_values()
+            .flat_map(|module| module.electrical_checks().map(move |check| (check, module)))
+            .collect()
     }
 }
 
