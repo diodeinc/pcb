@@ -15,7 +15,6 @@ concurrency:
 
 permissions:
   contents: read
-  packages: read
 
 jobs:
   ipc:
@@ -57,7 +56,7 @@ jobs:
     name: Evaluate publish bundles
     runs-on: blacksmith-16vcpu-ubuntu-2404
     container:
-      image: ghcr.io/diodeinc/kicad:10.0.5
+      image: debian:trixie-slim
       options: --user root
     timeout-minutes: 30
     steps:
