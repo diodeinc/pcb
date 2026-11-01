@@ -185,9 +185,9 @@ impl OutputSnapshot {
     }
 
     fn restore(self) -> Result<()> {
-        let dir = match &self {
+        let (dir, copy) = match self {
             Self::Created(dir) => {
-                return std::fs::remove_dir_all(dir)
+                return std::fs::remove_dir_all(&dir)
                     .with_context(|| format!("Failed to remove partial import {}", dir.display()));
             }
             Self::Empty(dir) => {
@@ -200,24 +200,28 @@ impl OutputSnapshot {
                 }
                 return Ok(());
             }
-            Self::Saved { dir, .. } => dir,
+            Self::Saved { dir, copy } => (dir, copy),
         };
-        for entry in snapshot_entries(dir)? {
-            remove_path(&entry)?;
-        }
-        if let Self::Saved { dir, copy } = self {
-            let backup = copy.keep();
-            for entry in snapshot_entries(&backup)? {
-                copy_tree(&entry, &dir.join(entry.file_name().unwrap())).with_context(|| {
-                    format!(
-                        "Failed to restore {} after a failed import; its previous contents are in {}",
-                        dir.display(),
-                        backup.display()
-                    )
-                })?;
+        // Keep the backup before touching the repository, so a failure partway through
+        // restoring (e.g. a file held open) never loses the previous contents.
+        let backup = copy.keep();
+        let restored = (|| -> Result<()> {
+            for entry in snapshot_entries(&dir)? {
+                remove_path(&entry)?;
             }
-            std::fs::remove_dir_all(&backup)?;
-        }
+            for entry in snapshot_entries(&backup)? {
+                copy_tree(&entry, &dir.join(entry.file_name().unwrap()))?;
+            }
+            Ok(())
+        })();
+        restored.with_context(|| {
+            format!(
+                "Failed to restore {} after a failed import; its previous contents are in {}",
+                dir.display(),
+                backup.display()
+            )
+        })?;
+        std::fs::remove_dir_all(&backup)?;
         Ok(())
     }
 }
