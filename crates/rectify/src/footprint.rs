@@ -454,7 +454,9 @@ fn parse_embedded_file(list: &[Sexpr]) -> Result<Option<(String, Vec<u8>)>> {
     let compressed = base64::engine::general_purpose::STANDARD
         .decode(b64_clean.as_bytes())
         .context("embedded data is not valid base64")?;
-    let decompressed = zstd::decode_all(&*compressed).context("zstd decompress")?;
+    let decompressed = pcb_sexpr::kicad::embedded::decode_zstd_stream(&compressed)
+        .map_err(anyhow::Error::msg)
+        .context("zstd decompress")?;
     Ok(Some((name, decompressed)))
 }
 

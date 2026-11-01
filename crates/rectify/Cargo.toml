@@ -21,7 +21,6 @@ pcb-sexpr = { workspace = true }
 triangulate = { workspace = true }
 
 base64 = { workspace = true }
-zstd = { workspace = true }
 regex = { workspace = true }
 
 # Numerics: raster grids, FFT-based mask correlation, parallel pose scan
