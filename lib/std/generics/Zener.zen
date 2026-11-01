@@ -57,7 +57,7 @@ def _spice_args(zener_voltage):
         "IS": "1e-14",
         "N": "1.0",
         "RS": "10m",
-        "BV": str(zener_voltage.max),
+        "BV": zener_voltage.with_value(zener_voltage.max),
         "IBV": "5m",
         "CJO": "1p",
     }
