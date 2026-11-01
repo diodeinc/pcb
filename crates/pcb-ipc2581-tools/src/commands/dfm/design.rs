@@ -33,12 +33,16 @@ use pcb_ir::dialects::ipc::{
     lower_layer_to_artwork_with, profile_occurrences_for,
 };
 use pcb_ir::dialects::{LayerRole, Side, artwork};
-use pcb_ir::geom::dfm::{BBoxIndex, Distance, WidthDisk, min_width_disk, thin_gaps_reach_mm};
-use pcb_ir::geom::region::ring_signed_area;
-use pcb_ir::geom::{Affine2, BBox, ContourSet, Point, Polarity, PreparedRegion, Span};
+use pcb_ir::geom::dfm::{
+    BBoxIndex, Distance, WidthDisk, min_width_disk, region_clearance_within, thin_gaps_reach_mm,
+};
+use pcb_ir::geom::region::PaintComposer;
+use pcb_ir::geom::region::{ring_edges, ring_signed_area};
+use pcb_ir::geom::{Affine2, BBox, ContourSet, Point, Polarity, PreparedRegion, Span, tol};
 #[cfg(not(target_family = "wasm"))]
 use rayon::prelude::*;
 
+use super::pdk::PartialDepth;
 use crate::geometry::GeometryDocument;
 use crate::layers;
 use pcb_ir::import::ipc2581::{
@@ -83,6 +87,12 @@ pub(super) struct Design<'a> {
     /// like `holes`.
     pub hole_lands: Vec<Vec<HoleLand>>,
     pub slot_lands: Vec<Vec<HoleLand>>,
+    /// The intentional lands of each NPTH, indexed like `holes`; see
+    /// [`intentional_npth_lands`].
+    pub npth_lands: Vec<Vec<HoleLand>>,
+    /// The Step's own blind and buried holes and slots. Those of an
+    /// unsupported span are left out of `holes` and `slots`.
+    pub partial_spans: Vec<(&'static str, DrillSpan)>,
     pub mask_layers: Vec<MaskLayer>,
     /// The V-score lines the Step draws.
     pub scores: Vec<Score>,
@@ -153,6 +163,8 @@ struct Source<'a> {
     conductor_limit_mm: f64,
     /// The farthest a soldermask web rule reads the image from a web's walls.
     web_context_mm: f64,
+    /// Whether every rule set states it drills blind, and buried, spans.
+    supported_spans: [bool; 2],
 }
 
 impl Source<'_> {
@@ -280,7 +292,7 @@ impl<'a> Design<'a> {
             .filter(|rule| {
                 matches!(
                     rule.kind,
-                    rules::RuleKind::CopperClearance
+                    rules::RuleKind::CopperClearance(_)
                         | rules::RuleKind::HoleToCopperClearance(_)
                         | rules::RuleKind::SlotToCopperClearance(_)
                 )
@@ -292,6 +304,15 @@ impl<'a> Design<'a> {
             .filter(|rule| rule.kind == rules::RuleKind::SoldermaskWeb)
             .map(|rule| thin_gaps_reach_mm(rule.limit.length().millimeters(), resolution))
             .fold(0.0, f64::max);
+        let supports = |depth| {
+            rules.iter().all(|rule| match &rule.limit {
+                rules::LimitValue::Allowed(rules::Allowed::DrillSpans(spans)) => {
+                    spans.contains(&depth)
+                }
+                _ => true,
+            })
+        };
+        let supported_spans = [PartialDepth::Blind, PartialDepth::Buried].map(supports);
         let primary_bom = if wanted.intersects(Pools::COMPONENTS) {
             primary_bom(imported)
         } else {
@@ -331,6 +352,7 @@ impl<'a> Design<'a> {
                     resolution,
                     conductor_limit_mm,
                     web_context_mm,
+                    supported_spans,
                 };
                 Self::extract(
                     source,
@@ -485,12 +507,34 @@ impl<'a> Design<'a> {
             || collect_drilled(source, stackup.as_ref()),
         );
         blockers.extend(unusable);
+        // Every drilled feature stays copper's context.
         let drilled = (holes.iter().map(|hole| (hole.bbox, hole.branch)))
             .chain(slots.iter().map(|slot| (slot.bbox, slot.branch)))
             .collect::<Vec<_>>();
+        let supported = |span: &DrillSpan| {
+            span.partial_depth
+                .is_none_or(|depth| source.supported_spans[depth as usize])
+        };
+        let partial_spans = (holes
+            .iter()
+            .map(|hole| ("hole", &hole.drill_span, hole.branch)))
+        .chain(
+            slots
+                .iter()
+                .map(|slot| ("slot", &slot.drill_span, slot.branch)),
+        )
+        .filter(|(_, span, branch)| branch.is_none() && span.partial_depth.is_some())
+        .map(|(feature, span, _)| (feature, span.clone()))
+        .collect();
+        let holes = (holes.into_iter())
+            .filter(|hole| supported(&hole.drill_span))
+            .collect::<Vec<_>>();
+        let slots = (slots.into_iter())
+            .filter(|slot| supported(&slot.drill_span))
+            .collect::<Vec<_>>();
         let net_shorts = pool(
             wanted,
-            Pools::CONDUCTOR_OWNERSHIP,
+            Pools::NET_SHORTS,
             Pools::NONE,
             &mut blockers,
             || collect_net_shorts(source, step),
@@ -574,6 +618,11 @@ impl<'a> Design<'a> {
                 ))
             },
         );
+        let npth_lands = if wanted.intersects(Pools::HOLE_LANDS) {
+            intentional_npth_lands(imported, &holes, &copper_layers)
+        } else {
+            vec![Vec::new(); holes.len()]
+        };
         Self {
             imported,
             scope,
@@ -581,6 +630,8 @@ impl<'a> Design<'a> {
             placements,
             resolution,
             conductor_boundaries,
+            npth_lands,
+            partial_spans,
             conductors_near,
             slot_widths: pool(
                 wanted,
@@ -872,6 +923,8 @@ pub(super) struct PhysicalStackup {
     /// The weight each copper layer states, in oz/ft², indexed like
     /// `copper_layers`.
     pub copper_weights_oz: Vec<Option<f64>>,
+    /// Whether the stackup is `SPECIFIED`, required as stated.
+    pub required: bool,
     overall_thickness_mm: Option<f64>,
     layers: Vec<PhysicalStackupLayer>,
 }
@@ -1191,6 +1244,7 @@ fn collect_physical_stackup(imported: &ImportedDesign) -> Result<PhysicalStackup
         name: imported.resolve(stackup.name).to_owned(),
         copper_layers,
         copper_weights_oz,
+        required: stackup.status == Some(ipc2581::types::StackupStatus::Specified),
         overall_thickness_mm: stackup.overall_thickness,
         layers: physical_layers,
     })
@@ -1343,6 +1397,13 @@ pub(super) enum ConductorId {
         instance: Option<u32>,
         source_set_index: u32,
     },
+    /// An island of declared text touching no other copper or drill.
+    /// `occurrence` is its first source feature.
+    Text {
+        step: Option<Symbol>,
+        instance: Option<u32>,
+        occurrence: FeatureOccurrenceId,
+    },
     Unattributed {
         step: Option<Symbol>,
         instance: Option<u32>,
@@ -1358,6 +1419,7 @@ impl ConductorId {
             Self::Net { step, .. }
             | Self::Isolated { step, .. }
             | Self::Auxiliary { step, .. }
+            | Self::Text { step, .. }
             | Self::Unattributed { step, .. } => step,
         }
     }
@@ -1367,6 +1429,7 @@ impl ConductorId {
             Self::Net { instance, .. }
             | Self::Isolated { instance, .. }
             | Self::Auxiliary { instance, .. }
+            | Self::Text { instance, .. }
             | Self::Unattributed { instance, .. } => instance,
         }
     }
@@ -1374,7 +1437,10 @@ impl ConductorId {
     pub fn net(self) -> Option<Symbol> {
         match self {
             Self::Net { net, .. } => Some(net),
-            Self::Isolated { .. } | Self::Auxiliary { .. } | Self::Unattributed { .. } => None,
+            Self::Isolated { .. }
+            | Self::Auxiliary { .. }
+            | Self::Text { .. }
+            | Self::Unattributed { .. } => None,
         }
     }
 
@@ -1752,9 +1818,18 @@ fn drill_span(
     let (first_copper_index, last_copper_index) = resolved.unwrap_or(whole_stack);
     let declared_through = matches!(span, FeatureSpan::ThroughBoard)
         || resolved.is_some_and(|resolved| resolved == whole_stack);
+    let outer = |index: u16| index == whole_stack.0 || index == whole_stack.1;
     DrillSpan {
         first_copper_index,
         last_copper_index,
+        partial_depth: match (
+            declared_through || resolved.is_none(),
+            outer(first_copper_index) || outer(last_copper_index),
+        ) {
+            (true, _) => None,
+            (false, true) => Some(PartialDepth::Blind),
+            (false, false) => Some(PartialDepth::Buried),
+        },
         interpretation: match (declared_through, resolved) {
             (true, _) => "declared_through_board",
             (false, Some(_)) => "declared_layer_span",
@@ -2041,11 +2116,24 @@ fn conductor_order(
         ConductorId::Auxiliary {
             source_set_index, ..
         } => (2, "", source_set_index, 0, None),
+        ConductorId::Text { occurrence, .. } => {
+            let source = imported
+                .feature_definition(occurrence.feature)
+                .expect("text must reference its imported definition")
+                .source;
+            (
+                3,
+                "",
+                source.set_index,
+                source.feature_index,
+                Some(occurrence),
+            )
+        }
         ConductorId::Unattributed {
             source_set_index,
             source_feature_index,
             ..
-        } => (3, "", source_set_index, source_feature_index, None),
+        } => (4, "", source_set_index, source_feature_index, None),
     };
     let step = id.step().map_or("", |step| imported.resolve(step));
     (
@@ -2170,7 +2258,7 @@ fn collect_copper_layers(
                 composer.push(Polarity::Dark, image.clone());
             }
             let image = composer.finish()?;
-            let mut conductors = owners
+            let conductors = owners
                 .into_iter()
                 .map(|(id, image)| CopperConductor {
                     id,
@@ -2178,6 +2266,7 @@ fn collect_copper_layers(
                     image,
                 })
                 .collect::<Vec<_>>();
+            let mut conductors = text_islands(source, conductors, drilled)?;
             conductors.sort_by_key(|conductor| conductor_order(imported, conductor.id));
             // The file's side attribute is authoritative; the stackup
             // position is the fallback for files that omit it.
@@ -2205,6 +2294,127 @@ fn collect_copper_layers(
         .into_iter()
         .unzip();
     Ok((copper_layers, blockers.into_iter().flatten().collect()))
+}
+
+/// Whether the source declares a netless conductor to be text. A graphic
+/// states no intent: it may be an antenna element or heat spreader.
+fn declared_text(imported: &ImportedDesign, id: ConductorId) -> bool {
+    let ConductorId::Unattributed { occurrence, .. } = id else {
+        return false;
+    };
+    imported
+        .feature_definition(occurrence.feature)
+        .and_then(|feature| imported.geometry.feature_set(feature))
+        .is_some_and(|set| set.geometry_usage == Some(ipc2581::types::GeometryUsage::Text))
+}
+
+/// Make each island of the Step's own declared text that touches no other
+/// copper and no drill one [`ConductorId::Text`] conductor.
+fn text_islands(
+    source: Source<'_>,
+    conductors: Vec<CopperConductor>,
+    drilled: &[(BBox, Option<u32>)],
+) -> Result<Vec<CopperConductor>> {
+    let (text, mut others): (Vec<_>, Vec<_>) = conductors.into_iter().partition(|conductor| {
+        conductor.id.instance().is_none() && declared_text(source.imported, conductor.id)
+    });
+    if text.is_empty() {
+        return Ok(others);
+    }
+    let mut union = PaintComposer::new(source.resolution);
+    for conductor in &text {
+        union.push(Polarity::Dark, conductor.image.clone());
+    }
+    let union = union.finish()?;
+    let (boundaries, near) = conductor_index(&others);
+    let drills = BBoxIndex::new(drilled.iter().map(|(bbox, _)| *bbox).collect());
+    let mut members = Vec::new();
+    let islands = union.connected_components();
+    for island in &islands {
+        let boundary = island.prepare_query();
+        let touches = |image: &ContourSet, image_boundary: &PreparedRegion| {
+            region_clearance_within(island, &boundary, image, image_boundary, tol::REGION_MM)
+                .is_some_and(|distance| {
+                    distance.mm <= island.uncertainty_mm + image.uncertainty_mm + tol::REGION_MM
+                })
+        };
+        let isolated = near
+            .query(island.bbox.expand(tol::REGION_MM))
+            .into_iter()
+            .all(|index| !touches(&others[index].image, &boundaries[index]))
+            && drills.query(island.bbox).into_iter().all(|index| {
+                island
+                    .intersection(&ContourSet::rectangle(drilled[index].0, source.resolution))
+                    .is_ok_and(|inside| inside.is_empty())
+            });
+        let mut owned = Vec::new();
+        for (index, conductor) in text.iter().enumerate() {
+            if conductor.image.bbox.intersects(island.bbox)
+                && !island.intersection(&conductor.image)?.is_empty()
+            {
+                owned.push(index);
+            }
+        }
+        members.push((isolated, owned));
+    }
+    // A feature is text only if every island it shares, transitively, is
+    // isolated.
+    let mut blocked = members
+        .iter()
+        .map(|(isolated, _)| !isolated)
+        .collect::<Vec<_>>();
+    let mut tainted = vec![false; text.len()];
+    loop {
+        let mut changed = false;
+        for ((_, owned), blocked) in members.iter().zip(&mut blocked) {
+            if *blocked {
+                for &index in owned {
+                    changed |= !std::mem::replace(&mut tainted[index], true);
+                }
+            } else if owned.iter().any(|&index| tainted[index]) {
+                *blocked = true;
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    let mut claimed = vec![false; text.len()];
+    let mut merged = Vec::new();
+    for (((_, owned), island), blocked) in members.into_iter().zip(islands).zip(blocked) {
+        if blocked || owned.is_empty() {
+            continue;
+        }
+        let occurrence = owned
+            .iter()
+            .filter_map(|&index| match text[index].id {
+                ConductorId::Unattributed { occurrence, .. } => Some(occurrence),
+                _ => None,
+            })
+            .min()
+            .expect("declared text is unattributed copper");
+        for &index in &owned {
+            claimed[index] = true;
+        }
+        merged.push(CopperConductor {
+            id: ConductorId::Text {
+                step: text[owned[0]].id.step(),
+                instance: None,
+                occurrence,
+            },
+            branch: None,
+            image: island,
+        });
+    }
+    others.extend(
+        text.into_iter()
+            .zip(claimed)
+            .filter(|(_, claimed)| !claimed)
+            .map(|(conductor, _)| conductor),
+    );
+    others.extend(merged);
+    Ok(others)
 }
 
 /// Declarations are evaluated once in their own Step frame. Parent frames
@@ -2560,6 +2770,144 @@ fn link_lands(
         .collect()
 }
 
+/// The lands each of the Step's own NPTHs is drilled through by design,
+/// indexed like `holes`. The hole's component is the one whose padstack
+/// instance drills it; several, or none, leave it without a land. A hole no
+/// padstack drills takes only a component pad anchored on its centre. A land
+/// is a pad of that component that holds the drill ([`holds_disk`]).
+fn intentional_npth_lands(
+    imported: &ImportedDesign,
+    holes: &[Hole],
+    copper_layers: &[CopperLayer],
+) -> Vec<Vec<HoleLand>> {
+    let document = &imported.geometry;
+    let mut instances = HashMap::<(Option<Symbol>, Symbol), Vec<(Point, Symbol)>>::new();
+    let npth = holes
+        .iter()
+        .filter(|hole| hole.class == HoleClass::Npth && hole.branch.is_none())
+        .filter_map(|hole| Some((hole.step, hole.padstack?)))
+        .collect::<HashSet<_>>();
+    for feature in &document.features {
+        let Some(padstack) = feature.padstack_ref else {
+            continue;
+        };
+        if feature.kind != FeatureKind::Padstack
+            || !npth.contains(&(feature.source_step_ref, padstack))
+        {
+            continue;
+        }
+        for pin in feature.pin_refs.slice(&document.pin_refs) {
+            if let Some(component) = pin.component_ref {
+                instances
+                    .entry((feature.source_step_ref, padstack))
+                    .or_default()
+                    .push((feature.center, component));
+            }
+        }
+    }
+    holes
+        .iter()
+        .map(|hole| {
+            if hole.class != HoleClass::Npth || hole.branch.is_some() {
+                return Vec::new();
+            }
+            let mut components = hole
+                .padstack
+                .and_then(|padstack| instances.get(&(hole.step, padstack)))
+                .into_iter()
+                .flatten()
+                .filter(|(center, _)| center.distance_to(hole.center) <= tol::REGION_MM)
+                .map(|&(_, component)| component)
+                .collect::<Vec<_>>();
+            components.sort_unstable_by_key(|component| imported.resolve(*component));
+            components.dedup();
+            let owner = match (hole.padstack, &components[..]) {
+                (Some(_), [component]) => Some(*component),
+                (Some(_), _) => return Vec::new(),
+                (None, _) => None,
+            };
+            let radius_mm = hole.diameter_mm / 2.0;
+            copper_layers
+                .iter()
+                .enumerate()
+                .filter(|(index, _)| hole.drill_span.contains_copper(*index))
+                .flat_map(|(copper_index, layer)| {
+                    layer
+                        .lands
+                        .iter()
+                        .enumerate()
+                        .filter(move |(_, land)| {
+                            land.step == hole.step
+                                && match owner {
+                                    Some(component) => land.reference_designator == Some(component),
+                                    None => {
+                                        land.reference_designator.is_some()
+                                            && land.center.distance_to(hole.center)
+                                                <= tol::REGION_MM
+                                    }
+                                }
+                                && land
+                                    .image
+                                    .as_ref()
+                                    .is_some_and(|image| holds_disk(image, hole.center, radius_mm))
+                        })
+                        .map(move |(land_index, _)| HoleLand {
+                            copper_index: copper_index as u32,
+                            land_index: land_index as u32,
+                        })
+                })
+                .collect()
+        })
+        .collect()
+}
+
+/// The filled outline of `image`: its outer rings, with every opening
+/// inside them closed.
+pub(super) fn filled_outline(image: &ContourSet) -> ContourSet {
+    let outer = image
+        .rings
+        .iter()
+        .filter(|ring| ring_signed_area(ring) > 0.0)
+        .cloned()
+        .collect::<Vec<_>>();
+    ContourSet::from_regularized(outer, image.resolution, image.uncertainty_mm)
+}
+
+/// Whether `image` is a land of the disk: its filled outline holds the whole
+/// disk, and every opening the disk reaches has all its edges within it. A
+/// bore wider than the drill leaves a clearance, not a land.
+fn holds_disk(image: &ContourSet, center: Point, radius_mm: f64) -> bool {
+    let filled = filled_outline(image);
+    let reaches = |(start, end): (Point, Point)| {
+        pcb_ir::geom::dist::point_segment(center, start, end).0 <= radius_mm + tol::REGION_MM
+    };
+    let bores_inside_drill = image
+        .rings
+        .iter()
+        .filter(|ring| ring_signed_area(ring) < 0.0)
+        .all(|ring| {
+            if ring_edges(ring).all(reaches) {
+                return true;
+            }
+            let opening = ContourSet::from_regularized(
+                vec![ring.iter().rev().copied().collect()],
+                image.resolution,
+                image.uncertainty_mm,
+            );
+            !opening.contains_point(center)
+                && opening
+                    .prepare_query()
+                    .nearest_within(center, radius_mm + tol::REGION_MM)
+                    .is_none()
+        });
+    bores_inside_drill
+        && filled.contains_point(center)
+        && filled
+            .prepare_query()
+            .nearest_within(center, radius_mm - tol::REGION_MM)
+            .is_none()
+}
+
 /// The V-score lines the Step draws itself.
 fn collect_scores(source: Source<'_>) -> Result<Vec<Score>> {
     let imported = source.imported;
@@ -2727,6 +3075,7 @@ mod tests {
             resolution: Resolution::default(),
             conductor_limit_mm: 0.0,
             web_context_mm: 0.0,
+            supported_spans: [true; 2],
         }
     }
 

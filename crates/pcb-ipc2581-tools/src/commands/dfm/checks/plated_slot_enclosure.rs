@@ -192,7 +192,13 @@ limit = { minimum = "0.2 mm", preferred = "0.3 mm" }"#;
     }
 
     fn check(xml: &str) -> dfm::DfmReport {
-        fixtures::report(xml, &fixtures::pdk(RULE), LayoutTarget::Board)
+        // The fixtures' slots stop short of the full stack, on purpose.
+        let support = "[profiles.test.support]\ndrill_spans = [\"blind\", \"buried\"]\n";
+        fixtures::report(
+            xml,
+            &fixtures::pdk(&format!("{support}{RULE}")),
+            LayoutTarget::Board,
+        )
     }
 
     const OVAL: &str = r#"<Location x="0" y="0"/><Oval width="2" height="0.6"/>"#;

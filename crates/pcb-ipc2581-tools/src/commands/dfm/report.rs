@@ -792,6 +792,8 @@ pub struct DrillSpan {
     pub first_copper_index: u16,
     pub last_copper_index: u16,
     pub interpretation: &'static str,
+    #[serde(skip)]
+    pub partial_depth: Option<super::pdk::PartialDepth>,
 }
 
 impl DrillSpan {

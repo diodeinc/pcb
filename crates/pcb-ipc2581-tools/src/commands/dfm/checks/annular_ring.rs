@@ -61,6 +61,9 @@ pub(super) fn evaluate(
     conditions: &Conditions,
     design: &Design,
 ) -> anyhow::Result<Evaluation> {
+    if class == HoleClass::Npth {
+        return npth_lands(limit_mm, conditions, design);
+    }
     let holes = holes_of_class(design, class);
     let copper_layers = &design.copper_layers;
     let hole_lands = &design.hole_lands;
@@ -168,6 +171,84 @@ pub(super) fn evaluate(
             .into_iter()
             .filter_map(|(_, measured)| measured)
             .collect(),
+    })
+}
+
+/// An NPTH's ring is the radial extent beyond the drill of its intentional
+/// land's filled outline ([`Design::npth_lands`]), on each layer with one.
+fn npth_lands(
+    limit_mm: f64,
+    conditions: &Conditions,
+    design: &Design,
+) -> anyhow::Result<Evaluation> {
+    let no_rings = BBoxIndex::new(Vec::new());
+    let mut checked = 0;
+    let mut measured_holes = Vec::new();
+    for (hole_index, hole) in holes_of_class(design, HoleClass::Npth) {
+        let radius = hole.diameter_mm / 2.0;
+        let mut enclosures = Vec::new();
+        for (copper_index, copper) in spanned_layers(design, &hole.drill_span, conditions) {
+            let lands = design.npth_lands[hole_index]
+                .iter()
+                .filter(|link| link.copper_index as usize == copper_index)
+                .map(|link| &copper.lands[link.land_index as usize])
+                .collect::<Vec<_>>();
+            let Some(&first) = lands.first() else {
+                continue;
+            };
+            checked += 1;
+            let filled = ContourSet::union_all(
+                design.resolution,
+                lands
+                    .iter()
+                    .filter_map(|land| land.image.as_ref())
+                    .map(crate::commands::dfm::design::filled_outline),
+            )?;
+            let subject = RingSubject {
+                copper,
+                ring_index: &no_rings,
+                land: Some(first),
+                in_copper: true,
+            };
+            let enclosure =
+                filled
+                    .prepare_query()
+                    .circular_enclosure(hole.center, radius, limit_mm);
+            enclosures.push((subject, enclosure));
+        }
+        let worst = enclosures
+            .iter()
+            .filter_map(|(subject, enclosure)| enclosure.map(|enclosure| (subject, enclosure)))
+            .min_by(|(_, left), (_, right)| left.mm.total_cmp(&right.mm));
+        let Some((subject, enclosure)) = worst else {
+            continue;
+        };
+        let mut worst = measured(design, hole, subject, enclosure, radius + limit_mm);
+        for (subject, enclosure) in &enclosures {
+            let Some(enclosure) = (*enclosure).filter(|distance| violates(distance, limit_mm))
+            else {
+                continue;
+            };
+            let detail = measured(design, hole, subject, enclosure, radius + limit_mm);
+            let mut site = MeasuredSite::new(
+                enclosure,
+                detail.bbox,
+                detail.layers,
+                ring_evidence(hole, subject, radius + limit_mm),
+                MeasurementKind::RadialEnclosure,
+            );
+            site.subjects = detail.subjects;
+            site.note = Some(
+                "The NPTH's intentional land: the radial extent of its filled outline beyond the drill."
+                    .to_owned(),
+            );
+            worst.sites.push(site);
+        }
+        measured_holes.push(worst);
+    }
+    Ok(Evaluation {
+        checked,
+        measured: measured_holes,
     })
 }
 

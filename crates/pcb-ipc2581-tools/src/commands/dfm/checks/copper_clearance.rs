@@ -19,7 +19,7 @@ use crate::commands::dfm::design::{
     ConductorId, CopperLayer, Design, NET_SHORT_LOCATION_TOLERANCE_MM, component_copper, spans,
 };
 use crate::commands::dfm::report::{SourceLocator, Subject};
-use crate::commands::dfm::rules::Conditions;
+use crate::commands::dfm::rules::{Conditions, CopperUse};
 
 use super::{Evaluation, Measured, linework_clearance, violates};
 
@@ -30,14 +30,27 @@ struct Piece {
 
 pub(super) fn evaluate(
     limit_mm: f64,
+    copper: CopperUse,
     conditions: &Conditions,
     design: &Design,
 ) -> anyhow::Result<Evaluation> {
+    // The text rule judges pairs of text islands; the functional rule the rest.
+    let text = |id: ConductorId| matches!(id, ConductorId::Text { .. });
     let measure = |layer: &CopperLayer| {
         let conductors = &layer.conductors;
+        if copper == CopperUse::Text
+            && conductors
+                .iter()
+                .filter(|conductor| text(conductor.id))
+                .count()
+                < 2
+        {
+            return Ok(Vec::new());
+        }
         let ties = TiePermissions::of(design, layer)?;
         let permitted = |first: ConductorId, second: ConductorId| {
-            first.electrical() == second.electrical()
+            (text(first) && text(second)) != (copper == CopperUse::Text)
+                || first.electrical() == second.electrical()
                 || ties.graphic_meets(first, second)
                 || ties.graphic_meets(second, first)
                 || ties.pad_pairs.contains(&(first, second))
@@ -389,6 +402,19 @@ pub(super) fn conductor_subject(
             Some(source_set_index),
             None,
         ),
+        ConductorId::Text { occurrence, .. } => {
+            let source = design
+                .imported
+                .feature_definition(occurrence.feature)
+                .expect("text must reference its imported definition")
+                .source;
+            (
+                "copper_text",
+                Some("netless text".to_owned()),
+                Some(source.set_index),
+                Some(source.feature_index),
+            )
+        }
         ConductorId::Unattributed {
             source_set_index,
             source_feature_index,
@@ -427,7 +453,8 @@ pub(super) fn conductor_subject(
 mod tests {
     use std::collections::BTreeSet;
 
-    use crate::commands::dfm::{checks, design::Design, fixtures, report::RuleStatus};
+    use crate::commands::dfm::report::{RuleStatus, Severity};
+    use crate::commands::dfm::{checks, design::Design, fixtures};
     use ipc2581::Ipc2581;
     use pcb_ir::dialects::ipc::ArtworkScope;
     use pcb_ir::geom::Resolution;
@@ -496,6 +523,239 @@ mod tests {
     fn run(xml: &str) -> checks::Results {
         let rule = "[[rules.copper.clearance]]\nid = \"copper-clearance\"\nlimit = { minimum = \"0.15 mm\" }";
         fixtures::run_board(xml, &fixtures::pdk(rule))
+    }
+
+    fn rect(x0: f64, y0: f64, x1: f64, y1: f64) -> String {
+        format!(
+            r#"<Contour><Polygon><PolyBegin x="{x0}" y="{y0}"/><PolyStepSegment x="{x1}" y="{y0}"/>
+            <PolyStepSegment x="{x1}" y="{y1}"/><PolyStepSegment x="{x0}" y="{y1}"/>
+            <PolyStepSegment x="{x0}" y="{y0}"/></Polygon></Contour>"#
+        )
+    }
+
+    /// A board with netless LOGO1 and U1, whose pad is on N1, plus `sets`.
+    fn declared_components(sets: &str) -> String {
+        format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
+  <Content roleRef="owner"><FunctionMode mode="FABRICATION"/><StepRef name="board"/><LayerRef name="TOP"/>
+    <DictionaryStandard units="MILLIMETER"><EntryStandard id="pad"><RectCenter width="1" height="1"/></EntryStandard></DictionaryStandard>
+  </Content>
+  <Ecad><CadHeader units="MILLIMETER"/><CadData>
+    <Layer name="TOP" layerFunction="SIGNAL" side="TOP" polarity="POSITIVE"/>
+    <Step name="board" type="BOARD">
+      <Profile><Polygon><PolyBegin x="-50" y="-50"/><PolyStepSegment x="50" y="-50"/><PolyStepSegment x="50" y="50"/><PolyStepSegment x="-50" y="50"/><PolyStepSegment x="-50" y="-50"/></Polygon></Profile>
+      <PadStackDef name="padstack"><PadstackPadDef layerRef="TOP" padUse="REGULAR"><Location x="0" y="0"/><StandardPrimitiveRef id="pad"/></PadstackPadDef></PadStackDef>
+      <Component refDes="LOGO1" packageRef="logo" layerRef="TOP" mountType="OTHER" part="logo"><Location x="0" y="0"/></Component>
+      <Component refDes="U1" packageRef="ic" layerRef="TOP" mountType="SMT" part="ic"><Location x="20" y="0"/></Component>
+      <LayerFeature layerRef="TOP">
+        <Set net="N1"><Pad padstackDefRef="padstack"><Location x="20" y="0"/><StandardPrimitiveRef id="pad"/><PinRef componentRef="U1" pin="1"/></Pad></Set>
+        {sets}
+      </LayerFeature>
+    </Step>
+  </CadData></Ecad>
+</IPC-2581>"#
+        )
+    }
+
+    #[test]
+    fn only_declared_isolated_text_is_judged_as_text() {
+        let pdk = fixtures::pdk(
+            r#"[[rules.copper.feature_width]]
+id = "width"
+limit = { minimum = "0.10 mm" }
+
+[[rules.copper.clearance]]
+id = "gap"
+limit = { minimum = "0.15 mm" }"#,
+        );
+        // Two islands 0.1 mm apart, the first with a 0.05 mm spur.
+        let shapes = format!(
+            "{}{}{}",
+            rect(0.0, 0.0, 1.0, 1.0),
+            rect(1.0, 0.475, 2.0, 0.525),
+            rect(0.0, 1.1, 1.0, 2.1)
+        );
+        let judged = |sets: &str| {
+            let report =
+                fixtures::report(&declared_components(sets), &pdk, crate::LayoutTarget::Board);
+            let mut findings = report
+                .findings
+                .iter()
+                .map(|finding| (finding.rule_id.clone(), finding.severity))
+                .collect::<Vec<_>>();
+            findings.sort_by(|left, right| left.0.cmp(&right.0));
+            let incomplete = report
+                .rules
+                .iter()
+                .filter(|rule| rule.status == RuleStatus::Incomplete)
+                .map(|rule| rule.id.clone())
+                .collect::<Vec<_>>();
+            (findings, incomplete)
+        };
+        let set = |usage: &str, component: &str, shapes: &str| {
+            format!(
+                r#"<Set geometryUsage="{usage}" componentRef="{component}"><Features>{shapes}</Features></Set>"#
+            )
+            .replace(r#" componentRef="""#, "")
+        };
+        let found = |findings: &[(&str, Severity)]| {
+            findings
+                .iter()
+                .map(|(id, severity)| (id.to_string(), *severity))
+                .collect::<Vec<_>>()
+        };
+        let (error, warning) = (Severity::Error, Severity::Warning);
+        let functional = (
+            found(&[("width", error)]),
+            vec!["gap".to_owned(), "gap.text".to_owned()],
+        );
+
+        for component in ["", "LOGO1"] {
+            assert_eq!(
+                judged(&set("TEXT", component, &shapes)),
+                (
+                    found(&[("gap.text", warning), ("width.text", warning)]),
+                    Vec::new()
+                ),
+                "{component}"
+            );
+        }
+        // A graphic, even an isolated terminal-free one, stays functional.
+        for component in ["LOGO1", "", "U1"] {
+            assert_eq!(
+                judged(&set("GRAPHIC", component, &shapes)),
+                functional,
+                "{component}"
+            );
+        }
+        // Text touching N1 stays functional.
+        let touching = format!(
+            "{}<Set net=\"N1\"><Features>{}</Features></Set>",
+            set("TEXT", "", &shapes),
+            rect(-1.0, 0.0, 0.0, 1.0)
+        );
+        let (findings, incomplete) = judged(&touching);
+        assert_eq!(findings, found(&[("width", error)]));
+        assert!(incomplete.contains(&"gap".to_owned()), "{incomplete:?}");
+        // One feature spanning an isolated island and one touching N1.
+        let split = format!(
+            r#"<Set geometryUsage="TEXT"><Features><UserSpecial>{}{}</UserSpecial></Features></Set><Set net="N1"><Features>{}</Features></Set>"#,
+            rect(5.0, 0.0, 5.05, 1.0),
+            rect(8.0, 0.0, 9.0, 1.0),
+            rect(9.0, 0.0, 10.0, 1.0)
+        );
+        let (findings, incomplete) = judged(&split);
+        assert_eq!(findings, found(&[("width", error)]));
+        assert!(incomplete.contains(&"gap".to_owned()), "{incomplete:?}");
+    }
+
+    #[test]
+    fn text_is_judged_by_every_tier_and_reported_once() {
+        // Two isolated text islands `gap` apart, one with a `width` spur.
+        let judged = |limits: &str, width: f64, gap: f64| {
+            let shapes = format!(
+                "{}{}{}",
+                rect(0.0, 0.0, 1.0, 1.0),
+                rect(1.0, 0.5 - width / 2.0, 2.0, 0.5 + width / 2.0),
+                rect(0.0, 1.0 + gap, 1.0, 2.0 + gap)
+            );
+            let xml = declared_components(&format!(
+                r#"<Set geometryUsage="TEXT"><Features>{shapes}</Features></Set>"#
+            ));
+            let report = fixtures::report(&xml, &fixtures::pdk(limits), crate::LayoutTarget::Board);
+            let mut findings = report
+                .findings
+                .iter()
+                .map(|finding| {
+                    assert_eq!(finding.severity, Severity::Warning);
+                    finding.rule_id.clone()
+                })
+                .collect::<Vec<_>>();
+            findings.sort();
+            findings
+        };
+        let ids = |ids: &[&str]| ids.iter().map(|id| id.to_string()).collect::<Vec<_>>();
+        let preferred_only = r#"[[rules.copper.feature_width]]
+id = "width"
+limit = { preferred = "0.10 mm" }
+
+[[rules.copper.clearance]]
+id = "gap"
+limit = { preferred = "0.15 mm" }"#;
+        assert_eq!(
+            judged(preferred_only, 0.05, 0.1),
+            ids(&["gap.text.preferred", "width.text.preferred"])
+        );
+        assert_eq!(judged(preferred_only, 0.12, 0.2), ids(&[]));
+
+        let both = r#"[[rules.copper.feature_width]]
+id = "width"
+limit = { minimum = "0.10 mm", preferred = "0.20 mm" }
+
+[[rules.copper.clearance]]
+id = "gap"
+limit = { minimum = "0.15 mm", preferred = "0.25 mm" }"#;
+        assert_eq!(judged(both, 0.05, 0.1), ids(&["gap.text", "width.text"]));
+        assert_eq!(
+            judged(both, 0.15, 0.2),
+            ids(&["gap.text.preferred", "width.text.preferred"])
+        );
+        assert_eq!(judged(both, 0.25, 0.3), ids(&[]));
+    }
+
+    #[test]
+    fn a_thin_functional_feature_reports_what_losing_it_does() {
+        let pdk = fixtures::pdk(
+            "[[rules.copper.feature_width]]\nid = \"width\"\nlimit = { minimum = \"0.10 mm\" }",
+        );
+        // N1 copper with three 0.05 mm features: a spur off a block; a
+        // bridge that alone joins two blocks; and the same bridge between
+        // blocks a wide bar also joins.
+        let shapes = [
+            rect(0.0, 0.0, 1.0, 1.0),
+            rect(1.0, 0.475, 2.0, 0.525),
+            rect(5.0, 0.0, 6.0, 1.0),
+            rect(6.0, 0.475, 6.5, 0.525),
+            rect(6.5, 0.0, 7.5, 1.0),
+            rect(10.0, 0.0, 11.0, 1.0),
+            rect(11.0, 0.475, 11.5, 0.525),
+            rect(11.5, 0.0, 12.5, 1.0),
+            rect(10.0, 1.0, 12.5, 2.0),
+        ]
+        .concat();
+        let report = fixtures::report(
+            &declared_components(&format!(
+                r#"<Set net="N1"><Features>{shapes}</Features></Set>"#
+            )),
+            &pdk,
+            crate::LayoutTarget::Board,
+        );
+        let mut consequences = report
+            .findings
+            .iter()
+            .flat_map(|finding| &finding.sites)
+            .filter_map(|site| {
+                let note = site.note.as_deref()?.strip_prefix("Consequence: ")?;
+                let x = site.bounding_box.as_bbox().min.x;
+                Some((x.round() as i64, note.split(';').next()?.to_owned()))
+            })
+            .collect::<Vec<_>>();
+        consequences.sort();
+        assert!(
+            report
+                .findings
+                .iter()
+                .all(|finding| finding.severity == Severity::Error)
+        );
+        assert_eq!(
+            consequences,
+            [
+                (1, "lost detail".to_owned()),
+                (6, "severed connection".to_owned()),
+                (11, "narrowed conductor".to_owned()),
+            ]
+        );
     }
 
     #[test]
@@ -1113,10 +1373,15 @@ limit = { minimum = "0.15 mm" }
         assert_eq!(ties[0].nets[0].instance(), None);
         for design in &designs {
             assert!(
-                super::evaluate(0.15, &super::Conditions::default(), design)
-                    .unwrap()
-                    .measured
-                    .is_empty()
+                super::evaluate(
+                    0.15,
+                    super::CopperUse::Functional,
+                    &super::Conditions::default(),
+                    design
+                )
+                .unwrap()
+                .measured
+                .is_empty()
             );
         }
 
@@ -1133,11 +1398,16 @@ limit = { minimum = "0.15 mm" }
         )
         .unwrap();
         assert!(
-            super::evaluate(0.15, &super::Conditions::default(), &designs[0])
-                .unwrap()
-                .measured
-                .iter()
-                .any(|measurement| measurement.distance.mm == 0.0)
+            super::evaluate(
+                0.15,
+                super::CopperUse::Functional,
+                &super::Conditions::default(),
+                &designs[0]
+            )
+            .unwrap()
+            .measured
+            .iter()
+            .any(|measurement| measurement.distance.mm == 0.0)
         );
     }
 

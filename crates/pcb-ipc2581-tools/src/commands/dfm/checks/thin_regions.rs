@@ -23,34 +23,47 @@
 //! and is discarded. Thus the composed image supplies the authoritative
 //! measurement while morphology only localizes the work.
 //!
-//! The opening residue flags copper that will not survive etching. A
-//! soldermask image is the mask *openings*, so its closing residue flags the
+//! The opening residue flags copper that will not survive etching. Each
+//! piece is noted by how it meets the surviving copper: joining two
+//! components severs a connection, meeting one twice narrows a conductor,
+//! otherwise it is lost detail. The note never changes a verdict.
+//! Only declared, isolated text ([`CopperUse::Text`]) is judged apart.
+//! A soldermask image is the mask *openings*, so its closing residue flags the
 //! web of mask remaining between them. Copper clearance is a separate
 //! electrical-conductor boundary-distance check; morphology must not
 //! reinterpret a same-net notch as spacing between conductors.
 
 use pcb_ir::geom::dfm::{BBoxIndex, ThinPiece, circular_region, thin_features, thin_gaps};
-use pcb_ir::geom::{BBox, ContourSet, Point, PreparedRegion};
+use pcb_ir::geom::{BBox, ContourSet, Point, PreparedRegion, tol};
 #[cfg(not(target_family = "wasm"))]
 use rayon::prelude::*;
 
 use super::{Evaluation, Measured, MeasuredSite};
 use crate::commands::dfm::design::{
-    CopperConductor, CopperLayer, Design, MaskLayer, MaskOwner, conductor_index, spans,
+    ConductorId, CopperConductor, CopperLayer, Design, MaskLayer, MaskOwner, conductor_index, spans,
 };
 use crate::commands::dfm::report::{Evidence, LayerRef, MeasurementKind, SourceLocator, Subject};
 use crate::commands::dfm::rules::Conditions;
+use crate::commands::dfm::rules::CopperUse;
 
 pub(super) fn copper_feature_width(
     limit_mm: f64,
+    copper: CopperUse,
     conditions: &Conditions,
     design: &Design,
 ) -> anyhow::Result<Evaluation> {
     let measure = |(index, layer): (usize, &CopperLayer)| {
+        if copper == CopperUse::Text
+            && !(layer.conductors.iter())
+                .any(|conductor| matches!(conductor.id, ConductorId::Text { .. }))
+        {
+            return Ok(Vec::new());
+        }
         let pieces = thin_features(&layer.image, limit_mm)?;
         if pieces.is_empty() {
             return Ok(Vec::new());
         }
+        let survivors = Survivors::of(&layer.image, &pieces)?;
         let local;
         let (boundaries, near) = match design.conductor_boundaries.get(index) {
             Some(boundaries) => (boundaries, &design.conductors_near[index]),
@@ -78,6 +91,15 @@ pub(super) fn copper_feature_width(
                 }
                 let owner =
                     unique_copper_owner(&construction, &layer.conductors, boundaries, near)?;
+                let text = owner.is_some_and(|owner| matches!(owner.id, ConductorId::Text { .. }));
+                if text != (copper == CopperUse::Text) {
+                    return Ok(None);
+                }
+                let consequence = survivors.consequence(&piece.candidate, design.resolution)?;
+                for site in &mut measured.sites {
+                    let note = site.note.take().unwrap_or_default();
+                    site.note = Some(format!("{consequence} {note}"));
+                }
                 if let Some(owner) = owner {
                     measured.subjects[0].provenance =
                         copper_subject(design, owner, &layer.layer).provenance;
@@ -103,7 +125,7 @@ pub(super) fn copper_feature_width(
                         site.subjects = vec![copper_subject(design, owner, &layer.layer)];
                     }
                 }
-                Ok::<_, anyhow::Error>(measured)
+                Ok::<_, anyhow::Error>(Some(measured))
             })
             .collect::<anyhow::Result<Vec<_>>>()
     };
@@ -117,6 +139,7 @@ pub(super) fn copper_feature_width(
         .map(measure)
         .collect::<anyhow::Result<Vec<_>>>()?
         .into_iter()
+        .flatten()
         .flatten()
         .collect();
     Ok(Evaluation {
@@ -190,6 +213,55 @@ pub(super) fn soldermask_web(limit_mm: f64, design: &Design) -> anyhow::Result<E
         checked: design.mask_layers.len(),
         measured,
     })
+}
+
+/// The copper of one layer that survives an opening at the width limit:
+/// the image without every thin candidate, by connected component.
+struct Survivors {
+    components: Vec<ContourSet>,
+    near: BBoxIndex,
+}
+
+impl Survivors {
+    fn of(image: &ContourSet, pieces: &[ThinPiece]) -> anyhow::Result<Self> {
+        let thin = ContourSet::union_all(
+            image.resolution,
+            pieces.iter().map(|piece| piece.candidate.clone()),
+        )?;
+        let components = image.difference(&thin)?.connected_components();
+        let near = BBoxIndex::new(components.iter().map(|component| component.bbox).collect());
+        Ok(Self { components, near })
+    }
+
+    /// What losing `candidate` does to the copper that survives.
+    fn consequence(
+        &self,
+        candidate: &ContourSet,
+        resolution: pcb_ir::geom::Resolution,
+    ) -> anyhow::Result<&'static str> {
+        // Candidates and survivors share their boundary exactly; a contact
+        // is where the candidate, grown past preparation noise, meets one.
+        let grown = candidate.disk_dilate(4.0 * resolution.tolerance_mm + tol::REGION_MM)?;
+        let (mut components, mut contacts) = (0, 0);
+        for index in self.near.query(grown.bbox) {
+            let shared = grown.intersection(&self.components[index])?;
+            if !shared.is_empty() {
+                components += 1;
+                contacts += shared.connected_components().len();
+            }
+        }
+        Ok(match (components, contacts) {
+            (2.., _) => {
+                "Consequence: severed connection; losing this copper splits the copper it joins."
+            }
+            (1, 2..) => {
+                "Consequence: narrowed conductor; the copper it joins keeps another path, but this neck still carries current, heat or signal."
+            }
+            _ => {
+                "Consequence: lost detail; this copper is a spur, an edge, or a whole feature too narrow to form."
+            }
+        })
+    }
 }
 
 fn measured_piece(

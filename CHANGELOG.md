@@ -8,6 +8,22 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added
+
+- DFM PDK profiles list the blind and buried spans they drill with `support.drill_spans`.
+- The JLCPCB DFM PDK accepts 2.5–4.5 mm boards from 12 layers and recommends a 0.45 mm NPTH annular ring.
+
+### Changed
+
+- DFM reports isolated `TEXT` copper under warning-level `.text` width and clearance rules.
+- DFM stackup template mismatches fail only `SPECIFIED` stackups.
+- DFM copper-width findings name their consequence: severed connection, narrowed conductor or lost detail.
+
+### Fixed
+
+- DFM recognizes NPTH lands anchored off the hole.
+- DFM hole clearance honours `NetShort` ties for vias inside the tied pad.
+
 ### Removed
 
 - `pcb quote --route global`: Diode now assembles every order in the US; quote `global-us` or `us`. BOM matching still covers US and global offers.
