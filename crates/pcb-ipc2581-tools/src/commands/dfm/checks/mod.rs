@@ -603,7 +603,13 @@ fn missing_subjects(kind: RuleKind, design: &Design) -> Option<String> {
             .iter()
             .all(|outline| !outline.is_board())
             .then(|| "board profile outlines".to_owned()),
-        RuleKind::CopperFeatureWidth | RuleKind::CopperClearance | RuleKind::SoldermaskWeb => None,
+        RuleKind::DrillSpans => design
+            .partial_spans
+            .is_empty()
+            .then(|| "blind or buried holes or slots".to_owned()),
+        RuleKind::CopperFeatureWidth(_)
+        | RuleKind::CopperClearance(_)
+        | RuleKind::SoldermaskWeb => None,
     };
     what.map(|what| format!("no {what} in the selected layout target"))
 }
@@ -701,11 +707,11 @@ fn evaluate(rule: &Rule, design: &Design) -> anyhow::Result<RuleEvaluation> {
             linework_clearance::evaluate(limit(), linework, &rule.conditions, design)?,
         ),
         RuleKind::BoardArrayPairClearance => board_array_spacing::evaluate(limit(), design)?.into(),
-        RuleKind::CopperFeatureWidth => {
-            thin_regions::copper_feature_width(limit(), &rule.conditions, design)?.into()
+        RuleKind::CopperFeatureWidth(copper) => {
+            thin_regions::copper_feature_width(limit(), copper, &rule.conditions, design)?.into()
         }
-        RuleKind::CopperClearance => {
-            copper_clearance::evaluate(limit(), &rule.conditions, design)?.into()
+        RuleKind::CopperClearance(copper) => {
+            copper_clearance::evaluate(limit(), copper, &rule.conditions, design)?.into()
         }
         RuleKind::SoldermaskWeb => thin_regions::soldermask_web(limit(), design)?.into(),
         RuleKind::CopperWeight(_)
@@ -713,7 +719,8 @@ fn evaluate(rule: &Rule, design: &Design) -> anyhow::Result<RuleEvaluation> {
         | RuleKind::DielectricGaps
         | RuleKind::SurfaceFinish
         | RuleKind::SoldermaskColor
-        | RuleKind::BoardSize => RuleEvaluation::Property(board_property::evaluate(rule, design)),
+        | RuleKind::BoardSize
+        | RuleKind::DrillSpans => RuleEvaluation::Property(board_property::evaluate(rule, design)),
         RuleKind::BoardOutline => RuleEvaluation::Property(Ok(board_property::outline(design))),
     })
 }
@@ -946,14 +953,41 @@ pub(super) fn without_own_lands<'a>(
 /// with the same stated padstack and no contradicting net. The feature then
 /// owns, within its Step occurrence, its net and the nets of those lands on
 /// any layer, and the netless pads that are those lands.
-pub(super) struct Ownership {
+pub(super) struct Ownership<'a> {
     step: Option<Symbol>,
     instance: Option<u32>,
     nets: Vec<Symbol>,
     lands: Vec<pcb_ir::import::physical::LandId>,
+    drilled: Drilled<'a>,
 }
 
-impl Ownership {
+/// The material a drilled feature removes.
+#[derive(Clone, Copy)]
+pub(super) enum Drilled<'a> {
+    Disk { center: Point, radius_mm: f64 },
+    Outline(&'a ContourSet),
+}
+
+impl Drilled<'_> {
+    /// Whether all of the drilled material lies in `copper`.
+    fn within(self, copper: &ContourSet) -> anyhow::Result<bool> {
+        Ok(match self {
+            Self::Disk { center, radius_mm } => {
+                copper.contains_point(center)
+                    && copper
+                        .prepare_query()
+                        .nearest_within(center, radius_mm)
+                        .is_none()
+            }
+            Self::Outline(outline) => {
+                copper.bbox.intersects(outline.bbox) && outline.difference(copper)?.is_empty()
+            }
+        })
+    }
+}
+
+impl<'a> Ownership<'a> {
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn of(
         design: &Design,
         net: Option<Symbol>,
@@ -961,6 +995,7 @@ impl Ownership {
         step: Option<Symbol>,
         instance: Option<u32>,
         links: &[super::design::HoleLand],
+        drilled: Drilled<'a>,
     ) -> Self {
         let lands = links
             .iter()
@@ -978,28 +1013,42 @@ impl Ownership {
                 .chain(lands.iter().filter_map(|land| land.net))
                 .collect(),
             lands: lands.iter().map(|land| land.id).collect(),
+            drilled,
         }
     }
 
     /// Whether a NetShort on `layer` lets `conductor` meet this feature's
-    /// copper at `point`. The tie is local: a tied graphic may meet a feature
-    /// whose own land is the pad it is tied to, and a tied pad may be entered
-    /// through its partner the feature owns. Elsewhere the tied nets meet
-    /// the feature like any others.
+    /// copper at `point`. The tie is local: a tied graphic may meet a
+    /// feature in the pad it is tied to, its own land or one of its net that
+    /// wholly holds its drill, and a tied pad may be entered through its
+    /// partner the feature owns. Elsewhere the tied nets meet the feature
+    /// like any others.
     fn tied(
         &self,
         ties: &copper_clearance::TiePermissions,
         layer: &super::design::CopperLayer,
         conductor: super::design::ConductorId,
         point: Point,
-    ) -> bool {
-        ties.graphic_pads(conductor).any(|pad| {
-            matches!(
-                pad,
-                super::design::ConductorId::Net { object: Some(object), .. }
-                    if self.lands.iter().any(|land| land.0 == object)
-            )
-        }) || ties.enters_pad(layer, conductor, |partner| self.owns(partner), point)
+    ) -> anyhow::Result<bool> {
+        for pad in ties.graphic_pads(conductor) {
+            let super::design::ConductorId::Net {
+                object: Some(object),
+                ..
+            } = pad
+            else {
+                continue;
+            };
+            if self.lands.iter().any(|land| land.0 == object) {
+                return Ok(true);
+            }
+            if self.owns(pad.electrical())
+                && let Some(copper) = layer.conductors.iter().find(|copper| copper.id == pad)
+                && self.drilled.within(&copper.image)?
+            {
+                return Ok(true);
+            }
+        }
+        Ok(ties.enters_pad(layer, conductor, |partner| self.owns(partner), point))
     }
 
     pub(super) fn owns(&self, conductor: super::design::ConductorId) -> bool {
@@ -1014,7 +1063,9 @@ impl Ownership {
             ConductorId::Isolated { occurrence, .. } => {
                 self.lands.iter().any(|land| land.0 == occurrence)
             }
-            ConductorId::Auxiliary { .. } | ConductorId::Unattributed { .. } => false,
+            ConductorId::Auxiliary { .. }
+            | ConductorId::Text { .. }
+            | ConductorId::Unattributed { .. } => false,
         }
     }
 }
@@ -1209,18 +1260,16 @@ fn identity(rule_id: &str, finding: &Finding) -> Vec<u8> {
 }
 
 /// A preferred tier measures what its required tier does against a stricter
-/// limit, so what fails both is reported once: as the required tier's error.
+/// limit, so what fails both is reported once: as the required tier's.
 fn drop_preferred_repeats(findings: &mut Vec<Finding>) {
-    let errors = findings
+    let required = findings
         .iter()
-        .filter(|finding| finding.severity == Severity::Error)
+        .filter(|finding| required_tier(&finding.rule_id).is_none())
         .map(|finding| (finding.frame, identity(&finding.rule_id, finding)))
         .collect::<HashSet<_>>();
     findings.retain(|finding| {
-        finding.severity == Severity::Error
-            || required_tier(&finding.rule_id).is_none_or(|required| {
-                !errors.contains(&(finding.frame, identity(required, finding)))
-            })
+        required_tier(&finding.rule_id)
+            .is_none_or(|tier| !required.contains(&(finding.frame, identity(tier, finding))))
     });
 }
 
@@ -1470,6 +1519,7 @@ mod tests {
                 first_copper_index: 0,
                 last_copper_index: 1,
                 interpretation: "declared",
+                partial_depth: None,
             }),
             anchor: Some(Point::new(2.0, 3.0).into()),
             ..Subject::default()

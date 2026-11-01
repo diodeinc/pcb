@@ -17,7 +17,7 @@ use ipc2581::types::LayerFunction;
 use crate::accessors::{ColorInfo, format_ounces, nominal_copper_weight};
 use crate::commands::dfm::design::Design;
 use crate::commands::dfm::pdk::{
-    CopperWeight, LayerPosition, Length, SoldermaskColor, StackupBuild, SurfaceFinish,
+    CopperWeight, LayerPosition, Length, PartialDepth, SoldermaskColor, StackupBuild, SurfaceFinish,
 };
 use crate::commands::dfm::report::{LayerRef, RuleStatus, Subject};
 use crate::commands::dfm::rules::{Allowed, Rule, RuleKind, position_label};
@@ -91,6 +91,9 @@ pub(super) fn evaluate(rule: &Rule, design: &Design) -> Result<Evaluation, Unjud
         }
         (RuleKind::DielectricGaps, Allowed::StackupTemplates { tolerance, builds }) => {
             dielectric_gaps(tolerance, builds, design)
+        }
+        (RuleKind::DrillSpans, Allowed::DrillSpans(allowed)) => {
+            drill_spans(allowed, &allowed_text, design)
         }
         (RuleKind::SurfaceFinish, Allowed::Finishes(allowed)) => {
             surface_finish(allowed, &allowed_text, design)
@@ -246,12 +249,23 @@ fn dielectric_gaps(
             && outer[0] == Some(build.outer_copper_weight.ounces())
             && inner.first().copied().flatten() == Some(build.inner_copper_weight.ounces())
     });
-    let message = match build {
-        Some(build) => mismatch(build, &gaps, tolerance),
-        None => Some(format!(
-            "no stackup template exists for a {layers}-layer {} build with these copper weights",
+    // No template: the process combination is unmodelled, not violated.
+    let Some(build) = build else {
+        return Err(incomplete(format!(
+            "no stackup template exists for a {layers}-layer {} build with these copper weights; the process combination needs qualification",
             nearest.original()
-        )),
+        )));
+    };
+    let message = mismatch(build, &gaps, tolerance);
+    // Only a required stackup violates a template it does not match; a
+    // proposed or approved one neither violates it nor permits substitution.
+    let message = match message {
+        Some(message) if !stackup.required => {
+            return Err(incomplete(format!(
+                "{message}; the stackup is a reference, not a requirement (its IPC-2581 stackupStatus is not SPECIFIED), and nothing states that the fab may substitute a template"
+            )));
+        }
+        message => message,
     };
     Ok(judged(
         1,
@@ -317,6 +331,49 @@ fn mismatch(build: &StackupBuild, gaps: &[(String, f64)], tolerance: &Length) ->
         tolerance.original(),
         closest.name,
     ))
+}
+
+/// A blind or buried span the profile does not list is unknown support,
+/// not a violation, and no hole or slot rule measured it.
+fn drill_spans(
+    allowed: &[PartialDepth],
+    allowed_text: &str,
+    design: &Design,
+) -> Result<Evaluation, Unjudged> {
+    let copper = &design
+        .stackup
+        .as_ref()
+        .expect("partial spans are physical")
+        .copper_layers;
+    let name = |index: u16| copper[usize::from(index)].name.clone();
+    let mut spans = Vec::<(String, usize)>::new();
+    for (feature, span) in &design.partial_spans {
+        let depth = span.partial_depth.expect("a partial span has a depth");
+        if allowed.contains(&depth) {
+            continue;
+        }
+        let span = format!(
+            "{} {feature} {}–{}",
+            depth.label(),
+            name(span.first_copper_index),
+            name(span.last_copper_index)
+        );
+        match spans.iter_mut().find(|(known, _)| *known == span) {
+            Some((_, count)) => *count += 1,
+            None => spans.push((span, 1)),
+        }
+    }
+    if spans.is_empty() {
+        return Ok(judged(design.partial_spans.len(), []));
+    }
+    let spans = spans
+        .iter()
+        .map(|(span, count)| format!("{span} ×{count}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    Err(incomplete(format!(
+        "the profile does not state it drills these spans: {spans}; it states [{allowed_text}]. No hole or slot rule measured them"
+    )))
 }
 
 /// A layout without a profile has no board to fabricate.

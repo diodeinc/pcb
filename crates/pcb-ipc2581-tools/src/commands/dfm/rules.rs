@@ -11,9 +11,9 @@ use anyhow::Result;
 use super::design::HoleClass;
 use super::pdk::{
     AssemblyDiagnostic, BOARD_OUTLINE_RULE_ID, Case, CopperWeight, HoleKind, LayerPosition, Length,
-    LengthCase, LengthLimit, Pdk, PlatedHoleKind, Profile, ProfileStatus, Ratio, RatioLimit,
-    RuleConditions, RuleMetadata, SelectingRule, SizeLimit, SlotPlating, SoldermaskColor,
-    StackupBuild, SurfaceFinish, ThicknessLimit,
+    LengthCase, LengthLimit, PartialDepth, Pdk, PlatedHoleKind, Profile, ProfileStatus, Ratio,
+    RatioLimit, RuleConditions, RuleMetadata, SelectingRule, SizeLimit, SlotPlating,
+    SoldermaskColor, StackupBuild, SurfaceFinish, ThicknessLimit,
 };
 use super::report::{Severity, ViewRecipe};
 use crate::accessors::nominal_copper_weight;
@@ -124,6 +124,7 @@ pub(super) enum Allowed {
         tolerance: Length,
         builds: Vec<StackupBuild>,
     },
+    DrillSpans(Vec<PartialDepth>),
 }
 
 impl Allowed {
@@ -148,6 +149,10 @@ impl Allowed {
                 "each dielectric gap within ± {} of a stackup template for the build",
                 tolerance.original()
             ),
+            Self::DrillSpans(spans) => std::iter::once("through")
+                .chain(spans.iter().map(|span| span.label()))
+                .collect::<Vec<_>>()
+                .join(", "),
         }
     }
 }
@@ -223,9 +228,9 @@ pub(super) enum RuleKind {
     /// Clearance: sibling board-array outlines keep their spacing.
     BoardArrayPairClearance,
     /// Width: final composed copper material narrower than the limit.
-    CopperFeatureWidth,
+    CopperFeatureWidth(CopperUse),
     /// Clearance: final copper owned by distinct electrical conductors.
-    CopperClearance,
+    CopperClearance(CopperUse),
     /// Residue: final soldermask material between openings narrower than the limit.
     SoldermaskWeb,
     /// Property: the standard weight of each copper layer at one position.
@@ -244,6 +249,17 @@ pub(super) enum RuleKind {
     /// Property: the checked layout has a profile to fabricate. Every PDK
     /// runs it.
     BoardOutline,
+    /// Property: each blind or buried span is one the profile lists.
+    DrillSpans,
+}
+
+/// What a copper width or clearance rule measures: functional copper, or
+/// isolated declared text, which changes how the board reads, not what it
+/// conducts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum CopperUse {
+    Functional,
+    Text,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -291,6 +307,7 @@ impl Pools {
     pub const BOARD_ARRAYS: Self = Self(1 << 12);
     pub const COMPONENTS: Self = Self(1 << 14);
     pub const COMPONENT_TERMINATIONS: Self = Self(1 << 15);
+    pub const NET_SHORTS: Self = Self(1 << 17);
 
     pub fn intersects(self, other: Self) -> bool {
         self.0 & other.0 != 0
@@ -354,8 +371,8 @@ impl RuleKind {
             Self::BoardArrayPairClearance => {
                 ("array_spacing", "Array spacing", &["array_outlines"])
             }
-            Self::CopperFeatureWidth => ("copper_width", "Copper width", COPPER),
-            Self::CopperClearance => ("copper_clearance", "Copper clearance", COPPER),
+            Self::CopperFeatureWidth(_) => ("copper_width", "Copper width", COPPER),
+            Self::CopperClearance(_) => ("copper_clearance", "Copper clearance", COPPER),
             Self::SoldermaskWeb => (
                 "soldermask_web",
                 "Soldermask web",
@@ -368,6 +385,7 @@ impl RuleKind {
             Self::SoldermaskColor => ("soldermask_color", "Soldermask color", &[]),
             Self::BoardSize => ("board_size", "Board size", &[]),
             Self::BoardOutline => ("board_outline", "Board outline", &[]),
+            Self::DrillSpans => ("drill_spans", "Drill spans", DRILLS),
         };
         ViewRecipe {
             kind,
@@ -383,6 +401,7 @@ impl RuleKind {
                     | Self::SoldermaskColor
                     | Self::BoardSize
                     | Self::BoardOutline
+                    | Self::DrillSpans
             ),
             features: features.to_vec(),
         }
@@ -520,6 +539,7 @@ impl RuleKind {
                 pools: Pools::HOLES
                     | Pools::COPPER
                     | Pools::CONDUCTOR_BOUNDARIES
+                    | Pools::NET_SHORTS
                     | Pools::HOLE_LANDS
                     | Pools::RESOLVED_DRILL_SPANS,
             },
@@ -540,6 +560,7 @@ impl RuleKind {
                     | Pools::SLOTS
                     | Pools::COPPER
                     | Pools::CONDUCTOR_BOUNDARIES
+                    | Pools::NET_SHORTS
                     | Pools::SLOT_LANDS
                     | Pools::RESOLVED_DRILL_SPANS,
             },
@@ -570,23 +591,31 @@ impl RuleKind {
                 witness_roles: Some(["first_board_array", "second_board_array"]),
                 pools: Pools::BOARD_ARRAYS,
             },
-            Self::CopperFeatureWidth => Semantics {
+            Self::CopperFeatureWidth(copper) => Semantics {
                 subject: "copper_layer",
                 quantity: "copper_feature_width",
                 method: "opening_candidate_then_medial_axis_width",
-                finding_title: "Copper feature is below minimum width".to_owned(),
+                finding_title: match copper {
+                    CopperUse::Functional => "Copper feature is below minimum width",
+                    CopperUse::Text => "Copper text detail is below minimum width",
+                }
+                .to_owned(),
                 quantity_label: "copper feature width".to_owned(),
                 witness_roles: Some(["first_boundary", "second_boundary"]),
                 pools: Pools::COPPER,
             },
-            Self::CopperClearance => Semantics {
+            Self::CopperClearance(copper) => Semantics {
                 subject: "conductor_pair",
                 quantity: "copper_to_copper_clearance",
                 method: "distinct_conductor_boundary_distance",
-                finding_title: "Copper spacing is below minimum".to_owned(),
+                finding_title: match copper {
+                    CopperUse::Functional => "Copper spacing is below minimum",
+                    CopperUse::Text => "Copper text spacing is below minimum",
+                }
+                .to_owned(),
                 quantity_label: "copper-to-copper clearance".to_owned(),
                 witness_roles: Some(["first_conductor", "second_conductor"]),
-                pools: Pools::COPPER | Pools::CONDUCTOR_OWNERSHIP,
+                pools: Pools::COPPER | Pools::CONDUCTOR_OWNERSHIP | Pools::NET_SHORTS,
             },
             Self::SoldermaskWeb => Semantics {
                 subject: "soldermask_layer",
@@ -663,6 +692,15 @@ impl RuleKind {
                 witness_roles: None,
                 pools: Pools::NONE,
             },
+            Self::DrillSpans => Semantics {
+                subject: "hole",
+                quantity: "unsupported_drill_span_count",
+                method: "declared_drill_span_against_profile_support",
+                finding_title: "Drill span the profile does not state it drills".to_owned(),
+                quantity_label: "blind or buried hole and slot count".to_owned(),
+                witness_roles: None,
+                pools: Pools::HOLES | Pools::SLOTS,
+            },
         }
     }
 }
@@ -691,6 +729,7 @@ impl Rule {
             RuleKind::HoleToCopperClearance(_)
                 | RuleKind::AnnularRing(_)
                 | RuleKind::HolePairClearance(_, _)
+                | RuleKind::DrillSpans
         );
         let pools = self.kind.semantics().pools;
         if self.conditions.requires_stackup() || (spans && has_stackup) {
@@ -874,7 +913,7 @@ pub(super) fn lower(pdk: &Pdk, selected_profile: Option<&str>) -> Result<Vec<Rul
         },
     ));
     rules.extend(selecting(&copper.annular_ring, selected, |select| {
-        let class = plated_hole_class(select.hole);
+        let class = hole_class(select.hole);
         (
             format!("Minimum {} annular ring", class.label()),
             RuleKind::AnnularRing(class),
@@ -901,16 +940,6 @@ pub(super) fn lower(pdk: &Pdk, selected_profile: Option<&str>) -> Result<Vec<Rul
             &pdk.rules.copper.plated_slot_enclosure,
             "Minimum plated-slot copper enclosure",
             RuleKind::PlatedSlotEnclosure,
-        ),
-        (
-            &pdk.rules.copper.feature_width,
-            "Minimum copper feature width",
-            RuleKind::CopperFeatureWidth,
-        ),
-        (
-            &pdk.rules.copper.clearance,
-            "Minimum copper-to-copper clearance",
-            RuleKind::CopperClearance,
         ),
         (
             &pdk.rules.copper.board_edge_clearance,
@@ -943,6 +972,46 @@ pub(super) fn lower(pdk: &Pdk, selected_profile: Option<&str>) -> Result<Vec<Rul
                 title,
                 kind,
             ));
+        }
+    }
+
+    // Each width or clearance tier has a warning companion for text, whose
+    // id keeps `.preferred` last so preferred repeats still drop.
+    for (ruleset, title, kind) in [
+        (
+            &pdk.rules.copper.feature_width,
+            "Minimum copper feature width",
+            RuleKind::CopperFeatureWidth as fn(CopperUse) -> RuleKind,
+        ),
+        (
+            &pdk.rules.copper.clearance,
+            "Minimum copper-to-copper clearance",
+            RuleKind::CopperClearance,
+        ),
+    ] {
+        for rule in ruleset {
+            let lowered = lower_length_rule(
+                &rule.metadata,
+                rule.limit.as_ref(),
+                &rule.cases,
+                selected,
+                title.to_owned(),
+                kind(CopperUse::Functional),
+            );
+            for rule in lowered {
+                let text = Rule {
+                    id: match required_tier(&rule.id) {
+                        Some(required) => format!("{required}.text.preferred"),
+                        None => format!("{}.text", rule.id),
+                    },
+                    title: format!("{} (text)", rule.title),
+                    severity: Severity::Warning,
+                    kind: kind(CopperUse::Text),
+                    ..rule.clone()
+                };
+                rules.push(rule);
+                rules.push(text);
+            }
         }
     }
 
@@ -1022,6 +1091,23 @@ pub(super) fn board_outline() -> Rule {
         conditions: Conditions::default(),
     }
 }
+
+/// The drill-span rule every profile runs. Unlike the support bounds, an
+/// unlisted blind or buried span is never assumed supported.
+pub(super) fn drill_spans(profile: &Profile) -> Rule {
+    Rule {
+        id: DRILL_SPANS_RULE_ID.to_owned(),
+        authored_id: DRILL_SPANS_RULE_ID.to_owned(),
+        title: "Profile drill spans".to_owned(),
+        severity: Severity::Error,
+        comparison: Comparison::Maximum,
+        limit: LimitValue::Allowed(Allowed::DrillSpans(profile.support.drill_spans.clone())),
+        kind: RuleKind::DrillSpans,
+        conditions: Conditions::default(),
+    }
+}
+
+pub(super) const DRILL_SPANS_RULE_ID: &str = "profile.support.drill_spans";
 
 /// A profile's support envelope as reserved `profile.support.*` rules: the
 /// rules that decide whether a design qualifies for the profile.

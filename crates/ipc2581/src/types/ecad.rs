@@ -91,6 +91,7 @@ pub struct Stackup {
     pub name: Symbol,
     pub overall_thickness: Option<f64>,
     pub where_measured: Option<WhereMeasured>,
+    pub status: Option<StackupStatus>,
     /// Millimeters, or percent of the thickness when `tol_percent`.
     pub tol_plus: Option<f64>,
     pub tol_minus: Option<f64>,
@@ -854,6 +855,14 @@ ipc_enum! {
     pub enum Polarity("polarity") {
         Positive = "POSITIVE",
         Negative = "NEGATIVE",
+    }
+}
+
+ipc_enum! {
+    pub enum StackupStatus("stackupStatus") {
+        Specified = "SPECIFIED",
+        Proposed = "PROPOSED",
+        Approved = "APPROVED",
     }
 }
 

@@ -1265,6 +1265,7 @@ impl<'a> Parser<'a> {
         let name = self.required_attr(node, "name", "Stackup")?;
         let overall_thickness = self.opt_mm(node, "overallThickness", units)?;
         let where_measured = self.opt_enum(node, "whereMeasured", WhereMeasured::from_ipc)?;
+        let status = self.opt_enum(node, "stackupStatus", StackupStatus::from_ipc)?;
         let (tol_percent, tol_plus, tol_minus) = self.parse_tolerances(node, units)?;
 
         let mut layers = Vec::new();
@@ -1278,6 +1279,7 @@ impl<'a> Parser<'a> {
             name,
             overall_thickness,
             where_measured,
+            status,
             tol_plus,
             tol_minus,
             tol_percent,

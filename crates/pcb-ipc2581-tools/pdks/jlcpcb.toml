@@ -4,7 +4,7 @@ default_profile = "one-ounce"
 [pdk]
 id = "jlcpcb-rigid-fr4"
 name = "JLCPCB rigid FR-4"
-revision = "review-bands-2026-10-29"
+revision = "applicability-2026-10-30"
 manufacturer = "JLCPCB"
 process = "Rigid FR-4, 1 oz or 2 oz outer copper"
 
@@ -32,8 +32,8 @@ note = "The [[stackup_builds]] at the end of this file; regenerate them with upd
 [sources.jlc-capabilities]
 title = "JLCPCB PCB Capabilities"
 url = "https://jlcpcb.com/capabilities/pcb-capabilities"
-accessed = "2026-10-26"
-note = "Public capability table. Rules use standard service values and exclude special local BGA exceptions."
+accessed = "2026-10-30"
+note = "Public capability table. Rules use standard service values and exclude special local BGA exceptions. Its drilling table recommends an NPTH pad annular ring of 0.45 mm or more, so 0.2 mm of copper can be removed around the hole for the sealing film."
 
 [sources.diode-mask-guidance]
 title = "Diode soldermask web guidance"
@@ -44,7 +44,7 @@ note = "Diode prefers a 0.10 mm soldermask web as advisory guidance. Shortfalls 
 name = "1 oz rigid FR-4"
 description = "Standard rigid FR-4 service with advisory 0.10 mm soldermask-web guidance."
 technologies = ["rigid"]
-coverage = ["2-32 copper layers", "1 oz outer copper", "standard FR-4 thicknesses 0.4-2.0 mm", "preferred soldermask web at 0.10 mm, warning only"]
+coverage = ["2-32 copper layers", "1 oz outer copper", "standard FR-4 thicknesses 0.4-2.0 mm, 2.5-4.5 mm for 12+ layers", "preferred soldermask web at 0.10 mm, warning only"]
 source = "jlc-capabilities"
 
 [profiles.one-ounce.defaults]
@@ -61,7 +61,7 @@ outer_copper_weight = ["1 oz"]
 name = "2 oz rigid FR-4"
 description = "Heavy-copper rigid FR-4 service with 2 oz finished outer copper."
 technologies = ["rigid"]
-coverage = ["2-32 copper layers", "2 oz outer copper", "standard FR-4 thicknesses 0.4-2.0 mm", "preferred soldermask web at 0.20 mm, warning only"]
+coverage = ["2-32 copper layers", "2 oz outer copper", "standard FR-4 thicknesses 0.4-2.0 mm, 2.5-4.5 mm for 12+ layers", "preferred soldermask web at 0.20 mm, warning only"]
 source = "jlc-capabilities"
 
 [profiles.two-ounce.defaults]
@@ -167,6 +167,15 @@ select = { hole = "pth" }
 limit = { minimum = "0.250 mm", preferred = "0.254 mm" }
 source = "precision-review-guidance"
 
+# An NPTH drilled through a land of its own component: JLC removes a 0.2 mm
+# ring of copper around the hole for the sealing film and recommends a
+# 0.45 mm NPTH pad annular ring.
+[[rules.copper.annular_ring]]
+id = "jlc.copper.npth_land_annular_ring"
+select = { hole = "npth" }
+limit = { preferred = "0.45 mm" }
+source = "jlc-capabilities"
+
 [[rules.copper.hole_clearance]]
 id = "jlc.copper.minimum_hole_clearance.via"
 select = { hole = "via" }
@@ -244,9 +253,14 @@ limit = { preferred = "0.20 mm" }
 source = "jlc-capabilities"
 
 # IPC overallThickness includes foil and soldermask, as the finished board does.
+# JLC lists 0.4-2.0 mm FR-4 and reserves 2.5 mm and above for 12+ layers; the
+# thicker nominals are those its stackup templates offer for 12-32 layers.
 [[rules.stackup.board_thickness]]
 id = "jlc.stackup.board_thickness"
-limit = { nominal = ["0.4 mm", "0.6 mm", "0.8 mm", "1.0 mm", "1.2 mm", "1.6 mm", "2.0 mm"], tolerance = "0.1 mm", tolerance_percent = 10 }
+cases = [
+  { id = "up-to-11-layer", when = { copper_layers = { minimum = 1, maximum = 11 } }, limit = { nominal = ["0.4 mm", "0.6 mm", "0.8 mm", "1.0 mm", "1.2 mm", "1.6 mm", "2.0 mm"], tolerance = "0.1 mm", tolerance_percent = 10 } },
+  { id = "12-layer-and-up", when = { copper_layers = { minimum = 12, maximum = 32 } }, limit = { nominal = ["0.4 mm", "0.6 mm", "0.8 mm", "1.0 mm", "1.2 mm", "1.6 mm", "2.0 mm", "2.5 mm", "3.0 mm", "3.2 mm", "3.5 mm", "4.0 mm", "4.5 mm"], tolerance = "0.1 mm", tolerance_percent = 10 } },
+]
 source = "jlc-capabilities"
 
 [[rules.stackup.copper_weight]]

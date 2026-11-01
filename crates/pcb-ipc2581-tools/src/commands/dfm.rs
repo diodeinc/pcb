@@ -142,6 +142,7 @@ fn check_with_scene(
         bail!("PDK {pdk_path} configures no DFM rules; add at least one capability");
     }
     rules.push(rules::board_outline());
+    rules.push(rules::drill_spans(&pdk.profiles[&selection.profile]));
     let designs = design::Design::frames(imported, scope, &rules, resolution)?;
     let checked = checks::run(&rules, &designs)?;
     let summary = summarize(&checked);
@@ -197,8 +198,9 @@ fn check_with_scene(
 }
 
 /// The profile a kit applies to a design when no profile is named: the first
-/// executable profile whose support the design meets, the default first and
-/// the rest in name order. A kit of one profile always runs it, so its
+/// executable profile whose support the design meets, drill spans included,
+/// the default first and the rest in name order. A kit of one profile always
+/// runs it, so its
 /// support rules report what the design lacks. When the design cannot be
 /// qualified for a profile considered before one it meets, because what the
 /// support reads is missing, or when it meets none, the default runs and its
@@ -236,24 +238,37 @@ fn select_profile(
     }
     let support = candidates
         .iter()
-        .map(|name| rules::support(&pdk.profiles[*name]))
+        .map(|name| {
+            let profile = &pdk.profiles[*name];
+            let mut support = rules::support(profile);
+            support.push(rules::drill_spans(profile));
+            support
+        })
         .collect::<Vec<_>>();
     let designs = design::Design::frames(imported, scope, &support.concat(), resolution)?;
     let mut rejected = Vec::new();
     for (name, support) in candidates.into_iter().zip(&support) {
         let checked = checks::run(support, &designs)?;
-        if checked.rules.iter().any(report::RuleResult::blocks_verdict) {
+        // An unlisted drill span rejects the profile; other unjudgeable
+        // support leaves the design unqualified.
+        let (spans, bounds): (Vec<_>, Vec<_>) = (checked.rules.iter())
+            .filter(|rule| rule.blocks_verdict())
+            .partition(|rule| rule.id == rules::DRILL_SPANS_RULE_ID);
+        if !bounds.is_empty() {
             return Ok(default);
         }
-        if checked.findings.is_empty() {
+        if checked.findings.is_empty() && spans.is_empty() {
             return Ok(report::ProfileSelection::automatic(name, rejected));
         }
         rejected.push(report::RejectedProfile {
             profile: name.to_owned(),
-            reasons: checked
-                .findings
-                .into_iter()
+            reasons: (checked.findings.into_iter())
                 .map(|finding| finding.message)
+                .chain(
+                    spans
+                        .into_iter()
+                        .filter_map(|rule| rule.skip_reason.clone()),
+                )
                 .collect(),
         });
     }
@@ -2017,11 +2032,16 @@ templates = [
   { name = "B", dielectric_gaps_mm = [0.1, 1.265, 0.12] },
 ]"#,
         );
-        let check = |outer: &str, gaps: &[&str]| {
-            let xml = stacked_board(outer, "0.0152", gaps, "1.6");
+        let judge = |outer: &str, gaps: &[&str], status: &str| {
+            let xml = stacked_board(outer, "0.0152", gaps, "1.6").replace(
+                r#"stackupStatus="PROPOSED""#,
+                &format!(r#"stackupStatus="{status}""#),
+            );
             judged(&check_with_pdk(&xml, LayoutTarget::Board, &pdk), "gaps")
         };
+        let check = |outer: &str, gaps: &[&str]| judge(outer, gaps, "SPECIFIED");
         let fail = |message: &str| ("Fail".to_owned(), Some(message.to_owned()));
+        let incomplete = |message: &str| ("Incomplete".to_owned(), Some(message.to_owned()));
 
         // The rule needs builds with inner layers and real gaps to match.
         for broken in [
@@ -2034,22 +2054,28 @@ templates = [
 
         assert_eq!(check("0.035", &["0.21", "1.065", "0.21"]).0, "Pass");
         assert_eq!(check("0.035", &["0.1", "1.265", "0.144"]).0, "Pass");
-        assert_eq!(
-            check("0.035", &["0.1", "1.265", "0.15"]),
-            fail(
-                "dielectric gaps match no stackup template for the 4-layer 1.6 mm, 1 oz outer / 0.5 oz inner build within ± 0.025 mm; closest is B: L3–L4 is 0.1500 mm, template 0.1200 mm; the build's default is A"
-            )
-        );
-        assert_eq!(
-            check("0.07", &["0.21", "1.065", "0.21"]),
-            fail("no stackup template exists for a 4-layer 1.6 mm build with these copper weights")
-        );
+        let mismatch = "dielectric gaps match no stackup template for the 4-layer 1.6 mm, 1 oz outer / 0.5 oz inner build within ± 0.025 mm; closest is B: L3–L4 is 0.1500 mm, template 0.1200 mm; the build's default is A";
+        assert_eq!(check("0.035", &["0.1", "1.265", "0.15"]), fail(mismatch));
+        for status in ["PROPOSED", "APPROVED"] {
+            assert_eq!(
+                judge("0.035", &["0.1", "1.265", "0.15"], status),
+                incomplete(&format!(
+                    "{mismatch}; the stackup is a reference, not a requirement (its IPC-2581 stackupStatus is not SPECIFIED), and nothing states that the fab may substitute a template"
+                ))
+            );
+            assert_eq!(judge("0.035", &["0.1", "1.265", "0.144"], status).0, "Pass");
+        }
+        for status in ["SPECIFIED", "PROPOSED"] {
+            assert_eq!(
+                judge("0.07", &["0.21", "1.065", "0.21"], status),
+                incomplete(
+                    "no stackup template exists for a 4-layer 1.6 mm build with these copper weights; the process combination needs qualification"
+                )
+            );
+        }
         assert_eq!(
             check("0.035", &["0.21", "", "0.21"]),
-            (
-                "Incomplete".to_owned(),
-                Some("physical stackup layer 'PP2' has no thickness".to_owned())
-            )
+            incomplete("physical stackup layer 'PP2' has no thickness")
         );
         assert_eq!(
             check("0.035", &["1.5"]),
@@ -2062,8 +2088,11 @@ templates = [
 
     #[test]
     fn jlc_flags_the_f9wry_stackup_its_only_template_does_not_match() {
-        let check = |gaps: &[&str]| {
-            let xml = stacked_board("0.07", "0.07", gaps, "2.0");
+        let check = |gaps: &[&str], status: &str| {
+            let xml = stacked_board("0.07", "0.07", gaps, "2.0").replace(
+                r#"stackupStatus="PROPOSED""#,
+                &format!(r#"stackupStatus="{status}""#),
+            );
             judged(
                 &check_builtin(&xml, "jlc").unwrap(),
                 "jlc.stackup.dielectric_gaps",
@@ -2073,17 +2102,128 @@ templates = [
             "0.1415", "0.1", "0.125", "0.1", "0.125", "0.1", "0.125", "0.1", "0.125", "0.1",
             "0.1415",
         ];
-        assert_eq!(check(&jlc), ("Pass".to_owned(), None));
+        assert_eq!(check(&jlc, "SPECIFIED"), ("Pass".to_owned(), None));
         let f9wry = [
             "0.1", "0.1", "0.12", "0.1", "0.12", "0.1", "0.12", "0.1", "0.12", "0.1", "0.1",
         ];
+        let mismatch = "dielectric gaps match no stackup template for the 12-layer 2.0 mm, 2 oz outer / 2 oz inner build within ± 0.025 mm; closest is JLC122022-1080: L1–L2 is 0.1000 mm, template 0.1415 mm; L11–L12 is 0.1000 mm, template 0.1415 mm; the build has no default template";
         assert_eq!(
-            check(&f9wry),
+            check(&f9wry, "SPECIFIED"),
+            ("Fail".to_owned(), Some(mismatch.to_owned()))
+        );
+        assert_eq!(check(&f9wry, "PROPOSED").0, "Incomplete");
+    }
+
+    /// A 4-layer board with one via drilled from `from` to `to`.
+    fn via_board(from: &str, to: &str) -> String {
+        stacked_board("0.035", "0.0152", &["0.2104", "1.065", "0.2104"], "1.6")
+            .replace(
+                "<Stackup ",
+                &format!(
+                    r#"<Layer name="DRILL" layerFunction="DRILL" side="ALL" polarity="POSITIVE"><Span fromLayer="{from}" toLayer="{to}"/></Layer>
+    <Stackup "#
+                ),
+            )
+            .replace(
+                "</Polygon></Profile>",
+                r#"</Polygon></Profile><LayerFeature layerRef="DRILL"><Set net="N1"><Hole name="V1" diameter="0.3" platingStatus="VIA" plusTol="0" minusTol="0" x="5" y="5"/></Set></LayerFeature>"#,
+            )
+    }
+
+    #[test]
+    fn automatic_selection_takes_the_profile_that_drills_the_span() {
+        let pdk = |profiles: &[(&str, &str)]| {
+            let mut source = "schema_version = 2\ndefault_profile = \"standard\"\n[pdk]\nid = \"spans\"\nname = \"Spans\"\nrevision = \"1\"\n".to_owned();
+            for (name, spans) in profiles {
+                source += &format!(
+                    "[profiles.{name}]\nname = \"{name}\"\n[profiles.{name}.support]\ncopper_layers = {{ maximum = 8 }}\n{spans}\n"
+                );
+            }
+            source
+                + "[[rules.drilling.hole_diameter]]\nid = \"via-diameter\"\nselect = { hole = \"via\" }\nlimit = { minimum = \"0.2 mm\" }\n"
+        };
+        let all = pdk(&[
+            ("standard", ""),
+            ("x-blind", "drill_spans = [\"blind\"]"),
+            ("y-buried", "drill_spans = [\"buried\"]"),
+        ]);
+        // (selected, rejected, drill-span status, vias measured)
+        let select = |xml: &str, pdk: &str| {
+            let report = check_with_pdk(xml, LayoutTarget::Board, pdk);
+            let selection = &report.pdk.profile_selection;
+            let rejected = selection
+                .rejected
+                .iter()
+                .map(|rejected| rejected.profile.clone())
+                .collect::<Vec<_>>();
+            let spans = judged(&report, "profile.support.drill_spans").0;
+            let measured = rule(&report, "via-diameter").checked;
+            (selection.profile.clone(), rejected, spans, measured)
+        };
+        let owned = |names: &[&str]| {
+            names
+                .iter()
+                .map(|name| name.to_string())
+                .collect::<Vec<_>>()
+        };
+
+        assert_eq!(
+            select(&via_board("L1", "L4"), &all),
+            ("standard".into(), vec![], "NotApplicable".into(), 1)
+        );
+        assert_eq!(
+            select(&via_board("L1", "L2"), &all),
+            ("x-blind".into(), owned(&["standard"]), "Pass".into(), 1)
+        );
+        assert_eq!(
+            select(&via_board("L2", "L3"), &all),
             (
-                "Fail".to_owned(),
-                Some("dielectric gaps match no stackup template for the 12-layer 2.0 mm, 2 oz outer / 2 oz inner build within ± 0.025 mm; closest is JLC122022-1080: L1–L2 is 0.1000 mm, template 0.1415 mm; L11–L12 is 0.1000 mm, template 0.1415 mm; the build has no default template".to_owned())
+                "y-buried".into(),
+                owned(&["standard", "x-blind"]),
+                "Pass".into(),
+                1
             )
         );
+        // No profile lists the span: the default runs, unqualified.
+        for profiles in [
+            vec![("standard", ""), ("y-buried", "drill_spans = [\"buried\"]")],
+            vec![("standard", ""), ("x-other", "")],
+        ] {
+            let (profile, _, spans, measured) = select(&via_board("L1", "L2"), &pdk(&profiles));
+            assert_eq!(
+                (profile.as_str(), spans.as_str(), measured),
+                ("standard", "Incomplete", 0)
+            );
+        }
+    }
+
+    #[test]
+    fn builtin_profiles_do_not_drill_blind_spans() {
+        // `hdi` in IPC's technologies names a process, not a drilled span.
+        for pdk in ["jlc", "ipc"] {
+            let report = check_builtin(&via_board("L1", "L2"), pdk).unwrap();
+            let (status, reason) = judged(&report, "profile.support.drill_spans");
+            assert_eq!(status, "Incomplete", "{pdk}");
+            assert!(reason.unwrap().contains("blind hole L1–L2 ×1"), "{pdk}");
+        }
+    }
+
+    #[test]
+    fn jlc_thicker_finished_boards_are_offered_only_from_12_layers() {
+        let thickness = |layers: usize, thickness: &str| {
+            let gaps = vec!["0.2"; layers - 1];
+            let xml = stacked_board("0.035", "0.0152", &gaps, thickness);
+            let report = check_builtin(&xml, "jlc").unwrap();
+            [
+                "jlc.stackup.board_thickness.up-to-11-layer",
+                "jlc.stackup.board_thickness.12-layer-and-up",
+            ]
+            .map(|id| judged(&report, id).0)
+        };
+        let [na, pass, fail] = ["NotApplicable", "Pass", "Fail"];
+        assert_eq!(thickness(11, "2.5"), [fail, na]);
+        assert_eq!(thickness(12, "2.5"), [na, pass]);
+        assert_eq!(thickness(12, "2.22"), [na, fail]);
     }
 
     #[test]
@@ -2139,7 +2279,9 @@ templates = [
         // Layer-count support cannot be certified, so the verdict fails closed.
         assert!(matches!(results.verdict, report::Verdict::Fail));
         assert_eq!(results.summary.errors, 0);
-        assert_eq!(results.summary.rules_incomplete, 2);
+        assert_eq!(results.summary.rules_incomplete, 3);
+        let spans = rule(&results, "profile.support.drill_spans");
+        assert!(matches!(spans.status, report::RuleStatus::Incomplete));
         for id in [
             "profile.support.copper_layers.minimum",
             "profile.support.copper_layers.maximum",

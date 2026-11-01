@@ -42,7 +42,8 @@ complete accepted fields. The example is illustrative, not a qualified process.
 One PDK file is a kit with named profiles. A built-in name such as
 `jlcpcb-1oz` selects both a kit and one profile. A built-in name without a
 profile, such as `jlc`, and a custom file select the profile from the design:
-the first executable profile whose `profile.support` the design meets, trying
+the first executable profile whose `profile.support` the design meets,
+`drill_spans` included, trying
 `default_profile` first and then the other profiles in name order. The report
 records the selected profile and why each earlier profile did not fit. A kit
 of one executable profile always runs it, and its support rules report what
@@ -71,7 +72,8 @@ The schema gives each kind of constraint one place:
   (a count range), `outer_copper_weight` and `inner_copper_weight` (lists of
   allowed weights), `board_thickness` (a thickness limit as in
   `rules.stackup.board_thickness`), `surface_finish` and `soldermask_color`
-  (lists of allowed values). A design outside any bound fails profile
+  (lists of allowed values), and `drill_spans` (`blind`, `buried`; omitted
+  means through holes only). A design outside any bound fails profile
   qualification. The engine emits these checks as reserved
   `profile.support.*` report rules; PDK authors do not write layer-count DFM
   rules.
@@ -136,8 +138,9 @@ an explicitly named profile qualifies it, no rule of the PDK applies and the
 check stops as `incomplete`, naming the materials and the missing process; it
 never judges a flex board against rigid copper-weight, thickness, or
 soldermask limits, nor passes it. A design that states no flexible material
-is not constrained: rigid stackups rarely name their material, and HDI is not
-yet detected.
+is not constrained: rigid stackups rarely name their material. Listing `hdi`
+does not state that a profile drills blind or buried spans;
+`support.drill_spans` does.
 
 A copper-weight condition names a standard weight (⅛, ¼, ⅓, ½, then whole
 ounces), while a stackup states a thickness that only approximates one: 1 oz
@@ -310,7 +313,9 @@ Each Step's findings apply at its placements; the report lists these in
   ring to measure. Both terminal layers, and any layer with a matching source
   land, must retain copper at the hole center;
   missing copper there is a zero-enclosure failure. One finding per hole
-  reports the worst layer.
+  reports the worst layer. With `select.hole = "npth"`, the rule measures
+  how far each NPTH's intentional land (see hole-to-copper clearance)
+  extends beyond the drill; an NPTH without one has no ring.
 - `rules.copper.plated_slot_enclosure` measures nominal artwork enclosure of
   plated slots only (no selector). It supports the same limits and copper-layer
   cases as annular ring. It measures the actual materialized slot, including
@@ -341,11 +346,16 @@ Each Step's findings apply at its placements; the report lists these in
   unattributed functional copper remains an offender. A copper object that a
   validated `NetShort` permits to meet the hole's net, such as a tied antenna
   graphic over its grounded pin, is exempt too; the tied nets are not merged.
-  NPTH copper is exempt only, layer by layer, when it is the land the hole is
-  drilled through by design: a component pad centred on the hole and at least
-  as wide, such as a mounting hole's annular land, with the copper joined to
-  it on that layer. A same-named net elsewhere, other copper on that layer,
-  and the land's net on a layer without the land are measured as before.
+  A tied graphic meets a via or PTH only where the hole is in the tied pad:
+  the pad is its own land, or it owns the pad's net and its whole drill lies
+  in the pad.
+  NPTH copper is exempt only, layer by layer, where it is an intentional
+  land of the hole, which the NPTH annular-ring rule judges instead: a pad
+  of the one component whose padstack instance drills the hole, whose
+  filled outline holds the whole drill and whose bore, if any, lies within
+  it, wherever its anchor is. A hole no padstack drills takes only a
+  component pad anchored on its centre. Only the land's own geometry is
+  exempt; the rest of its net is measured.
 - Slot-to-copper clearance (`rules.copper.slot_clearance`) measures the true
   materialized filled slot outline, including its ends, against unrelated
   final copper on its physical span. Touching or overlapping copper has zero
@@ -359,17 +369,26 @@ Each Step's findings apply at its placements; the report lists these in
   incomplete check, not a geometric shortfall or a valid pass.
   Copper layer declaration order does not determine the physical span.
 - Copper feature-width rules report narrow copper piece by piece after final
-  polarity composition. Copper-clearance rules measure the shortest
+  polarity composition. Each site note names the consequence of losing the
+  piece (`severed connection`, `narrowed conductor` or `lost detail`); it
+  never changes a verdict.
+  Copper-clearance rules measure the shortest
   boundary distance between distinct final conductor images. Same-net
   notches and same-net islands are not clearance subjects; touching or
   overlapping distinct conductors have zero clearance. Functional copper
   without a net leaves this rule `incomplete` instead of being guessed into an
   electrical domain; rules that measure the composed image are unaffected. Fiducials, copper-balance
   support, and netless pads remain explicit auxiliary conductors.
+- Netless `geometryUsage="TEXT"` copper that touches no other copper or
+  drill (nor shares a feature with text that does) forms text islands.
+  Each copper width and clearance tier has a warning companion,
+  `<id>.text` or `<id>.text.preferred`, that measures their narrow pieces
+  and the gaps between two of them; the functional rule measures the rest.
+  `GRAPHIC` copper states no intent, so it stays functional.
 - Explicit IPC `NetShort` declarations permit validated net-tie contacts on the
   containing copper layer: a matching component graphic/pad contact permits
   that graphic to meet the declared nets; a pad-only tie permits only the pad
-  pair. The declaration must name two distinct nets and match actual contact.
+  pair. Copper, hole and slot clearance share these permissions. The declaration must name two distinct nets and match actual contact.
   It does not merge nets or exempt remote shorts, third-net clearances, or
   other layout occurrences. Unsupported or unmatched declarations leave the
   affected ownership-dependent checks `incomplete`, not silently passing.
@@ -403,7 +422,9 @@ Each Step's findings apply at its placements; the report lists these in
     layers. The design's build is its layer count, the listed thickness
     nearest its finished thickness, and its outer and inner copper weights;
     it conforms when a template for that build has every gap within
-    `tolerance`. A build with no template fails. A layer count with no build
+    `tolerance`. A build with no template is `incomplete`. A mismatch fails
+    only a `stackupStatus="SPECIFIED"` stackup; otherwise it is `incomplete`,
+    since nothing permits the fab to substitute its template. A layer count with no build
     is `not_applicable`; missing thicknesses or weights leave the rule
     `incomplete`.
   - Surface finish reads the `SurfaceFinish` spec of each coating layer in
@@ -416,6 +437,11 @@ Each Step's findings apply at its placements; the report lists these in
     as KiCad writes it, takes the nearest named colour. A finish or colour the file does not
     state (KiCad writes `Not specified`) is left to the fab, so the rule is
     `not_applicable`. IPC `OTHER` finishes are never allowed.
+  - `profile.support.drill_spans` runs for every profile. A hole or slot
+    whose span stops short of one outer layer is blind, of both buried. A
+    span the profile does not list makes the rule `incomplete`, naming each
+    span and count, and no hole or slot rule measures those features: their
+    absence from other findings says nothing about their geometry.
   - Board size measures the extents of the checked layout: the board for
     `--layout-target board`, the array or panel for `board-array`. Extents
     and limits are both compared long side to long side. A layout without a

@@ -640,7 +640,7 @@ fn ipc_dfm_replaces_stale_report_and_reports_all_incomplete_runs() {
     let rules = unattributed["rules"].as_array().unwrap();
     let incomplete = rules
         .iter()
-        .filter(|rule| rule["status"] == "incomplete")
+        .filter(|rule| rule["status"] == "incomplete" && rule["severity"] == "error")
         .collect::<Vec<_>>();
     assert_eq!(incomplete.len(), 1);
     assert!(

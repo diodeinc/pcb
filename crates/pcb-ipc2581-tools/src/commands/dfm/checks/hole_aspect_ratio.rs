@@ -178,15 +178,17 @@ cases = [
         let defaults = default_thickness.map_or(String::new(), |thickness| {
             format!("[profiles.test.defaults]\nboard_thickness = \"{thickness}\"\n")
         });
-        let pdk = fixtures::pdk(&format!("{defaults}{rule}"));
+        let support = "[profiles.test.support]\ndrill_spans = [\"blind\", \"buried\"]\n";
+        let pdk = fixtures::pdk(&format!("{defaults}{support}{rule}"));
         fixtures::report(xml, &pdk, LayoutTarget::Board)
     }
 
     fn only_rule(report: &DfmReport) -> &RuleResult {
-        let [rule, outline] = report.rules.as_slice() else {
-            panic!("one rule besides the board outline: {:?}", report.rules);
+        let [rule, outline, spans] = report.rules.as_slice() else {
+            panic!("one rule besides the reserved ones: {:?}", report.rules);
         };
         assert_eq!(outline.id, "board.outline");
+        assert_eq!(spans.id, "profile.support.drill_spans");
         rule
     }
 

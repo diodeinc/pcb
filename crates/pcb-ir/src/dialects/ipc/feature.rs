@@ -382,6 +382,7 @@ pub struct FeatureSet {
     pub source_set_index: u32,
     pub source_geometry_ref: Option<Symbol>,
     pub component_ref: Option<Symbol>,
+    pub geometry_usage: Option<ipc2581::types::GeometryUsage>,
     pub net: Option<Symbol>,
     pub polarity: Polarity,
     /// Whether the set is generated copper balancing.

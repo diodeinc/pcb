@@ -10,10 +10,10 @@ use crate::commands::dfm::pdk::SlotPlating;
 use crate::commands::dfm::report::Evidence;
 use crate::commands::dfm::rules::Conditions;
 
-use super::copper_clearance::conductor_subject;
+use super::copper_clearance::{TiePermissions, conductor_subject};
 use super::{
-    Evaluation, Measured, Ownership, layers, linework_clearance, slot_matches, slot_subject,
-    spanned_layers, violates,
+    Drilled, Evaluation, Measured, Ownership, layers, linework_clearance, slot_matches,
+    slot_subject, spanned_layers, violates,
 };
 
 pub(super) fn evaluate(
@@ -24,6 +24,16 @@ pub(super) fn evaluate(
 ) -> anyhow::Result<Evaluation> {
     let mut checked = 0;
     let mut measured = Vec::new();
+    // A plated slot meets a NetShort as a hole does; a nonplated one has no
+    // net for a tie to name.
+    let ties = match plating {
+        SlotPlating::Nonplated => Vec::new(),
+        SlotPlating::Plated => design
+            .copper_layers
+            .iter()
+            .map(|layer| TiePermissions::of(design, layer))
+            .collect::<anyhow::Result<Vec<_>>>()?,
+    };
     // A placed slot is measured here too, against what its own Step's design
     // does not hold: this Step's copper and that of the other placements.
     for (slot_index, slot) in design
@@ -40,6 +50,7 @@ pub(super) fn evaluate(
             slot.step,
             slot.provenance.instance_index,
             &design.slot_lands[slot_index],
+            Drilled::Outline(&slot.outline),
         );
         // Extraction orders copper layers and drill spans by the same
         // validated physical stackup.
@@ -69,6 +80,16 @@ pub(super) fn evaluate(
                     )
                     .map(|distance| (conductor, copper_boundary, distance))
                 })
+                .map(|(conductor, copper_boundary, distance)| {
+                    let tied = match ties.get(copper_index) {
+                        Some(ties) => owner.tied(ties, copper, conductor.id, distance.second)?,
+                        None => false,
+                    };
+                    Ok((!tied).then_some((conductor, copper_boundary, distance)))
+                })
+                .collect::<anyhow::Result<Vec<_>>>()?
+                .into_iter()
+                .flatten()
                 .min_by(|(_, _, left), (_, _, right)| left.mm.total_cmp(&right.mm));
             let Some((offender, copper_boundary, distance)) = nearest else {
                 continue;
@@ -122,8 +143,11 @@ mod tests {
     use crate::commands::dfm::{self, report};
 
     fn pdk(plating: &str) -> String {
+        // The fixtures' slots stop short of the full stack, on purpose.
         fixtures::pdk(&format!(
-            r#"[[rules.copper.slot_clearance]]
+            r#"[profiles.test.support]
+drill_spans = ["blind", "buried"]
+[[rules.copper.slot_clearance]]
 id = "slot-clearance"
 select = {{ plating = "{plating}" }}
 limit = {{ minimum = "0.20 mm" }}"#
@@ -171,14 +195,15 @@ limit = {{ minimum = "0.20 mm" }}"#
     }
 
     #[test]
-    fn width_only_report_omits_unproven_span_with_shuffled_layers() {
+    fn width_report_states_the_physical_span_with_shuffled_layers() {
         let source = pdk("plated")
             .replace("rules.copper.slot_clearance", "rules.drilling.slot_width")
             .replace("0.20 mm", "0.80 mm");
         let result = check(&board("PLATED", "", ""), &source);
         let finding = &result.findings[0];
         assert!((finding.measurement.actual_mm().unwrap() - 0.6).abs() < 1e-8);
-        assert!(finding.subjects[0].drill_span.is_none());
+        let span = finding.subjects[0].drill_span.as_ref().unwrap();
+        assert_eq!((span.first_copper_index, span.last_copper_index), (0, 1));
     }
 
     #[test]
@@ -190,6 +215,7 @@ limit = {{ minimum = "0.20 mm" }}"#
         for (plating, gap) in [("PLATED", 0.1), ("NONPLATED", 0.1), ("NONPLATED", 0.3)] {
             let copper = copper("net=\"N2\"").replace("1.1", &(1.0 + gap).to_string());
             let xml = board(plating, "net=\"N1\"", &copper)
+                .replace(r#"toLayer="L1""#, r#"toLayer="L2""#)
                 .replace("height=\"0.6\"", "height=\"1\"")
                 .replace(
                     "<Datum x=\"0\" y=\"0\"/>",
@@ -231,7 +257,7 @@ limit = {{ minimum = "0.20 mm" }}"#
             }
 
             let missing = xml.replace(
-                "<Span fromLayer=\"L0\" toLayer=\"L1\"/>",
+                "<Span fromLayer=\"L0\" toLayer=\"L2\"/>",
                 "<Span fromLayer=\"L0\"/>",
             );
             let unresolved = check(&missing, standard.source);

@@ -50,6 +50,7 @@ fn enum_tokens_match_the_schema() {
         "sideType" => Side,
         "polarityType" => Polarity,
         "whereMeasuredType" => WhereMeasured,
+        "stackupStatusType" => StackupStatus,
         "platingStatusType" => PlatingStatus,
         "padUseType" => PadUse,
         "cadPinType" => PackagePinType,

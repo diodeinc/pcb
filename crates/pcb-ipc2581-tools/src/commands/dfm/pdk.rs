@@ -193,6 +193,9 @@ pub struct ProfileSupport {
     pub surface_finish: Option<Vec<SurfaceFinish>>,
     #[serde(default)]
     pub soldermask_color: Option<Vec<SoldermaskColor>>,
+    /// The partial-depth spans the profile drills; through holes need none.
+    #[serde(default)]
+    pub drill_spans: Vec<PartialDepth>,
 }
 
 impl ProfileSupport {
@@ -579,6 +582,23 @@ impl Technology {
     }
 }
 
+/// A drill span short of the full stack.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PartialDepth {
+    Blind,
+    Buried,
+}
+
+impl PartialDepth {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Blind => "blind",
+            Self::Buried => "buried",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProfileDefaults {
@@ -845,7 +865,7 @@ pub struct CopperRules {
     #[serde(default)]
     pub plated_slot_enclosure: Vec<LengthRule>,
     #[serde(default)]
-    pub annular_ring: Vec<SelectingRule<PlatedHoleSelector>>,
+    pub annular_ring: Vec<SelectingRule<HoleSelector>>,
     #[serde(default)]
     pub hole_clearance: Vec<SelectingRule<HoleSelector>>,
     #[serde(default)]
