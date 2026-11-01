@@ -1,13 +1,13 @@
 use std::{
     cmp::Ordering,
-    collections::HashMap,
     fmt,
     hash::Hash,
     str::FromStr,
-    sync::{Arc, Mutex, OnceLock},
+    sync::{Arc, OnceLock},
 };
 
 use allocative::Allocative;
+use mini_map::MiniFixedSortedMap as SortedMap;
 use rust_decimal::{Decimal, prelude::ToPrimitive};
 use serde::{Deserialize, Serialize};
 use starlark::{
@@ -21,31 +21,47 @@ use starlark::{
     },
     util::ArcStr,
     values::{
-        Freeze, FreezeResult, FrozenValue, Heap, StarlarkValue, Value, ValueLike,
+        Freeze, FreezeResult, Heap, StarlarkValue, Value,
         float::StarlarkFloat,
         function::FUNCTION_TYPE,
         starlark_value,
         string::StarlarkStr,
-        typing::{TypeInstanceId, TypeMatcher, TypeMatcherDyn, TypeMatcherFactory},
+        typing::{TypeIdDomain, TypeInstanceId, TypeMatcher, TypeMatcherDyn, TypeMatcherFactory},
     },
 };
-use starlark_map::{StarlarkHasher, sorted_map::SortedMap};
+use starlark_map::StarlarkHasher;
 
 use super::{
     ParseError, PhysicalUnit, PhysicalUnitDims, PhysicalValue, PhysicalValueError,
     parse_percentish_decimal, parse_physical_value, split_number_and_unit,
 };
 
-// Shared type instance ID cache for unit-based types
-fn get_type_instance_id(
-    unit: PhysicalUnitDims,
-    cache: &OnceLock<Mutex<HashMap<PhysicalUnitDims, TypeInstanceId>>>,
-) -> TypeInstanceId {
-    let map = cache.get_or_init(|| Mutex::new(HashMap::new()));
-    *map.lock()
-        .unwrap()
-        .entry(unit)
-        .or_insert_with(TypeInstanceId::r#gen)
+/// Content-derived type-id kinds for pcb's nominal Starlark types.
+#[derive(Clone, Copy, Debug)]
+pub enum PcbTypeIdDomain {
+    PhysicalValue,
+    PhysicalValueType,
+    Enum,
+    EnumType,
+    Net,
+    NetType,
+    Interface,
+    Symbol,
+}
+
+impl TypeIdDomain for PcbTypeIdDomain {
+    fn tag(&self) -> &'static str {
+        match self {
+            PcbTypeIdDomain::PhysicalValue => "pcb.physical_value",
+            PcbTypeIdDomain::PhysicalValueType => "pcb.physical_value_type",
+            PcbTypeIdDomain::Enum => "pcb.enum",
+            PcbTypeIdDomain::EnumType => "pcb.enum_type",
+            PcbTypeIdDomain::Net => "pcb.net",
+            PcbTypeIdDomain::NetType => "pcb.net_type",
+            PcbTypeIdDomain::Interface => "pcb.interface",
+            PcbTypeIdDomain::Symbol => "pcb.symbol",
+        }
+    }
 }
 
 /// Helper to convert Decimal to f64 for Starlark
@@ -203,9 +219,9 @@ impl TryFrom<Value<'_>> for PhysicalValue {
     }
 }
 
-impl Freeze for PhysicalUnitDims {
-    type Frozen = Self;
-    fn freeze(self, _freezer: &starlark::values::Freezer) -> FreezeResult<Self::Frozen> {
+impl<'v> Freeze<'v> for PhysicalUnitDims {
+    type Frozen<'fv> = Self;
+    fn freeze<'fv>(self, _freezer: &starlark::values::Freezer<'v, 'fv>) -> FreezeResult<Self> {
         Ok(self)
     }
 }
@@ -558,9 +574,9 @@ pub struct PhysicalValueType {
     exported_name: Arc<OnceLock<String>>,
 }
 
-impl Freeze for PhysicalValueType {
-    type Frozen = Self;
-    fn freeze(self, _freezer: &starlark::values::Freezer) -> FreezeResult<Self::Frozen> {
+impl<'v> Freeze<'v> for PhysicalValueType {
+    type Frozen<'fv> = Self;
+    fn freeze<'fv>(self, _freezer: &starlark::values::Freezer<'v, 'fv>) -> FreezeResult<Self> {
         Ok(self)
     }
 }
@@ -582,9 +598,15 @@ impl PhysicalValueType {
         }
     }
 
-    fn type_instance_id(&self) -> TypeInstanceId {
-        static CACHE: OnceLock<Mutex<HashMap<PhysicalUnitDims, TypeInstanceId>>> = OnceLock::new();
-        get_type_instance_id(self.unit, &CACHE)
+    fn type_instance_id(&self, domain: PcbTypeIdDomain) -> TypeInstanceId {
+        let PhysicalUnitDims {
+            mass,
+            length,
+            time,
+            current,
+            temp,
+        } = self.unit;
+        TypeInstanceId::from_identity(domain, &((mass, length, time), (current, temp)))
     }
 
     fn instance_ty_name(&self) -> String {
@@ -618,7 +640,7 @@ impl PhysicalValueType {
         .expect("ParamSpec creation should not fail")
     }
 
-    fn parameters_spec(&self) -> ParametersSpec<FrozenValue> {
+    fn parameters_spec<'v>(&self) -> ParametersSpec<Value<'v>> {
         ParametersSpec::new_parts(
             self.instance_ty_name().as_str(),
             [("value", ParametersSpecParam::Optional)],
@@ -679,7 +701,7 @@ impl<'v> StarlarkValue<'v> for PhysicalValueType {
     }
 
     fn eval_type(&self) -> Option<Ty> {
-        let id = self.type_instance_id();
+        let id = self.type_instance_id(PcbTypeIdDomain::PhysicalValue);
         let ty_value = Ty::custom(
             TyUser::new(
                 self.instance_ty_name(),
@@ -706,7 +728,7 @@ impl<'v> StarlarkValue<'v> for PhysicalValueType {
             TyUser::new(
                 self.ty_name(),
                 TyStarlarkValue::new::<Self>(),
-                TypeInstanceId::r#gen(),
+                self.type_instance_id(PcbTypeIdDomain::PhysicalValueType),
                 TyUserParams {
                     callable: Some(TyCallable::new(self.param_spec(), self.eval_type()?)),
                     ..TyUserParams::default()
@@ -970,9 +992,9 @@ mod tests {
             let value = heap.alloc(physical);
             let unfrozen_hash = value.to_value().get_hashed().unwrap().hash();
 
-            let frozen_heap = FrozenHeap::new();
-            let frozen = frozen_heap.alloc(physical);
-            let frozen_hash = frozen.get_hashed().unwrap().hash();
+            let frozen_hash = FrozenHeap::temp(|frozen_heap| {
+                frozen_heap.alloc(physical).get_hashed().unwrap().hash()
+            });
 
             assert_eq!(unfrozen_hash, frozen_hash);
         });

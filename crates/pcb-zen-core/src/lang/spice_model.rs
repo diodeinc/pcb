@@ -12,8 +12,8 @@ use starlark::{
     eval::{Arguments, Evaluator, ParametersSpec, ParametersSpecParam},
     starlark_complex_value, starlark_module, starlark_simple_value,
     values::{
-        Coerce, Freeze, NoSerialize, StarlarkValue, Trace, Value, ValueLike, dict::DictRef,
-        list::ListRef, starlark_value,
+        Freeze, NoSerialize, StarlarkValue, Trace, Value, dict::DictRef, list::ListRef,
+        starlark_value,
     },
 };
 
@@ -23,16 +23,16 @@ use anyhow::anyhow;
 use pcb_sch::physical::PhysicalValue;
 
 /// SpiceModel reprents a sub circuit
-#[derive(Clone, Trace, Coerce, ProvidesStaticType, NoSerialize, Allocative, Freeze)]
+#[derive(Clone, Trace, ProvidesStaticType, NoSerialize, Allocative, Freeze)]
 #[repr(C)]
-pub struct SpiceModelValueGen<V> {
-    pub definition: String, // file content with the definition
-    pub name: String,       // spice subckt name
-    pub nets: Vec<V>,       // input nets
+pub struct SpiceModelValue<'v> {
+    pub definition: String,   // file content with the definition
+    pub name: String,         // spice subckt name
+    pub nets: Vec<Value<'v>>, // input nets
     pub args: SmallMap<String, String>,
 }
 
-impl<V: std::fmt::Debug> std::fmt::Debug for SpiceModelValueGen<V> {
+impl<'v> std::fmt::Debug for SpiceModelValue<'v> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mut debug = f.debug_struct("SpiceModel");
         debug.field("definition", &self.definition);
@@ -46,12 +46,9 @@ impl<V: std::fmt::Debug> std::fmt::Debug for SpiceModelValueGen<V> {
 starlark_complex_value!(pub SpiceModelValue);
 
 #[starlark_value(type = "SpiceModel")]
-impl<'v, V: ValueLike<'v>> StarlarkValue<'v> for SpiceModelValueGen<V> where
-    Self: ProvidesStaticType<'v>
-{
-}
+impl<'v> StarlarkValue<'v> for SpiceModelValue<'v> where Self: ProvidesStaticType<'v> {}
 
-impl<'v, V: ValueLike<'v>> std::fmt::Display for SpiceModelValueGen<V> {
+impl<'v> std::fmt::Display for SpiceModelValue<'v> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         writeln!(
             f,
@@ -62,8 +59,8 @@ impl<'v, V: ValueLike<'v>> std::fmt::Display for SpiceModelValueGen<V> {
     }
 }
 
-impl<'v, V: ValueLike<'v>> SpiceModelValueGen<V> {
-    pub fn nets(&self) -> &Vec<V> {
+impl<'v> SpiceModelValue<'v> {
+    pub fn nets(&self) -> &Vec<Value<'v>> {
         &self.nets
     }
 
@@ -88,10 +85,7 @@ pub struct SpiceModelType;
 starlark_simple_value!(SpiceModelType);
 
 #[starlark_value(type = "SpiceModel")]
-impl<'v> StarlarkValue<'v> for SpiceModelType
-where
-    Self: ProvidesStaticType<'v>,
-{
+impl<'v> StarlarkValue<'v> for SpiceModelType {
     fn invoke(
         &self,
         _me: Value<'v>,

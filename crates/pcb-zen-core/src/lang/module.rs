@@ -1,40 +1,38 @@
 #![allow(clippy::needless_lifetimes)]
 
+use crate::lang::electrical_check::ElectricalCheck;
+use crate::lang::test_bench::TestBenchValue;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
 
 use tracing::instrument;
 
 use crate::lang::component::FrozenComponentValue;
-use crate::lang::electrical_check::FrozenElectricalCheck;
 use crate::lang::r#enum::{EnumType, EnumValue};
 use crate::lang::io_direction::IoDirection;
-use crate::lang::test_bench::FrozenTestBenchValue;
 use crate::lang::type_conversion::try_implicit_type_conversion;
 use allocative::Allocative;
 use pcb_sch::physical::PhysicalValueType;
 use serde::Serialize;
 use starlark::environment::FrozenModule;
 use starlark::values::typing::{TypeCompiled, TypeType};
-use starlark::values::{Heap, UnpackValue, ValueLifetimeless};
+use starlark::values::{Heap, UnpackValue};
 use starlark::{
     any::ProvidesStaticType,
     collections::SmallMap,
     environment::GlobalsBuilder,
     eval::{Arguments, Evaluator},
-    starlark_complex_value, starlark_complex_values, starlark_module, starlark_simple_value,
+    starlark_complex_value, starlark_module, starlark_simple_value,
     values::{
-        Coerce, Freeze, FrozenValue, NoSerialize, StarlarkValue, Trace, Value, ValueLike,
-        float::StarlarkFloat, list::ListRef, starlark_value, tuple::TupleRef,
+        Freeze, NoSerialize, StarlarkValue, Trace, Value, float::StarlarkFloat, list::ListRef,
+        starlark_value, tuple::TupleRef,
     },
 };
 
-use crate::graph::starlark::ModuleGraphValueGen;
+use crate::graph::starlark::ModuleGraphValue;
 use crate::lang::context::{ContextValue, PendingChild};
 use crate::lang::evaluator_ext::EvaluatorExt;
-use crate::lang::interface::{
-    FrozenInterfaceFactory, FrozenInterfaceValue, InterfaceFactory, InterfaceValue,
-};
+use crate::lang::interface::{InterfaceFactory, InterfaceValue};
 use crate::lang::param_decl::invoke_config;
 use crate::lang::validation::validate_identifier_name;
 use regex::Regex;
@@ -48,7 +46,7 @@ macro_rules! downcast_frozen_module {
     ($module:expr) => {
         $module
             .to_value()
-            .downcast_ref::<FrozenModuleValue>()
+            .downcast_ref::<$crate::lang::module::ModuleValue<'_>>()
             .ok_or_else(|| {
                 starlark::Error::new_other(anyhow::anyhow!(
                     "Module methods only work on frozen modules"
@@ -58,10 +56,9 @@ macro_rules! downcast_frozen_module {
 }
 
 use super::net::{
-    FrozenNetType, FrozenNetValue, NetId, NetType, NetValue, generate_net_id,
-    net_kind_requires_name, net_matches_type_name, net_type_name_from_value,
+    NetId, NetType, NetValue, generate_net_id, net_kind_requires_name, net_matches_type_name,
+    net_type_name_from_value,
 };
-use crate::lang::context::FrozenContextValue;
 use starlark::errors::EvalMessage;
 
 /// Info about a net introduced by this module
@@ -225,12 +222,12 @@ impl std::fmt::Display for Position {
     }
 }
 
-impl starlark::values::Freeze for Position {
-    type Frozen = Position;
-    fn freeze(
+impl<'v> starlark::values::Freeze<'v> for Position {
+    type Frozen<'fv> = Position;
+    fn freeze<'fv>(
         self,
-        _: &starlark::values::Freezer,
-    ) -> Result<Self::Frozen, starlark::values::FreezeError> {
+        _: &starlark::values::Freezer<'v, 'fv>,
+    ) -> Result<Position, starlark::values::FreezeError> {
         Ok(self)
     }
 }
@@ -276,17 +273,17 @@ impl From<MissingInputError> for starlark::Error {
 
 /// Metadata for a module parameter (from io() or config() calls)
 #[derive(Clone, Debug, Trace, Allocative, Freeze)]
-pub struct ParameterMetadataGen<V: ValueLifetimeless> {
+pub struct ParameterMetadata<'v> {
     /// Parameter name
     pub name: String,
     /// Type value (e.g., Net, str, int, etc.)
-    pub type_value: V,
+    pub type_value: Value<'v>,
     /// Whether the parameter is optional
     pub optional: bool,
     /// Default value if provided
-    pub default_value: Option<V>,
+    pub default_value: Option<Value<'v>>,
     /// Finite set of allowed values if provided
-    pub allowed_values: Option<Vec<V>>,
+    pub allowed_values: Option<Vec<Value<'v>>>,
     /// Whether this is a config parameter (vs io parameter)
     pub is_config: bool,
     /// Help text describing the parameter
@@ -294,7 +291,7 @@ pub struct ParameterMetadataGen<V: ValueLifetimeless> {
     /// Optional direction metadata for io() parameters.
     pub direction: Option<IoDirection>,
     /// The actual value returned by io() or config()
-    pub actual_value: Option<V>,
+    pub actual_value: Option<Value<'v>>,
     /// Source span for the `io()`/`config()` declaration when available.
     #[freeze(identity)]
     #[allocative(skip)]
@@ -305,14 +302,14 @@ pub struct ParameterMetadataGen<V: ValueLifetimeless> {
     pub declaration_call_stack: starlark::eval::CallStack,
 }
 
-impl<'v, V: ValueLike<'v>> ParameterMetadataGen<V> {
+impl<'v> ParameterMetadata<'v> {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         name: String,
-        type_value: V,
+        type_value: Value<'v>,
         optional: bool,
-        default_value: Option<V>,
-        allowed_values: Option<Vec<V>>,
+        default_value: Option<Value<'v>>,
+        allowed_values: Option<Vec<Value<'v>>>,
         is_config: bool,
         help: Option<String>,
         direction: Option<IoDirection>,
@@ -453,12 +450,12 @@ pub(crate) fn io_declaration_site(eval: &Evaluator<'_, '_, '_>) -> DeclarationSi
 }
 
 #[derive(Clone, Trace, ProvidesStaticType, NoSerialize, Allocative, Freeze)]
-pub struct ModuleValueGen<V: ValueLifetimeless> {
+pub struct ModuleValue<'v> {
     path: ModulePath,
     source_path: String,
-    inputs: SmallMap<String, V>,
-    properties: SmallMap<String, V>,
-    signature: Vec<ParameterMetadataGen<V>>,
+    inputs: SmallMap<String, Value<'v>>,
+    properties: SmallMap<String, Value<'v>>,
+    signature: Vec<ParameterMetadata<'v>>,
     /// Nets that are introduced (created) by this module. Map of `net id → net info`.
     introduced_nets: SmallMap<NetId, IntroducedNet>,
     /// Local name → net id, to enforce uniqueness of names within a module.
@@ -468,51 +465,45 @@ pub struct ModuleValueGen<V: ValueLifetimeless> {
     /// Path movement directives from moved() calls. Map of `old path → (new path, auto_generated)`.
     moved_directives: SmallMap<String, (String, bool)>,
     /// Local values (components, electrical checks, testbenches). Child modules are in module_tree.
-    children: Vec<V>,
+    children: Vec<Value<'v>>,
     /// Component modifier functions registered via builtin.add_component_modifier().
     /// These are called in order on every component created in THIS module only (not children).
     /// Applied BEFORE parent modifiers to maintain bottom-up execution order:
     /// child's own → parent's → grandparent's, etc.
-    component_modifiers: Vec<V>,
+    component_modifiers: Vec<Value<'v>>,
     /// Component modifier functions inherited from parent and ancestor modules.
     /// Collected during module instantiation by combining parent.component_modifiers() +
     /// parent.parent_component_modifiers(), creating the full ancestor chain.
     /// Applied AFTER the module's own modifiers.
-    parent_component_modifiers: Vec<V>,
+    parent_component_modifiers: Vec<Value<'v>>,
     /// Where the parent instantiated this module; `None` for the root.
     #[freeze(identity)]
     #[allocative(skip)]
     pub(crate) call_site: Option<(String, ResolvedSpan)>,
 }
 
-pub type ModuleValue<'v> = ModuleValueGen<Value<'v>>;
-pub type FrozenModuleValue = ModuleValueGen<FrozenValue>;
-starlark_complex_values!(ModuleValue);
+starlark_complex_value!(pub ModuleValue);
 
 #[starlark_value(type = "Module")]
-impl<'v, V: ValueLike<'v>> StarlarkValue<'v> for ModuleValueGen<V>
-where
-    Self: ProvidesStaticType<'v>,
-    <Self as ProvidesStaticType<'v>>::StaticType: Send,
-{
+impl<'v> StarlarkValue<'v> for ModuleValue<'v> {
     fn get_attr(&self, attr: &str, heap: Heap<'v>) -> Option<Value<'v>> {
         let module_value = heap.alloc_complex(self.clone()).to_value();
 
         match attr {
             "nets" => {
-                let callable = NetsCallableGen {
+                let callable = NetsCallable {
                     module: module_value,
                 };
                 Some(heap.alloc_complex(callable))
             }
             "components" => {
-                let callable = ComponentsCallableGen {
+                let callable = ComponentsCallable {
                     module: module_value,
                 };
                 Some(heap.alloc_complex(callable))
             }
             "graph" => {
-                let callable = GraphCallableGen {
+                let callable = GraphCallable {
                     module: module_value,
                 };
                 Some(heap.alloc_complex(callable))
@@ -534,13 +525,13 @@ where
     }
 }
 
-impl<'v, V: ValueLike<'v>> std::fmt::Display for ModuleValueGen<V> {
+impl<'v> std::fmt::Display for ModuleValue<'v> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "Module({})", self.path)
     }
 }
 
-impl<'v, V: ValueLike<'v>> std::fmt::Debug for ModuleValueGen<V> {
+impl<'v> std::fmt::Debug for ModuleValue<'v> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mut debug = f.debug_struct("Module");
         debug.field("path", &self.path);
@@ -569,18 +560,18 @@ impl<'v, V: ValueLike<'v>> std::fmt::Debug for ModuleValueGen<V> {
     }
 }
 
-impl<'v, V: ValueLike<'v>> ModuleValueGen<V> {
-    pub(crate) fn add_property(&mut self, name: String, value: V) {
+impl<'v> ModuleValue<'v> {
+    pub(crate) fn add_property(&mut self, name: String, value: Value<'v>) {
         self.properties.insert(name, value);
     }
 
-    pub(crate) fn add_input(&mut self, name: String, value: V) {
+    pub(crate) fn add_input(&mut self, name: String, value: Value<'v>) {
         self.inputs.insert(name, value);
     }
 
     pub fn new(path: ModulePath, source_path: &Path, positions: PositionMap) -> Self {
         let source_path = source_path.to_string_lossy().into_owned();
-        ModuleValueGen {
+        ModuleValue {
             path,
             source_path,
             inputs: SmallMap::new(),
@@ -609,22 +600,22 @@ impl<'v, V: ValueLike<'v>> ModuleValueGen<V> {
         &self.path
     }
 
-    pub fn inputs(&self) -> &SmallMap<String, V> {
+    pub fn inputs(&self) -> &SmallMap<String, Value<'v>> {
         &self.inputs
     }
 
     /// Return a reference to the custom property map attached to this Module.
-    pub fn properties(&self) -> &SmallMap<String, V> {
+    pub fn properties(&self) -> &SmallMap<String, Value<'v>> {
         &self.properties
     }
 
     /// Get the component modifiers registered for this module.
-    pub fn component_modifiers(&self) -> &Vec<V> {
+    pub fn component_modifiers(&self) -> &Vec<Value<'v>> {
         &self.component_modifiers
     }
 
     /// Add a component modifier function to this module.
-    pub fn add_component_modifier(&mut self, modifier_fn: V) {
+    pub fn add_component_modifier(&mut self, modifier_fn: Value<'v>) {
         let modifier_value = modifier_fn.to_value();
 
         // Board()/Layout()/Simulation() can register the same function more than once.
@@ -640,12 +631,12 @@ impl<'v, V: ValueLike<'v>> ModuleValueGen<V> {
     }
 
     /// Get the component modifiers inherited from parent modules.
-    pub fn parent_component_modifiers(&self) -> &Vec<V> {
+    pub fn parent_component_modifiers(&self) -> &Vec<Value<'v>> {
         &self.parent_component_modifiers
     }
 
     /// Set the component modifiers inherited from parent modules.
-    pub fn set_parent_component_modifiers(&mut self, modifiers: Vec<V>) {
+    pub fn set_parent_component_modifiers(&mut self, modifiers: Vec<Value<'v>>) {
         self.parent_component_modifiers = modifiers;
     }
 
@@ -667,20 +658,20 @@ impl<'v, V: ValueLike<'v>> ModuleValueGen<V> {
     pub fn add_parameter_metadata(
         &mut self,
         name: String,
-        type_value: V,
+        type_value: Value<'v>,
         optional: bool,
-        default_value: Option<V>,
-        allowed_values: Option<Vec<V>>,
+        default_value: Option<Value<'v>>,
+        allowed_values: Option<Vec<Value<'v>>>,
         is_config: bool,
         help: Option<String>,
         direction: Option<IoDirection>,
-        actual_value: Option<V>,
+        actual_value: Option<Value<'v>>,
         declaration_span: Option<ResolvedSpan>,
         declaration_call_stack: starlark::eval::CallStack,
     ) {
         // Check if this parameter already exists
         if !self.signature.iter().any(|p| p.name == name) {
-            let mut param = ParameterMetadataGen::new(
+            let mut param = ParameterMetadata::new(
                 name,
                 type_value,
                 optional,
@@ -698,12 +689,12 @@ impl<'v, V: ValueLike<'v>> ModuleValueGen<V> {
     }
 
     /// Get the module's signature.
-    pub fn signature(&self) -> &Vec<ParameterMetadataGen<V>> {
+    pub fn signature(&self) -> &Vec<ParameterMetadata<'v>> {
         &self.signature
     }
 
     /// Add a child value (component, electrical check, or testbench) to this module
-    pub fn add_child(&mut self, child: V) {
+    pub fn add_child(&mut self, child: Value<'v>) {
         self.children.push(child);
     }
 
@@ -722,41 +713,29 @@ impl<'v, V: ValueLike<'v>> ModuleValueGen<V> {
     }
 
     /// Get all children (components, electrical checks, testbenches) in this module
-    pub fn children(&self) -> &Vec<V> {
+    pub fn children(&self) -> &Vec<Value<'v>> {
         &self.children
     }
 
     /// Get all electrical checks registered in this module (requires downcasting)
-    pub fn electrical_checks<'a>(&'a self) -> impl Iterator<Item = &'a FrozenElectricalCheck> + 'a
-    where
-        V: 'a,
-        'v: 'a,
-    {
+    pub fn electrical_checks(&self) -> impl Iterator<Item = &'v ElectricalCheck<'v>> + '_ {
         self.children
             .iter()
-            .filter_map(move |child| child.downcast_ref::<FrozenElectricalCheck>())
+            .filter_map(|child| child.downcast_ref::<ElectricalCheck<'v>>())
     }
 
     /// Get all components created in this module (requires downcasting)
-    pub fn components<'a>(&'a self) -> impl Iterator<Item = &'a FrozenComponentValue> + 'a
-    where
-        V: 'a,
-        'v: 'a,
-    {
+    pub fn components(&self) -> impl Iterator<Item = &'v FrozenComponentValue<'v>> + '_ {
         self.children
             .iter()
-            .filter_map(move |child| child.downcast_ref::<FrozenComponentValue>())
+            .filter_map(|child| child.downcast_ref::<FrozenComponentValue<'v>>())
     }
 
     /// Get all testbenches created in this module (requires downcasting)
-    pub fn testbenches<'a>(&'a self) -> impl Iterator<Item = &'a FrozenTestBenchValue> + 'a
-    where
-        V: 'a,
-        'v: 'a,
-    {
+    pub fn testbenches(&self) -> impl Iterator<Item = &'v TestBenchValue<'v>> + '_ {
         self.children
             .iter()
-            .filter_map(move |child| child.downcast_ref::<FrozenTestBenchValue>())
+            .filter_map(|child| child.downcast_ref::<TestBenchValue<'v>>())
     }
 
     fn record_net_name(
@@ -881,15 +860,13 @@ impl<'v, V: ValueLike<'v>> ModuleValueGen<V> {
     /// Extract all net names from a value recursively.
     /// This handles Net types directly and recursively extracts nets from Interface types.
     pub fn extract_nets_from_value(value: starlark::values::Value<'_>) -> HashSet<String> {
-        use crate::lang::interface::{FrozenInterfaceValue, InterfaceValue};
-        use crate::lang::net::{FrozenNetValue, NetValue};
+        use crate::lang::interface::InterfaceValue;
+        use crate::lang::net::NetValue;
 
         let mut nets = HashSet::new();
 
         // Check if it's a Net
         if let Some(net) = value.downcast_ref::<NetValue>() {
-            nets.insert(net.name().to_string());
-        } else if let Some(net) = value.downcast_ref::<FrozenNetValue>() {
             nets.insert(net.name().to_string());
         }
         // Check if it's an Interface
@@ -897,11 +874,6 @@ impl<'v, V: ValueLike<'v>> ModuleValueGen<V> {
             // Recursively extract nets from all interface fields
             for (_field_name, field_value) in iface.fields().iter() {
                 nets.extend(Self::extract_nets_from_value(*field_value));
-            }
-        } else if let Some(iface) = value.downcast_ref::<FrozenInterfaceValue>() {
-            // Recursively extract nets from all interface fields
-            for (_field_name, field_value) in iface.fields().iter() {
-                nets.extend(Self::extract_nets_from_value(field_value.to_value()));
             }
         }
 
@@ -975,10 +947,7 @@ impl std::fmt::Display for ModuleLoader {
 }
 
 #[starlark_value(type = "ModuleLoader")]
-impl<'v> StarlarkValue<'v> for ModuleLoader
-where
-    Self: ProvidesStaticType<'v>,
-{
+impl<'v> StarlarkValue<'v> for ModuleLoader {
     #[instrument(name = "module_instantiate", skip_all, fields(module = %self.name))]
     fn invoke(
         &self,
@@ -1187,7 +1156,7 @@ where
             .get_option(attr)
             .ok()
             .flatten()
-            .map(|owned| heap.access_owned_frozen_value(&owned))
+            .map(|owned| owned.add_to_heap(heap))
     }
 }
 
@@ -1313,13 +1282,7 @@ fn validate_type<'v>(
     }
 
     // Open intent is orthogonal to net type: an open net satisfies any net-shaped type.
-    if let Some(expected_type_name) = typ
-        .downcast_ref::<NetType>()
-        .map(|nt| &nt.type_name)
-        .or_else(|| {
-            typ.downcast_ref::<FrozenNetType>()
-                .map(|fnt| &fnt.type_name)
-        })
+    if let Some(expected_type_name) = typ.downcast_ref::<NetType>().map(|nt| &nt.type_name)
         && let Some(matches) = net_matches_type_name(value, expected_type_name)
     {
         if matches {
@@ -1334,10 +1297,8 @@ fn validate_type<'v>(
     }
 
     // InterfaceFactory validation
-    if (typ.downcast_ref::<InterfaceFactory>().is_some()
-        || typ.downcast_ref::<FrozenInterfaceFactory>().is_some())
-        && (value.downcast_ref::<InterfaceValue>().is_some()
-            || value.downcast_ref::<FrozenInterfaceValue>().is_some())
+    if typ.downcast_ref::<InterfaceFactory>().is_some()
+        && value.downcast_ref::<InterfaceValue>().is_some()
     {
         return Ok(());
     }
@@ -1554,25 +1515,22 @@ pub(crate) fn run_checks<'v>(
 }
 
 /// Callable wrapper for nets() method on modules
-#[derive(Clone, Debug, Coerce, Trace, ProvidesStaticType, NoSerialize, Allocative, Freeze)]
+#[derive(Clone, Debug, Trace, ProvidesStaticType, NoSerialize, Allocative, Freeze)]
 #[repr(C)]
-pub struct NetsCallableGen<V: ValueLifetimeless> {
-    module: V,
+pub struct NetsCallable<'v> {
+    module: Value<'v>,
 }
 
 starlark_complex_value!(pub NetsCallable);
 
-impl<V: ValueLifetimeless> std::fmt::Display for NetsCallableGen<V> {
+impl<'v> std::fmt::Display for NetsCallable<'v> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "Module.nets")
     }
 }
 
 #[starlark_value(type = "function")]
-impl<'v, V: ValueLike<'v>> StarlarkValue<'v> for NetsCallableGen<V>
-where
-    Self: ProvidesStaticType<'v>,
-{
+impl<'v> StarlarkValue<'v> for NetsCallable<'v> {
     fn invoke(
         &self,
         _me: Value<'v>,
@@ -1598,7 +1556,7 @@ where
         for (comp_path, component_val) in components.iter() {
             if let Some(component) = component_val.downcast_ref::<FrozenComponentValue>() {
                 for (pin_name, net_val) in component.connections().iter() {
-                    if let Some(net) = net_val.downcast_ref::<FrozenNetValue>() {
+                    if let Some(net) = net_val.downcast_ref::<NetValue<'_>>() {
                         let port_tuple = heap.alloc((
                             heap.alloc_str(comp_path.to_string().as_str()),
                             heap.alloc_str(pin_name),
@@ -1628,33 +1586,30 @@ where
 }
 
 /// Callable wrapper for components() method on modules
-#[derive(Clone, Debug, Coerce, Trace, ProvidesStaticType, NoSerialize, Allocative, Freeze)]
+#[derive(Clone, Debug, Trace, ProvidesStaticType, NoSerialize, Allocative, Freeze)]
 #[repr(C)]
-pub struct ComponentsCallableGen<V: ValueLifetimeless> {
-    module: V,
+pub struct ComponentsCallable<'v> {
+    module: Value<'v>,
 }
 
 /// Callable wrapper for graph() method on modules
-#[derive(Clone, Debug, Coerce, Trace, ProvidesStaticType, NoSerialize, Allocative, Freeze)]
+#[derive(Clone, Debug, Trace, ProvidesStaticType, NoSerialize, Allocative, Freeze)]
 #[repr(C)]
-pub struct GraphCallableGen<V: ValueLifetimeless> {
-    module: V,
+pub struct GraphCallable<'v> {
+    module: Value<'v>,
 }
 
 starlark_complex_value!(pub ComponentsCallable);
 starlark_complex_value!(pub GraphCallable);
 
-impl<V: ValueLifetimeless> std::fmt::Display for ComponentsCallableGen<V> {
+impl<'v> std::fmt::Display for ComponentsCallable<'v> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "Module.components")
     }
 }
 
 #[starlark_value(type = "function")]
-impl<'v, V: ValueLike<'v>> StarlarkValue<'v> for ComponentsCallableGen<V>
-where
-    Self: ProvidesStaticType<'v>,
-{
+impl<'v> StarlarkValue<'v> for ComponentsCallable<'v> {
     fn invoke(
         &self,
         _me: Value<'v>,
@@ -1687,17 +1642,14 @@ where
     }
 }
 
-impl<V: ValueLifetimeless> std::fmt::Display for GraphCallableGen<V> {
+impl<'v> std::fmt::Display for GraphCallable<'v> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "Module.graph")
     }
 }
 
 #[starlark_value(type = "function")]
-impl<'v, V: ValueLike<'v>> StarlarkValue<'v> for GraphCallableGen<V>
-where
-    Self: ProvidesStaticType<'v>,
-{
+impl<'v> StarlarkValue<'v> for GraphCallable<'v> {
     fn invoke(
         &self,
         _me: Value<'v>,
@@ -1726,7 +1678,7 @@ where
             if let Some(component) = component_val.downcast_ref::<FrozenComponentValue>() {
                 let mut pins = Vec::new();
                 for (pin_name, net_val) in component.connections().iter() {
-                    if let Some(net) = net_val.downcast_ref::<crate::FrozenNetValue>() {
+                    if let Some(net) = net_val.downcast_ref::<crate::NetValue>() {
                         let port_path = PortPath::new(comp_path.clone(), pin_name.clone());
                         pins.push(pin_name.clone());
 
@@ -1748,7 +1700,7 @@ where
             if !param.is_config {
                 // This is an io() parameter - extract nets from it
                 if let Some(actual_value) = &param.actual_value {
-                    public_nets.extend(ModuleValueGen::<V>::extract_nets_from_value(
+                    public_nets.extend(ModuleValue::<'v>::extract_nets_from_value(
                         actual_value.to_value(),
                     ));
                 }
@@ -1762,7 +1714,7 @@ where
             })?;
 
         // Create and return ModuleGraph object
-        let module_graph = ModuleGraphValueGen {
+        let module_graph = ModuleGraphValue {
             module: self.module.to_value(),
             graph: Arc::new(graph),
         };
@@ -1779,10 +1731,7 @@ pub struct ModuleType;
 starlark_simple_value!(ModuleType);
 
 #[starlark_value(type = "Module")]
-impl<'v> StarlarkValue<'v> for ModuleType
-where
-    Self: ProvidesStaticType<'v>,
-{
+impl<'v> StarlarkValue<'v> for ModuleType {
     fn invoke(
         &self,
         _me: Value<'v>,
@@ -1806,10 +1755,7 @@ where
         let mut params: Vec<String> = vec!["name".to_string(), "properties".to_string()];
         let mut param_types: SmallMap<String, String> = SmallMap::new();
 
-        let extra = frozen_module
-            .extra_value()
-            .and_then(|e| e.downcast_ref::<FrozenContextValue>())
-            .unwrap();
+        let extra = crate::lang::eval::frozen_context(&frozen_module);
         for param in extra.module.signature().iter() {
             params.push(param.name.clone());
             param_types.insert(param.name.clone(), param.type_value.to_string());
@@ -1826,7 +1772,7 @@ where
     }
 
     fn eval_type(&self) -> Option<starlark::typing::Ty> {
-        Some(<FrozenModuleValue as StarlarkValue>::get_type_starlark_repr())
+        Some(<ModuleValue as StarlarkValue>::get_type_starlark_repr())
     }
 }
 

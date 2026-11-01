@@ -7,7 +7,7 @@ use pcb_eda::kicad::symbol_check::{
     FootprintPads, Severity, SymbolIssue, check_symbol, fix, unloadable,
 };
 use pcb_eda::kicad::symbol_library::KicadSymbolLibrary;
-use starlark::{codemap::CodeMap, errors::EvalSeverity, values::ValueLike};
+use starlark::{codemap::CodeMap, errors::EvalSeverity};
 use tracing::{info_span, instrument};
 
 use crate::{
@@ -16,7 +16,7 @@ use crate::{
 
 use super::component::FrozenComponentValue;
 use super::footprint::{resolve_file_backed_footprint, resolved_span};
-use super::module::{FrozenModuleValue, ModulePath};
+use super::module::{ModulePath, ModuleValue};
 use super::symbol::{SymbolValue, loaded_symbol_library};
 use crate::passes::source_suppresses;
 
@@ -62,10 +62,10 @@ impl Library {
 
 /// Each component with the file and name of its KiCad symbol, and whether
 /// the file belongs to a workspace package. The stdlib ships checked.
-fn symbols<'a>(
-    module_tree: &'a BTreeMap<ModulePath, &FrozenModuleValue>,
+fn symbols<'a, 'v: 'a>(
+    module_tree: &'a BTreeMap<ModulePath, &'v ModuleValue<'v>>,
     resolution: &'a ResolutionResult,
-) -> impl Iterator<Item = (&'a FrozenComponentValue, PathBuf, &'a str, bool)> {
+) -> impl Iterator<Item = (&'v FrozenComponentValue<'v>, PathBuf, &'v str, bool)> + 'a {
     let mut seen = HashSet::new();
     let components = module_tree.values().flat_map(|module| module.components());
     components.filter_map(move |component| {
@@ -98,8 +98,8 @@ fn symbols<'a>(
 /// Fix what can be fixed in the symbols [`check_symbols`] checks. `fixed`
 /// holds the new text of each file that changes, and is read back so that
 /// fixes from several evaluations build on each other.
-pub(crate) fn fix_symbols(
-    module_tree: &BTreeMap<ModulePath, &FrozenModuleValue>,
+pub(crate) fn fix_symbols<'v>(
+    module_tree: &BTreeMap<ModulePath, &'v ModuleValue<'v>>,
     resolution: &ResolutionResult,
     file_provider: &dyn FileProvider,
     fixed: &mut BTreeMap<PathBuf, String>,
@@ -126,8 +126,8 @@ pub(crate) fn fix_symbols(
 /// symbol file, the file that has to change; a dependency's file is only
 /// held to what KiCad loads, without fixes.
 #[instrument(name = "check_symbols", skip_all)]
-pub(crate) fn check_symbols(
-    module_tree: &BTreeMap<ModulePath, &FrozenModuleValue>,
+pub(crate) fn check_symbols<'v>(
+    module_tree: &BTreeMap<ModulePath, &'v ModuleValue<'v>>,
     resolution: &ResolutionResult,
     file_provider: &dyn FileProvider,
 ) -> Vec<Diagnostic> {

@@ -29,3 +29,7 @@ semver = { workspace = true }
 
 [dev-dependencies]
 zstd = { workspace = true }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+# rand (via num-bigint/allocative from buck2) pulls getrandom, which needs a backend on wasm32.
+getrandom_04 = { package = "getrandom", version = "0.4", features = ["wasm_js"] }

@@ -7,26 +7,26 @@ expression: output
         path: <root>,
         source: "test.zen",
         children: [
-            FrozenValue(
+            Value(
                 Component {
                     name: "test_comp_dnp",
                     footprint: "test_footprint",
                     prefix: "U",
                     connections: {
-                        "in": FrozenValue(
+                        "in": Value(
                             Net {
                                 name: "in",
                                 id: "<ID>",
                             },
                         ),
-                        "out": FrozenValue(
+                        "out": Value(
                             Net {
                                 name: "out",
                                 id: "<ID>",
                             },
                         ),
                     },
-                    symbol: FrozenValue(
+                    symbol: Value(
                         Symbol {
                             name: None,
                             pins: {

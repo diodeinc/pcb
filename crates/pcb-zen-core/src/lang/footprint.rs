@@ -10,11 +10,11 @@ use starlark::{
 
 use crate::{Diagnostic, FileProvider, FileProviderError, resolution::ResolutionResult};
 
-use super::module::FrozenModuleValue;
 use super::module::ModulePath;
+use super::module::ModuleValue;
 
-pub(crate) fn validate_footprints(
-    module_tree: &BTreeMap<ModulePath, &FrozenModuleValue>,
+pub(crate) fn validate_footprints<'v>(
+    module_tree: &BTreeMap<ModulePath, &'v ModuleValue<'v>>,
     resolution: &ResolutionResult,
     file_provider: &dyn FileProvider,
 ) -> Vec<Diagnostic> {

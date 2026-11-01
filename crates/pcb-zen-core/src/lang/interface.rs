@@ -1,24 +1,22 @@
 use allocative::Allocative;
+use pcb_sch::physical::PcbTypeIdDomain;
 use starlark::collections::SmallMap;
 use starlark::environment::GlobalsBuilder;
 use starlark::eval::{Arguments, Evaluator, ParametersSpec, ParametersSpecParam};
+use starlark::starlark_complex_value;
 use starlark::starlark_module;
 use starlark::values::typing::TypeInstanceId;
 use starlark::values::{
-    Coerce, Freeze, FrozenValue, Heap, NoSerialize, ProvidesStaticType, StarlarkValue, Trace,
-    Value, ValueLike, starlark_value,
+    AllocFrozenValue, AllocValue, Freeze, FreezeResult, Freezer, FrozenHeap, Heap, NoSerialize,
+    ProvidesStaticType, StarlarkValue, Trace, Value, starlark_value,
 };
-use starlark::{starlark_complex_value, starlark_complex_values};
-use std::cell::OnceCell;
 
 use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};
 
 use crate::lang::context::ContextValue;
 use crate::lang::evaluator_ext::EvaluatorExt;
-use crate::lang::net::{
-    FrozenNetValue, NetId, NetValue, instantiate_generated_net, validate_field,
-};
+use crate::lang::net::{NetId, NetValue, instantiate_generated_net, validate_field};
 use crate::lang::validation::validate_identifier_name;
 
 /// Tracks both old and new style instance prefixes for backward compatibility
@@ -89,21 +87,7 @@ pub(crate) fn unregister_template_owned_nets<'v>(value: Value<'v>, ctx: &Context
         return;
     }
 
-    if let Some(net) = value.downcast_ref::<FrozenNetValue>() {
-        if net.is_template_owned() {
-            ctx.unregister_net(net.id());
-        }
-        return;
-    }
-
     if let Some(interface) = value.downcast_ref::<InterfaceValue<'v>>() {
-        for (_field_name, field_value) in interface.fields().iter() {
-            unregister_template_owned_nets(field_value.to_value(), ctx);
-        }
-        return;
-    }
-
-    if let Some(interface) = value.downcast_ref::<FrozenInterfaceValue>() {
         for (_field_name, field_value) in interface.fields().iter() {
             unregister_template_owned_nets(field_value.to_value(), ctx);
         }
@@ -126,11 +110,6 @@ fn clone_net_template<'v>(
         template.downcast_ref::<NetValue<'v>>()
     {
         (net_val.id(), net_val.template_name_opt().map(str::to_owned))
-    } else if let Some(frozen_net) = template.downcast_ref::<FrozenNetValue>() {
-        (
-            frozen_net.id(),
-            frozen_net.template_name_opt().map(str::to_owned),
-        )
     } else {
         return Err(anyhow::anyhow!("Expected Net template, got {}", template.get_type()).into());
     };
@@ -141,8 +120,6 @@ fn clone_net_template<'v>(
 
     let cloned_value = if let Some(net_val) = template.downcast_ref::<NetValue<'v>>() {
         net_val.with_new_id(heap)
-    } else if let Some(frozen_net) = template.downcast_ref::<FrozenNetValue>() {
-        frozen_net.with_new_id(heap)
     } else {
         unreachable!("template type was validated above")
     };
@@ -282,28 +259,6 @@ fn clone_interface_template<'v>(
                 iv.generated_fields.clone(),
                 iv.instance_root_name.clone(),
             )
-        } else if let Some(fiv) = instance.downcast_ref::<FrozenInterfaceValue>() {
-            let mut cloned = SmallMap::new();
-            for (name, value) in fiv.fields.iter() {
-                cloned.insert(
-                    name.clone(),
-                    clone_field(
-                        name,
-                        value.to_value(),
-                        prefix,
-                        should_register,
-                        cloned_nets,
-                        heap,
-                        eval,
-                    )?,
-                );
-            }
-            (
-                fiv.factory().to_value(),
-                cloned,
-                fiv.generated_fields.clone(),
-                fiv.instance_root_name.clone(),
-            )
         } else {
             return Err(
                 anyhow::anyhow!("expected InterfaceValue, got {}", instance.get_type()).into(),
@@ -377,18 +332,15 @@ fn create_field_value<'v>(
 }
 
 /// Core function to create an interface instance from a factory
-fn create_interface_instance<'v, V>(
-    factory: &InterfaceFactoryGen<V>,
+fn create_interface_instance<'v>(
+    factory: &InterfaceFactory<'v>,
     factory_value: Value<'v>,
     provided_values: SmallMap<String, Value<'v>>,
     prefix: &InstancePrefix,
     should_register: bool,
     heap: Heap<'v>,
     eval: &mut Evaluator<'v, '_, '_>,
-) -> starlark::Result<Value<'v>>
-where
-    V: ValueLike<'v> + InterfaceCell,
-{
+) -> starlark::Result<Value<'v>> {
     // Build the field map, recursively creating values where necessary
     let mut fields = SmallMap::with_capacity(factory.fields.len());
     let mut generated_fields = Vec::new();
@@ -449,9 +401,9 @@ fn apply_pair_impedance<'v>(fields: &mut SmallMap<String, Value<'v>>, heap: Heap
 }
 
 /// Build a consistent parameter spec for interface factories, excluding reserved field names
-fn build_interface_param_spec<'v, V: ValueLike<'v>>(
-    fields: &SmallMap<String, V>,
-) -> ParametersSpec<FrozenValue> {
+fn build_interface_param_spec<'v>(
+    fields: &SmallMap<String, Value<'v>>,
+) -> ParametersSpec<Value<'v>> {
     ParametersSpec::new_parts(
         "InterfaceInstance",
         std::iter::empty::<(&str, ParametersSpecParam<_>)>(),
@@ -472,93 +424,49 @@ pub struct InterfaceTypeData {
     name: String,
     /// Globally unique id of the interface type.
     id: TypeInstanceId,
-    /// Creating these on every invoke is pretty expensive (profiling shows)
-    /// so compute them in advance and cache.
-    parameter_spec: ParametersSpec<FrozenValue>,
 }
 
-// Trait to handle the difference between mutable and frozen values
-pub trait InterfaceCell: starlark::values::ValueLifetimeless {
-    type InterfaceTypeDataOpt: std::fmt::Debug;
-
-    fn get_or_init_ty(
-        ty: &Self::InterfaceTypeDataOpt,
-        f: impl FnOnce() -> starlark::Result<Arc<InterfaceTypeData>>,
-    ) -> starlark::Result<()>;
-    fn get_ty(ty: &Self::InterfaceTypeDataOpt) -> Option<&Arc<InterfaceTypeData>>;
-}
-
-impl InterfaceCell for Value<'_> {
-    type InterfaceTypeDataOpt = OnceCell<Arc<InterfaceTypeData>>;
-
-    fn get_or_init_ty(
-        ty: &Self::InterfaceTypeDataOpt,
-        f: impl FnOnce() -> starlark::Result<Arc<InterfaceTypeData>>,
-    ) -> starlark::Result<()> {
-        if ty.get().is_none() {
-            let _ = ty.set(f()?);
-        }
-        Ok(())
-    }
-
-    fn get_ty(ty: &Self::InterfaceTypeDataOpt) -> Option<&Arc<InterfaceTypeData>> {
-        ty.get()
-    }
-}
-
-impl InterfaceCell for FrozenValue {
-    type InterfaceTypeDataOpt = Option<Arc<InterfaceTypeData>>;
-
-    fn get_or_init_ty(
-        ty: &Self::InterfaceTypeDataOpt,
-        f: impl FnOnce() -> starlark::Result<Arc<InterfaceTypeData>>,
-    ) -> starlark::Result<()> {
-        let _ignore = (ty, f);
-        Ok(())
-    }
-
-    fn get_ty(ty: &Self::InterfaceTypeDataOpt) -> Option<&Arc<InterfaceTypeData>> {
-        ty.as_ref()
-    }
-}
-
+/// An `interface(...)` type. It is its own frozen form: freezing only freezes the
+/// field values, and the type data set by `export_as` carries over unchanged.
 #[derive(Clone, Debug, Trace, ProvidesStaticType, NoSerialize, Allocative)]
-pub struct InterfaceFactoryGen<V: InterfaceCell> {
+pub struct InterfaceFactory<'v> {
     id: TypeInstanceId,
     #[allocative(skip)]
     #[trace(unsafe_ignore)]
-    interface_type_data: V::InterfaceTypeDataOpt,
-    fields: SmallMap<String, V>,
-    post_init_fn: Option<V>,
-    param_spec: ParametersSpec<FrozenValue>,
+    interface_type_data: OnceLock<Arc<InterfaceTypeData>>,
+    fields: SmallMap<String, Value<'v>>,
+    post_init_fn: Option<Value<'v>>,
+    param_spec: ParametersSpec<Value<'v>>,
 }
 
-pub type InterfaceFactory<'v> = InterfaceFactoryGen<Value<'v>>;
-pub type FrozenInterfaceFactory = InterfaceFactoryGen<FrozenValue>;
-starlark_complex_values!(InterfaceFactory);
+impl<'v> AllocValue<'v> for InterfaceFactory<'v> {
+    fn alloc_value(self, heap: Heap<'v>) -> Value<'v> {
+        heap.alloc_complex(self)
+    }
+}
 
-impl Freeze for InterfaceFactory<'_> {
-    type Frozen = FrozenInterfaceFactory;
-    fn freeze(
-        self,
-        freezer: &starlark::values::Freezer,
-    ) -> starlark::values::FreezeResult<Self::Frozen> {
-        Ok(FrozenInterfaceFactory {
+impl<'fv> AllocFrozenValue<'fv> for InterfaceFactory<'fv> {
+    fn alloc_frozen_value(self, heap: FrozenHeap<'fv>) -> Value<'fv> {
+        heap.alloc_simple(self)
+    }
+}
+
+impl<'v> Freeze<'v> for InterfaceFactory<'v> {
+    type Frozen<'fv> = InterfaceFactory<'fv>;
+    fn freeze<'fv>(self, freezer: &Freezer<'v, 'fv>) -> FreezeResult<InterfaceFactory<'fv>> {
+        Ok(InterfaceFactory {
             id: self.id,
-            interface_type_data: self.interface_type_data.into_inner(),
+            interface_type_data: self.interface_type_data,
             fields: self.fields.freeze(freezer)?,
             post_init_fn: self.post_init_fn.freeze(freezer)?,
-            param_spec: self.param_spec,
+            param_spec: self.param_spec.freeze(freezer)?,
         })
     }
 }
 
-#[starlark_value(type = "InterfaceFactory")]
-impl<'v, V: ValueLike<'v> + InterfaceCell + 'v> StarlarkValue<'v> for InterfaceFactoryGen<V>
-where
-    Self: ProvidesStaticType<'v>,
-{
-    type Canonical = FrozenInterfaceFactory;
+#[starlark_value(type = "InterfaceFactory", frozen_vtable)]
+impl<'v> StarlarkValue<'v> for InterfaceFactory<'v> {
+    type Canonical = Self;
 
     fn invoke(
         &self,
@@ -614,13 +522,13 @@ where
         variable_name: &str,
         _eval: &mut Evaluator<'v, '_, '_>,
     ) -> starlark::Result<()> {
-        V::get_or_init_ty(&self.interface_type_data, || {
-            Ok(Arc::new(InterfaceTypeData {
+        self.interface_type_data.get_or_init(|| {
+            Arc::new(InterfaceTypeData {
                 name: variable_name.to_owned(),
                 id: self.id,
-                parameter_spec: build_interface_param_spec(&self.fields),
-            }))
-        })
+            })
+        });
+        Ok(())
     }
 
     fn dir_attr(&self) -> Vec<String> {
@@ -628,10 +536,10 @@ where
     }
 }
 
-impl<'v, V: ValueLike<'v> + InterfaceCell> std::fmt::Display for InterfaceFactoryGen<V> {
+impl<'v> std::fmt::Display for InterfaceFactory<'v> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         // If we have a name from export_as, use it
-        if let Some(type_data) = V::get_ty(&self.interface_type_data) {
+        if let Some(type_data) = self.interface_type_data.get() {
             write!(f, "{}", type_data.name)
         } else {
             // Otherwise show the structure
@@ -642,9 +550,7 @@ impl<'v, V: ValueLike<'v> + InterfaceCell> std::fmt::Display for InterfaceFactor
                 }
                 // Show the type of the field value, with special handling for interfaces
                 let val = value.to_value();
-                let type_str = if val.downcast_ref::<InterfaceFactory<'v>>().is_some()
-                    || val.downcast_ref::<FrozenInterfaceFactory>().is_some()
-                {
+                let type_str = if val.downcast_ref::<InterfaceFactory<'v>>().is_some() {
                     // For nested interfaces, show their full signature
                     val.to_string()
                 } else {
@@ -658,34 +564,28 @@ impl<'v, V: ValueLike<'v> + InterfaceCell> std::fmt::Display for InterfaceFactor
     }
 }
 
-impl<'v, V: ValueLike<'v> + InterfaceCell> InterfaceFactoryGen<V> {
-    pub fn iter(&self) -> impl Iterator<Item = (&str, &V)> {
+impl<'v> InterfaceFactory<'v> {
+    pub fn iter(&self) -> impl Iterator<Item = (&str, &Value<'v>)> {
         self.fields.iter().map(|(k, v)| (k.as_str(), v))
     }
 }
 
-#[derive(Clone, Debug, Trace, Coerce, ProvidesStaticType, Allocative, Freeze, serde::Serialize)]
+#[derive(Clone, Debug, Trace, ProvidesStaticType, Allocative, Freeze, serde::Serialize)]
 #[repr(C)]
-#[serde(bound = "V: serde::Serialize")]
-pub struct InterfaceValueGen<V> {
-    fields: SmallMap<String, V>,
+pub struct InterfaceValue<'v> {
+    fields: SmallMap<String, Value<'v>>,
     #[serde(skip)]
     generated_fields: Vec<String>,
     #[serde(skip)]
     instance_root_name: Option<String>,
     #[serde(skip)]
-    factory: V, // Runtime only - factory has NoSerialize so can't be JSON-serialized
+    factory: Value<'v>, // Runtime only - factory has NoSerialize so can't be JSON-serialized
 }
 
 starlark_complex_value!(pub InterfaceValue);
 
 #[starlark_value(type = "InterfaceValue")]
-impl<'v, V: ValueLike<'v>> StarlarkValue<'v> for InterfaceValueGen<V>
-where
-    Self: ProvidesStaticType<'v>,
-{
-    type Canonical = FrozenInterfaceValue;
-
+impl<'v> StarlarkValue<'v> for InterfaceValue<'v> {
     fn get_attr(&self, attr: &str, _heap: Heap<'v>) -> Option<Value<'v>> {
         self.fields.get(attr).map(|v| v.to_value())
     }
@@ -729,25 +629,16 @@ where
     }
 }
 
-impl<'v, V: ValueLike<'v>> std::fmt::Display for InterfaceValueGen<V> {
+impl<'v> std::fmt::Display for InterfaceValue<'v> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mut items: Vec<_> = self.fields.iter().collect();
         items.sort_by_key(|(k, _)| *k);
 
-        let name = if let Some(factory) = self.factory.downcast_ref::<InterfaceFactory>() {
-            factory
-                .interface_type_data
-                .get()
-                .map(|type_data| type_data.name.clone())
-        } else if let Some(factory) = self.factory.downcast_ref::<FrozenInterfaceFactory>() {
-            factory
-                .interface_type_data
-                .as_ref()
-                .map(|type_data| type_data.name.clone())
-        } else {
-            None
-        };
-        let type_name = name.unwrap_or_else(|| "<Unknown>".to_string());
+        let type_name = self
+            .factory
+            .downcast_ref::<InterfaceFactory>()
+            .and_then(|factory| factory.interface_type_data.get())
+            .map_or("<Unknown>", |type_data| type_data.name.as_str());
 
         write!(f, "{type_name}(")?;
         for (i, (k, v)) in items.iter().enumerate() {
@@ -761,18 +652,18 @@ impl<'v, V: ValueLike<'v>> std::fmt::Display for InterfaceValueGen<V> {
     }
 }
 
-impl<'v, V: ValueLike<'v>> InterfaceValueGen<V> {
+impl<'v> InterfaceValue<'v> {
     // Provide read-only access to the underlying fields map so other modules
     // (e.g. the schematic generator) can traverse the interface hierarchy
     // without relying on private internals.
     #[inline]
-    pub fn fields(&self) -> &SmallMap<String, V> {
+    pub fn fields(&self) -> &SmallMap<String, Value<'v>> {
         &self.fields
     }
 
     // Provide read-only access to the factory for serialization purposes
     #[inline]
-    pub fn factory(&self) -> &V {
+    pub fn factory(&self) -> &Value<'v> {
         &self.factory
     }
 }
@@ -808,9 +699,6 @@ pub(crate) fn interface_globals(builder: &mut GlobalsBuilder) {
                     || type_str == "InterfaceValue"
                     || type_str == "field"
                     || field_value.downcast_ref::<InterfaceFactory<'v>>().is_some()
-                    || field_value
-                        .downcast_ref::<FrozenInterfaceFactory>()
-                        .is_some()
                 {
                     if let Some(ctx) = eval
                         .module()
@@ -834,9 +722,23 @@ pub(crate) fn interface_globals(builder: &mut GlobalsBuilder) {
         // all interface fields as optional named‑only parameters.
         let param_spec = build_interface_param_spec(&fields);
 
+        // Deterministic id: the `interface(...)` call site plus its field names, so
+        // re-evaluating a file reproduces the same type.
+        let call_site = eval.call_stack_top_location().map(|loc| {
+            (
+                loc.filename().to_owned(),
+                loc.span.begin().get(),
+                loc.span.end().get(),
+            )
+        });
+        let mut field_names: Vec<&str> = fields.keys().map(String::as_str).collect();
+        field_names.sort();
+        let id =
+            TypeInstanceId::from_identity(PcbTypeIdDomain::Interface, &(call_site, field_names));
+
         let factory = heap.alloc(InterfaceFactory {
-            id: TypeInstanceId::r#gen(),
-            interface_type_data: OnceCell::new(),
+            id,
+            interface_type_data: OnceLock::new(),
             fields,
             post_init_fn,
             param_spec,
@@ -870,21 +772,8 @@ pub(crate) fn instantiate_interface<'v>(
             eval,
         );
     }
-    if let Some(factory) = spec.downcast_ref::<FrozenInterfaceFactory>() {
-        return create_interface_instance(
-            factory,
-            spec,
-            SmallMap::new(),
-            prefix,
-            should_register,
-            heap,
-            eval,
-        );
-    }
 
-    if spec.downcast_ref::<InterfaceValue<'v>>().is_some()
-        || spec.downcast_ref::<FrozenInterfaceValue>().is_some()
-    {
+    if spec.downcast_ref::<InterfaceValue<'v>>().is_some() {
         return clone_interface_template(spec, prefix, should_register, heap, eval);
     }
 

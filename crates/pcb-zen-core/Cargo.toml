@@ -27,6 +27,7 @@ pagable = { workspace = true }
 
 starlark = { workspace = true }
 starlark_map = { workspace = true }
+mini_map = { workspace = true }
 starlark_syntax = { workspace = true }
 
 anyhow = { workspace = true }

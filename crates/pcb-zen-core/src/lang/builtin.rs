@@ -239,7 +239,7 @@ fn builtin_methods(methods: &mut MethodsBuilder) {
         #[starlark(require = named, default = "error".to_string())] severity: String,
         eval: &mut Evaluator<'v, '_, '_>,
     ) -> starlark::Result<NoneType> {
-        use crate::lang::electrical_check::ElectricalCheckGen;
+        use crate::lang::electrical_check::ElectricalCheck;
 
         if !["error", "warning", "advice"].contains(&severity.as_str()) {
             return Err(Error::new_other(anyhow::anyhow!(
@@ -255,7 +255,7 @@ fn builtin_methods(methods: &mut MethodsBuilder) {
             .unwrap_or_default();
         let call_span = call_site.map(|cs| cs.resolve_span());
 
-        let check = ElectricalCheckGen::<Value> {
+        let check = ElectricalCheck {
             name,
             inputs,
             check_func: check_fn,

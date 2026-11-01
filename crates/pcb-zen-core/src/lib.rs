@@ -145,10 +145,10 @@ pub use file_provider::InMemoryFileProvider;
 
 // Re-export types needed by pcb-zen
 pub use lang::component::FrozenComponentValue;
-pub use lang::interface::FrozenInterfaceValue;
-pub use lang::module::{FrozenModuleValue, ModulePath};
-pub use lang::net::{FrozenNetValue, NetId};
-pub use lang::spice_model::FrozenSpiceModelValue;
+pub use lang::interface::InterfaceValue;
+pub use lang::module::{ModulePath, ModuleValue};
+pub use lang::net::{NetId, NetValue};
+pub use lang::spice_model::SpiceModelValue;
 
 /// Abstraction for file system access to make the core WASM-compatible
 /// A directory entry together with the file type its directory listing

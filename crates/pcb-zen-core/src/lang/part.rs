@@ -101,10 +101,7 @@ impl std::fmt::Display for PartValue {
 starlark_simple_value!(PartValue);
 
 #[starlark_value(type = "Part")]
-impl<'v> StarlarkValue<'v> for PartValue
-where
-    Self: ProvidesStaticType<'v>,
-{
+impl<'v> StarlarkValue<'v> for PartValue {
     fn get_attr(&self, attr: &str, heap: Heap<'v>) -> Option<Value<'v>> {
         match attr {
             "mpn" => Some(heap.alloc_str(self.mpn()).to_value()),

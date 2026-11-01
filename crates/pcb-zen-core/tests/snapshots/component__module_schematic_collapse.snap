@@ -11,29 +11,29 @@ expression: output
         path: collapsed_module,
         source: "/SubModule.zen",
         properties: {
-            "collapse": "FrozenValue(StarlarkBool(true))",
+            "collapse": "Value(StarlarkBool(true))",
         },
         children: [
-            FrozenValue(
+            Value(
                 Component {
                     name: "R1",
                     footprint: "0402",
                     prefix: "U",
                     connections: {
-                        "1": FrozenValue(
+                        "1": Value(
                             Net {
                                 name: "VCC",
                                 id: "<ID>",
                             },
                         ),
-                        "2": FrozenValue(
+                        "2": Value(
                             Net {
                                 name: "GND",
                                 id: "<ID>",
                             },
                         ),
                     },
-                    symbol: FrozenValue(
+                    symbol: Value(
                         Symbol {
                             name: None,
                             pins: {

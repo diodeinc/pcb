@@ -1,6 +1,5 @@
 ---
 source: crates/pcb-zen-core/tests/test.rs
-assertion_line: 141
 expression: output
 ---
 Warning: test.zen:17:1-22:2 Duplicate child name 'R1': a component with this name already exists.
@@ -9,26 +8,26 @@ Warning: test.zen:17:1-22:2 Duplicate child name 'R1': a component with this nam
         path: <root>,
         source: "test.zen",
         children: [
-            FrozenValue(
+            Value(
                 Component {
                     name: "R1",
                     footprint: "package://stdlib/kicad-footprints/Resistor_SMD.pretty/R_0402_1005Metric.kicad_mod",
                     prefix: "U",
                     connections: {
-                        "1": FrozenValue(
+                        "1": Value(
                             Net {
                                 name: "VCC",
                                 id: "<ID>",
                             },
                         ),
-                        "2": FrozenValue(
+                        "2": Value(
                             Net {
                                 name: "GND",
                                 id: "<ID>",
                             },
                         ),
                     },
-                    symbol: FrozenValue(
+                    symbol: Value(
                         Symbol {
                             name: None,
                             pins: {
@@ -39,26 +38,26 @@ Warning: test.zen:17:1-22:2 Duplicate child name 'R1': a component with this nam
                     ),
                 },
             ),
-            FrozenValue(
+            Value(
                 Component {
                     name: "R1",
                     footprint: "package://stdlib/kicad-footprints/Resistor_SMD.pretty/R_0402_1005Metric.kicad_mod",
                     prefix: "U",
                     connections: {
-                        "1": FrozenValue(
+                        "1": Value(
                             Net {
                                 name: "VCC",
                                 id: "<ID>",
                             },
                         ),
-                        "2": FrozenValue(
+                        "2": Value(
                             Net {
                                 name: "GND",
                                 id: "<ID>",
                             },
                         ),
                     },
-                    symbol: FrozenValue(
+                    symbol: Value(
                         Symbol {
                             name: None,
                             pins: {

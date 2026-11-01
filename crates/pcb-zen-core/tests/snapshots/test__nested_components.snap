@@ -1,6 +1,5 @@
 ---
 source: crates/pcb-zen-core/tests/test.rs
-assertion_line: 88
 expression: output
 ---
 {
@@ -16,26 +15,26 @@ expression: output
         path: MyModule.MyComponent,
         source: "/Component.zen",
         children: [
-            FrozenValue(
+            Value(
                 Component {
                     name: "Component",
                     footprint: "package://stdlib/kicad-footprints/Capacitor_SMD.pretty/C_0805_2012Metric.kicad_mod",
                     prefix: "U",
                     connections: {
-                        "P1": FrozenValue(
+                        "P1": Value(
                             Net {
                                 name: "P1",
                                 id: "<ID>",
                             },
                         ),
-                        "P2": FrozenValue(
+                        "P2": Value(
                             Net {
                                 name: "P2",
                                 id: "<ID>",
                             },
                         ),
                     },
-                    symbol: FrozenValue(
+                    symbol: Value(
                         Symbol {
                             name: None,
                             pins: {

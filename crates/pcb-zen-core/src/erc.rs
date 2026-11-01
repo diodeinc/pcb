@@ -1,15 +1,15 @@
 use std::collections::{BTreeSet, HashMap};
 
+use crate::lang::net::NetValue;
 use pcb_sch::Schematic;
 use starlark::codemap::ResolvedSpan;
 use starlark::errors::EvalSeverity;
-use starlark::values::ValueLike;
 
 use crate::lang::pin_erc::{
     pin_no_connect_body, pin_types_are_only_no_connect, signal_pin_type_candidates,
 };
 use crate::lang::symbol::SymbolValue;
-use crate::{Diagnostic, Diagnostics, EvalOutput, FrozenNetValue, ModulePath};
+use crate::{Diagnostic, Diagnostics, EvalOutput, ModulePath};
 
 #[derive(Clone)]
 struct NetMetadata {
@@ -90,7 +90,7 @@ impl<'a> SchematicErcContext<'a> {
                 }
 
                 for net_value in component.connections().values() {
-                    if let Some(net) = net_value.downcast_ref::<FrozenNetValue>() {
+                    if let Some(net) = net_value.downcast_ref::<NetValue<'_>>() {
                         net_metadata.entry(net.id()).or_insert_with(|| NetMetadata {
                             display_name: net.name().to_string(),
                             path: net.declaration_path().unwrap_or_default().to_string(),

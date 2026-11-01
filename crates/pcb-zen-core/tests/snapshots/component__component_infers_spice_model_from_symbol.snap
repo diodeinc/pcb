@@ -7,19 +7,19 @@ expression: output
         path: <root>,
         source: "test.zen",
         children: [
-            FrozenValue(
+            Value(
                 Component {
                     name: "R1",
                     footprint: "0603",
                     prefix: "R",
                     connections: {
-                        "P1": FrozenValue(
+                        "P1": Value(
                             Net {
                                 name: "A",
                                 id: "<ID>",
                             },
                         ),
-                        "P2": FrozenValue(
+                        "P2": Value(
                             Net {
                                 name: "B",
                                 id: "<ID>",
@@ -27,11 +27,11 @@ expression: output
                         ),
                     },
                     properties: {
-                        "symbol_name": FrozenValue(
+                        "symbol_name": Value(
                             "TestSim",
                         ),
                     },
-                    symbol: FrozenValue(
+                    symbol: Value(
                         Symbol {
                             name: Some(
                                 "TestSim",
@@ -51,18 +51,18 @@ expression: output
                             },
                         },
                     ),
-                    spice_model: FrozenValue(
+                    spice_model: Value(
                         SpiceModel {
                             definition: "\n.SUBCKT my_resistor p n PARAMS: RVAL=1k\nR1 p n {RVAL}\n.ENDS my_resistor",
                             name: "my_resistor",
                             nets: [
-                                FrozenValue(
+                                Value(
                                     Net {
                                         name: "B",
                                         id: "<ID>",
                                     },
                                 ),
-                                FrozenValue(
+                                Value(
                                     Net {
                                         name: "A",
                                         id: "<ID>",

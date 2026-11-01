@@ -1,8 +1,10 @@
+use pcb_sch::physical::PcbTypeIdDomain;
+use std::fmt;
+use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Mutex, OnceLock};
-use std::{collections::HashMap, fmt};
 
 use allocative::Allocative;
+use mini_map::MiniFixedSortedMap as SortedMap;
 use starlark::typing::TyUserFields;
 use starlark::{
     any::ProvidesStaticType,
@@ -13,14 +15,12 @@ use starlark::{
     typing::{ParamIsRequired, ParamSpec, Ty, TyCallable, TyStarlarkValue, TyUser, TyUserParams},
     util::ArcStr,
     values::{
-        Coerce, Freeze, FreezeResult, Freezer, FrozenValue, Heap, NoSerialize, StarlarkValue,
-        Trace, Value, ValueLike,
-        record::FieldGen,
+        Freeze, Heap, NoSerialize, StarlarkValue, Trace, Value,
+        record::Field,
         starlark_value,
         typing::{TypeCompiled, TypeInstanceId, TypeMatcher, TypeMatcherDyn, TypeMatcherFactory},
     },
 };
-use starlark_map::sorted_map::SortedMap;
 
 use crate::lang::evaluator_ext::EvaluatorExt;
 use crate::lang::symbol::SymbolValue;
@@ -39,23 +39,15 @@ pub(crate) fn compatible_net_type_view<'a>(actual: &str, expected: &'a str) -> O
 }
 
 pub(crate) fn net_type_name_from_value<'v>(value: Value<'v>) -> Option<&'v str> {
-    if let Some(net) = value.downcast_ref::<NetValue<'v>>() {
-        Some(net.net_type_name())
-    } else if let Some(net) = value.downcast_ref::<FrozenNetValue>() {
-        Some(net.net_type_name())
-    } else {
-        None
-    }
+    value
+        .downcast_ref::<NetValue<'v>>()
+        .map(|net| net.net_type_name())
 }
 
 pub(crate) fn net_matches_type_name(value: Value<'_>, expected_type_name: &str) -> Option<bool> {
-    if let Some(net) = value.downcast_ref::<NetValue<'_>>() {
-        Some(net.is_open() || net.net_type_name() == expected_type_name)
-    } else {
-        value
-            .downcast_ref::<FrozenNetValue>()
-            .map(|net| net.is_open() || net.net_type_name() == expected_type_name)
-    }
+    value
+        .downcast_ref::<NetValue<'_>>()
+        .map(|net| net.is_open() || net.net_type_name() == expected_type_name)
 }
 
 pub(crate) fn net_kind_requires_name(kind: &str) -> bool {
@@ -140,24 +132,9 @@ impl ConnectionIntent {
     }
 }
 
-#[derive(
-    Clone,
-    PartialEq,
-    Eq,
-    ProvidesStaticType,
-    Allocative,
-    Trace,
-    Freeze,
-    Coerce,
-    serde::Serialize,
-    serde::Deserialize,
-)]
+#[derive(Clone, PartialEq, Eq, ProvidesStaticType, Allocative, Trace, Freeze, serde::Serialize)]
 #[repr(C)]
-#[serde(bound(
-    serialize = "V: serde::Serialize",
-    deserialize = "V: serde::Deserialize<'de>"
-))]
-pub struct NetValueGen<V> {
+pub struct NetValue<'v> {
     /// The globally unique identifier for this net
     pub(crate) net_id: NetId,
     /// The source-level name for this net, or empty while awaiting assignment inference.
@@ -196,13 +173,14 @@ pub struct NetValueGen<V> {
     #[serde(default, skip_serializing_if = "ConnectionIntent::is_connected")]
     pub(crate) connection_intent: ConnectionIntent,
     /// Properties (including symbol, voltage, impedance, etc. if provided)
-    pub(crate) properties: SmallMap<String, V>,
+    pub(crate) properties: SmallMap<String, Value<'v>>,
 }
 
 starlark_complex_value!(pub NetValue);
+
 starlark::methods_static!(NET_METHODS = builtin_net_methods);
 
-impl<V: std::fmt::Debug> std::fmt::Debug for NetValueGen<V> {
+impl<'v> std::fmt::Debug for NetValue<'v> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         // Use "Net" as struct name for backwards compatibility with old snapshots
         let mut debug = f.debug_struct("Net");
@@ -224,10 +202,7 @@ impl<V: std::fmt::Debug> std::fmt::Debug for NetValueGen<V> {
 }
 
 #[starlark_value(type = "Net")]
-impl<'v, V: ValueLike<'v>> StarlarkValue<'v> for NetValueGen<V>
-where
-    Self: ProvidesStaticType<'v>,
-{
+impl<'v> StarlarkValue<'v> for NetValue<'v> {
     fn get_methods() -> Option<&'static Methods> {
         Some(NET_METHODS.methods())
     }
@@ -281,13 +256,13 @@ where
     }
 }
 
-impl<'v, V: ValueLike<'v>> std::fmt::Display for NetValueGen<V> {
+impl<'v> std::fmt::Display for NetValue<'v> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.name())
     }
 }
 
-impl<V> NetValueGen<V> {
+impl<'v> NetValue<'v> {
     fn is_builtin_optional_attr(&self, attribute: &str) -> bool {
         is_builtin_optional_net_field(&self.type_name, attribute)
     }
@@ -315,7 +290,7 @@ impl<V> NetValueGen<V> {
     }
 }
 
-impl<'v, V: ValueLike<'v>> NetValueGen<V> {
+impl<'v> NetValue<'v> {
     fn clone_with(&self, heap: Heap<'v>, edit: impl FnOnce(&mut NetValue<'v>)) -> Value<'v> {
         let mut net = NetValue {
             net_id: self.net_id,
@@ -368,7 +343,7 @@ impl<'v, V: ValueLike<'v>> NetValueGen<V> {
     }
 
     /// Create a new NetValue
-    pub fn new(net_id: NetId, name: String, properties: SmallMap<String, V>) -> Self {
+    pub fn new(net_id: NetId, name: String, properties: SmallMap<String, Value<'v>>) -> Self {
         Self {
             net_id,
             name,
@@ -425,7 +400,7 @@ impl<'v, V: ValueLike<'v>> NetValueGen<V> {
     }
 
     /// Return the properties map of this net instance.
-    pub fn properties(&self) -> &SmallMap<String, V> {
+    pub fn properties(&self) -> &SmallMap<String, Value<'v>> {
         &self.properties
     }
 
@@ -602,30 +577,20 @@ pub(crate) fn instantiate_not_connected<'v>(
 /// - `Net = builtin.net_type("Net")`
 /// - `Power = builtin.net_type("Power")`
 /// - `Ground = builtin.net_type("Ground")`
-#[derive(Clone, Debug, Trace, Coerce, ProvidesStaticType, Allocative, NoSerialize)]
+#[derive(Clone, Debug, Trace, Freeze, ProvidesStaticType, Allocative, NoSerialize)]
 #[repr(C)]
-pub struct NetTypeGen<V> {
+pub struct NetType<'v> {
     /// The type name (e.g., "Net", "Power", "Ground")
     pub(crate) type_name: String,
-    /// Field specifications: field name -> field spec value (FieldGen or type constructor)
+    /// Field specifications: field name -> field spec value (Field or type constructor)
     /// Types are validated at net type definition time, re-compiled at net instantiation time
-    pub(crate) fields: SmallMap<String, V>,
+    pub(crate) fields: SmallMap<String, Value<'v>>,
 }
 
 starlark_complex_value!(pub NetType);
 starlark::methods_static!(NET_TYPE_METHODS = net_type_methods);
 
-impl<'v> Freeze for NetType<'v> {
-    type Frozen = FrozenNetType;
-    fn freeze(self, freezer: &Freezer) -> FreezeResult<Self::Frozen> {
-        Ok(FrozenNetType {
-            type_name: self.type_name,
-            fields: self.fields.freeze(freezer)?,
-        })
-    }
-}
-
-impl<V> NetTypeGen<V> {
+impl<'v> NetType<'v> {
     /// Returns the instance type name (e.g., "Net", "Power", "Ground")
     fn instance_ty_name(&self) -> String {
         self.type_name.to_string()
@@ -637,7 +602,7 @@ impl<V> NetTypeGen<V> {
     }
 }
 
-impl<V> fmt::Display for NetTypeGen<V> {
+impl<'v> fmt::Display for NetType<'v> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.instance_ty_name())
     }
@@ -664,7 +629,7 @@ impl<'v> NetType<'v> {
             // Validate the field spec by compiling its type - this fails early if invalid
             // This handles field(), direct types (str/int), and custom types (Enum/PhysicalValue) uniformly
             let type_compiled_result =
-                if let Some(field_gen) = field_value.downcast_ref::<FieldGen<Value<'v>>>() {
+                if let Some(field_gen) = field_value.downcast_ref::<Field<'v>>() {
                     Ok(field_gen.typ)
                 } else {
                     TypeCompiled::new(field_value, eval.heap())
@@ -698,7 +663,7 @@ pub(crate) struct NetInstantiateOptions {
     pub(crate) intent: NetInstantiateIntent,
 }
 
-impl<'v, V: ValueLike<'v>> NetTypeGen<V> {
+impl<'v> NetType<'v> {
     pub(crate) fn instantiate(
         &self,
         base_net: Option<&NetValue<'v>>,
@@ -855,23 +820,11 @@ impl<'v, V: ValueLike<'v>> NetTypeGen<V> {
 
     /// Get the unique TypeInstanceId for this NetType based on structural equivalence.
     /// Net types with identical type_name AND field names share the same TypeInstanceId.
-    fn type_instance_id(&self) -> TypeInstanceId {
-        type NetTypeCache = HashMap<(String, Vec<String>), TypeInstanceId>;
-        static CACHE: OnceLock<Mutex<NetTypeCache>> = OnceLock::new();
-
-        // Build field signature from field names only (not types, for backward compat)
-        let mut field_names: Vec<String> = self.fields.keys().cloned().collect();
-
-        // Sort by field name for structural equivalence
+    fn type_instance_id(&self, domain: PcbTypeIdDomain) -> TypeInstanceId {
+        // Field names only (not types, for backward compat), sorted for structural equivalence.
+        let mut field_names: Vec<&str> = self.fields.keys().map(String::as_str).collect();
         field_names.sort();
-
-        let cache_key = (self.type_name.clone(), field_names);
-        let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
-        *cache
-            .lock()
-            .unwrap()
-            .entry(cache_key)
-            .or_insert_with(TypeInstanceId::r#gen)
+        TypeInstanceId::from_identity(domain, &(self.type_name.as_str(), field_names))
     }
 
     /// Returns the parameter specification for this type's constructor
@@ -902,7 +855,7 @@ impl<'v, V: ValueLike<'v>> NetTypeGen<V> {
     }
 
     /// Returns the runtime parameter specification for parsing arguments
-    fn parameters_spec(&self) -> ParametersSpec<FrozenValue> {
+    fn parameters_spec(&self) -> ParametersSpec<Value<'v>> {
         let mut named_params = vec![
             ("name", ParametersSpecParam::Optional),
             ("__register", ParametersSpecParam::Optional),
@@ -926,12 +879,8 @@ impl<'v, V: ValueLike<'v>> NetTypeGen<V> {
 fn compile_field_type<'v>(
     field_spec: Value<'v>,
     heap: Heap<'v>,
-) -> anyhow::Result<TypeCompiled<Value<'v>>> {
-    if let Some(field_gen) = field_spec.downcast_ref::<FieldGen<Value<'v>>>() {
-        Ok(TypeCompiled::from_ty(field_gen.typ.as_ty(), heap))
-    } else if let Some(field_gen) = field_spec.downcast_ref::<FieldGen<FrozenValue>>() {
-        // Loaded modules freeze field(...) specs, but we still want to honor
-        // the original compiled matcher for validation and coercion.
+) -> anyhow::Result<TypeCompiled<'v>> {
+    if let Some(field_gen) = field_spec.downcast_ref::<Field<'v>>() {
         Ok(TypeCompiled::from_ty(field_gen.typ.as_ty(), heap))
     } else {
         TypeCompiled::new(field_spec, heap)
@@ -954,15 +903,11 @@ pub(crate) fn validate_field<'v>(
     let heap = eval.heap();
 
     // Try to extract default from field() spec first (before type compilation)
-    let default = if let Some(fg) = field_spec.downcast_ref::<FieldGen<Value>>() {
-        fg.default.map(|d| d.to_value())
-    } else if let Some(fg) = field_spec.downcast_ref::<FieldGen<FrozenValue>>() {
-        fg.default.map(|d| d.to_value())
-    } else {
-        None
-    };
+    let default = field_spec
+        .downcast_ref::<Field<'v>>()
+        .and_then(|fg| fg.default);
 
-    // Extract TypeCompiled from field spec (FieldGen or direct type)
+    // Extract TypeCompiled from field spec (Field or direct type)
     let type_compiled = compile_field_type(field_spec, heap);
 
     let type_compiled = match type_compiled {
@@ -1035,20 +980,6 @@ pub(crate) fn instantiate_generated_net<'v>(
         );
     }
 
-    if let Some(net_type) = spec.downcast_ref::<FrozenNetType>() {
-        return net_type.instantiate(
-            None,
-            Some(generated_name),
-            SmallMap::new(),
-            NetInstantiateOptions {
-                should_register,
-                assignment_inferable,
-                intent: NetInstantiateIntent::Connected,
-            },
-            eval,
-        );
-    }
-
     Err(anyhow::anyhow!(
         "internal error: expected NetType when instantiating generated net, got {}",
         spec.get_type()
@@ -1057,11 +988,7 @@ pub(crate) fn instantiate_generated_net<'v>(
 }
 
 #[starlark_value(type = "NetType")]
-impl<'v, V: ValueLike<'v>> StarlarkValue<'v> for NetTypeGen<V>
-where
-    Self: ProvidesStaticType<'v>,
-{
-    type Canonical = FrozenNetType;
+impl<'v> StarlarkValue<'v> for NetType<'v> {
     fn invoke(
         &self,
         _: Value<'v>,
@@ -1141,7 +1068,7 @@ where
     }
 
     fn eval_type(&self) -> Option<Ty> {
-        let id = self.type_instance_id();
+        let id = self.type_instance_id(PcbTypeIdDomain::Net);
 
         // Build known fields from self.fields
         // TODO(type-hints): Extract proper Ty from field specs instead of Ty::any()
@@ -1176,7 +1103,7 @@ where
             TyUser::new(
                 self.ty_name(),
                 TyStarlarkValue::new::<Self>(),
-                TypeInstanceId::r#gen(),
+                self.type_instance_id(PcbTypeIdDomain::NetType),
                 TyUserParams {
                     callable: Some(TyCallable::new(self.param_spec(), self.eval_type()?)),
                     ..TyUserParams::default()

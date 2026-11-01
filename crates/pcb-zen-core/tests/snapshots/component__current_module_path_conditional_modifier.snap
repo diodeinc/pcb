@@ -7,19 +7,19 @@ expression: output
         path: <root>,
         source: "test.zen",
         children: [
-            FrozenValue(
+            Value(
                 Component {
                     name: "R2",
                     footprint: "0603",
                     prefix: "U",
                     connections: {
-                        "1": FrozenValue(
+                        "1": Value(
                             Net {
                                 name: "A",
                                 id: "<ID>",
                             },
                         ),
-                        "2": FrozenValue(
+                        "2": Value(
                             Net {
                                 name: "B",
                                 id: "<ID>",
@@ -27,13 +27,13 @@ expression: output
                         ),
                     },
                     properties: {
-                        "modified_in_root": FrozenValue(
+                        "modified_in_root": Value(
                             StarlarkBool(
                                 true,
                             ),
                         ),
                     },
-                    symbol: FrozenValue(
+                    symbol: Value(
                         Symbol {
                             name: None,
                             pins: {
@@ -50,19 +50,19 @@ expression: output
         path: ChildInstance,
         source: "/Child.zen",
         children: [
-            FrozenValue(
+            Value(
                 Component {
                     name: "R1",
                     footprint: "0603",
                     prefix: "U",
                     connections: {
-                        "1": FrozenValue(
+                        "1": Value(
                             Net {
                                 name: "A",
                                 id: "<ID>",
                             },
                         ),
-                        "2": FrozenValue(
+                        "2": Value(
                             Net {
                                 name: "B",
                                 id: "<ID>",
@@ -70,13 +70,13 @@ expression: output
                         ),
                     },
                     properties: {
-                        "modified_in_root": FrozenValue(
+                        "modified_in_root": Value(
                             StarlarkBool(
                                 true,
                             ),
                         ),
                     },
-                    symbol: FrozenValue(
+                    symbol: Value(
                         Symbol {
                             name: None,
                             pins: {

@@ -106,9 +106,9 @@ def _spice_subcircuit_name(direction: Direction):
 def _spice_args(reverse_standoff_voltage, reverse_clamping_voltage):
     bv = "6.4"
     if reverse_clamping_voltage:
-        bv = str(reverse_clamping_voltage.max)
+        bv = reverse_clamping_voltage.with_value(reverse_clamping_voltage.max)
     elif reverse_standoff_voltage:
-        bv = str(reverse_standoff_voltage.max * 1.1)
+        bv = reverse_standoff_voltage.with_value(reverse_standoff_voltage.max) * 1.1
     return {
         "BV": bv,
         "IBV": "10m",

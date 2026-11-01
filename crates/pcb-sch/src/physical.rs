@@ -1444,7 +1444,7 @@ impl PhysicalValue {
 #[cfg(feature = "starlark")]
 mod bindings;
 #[cfg(feature = "starlark")]
-pub use bindings::PhysicalValueType;
+pub use bindings::{PcbTypeIdDomain, PhysicalValueType};
 
 #[cfg(test)]
 mod tests {

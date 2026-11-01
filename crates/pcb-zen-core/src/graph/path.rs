@@ -1,7 +1,7 @@
 use crate::graph::{CircuitGraph, FactorId, PortId, PortPath};
 use crate::lang::module::ModulePath;
 
-use starlark::values::{FrozenValue, Heap, Value, tuple::TupleRef};
+use starlark::values::{Heap, Value, tuple::TupleRef};
 use std::collections::{HashMap, HashSet};
 
 impl CircuitGraph {
@@ -58,10 +58,10 @@ impl CircuitGraph {
         &self,
         port_path: &[PortId],
         factors: &[FactorId],
-        components: &HashMap<ModulePath, FrozenValue>,
+        components: &HashMap<ModulePath, Value<'v>>,
         heap: Heap<'v>,
     ) -> starlark::Result<Value<'v>> {
-        use crate::graph::starlark::PathValueGen;
+        use crate::graph::starlark::PathValue;
 
         let mut ports = Vec::new();
         let mut path_components = Vec::new();
@@ -109,7 +109,7 @@ impl CircuitGraph {
         }
 
         // Create PathValue object
-        let path_value = PathValueGen {
+        let path_value = PathValue {
             ports,
             components: path_components,
             nets: path_nets,

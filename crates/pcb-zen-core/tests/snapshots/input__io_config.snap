@@ -1,6 +1,5 @@
 ---
 source: crates/pcb-zen-core/tests/input.rs
-assertion_line: 29
 expression: output
 ---
 {
@@ -12,20 +11,20 @@ expression: output
         path: U1,
         source: "/Module.zen",
         children: [
-            FrozenValue(
+            Value(
                 Component {
                     name: "comp0",
                     footprint: "package://stdlib/kicad-footprints/Resistor_SMD.pretty/R_0402_1005Metric.kicad_mod",
                     prefix: "U",
                     connections: {
-                        "V": FrozenValue(
+                        "V": Value(
                             Net {
                                 name: "VCC",
                                 id: "<ID>",
                             },
                         ),
                     },
-                    symbol: FrozenValue(
+                    symbol: Value(
                         Symbol {
                             name: None,
                             pins: {

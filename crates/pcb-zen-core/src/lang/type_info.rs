@@ -1,11 +1,10 @@
-use crate::FrozenNetValue;
 use crate::lang::r#enum::EnumType;
-use crate::lang::interface::{FrozenInterfaceFactory, InterfaceFactory};
+use crate::lang::interface::InterfaceFactory;
 use crate::lang::io_direction::IoDirection;
-use crate::lang::net::{FrozenNetType, NetType, NetValue};
+use crate::lang::net::{NetType, NetValue};
 use serde::{Deserialize, Serialize};
 use starlark::values::typing::TypeType;
-use starlark::values::{UnpackValue, Value, ValueLike};
+use starlark::values::{UnpackValue, Value};
 
 /// Structured representation of Starlark types for introspection
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -60,28 +59,12 @@ impl TypeInfo {
         }
 
         // Check for Net type by type name
-        if value.downcast_ref::<NetType>().is_some()
-            || value.downcast_ref::<FrozenNetType>().is_some()
-            || value.downcast_ref::<NetValue>().is_some()
-            || value.downcast_ref::<FrozenNetValue>().is_some()
-        {
+        if value.downcast_ref::<NetType>().is_some() || value.downcast_ref::<NetValue>().is_some() {
             return TypeInfo::Net;
         }
 
         // Check for Interface types by downcasting
         if let Some(iface) = value.downcast_ref::<InterfaceFactory>() {
-            let mut pins = Vec::new();
-            for (key, val) in iface.iter() {
-                pins.push((key.to_string(), Self::from_value(val.to_value())));
-            }
-
-            return TypeInfo::Interface {
-                name: value.to_string(),
-                pins,
-            };
-        }
-
-        if let Some(iface) = value.downcast_ref::<FrozenInterfaceFactory>() {
             let mut pins = Vec::new();
             for (key, val) in iface.iter() {
                 pins.push((key.to_string(), Self::from_value(val.to_value())));

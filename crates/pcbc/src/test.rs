@@ -105,8 +105,8 @@ pub fn test(
             );
 
             // Execute checks for each TestBench
-            for testbench in testbenches {
-                let check_diagnostics = execute_testbench_checks(testbench, &eval_output);
+            for index in 0..testbenches.len() {
+                let check_diagnostics = execute_testbench_checks(&eval_output, index);
                 diagnostics.diagnostics.extend(check_diagnostics);
             }
         }
@@ -134,14 +134,14 @@ pub fn test(
 
 /// Execute all deferred checks for a TestBench
 fn execute_testbench_checks(
-    testbench: &pcb_zen_core::lang::test_bench::FrozenTestBenchValue,
     eval_output: &pcb_zen_core::lang::eval::EvalOutput,
+    index: usize,
 ) -> Vec<pcb_zen_core::Diagnostic> {
     use pcb_zen_core::lang::eval::EvalContextRef;
     use pcb_zen_core::lang::test_bench::execute_deferred_check;
     use starlark::environment::Module;
     use starlark::eval::Evaluator;
-    use starlark::values::{ValueLike, dict::AllocDict};
+    use starlark::values::dict::AllocDict;
 
     let mut all_diagnostics = Vec::new();
     let mut total_checks = 0;
@@ -149,19 +149,20 @@ fn execute_testbench_checks(
 
     let eval_ctx = eval_output.check_context(
         Arc::new(pcb_zen_core::DefaultFileProvider::new()),
-        std::path::PathBuf::from(testbench.source_path()),
+        std::path::PathBuf::from(eval_output.collect_testbenches()[index].source_path()),
     );
 
     Module::with_temp_heap(|module| {
         // Create a ContextValue and attach it to the module
         let heap = module.heap();
+        let testbench = eval_output.collect_testbenches_at(heap)[index];
         let ctx_value = pcb_zen_core::lang::context::ContextValue::from_context(&eval_ctx);
         module.set_extra_value(heap.alloc_complex(ctx_value));
         let mut eval_context_ref = EvalContextRef::for_checks(&eval_ctx, eval_output);
         let mut eval = Evaluator::new(&module);
         eval.extra_mut = Some(&mut eval_context_ref);
 
-        let module_tree = eval_output.module_tree();
+        let module_tree = eval_output.module_tree_at(heap);
         for deferred_case in testbench.deferred_cases().iter() {
             // Look up evaluated module from tree by full path
             let module_path = ModulePath::from(deferred_case.case_final_name.clone());
@@ -216,7 +217,7 @@ fn execute_testbench_checks(
 
             for check in &deferred_case.checks {
                 total_checks += 1;
-                // module_value is FrozenModuleValue (ModuleValueGen<FrozenValue>)
+                // module_value is ModuleValue (ModuleValueGen<FrozenValue>)
                 // Allocate it to heap to get a Value
                 let module_as_value = heap.alloc_complex((*module_value).clone());
                 let (passed, mut diagnostics) =

@@ -116,7 +116,7 @@ def _spice_nets(package: Package, XIN: Net, XOUT: Net, GND: Net | None):
 def _spice_args(frequency, load_capacitance, package):
     """Returns SPICE arguments based on crystal parameters."""
     args = {
-        "FREQ": str(frequency.value),  # Frequency in Hz
+        "FREQ": frequency,
         "Cm": "10f",  # Motional capacitance (typical 10fF)
         "Rm": "50",  # ESR/motional resistance (typical 50 ohms)
         "Cp": "3p",  # Parallel capacitance (typical 3pF)
@@ -130,7 +130,7 @@ def _spice_args(frequency, load_capacitance, package):
     # The parallel capacitance contributes to the load capacitance
     if load_capacitance:
         # Cp is typically much smaller than CL
-        args["Cp"] = str(load_capacitance.value / 5)  # Rough approximation
+        args["Cp"] = load_capacitance / 5  # Rough approximation
 
     return args
 

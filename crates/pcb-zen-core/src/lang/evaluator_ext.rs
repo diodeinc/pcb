@@ -6,11 +6,11 @@ use std::{
 use starlark::{
     any::{AnyLifetime, ProvidesStaticType},
     eval::Evaluator,
-    values::{FrozenValue, Value, ValueLike},
+    values::Value,
 };
 
 use crate::{
-    Diagnostic, FrozenComponentValue, FrozenModuleValue,
+    Diagnostic, FrozenComponentValue,
     lang::{
         context::ContextValue,
         eval::{EvalContext, EvalOutput},
@@ -70,11 +70,12 @@ pub(crate) trait EvaluatorExt<'v> {
     /// Return the [`Context`] that is currently being used.
     fn eval_context(&self) -> Option<&EvalContext>;
 
-    fn module_tree(&self) -> Option<BTreeMap<ModulePath, &FrozenModuleValue>>;
+    /// The completed module tree, brought to this evaluator's heap.
+    fn module_tree(&self) -> Option<BTreeMap<ModulePath, &'v ModuleValue<'v>>>;
 
     /// Recursively collect components from a module and all its submodules
-    /// Returns a map of component_path -> component_value (as FrozenValue)
-    fn collect_components(&self, module_path: &ModulePath) -> HashMap<ModulePath, FrozenValue>;
+    /// Returns a map of component_path -> component_value (as Value<'_>)
+    fn collect_components(&self, module_path: &ModulePath) -> HashMap<ModulePath, Value<'v>>;
 }
 
 impl<'v> EvaluatorExt<'v> for Evaluator<'v, '_, '_> {
@@ -125,15 +126,13 @@ impl<'v> EvaluatorExt<'v> for Evaluator<'v, '_, '_> {
         })
     }
 
-    fn module_tree(&self) -> Option<BTreeMap<ModulePath, &FrozenModuleValue>> {
+    fn module_tree(&self) -> Option<BTreeMap<ModulePath, &'v ModuleValue<'v>>> {
         let extra: &dyn AnyLifetime<'_> = &**self.extra_mut.as_ref()?;
-        extra
-            .downcast_ref::<EvalContextRef>()?
-            .output
-            .map(EvalOutput::module_tree)
+        let output = extra.downcast_ref::<EvalContextRef>()?.output?;
+        Some(output.module_tree_at(self.heap()))
     }
 
-    fn collect_components(&self, module_path: &ModulePath) -> HashMap<ModulePath, FrozenValue> {
+    fn collect_components(&self, module_path: &ModulePath) -> HashMap<ModulePath, Value<'v>> {
         let Some(tree) = self.module_tree() else {
             return HashMap::new();
         };
@@ -150,7 +149,6 @@ impl<'v> EvaluatorExt<'v> for Evaluator<'v, '_, '_> {
                         // Build component path: module_path.component_name
                         let mut component_path = child_module_path.clone();
                         component_path.push(component.name());
-                        // Store the FrozenValue wrapper, not the unwrapped component
                         result.insert(component_path, *child);
                     }
                 }

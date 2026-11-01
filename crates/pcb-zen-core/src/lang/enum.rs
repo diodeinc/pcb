@@ -1,4 +1,5 @@
 use allocative::Allocative;
+use pcb_sch::physical::PcbTypeIdDomain;
 use serde::{Deserialize, Serialize};
 use starlark::{
     any::ProvidesStaticType,
@@ -7,16 +8,15 @@ use starlark::{
     starlark_module, starlark_simple_value,
     typing::{ParamIsRequired, ParamSpec, Ty, TyCallable, TyStarlarkValue, TyUser, TyUserParams},
     values::{
-        Freeze, Heap, StarlarkValue, Value, ValueLike,
+        Freeze, Heap, StarlarkValue, Value,
         function::FUNCTION_TYPE,
         starlark_value,
         typing::{TypeInstanceId, TypeMatcher, TypeMatcherDyn, TypeMatcherFactory},
     },
 };
 use starlark_map::StarlarkHasher;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::fmt;
-use std::sync::{Mutex, OnceLock};
 
 #[derive(thiserror::Error, Debug)]
 enum EnumError {
@@ -86,14 +86,8 @@ impl EnumType {
         &self.variants
     }
 
-    fn type_instance_id(&self) -> TypeInstanceId {
-        static CACHE: OnceLock<Mutex<HashMap<EnumType, TypeInstanceId>>> = OnceLock::new();
-        *CACHE
-            .get_or_init(|| Mutex::new(HashMap::new()))
-            .lock()
-            .unwrap()
-            .entry(self.clone())
-            .or_insert_with(TypeInstanceId::r#gen)
+    fn type_instance_id(&self, domain: PcbTypeIdDomain) -> TypeInstanceId {
+        TypeInstanceId::from_identity(domain, &self.variants)
     }
 
     fn param_spec(&self) -> ParamSpec {
@@ -192,7 +186,7 @@ impl<'v> StarlarkValue<'v> for EnumType {
             TyUser::new(
                 "enum".to_owned(),
                 TyStarlarkValue::new::<EnumValue>(),
-                self.type_instance_id(),
+                self.type_instance_id(PcbTypeIdDomain::Enum),
                 TyUserParams {
                     matcher: Some(TypeMatcherFactory::new(EnumTypeMatcher {
                         enum_type: self.clone(),
@@ -209,7 +203,7 @@ impl<'v> StarlarkValue<'v> for EnumType {
             TyUser::new(
                 "EnumType".to_owned(),
                 TyStarlarkValue::new::<EnumType>(),
-                TypeInstanceId::r#gen(),
+                self.type_instance_id(PcbTypeIdDomain::EnumType),
                 TyUserParams {
                     callable: Some(TyCallable::new(self.param_spec(), self.eval_type()?)),
                     ..TyUserParams::default()

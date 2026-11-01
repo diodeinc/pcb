@@ -12,19 +12,19 @@ Root module depth: 0
         path: ChildInstance,
         source: "/Child.zen",
         children: [
-            FrozenValue(
+            Value(
                 Component {
                     name: "R2",
                     footprint: "0603",
                     prefix: "U",
                     connections: {
-                        "1": FrozenValue(
+                        "1": Value(
                             Net {
                                 name: "A",
                                 id: "<ID>",
                             },
                         ),
-                        "2": FrozenValue(
+                        "2": Value(
                             Net {
                                 name: "B",
                                 id: "<ID>",
@@ -32,14 +32,14 @@ Root module depth: 0
                         ),
                     },
                     properties: {
-                        "module_depth": FrozenValue(
+                        "module_depth": Value(
                             1,
                         ),
-                        "module_path": FrozenValue(
+                        "module_path": Value(
                             "[\"ChildInstance\"]",
                         ),
                     },
-                    symbol: FrozenValue(
+                    symbol: Value(
                         Symbol {
                             name: None,
                             pins: {
@@ -56,19 +56,19 @@ Root module depth: 0
         path: ChildInstance.GrandChildInstance,
         source: "/GrandChild.zen",
         children: [
-            FrozenValue(
+            Value(
                 Component {
                     name: "R1",
                     footprint: "0603",
                     prefix: "U",
                     connections: {
-                        "1": FrozenValue(
+                        "1": Value(
                             Net {
                                 name: "A",
                                 id: "<ID>",
                             },
                         ),
-                        "2": FrozenValue(
+                        "2": Value(
                             Net {
                                 name: "B",
                                 id: "<ID>",
@@ -76,14 +76,14 @@ Root module depth: 0
                         ),
                     },
                     properties: {
-                        "module_depth": FrozenValue(
+                        "module_depth": Value(
                             2,
                         ),
-                        "module_path": FrozenValue(
+                        "module_path": Value(
                             "[\"ChildInstance\", \"GrandChildInstance\"]",
                         ),
                     },
-                    symbol: FrozenValue(
+                    symbol: Value(
                         Symbol {
                             name: None,
                             pins: {
