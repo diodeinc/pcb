@@ -1,4 +1,5 @@
 use super::{ContourSet, edges_of, horizontal_crossing, signed_area_of};
+use crate::geom::accuracy::numerical_error;
 use crate::geom::dist::{self, Distance};
 use crate::geom::{BBox, Point, tol};
 use std::ops::Range;
@@ -12,6 +13,10 @@ pub struct PreparedRegion {
     pub(crate) segments: Vec<(Point, Point)>,
     order: Vec<usize>,
     nodes: Vec<Node>,
+    /// Closed source rings, absent for an arbitrary segment collection.
+    ring_bounds: Vec<BBox>,
+    segment_rings: Vec<u32>,
+    winding_bounds: Vec<BBox>,
     pub(crate) uncertainty_mm: f64,
 }
 
@@ -47,13 +52,47 @@ impl ContourSet {
     /// assert_eq!(inside.second, Point::new(2.0, 0.0));
     /// ```
     pub fn prepare_query(&self) -> PreparedRegion {
-        PreparedRegion::from_segments(
+        let mut prepared = PreparedRegion::from_segments(
             self.rings()
                 .filter(|ring| signed_area_of(ring) != 0.0)
                 .flat_map(edges_of)
                 .collect(),
             self.uncertainty_mm,
-        )
+        );
+        // A single ring cannot benefit from per-ring pruning within its BVH.
+        if self.ring_count() < 2 {
+            return prepared;
+        }
+        prepared.segment_rings.reserve(prepared.segments.len());
+        let guard = numerical_error(self.bbox);
+        for (ring, bounds) in self.bounded_rings() {
+            if signed_area_of(ring) == 0.0 {
+                continue;
+            }
+            let id = prepared.ring_bounds.len() as u32;
+            prepared.ring_bounds.push(bounds.expand(guard));
+            prepared
+                .segment_rings
+                .extend(std::iter::repeat_n(id, ring.len()));
+        }
+        // A whole closed ring winds zero outside its bounds. Keep the union
+        // of source-ring bounds at each node so winding can skip distant
+        // islands and holes, not walk every edge to the left of the point.
+        // Nodes are in preorder, so their children are ready in reverse.
+        prepared.winding_bounds = vec![BBox::empty(); prepared.nodes.len()];
+        for id in (0..prepared.nodes.len()).rev() {
+            let bounds = match &prepared.nodes[id].kind {
+                NodeKind::Leaf(range) => prepared.order[range.clone()]
+                    .iter()
+                    .map(|&edge| prepared.ring_bounds[prepared.segment_rings[edge] as usize])
+                    .fold(BBox::empty(), BBox::union),
+                NodeKind::Branch(left, right) => {
+                    prepared.winding_bounds[*left].union(prepared.winding_bounds[*right])
+                }
+            };
+            prepared.winding_bounds[id] = bounds;
+        }
+        prepared
     }
 }
 
@@ -63,6 +102,9 @@ impl PreparedRegion {
             order: (0..segments.len()).collect(),
             segments,
             nodes: Vec::new(),
+            ring_bounds: Vec::new(),
+            segment_rings: Vec::new(),
+            winding_bounds: Vec::new(),
             uncertainty_mm,
         };
         if !prepared.segments.is_empty() {
@@ -277,7 +319,9 @@ impl PreparedRegion {
         let wind = query.needs_winding
             && node.bounds.min.y <= query.point.y
             && query.point.y < node.bounds.max.y
-            && node.bounds.min.x <= query.point.x;
+            && node.bounds.min.x <= query.point.x
+            && (self.winding_bounds.is_empty()
+                || self.winding_bounds[index].contains_point(query.point));
         if !measure && !wind {
             return;
         }
@@ -293,7 +337,13 @@ impl PreparedRegion {
                             query.boundary = boundary;
                         }
                     }
+                    // Skip every edge of an excluded ring, including in a
+                    // node shared with a ring that does enclose the point:
+                    // dropping only some of its crossings would change the sum.
                     if wind
+                        && (self.segment_rings.is_empty()
+                            || self.ring_bounds[self.segment_rings[id] as usize]
+                                .contains_point(query.point))
                         && let Some((x, direction)) = horizontal_crossing(start, end, query.point.y)
                         && x <= query.point.x
                     {

@@ -219,6 +219,7 @@ pub(super) fn soldermask_web(limit_mm: f64, design: &Design) -> anyhow::Result<E
 /// the image without every thin candidate, by connected component.
 struct Survivors {
     components: Vec<ContourSet>,
+    boundaries: Vec<PreparedRegion>,
     near: BBoxIndex,
 }
 
@@ -230,7 +231,12 @@ impl Survivors {
         )?;
         let components = image.difference(&thin)?.connected_components();
         let near = BBoxIndex::new(components.iter().map(|component| component.bbox).collect());
-        Ok(Self { components, near })
+        let boundaries = components.iter().map(ContourSet::prepare_query).collect();
+        Ok(Self {
+            components,
+            boundaries,
+            near,
+        })
     }
 
     /// What losing `candidate` does to the copper that survives.
@@ -244,7 +250,11 @@ impl Survivors {
         let grown = candidate.disk_dilate(4.0 * resolution.tolerance_mm + tol::REGION_MM)?;
         let (mut components, mut contacts) = (0, 0);
         for index in self.near.query(grown.bbox) {
-            let shared = grown.intersection(&self.components[index])?;
+            // A component's bounds may enclose a candidate inside one of its
+            // holes. Reuse its boundary to prove those intersections empty;
+            // contact and ambiguous cases still use the original overlay.
+            let shared =
+                grown.intersection_with_index(&self.components[index], &self.boundaries[index])?;
             if !shared.is_empty() {
                 components += 1;
                 contacts += shared.connected_components().len();

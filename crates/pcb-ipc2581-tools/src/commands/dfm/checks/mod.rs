@@ -161,7 +161,11 @@ pub(super) fn run(rules: &[Rule], designs: &[Design]) -> anyhow::Result<Results>
             .collect(),
         ..Results::default()
     };
+    let mut hole_preparation = hole_clearance::Preparation::default();
     for rule in rules {
+        if rule.kind != RuleKind::HoleToCopperClearance(HoleClass::Npth) {
+            hole_preparation = hole_clearance::Preparation::default();
+        }
         let mut result = RuleResult::new(rule);
         // A rule is evaluated in the design of every Step. One design that
         // cannot certify it leaves it uncertified; it measures nothing only
@@ -171,8 +175,14 @@ pub(super) fn run(rules: &[Rule], designs: &[Design]) -> anyhow::Result<Results>
         for (index, design) in designs.iter().enumerate() {
             let unevaluated = unevaluated(rule, design).or_else(|| {
                 // A measurement that fails leaves its own rule uncertified.
-                judge_in(rule, (index as u32, design), &mut result, &mut results)
-                    .unwrap_or_else(|error| Some((RuleStatus::Incomplete, format!("{error:#}"))))
+                judge_in(
+                    rule,
+                    (index as u32, design),
+                    &mut result,
+                    &mut results,
+                    &mut hole_preparation,
+                )
+                .unwrap_or_else(|error| Some((RuleStatus::Incomplete, format!("{error:#}"))))
             });
             match unevaluated {
                 Some((RuleStatus::Incomplete, reason)) if !incomplete.contains(&reason) => {
@@ -258,11 +268,12 @@ fn judge_in(
     (index, design): (u32, &Design),
     result: &mut RuleResult,
     results: &mut Results,
+    hole_preparation: &mut hole_clearance::Preparation,
 ) -> anyhow::Result<Option<(RuleStatus, String)>> {
     let Results {
         frames, findings, ..
     } = results;
-    match evaluate(rule, design)? {
+    match evaluate(rule, design, hole_preparation, index as usize)? {
         RuleEvaluation::Assembly(evaluation) => {
             for issue in evaluation.issues {
                 let frame = frame_at(frames, index, issue.placements.clone());
@@ -670,7 +681,12 @@ fn unresolved_span(rule: &Rule, design: &Design) -> Option<String> {
     }
 }
 
-fn evaluate(rule: &Rule, design: &Design) -> anyhow::Result<RuleEvaluation> {
+fn evaluate(
+    rule: &Rule,
+    design: &Design,
+    hole_preparation: &mut hole_clearance::Preparation,
+    design_index: usize,
+) -> anyhow::Result<RuleEvaluation> {
     let limit = || rule.limit.length().millimeters();
     Ok(match rule.kind {
         RuleKind::AssemblyDiagnostic(diagnostic) => {
@@ -697,9 +713,15 @@ fn evaluate(rule: &Rule, design: &Design) -> anyhow::Result<RuleEvaluation> {
         RuleKind::PlatedSlotEnclosure => {
             plated_slot_enclosure::evaluate(limit(), &rule.conditions, design)?.into()
         }
-        RuleKind::HoleToCopperClearance(class) => {
-            hole_clearance::evaluate(limit(), class, &rule.conditions, design)?.into()
-        }
+        RuleKind::HoleToCopperClearance(class) => hole_clearance::evaluate(
+            limit(),
+            class,
+            &rule.conditions,
+            design,
+            hole_preparation,
+            design_index,
+        )?
+        .into(),
         RuleKind::SlotToCopperClearance(plating) => {
             slot_clearance::evaluate(limit(), plating, &rule.conditions, design)?.into()
         }

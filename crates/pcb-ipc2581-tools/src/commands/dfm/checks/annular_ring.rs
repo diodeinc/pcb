@@ -27,10 +27,10 @@
 //! is a plane anti-pad or a removed unused land and has no ring to measure.
 //! One measurement per hole reports the layer minimizing `a`.
 //!
-//! Computation: `p ∈ M` by a batched winding-number sweep over all hole
-//! centers; `d(p, ∂M)` by a nearest-boundary query against a uniform grid
-//! over the boundary segments, searched only to `r + A_min` since farther
-//! boundaries cannot violate.
+//! Computation: `p ∈ M` by winding-number queries against the prepared
+//! boundary hierarchy; `d(p, ∂M)` by nearest-boundary queries against the
+//! same hierarchy, searched only to `r + A_min` since farther boundaries
+//! cannot violate.
 
 use pcb_ir::geom::dfm::{BBoxIndex, Distance, circular_region};
 use pcb_ir::geom::region::Ring;
@@ -65,6 +65,12 @@ pub(super) fn evaluate(
         return npth_lands(limit_mm, conditions, design);
     }
     let holes = holes_of_class(design, class);
+    if holes.is_empty() {
+        return Ok(Evaluation {
+            checked: 0,
+            measured: Vec::new(),
+        });
+    }
     let copper_layers = &design.copper_layers;
     let hole_lands = &design.hole_lands;
     let boundaries = &design.copper_boundaries;
@@ -73,7 +79,6 @@ pub(super) fn evaluate(
     #[cfg(target_family = "wasm")]
     let layers = copper_layers.iter();
     let ring_indices = layers
-        .clone()
         .map(|layer| {
             BBoxIndex::new(
                 layer
@@ -90,21 +95,13 @@ pub(super) fn evaluate(
             )
         })
         .collect::<Vec<_>>();
-    let centers = holes
-        .iter()
-        .map(|(_, hole)| hole.center)
-        .collect::<Vec<_>>();
-    let contains = layers
-        .map(|layer| layer.image.contains_points_batch(&centers))
-        .collect::<Vec<_>>();
 
     #[cfg(not(target_family = "wasm"))]
     let holes = holes.par_iter();
     #[cfg(target_family = "wasm")]
     let holes = holes.iter();
     let per_hole = holes
-        .enumerate()
-        .map(|(position, &(hole_index, hole))| {
+        .map(|&(hole_index, hole)| {
             let radius = hole.diameter_mm / 2.0;
             let enclosures = spanned_layers(design, &hole.drill_span, conditions)
                 .filter_map(|(copper_index, copper)| {
@@ -112,7 +109,7 @@ pub(super) fn evaluate(
                         .iter()
                         .find(|link| link.copper_index as usize == copper_index)
                         .map(|link: &HoleLand| &copper.lands[link.land_index as usize]);
-                    let in_copper = contains[copper_index][position];
+                    let in_copper = boundaries[copper_index].winding(hole.center) != 0;
                     let required = land.is_some() || hole.drill_span.terminates_on(copper_index);
                     (in_copper || required).then_some((
                         copper_index,

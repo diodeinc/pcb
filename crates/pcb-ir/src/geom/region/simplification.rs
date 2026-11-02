@@ -10,6 +10,7 @@ use i_overlay::core::overlay::{IntOverlayOptions, Overlay};
 use i_overlay::core::overlay_rule::OverlayRule;
 use i_overlay::core::simplify::Simplify;
 use i_overlay::i_float::int::point::IntPoint;
+use i_overlay::i_shape::flat::buffer::FlatContoursBuffer;
 use i_overlay::i_shape::int::shape::IntShapes;
 
 /// Regularize rings under the given fill rule into non-overlapping shapes.
@@ -42,7 +43,7 @@ pub(super) fn overlay(
     rule: OverlayRule,
     fill_rule: OverlayFillRule,
 ) -> Vec<Shape> {
-    let [shapes] = overlay_on_lattice(subject, clip, true, |mut overlay| {
+    let [shapes] = overlay_on_lattice(subject, clip, true, fill_rule, |mut overlay| {
         [overlay.overlay(rule, fill_rule)]
     });
     shapes
@@ -57,7 +58,7 @@ pub(super) fn overlay_rules<const N: usize>(
     rules: [OverlayRule; N],
     fill_rule: OverlayFillRule,
 ) -> [Vec<Shape>; N] {
-    overlay_on_lattice(subject, clip, true, |mut overlay| {
+    overlay_on_lattice(subject, clip, true, fill_rule, |mut overlay| {
         let mut buffer = BooleanExtractionBuffer::default();
         match overlay.build_graph_view(fill_rule) {
             Some(graph) => rules.map(|rule| graph.extract_shapes(rule, &mut buffer)),
@@ -71,9 +72,13 @@ pub(super) fn overlay_rules<const N: usize>(
 /// cancels seams where source fills were cut along each other, and a curve
 /// built from regularized rings has none.
 pub(super) fn positive_winding(rings: &[Ring]) -> Vec<Ring> {
-    let [shapes] = overlay_on_lattice(rings, &[], false, |mut overlay| {
-        [overlay.overlay(OverlayRule::Subject, OverlayFillRule::Positive)]
-    });
+    let [shapes] = overlay_on_lattice(
+        rings,
+        &[],
+        false,
+        OverlayFillRule::Positive,
+        |mut overlay| [overlay.overlay(OverlayRule::Subject, OverlayFillRule::Positive)],
+    );
     flatten_shapes(shapes)
 }
 
@@ -83,35 +88,64 @@ fn overlay_on_lattice<const N: usize>(
     subject: &[Ring],
     clip: &[Ring],
     split: bool,
+    fill_rule: OverlayFillRule,
     extract: impl FnOnce(Overlay<i64>) -> [IntShapes<i64>; N],
 ) -> [Vec<Shape>; N] {
     let bbox = rings_bbox(subject).union(rings_bbox(clip));
-    let vertices = split.then(|| VertexColumns::new(&[subject, clip], bbox));
     let scale = lattice_per_mm(bbox);
-    let lattice = |rings: &[Ring]| {
-        rings
-            .iter()
-            .map(|ring| {
-                let mut lattice = Vec::with_capacity(ring.len());
+    let overlay = {
+        let vertices = split.then(|| VertexColumns::new(&[subject, clip], bbox));
+        let mut on_edge = Vec::new();
+        // Point arenas and contour ranges replace one allocation per ring.
+        // Preserve the split points and their order before optional exact
+        // rectangle consolidation; reserve kernel segments from this count.
+        let mut lattice = |rings: &[Ring]| {
+            let mut buffer = FlatContoursBuffer {
+                points: Vec::with_capacity(rings.iter().map(Vec::len).sum()),
+                ranges: Vec::with_capacity(rings.len()),
+            };
+            for ring in rings {
+                let start = buffer.points.len();
                 let mut emit = |[x, y]: [f64; 2]| {
-                    lattice.push(IntPoint::new(
+                    buffer.points.push(IntPoint::new(
                         (x * scale).round() as i64,
                         (y * scale).round() as i64,
                     ));
                 };
                 match &vertices {
-                    Some(vertices) => vertices.split(ring, &mut emit),
+                    Some(vertices) => vertices.split(ring, &mut on_edge, &mut emit),
                     None => ring.iter().copied().for_each(&mut emit),
                 }
-                lattice
+                buffer.ranges.push(start..buffer.points.len());
+            }
+            buffer
+        };
+        // Scratch arenas and the vertex index die before graph construction.
+        let mut prepared_subject = lattice(subject);
+        let clip = lattice(clip);
+        // A large union of positive rectangles can lose internal strip edges
+        // exactly on the existing lattice. Do not alter winding multiplicities
+        // under parity fill or in the presence of negative/nonrectangular rings.
+        if clip.points.is_empty()
+            && fill_rule == OverlayFillRule::NonZero
+            && subject.len() > 8_000
+            && subject.iter().all(|ring| match ring.as_slice() {
+                [a, b, c, d] => {
+                    a[1] == b[1]
+                        && b[0] == c[0]
+                        && c[1] == d[1]
+                        && d[0] == a[0]
+                        && a[0] < b[0]
+                        && a[1] < d[1]
+                }
+                _ => false,
             })
-            .collect::<Vec<_>>()
+        {
+            coalesce_rectangle_strips(&mut prepared_subject, (ON_EDGE_MM * scale).ceil() as i64);
+        }
+        Overlay::from_subj_and_clip(&prepared_subject, &clip)
     };
-    extract(Overlay::from_subj_and_clip(
-        lattice(subject).as_slice(),
-        lattice(clip).as_slice(),
-    ))
-    .map(|shapes| {
+    extract(overlay).map(|shapes| {
         shapes
             .into_iter()
             .map(|shape| {
@@ -126,6 +160,113 @@ fn overlay_on_lattice<const N: usize>(
             })
             .collect()
     })
+}
+
+/// Consolidate equal-span, touching or overlapping rectangles after all source
+/// edge splitting and lattice conversion. Kinked contours remain untouched.
+/// Two in-place sort/compact passes bound construction to O(n log n) and O(n)
+/// scratch, rather than iterating a potentially quadratic strip fixed point.
+fn coalesce_rectangle_strips(buffer: &mut FlatContoursBuffer<i64>, guard: i64) {
+    let mut candidates = Vec::with_capacity(buffer.ranges.len());
+    let mut others = Vec::new();
+    for range in &buffer.ranges {
+        let ring = &buffer.points[range.clone()];
+        let min_x = ring.iter().map(|p| p.x).min().unwrap();
+        let max_x = ring.iter().map(|p| p.x).max().unwrap();
+        let min_y = ring.iter().map(|p| p.y).min().unwrap();
+        let max_y = ring.iter().map(|p| p.y).max().unwrap();
+        let mut length = 0_u128;
+        let mut right_rise = 0_i128;
+        let on_frame = ring.iter().zip(ring.iter().cycle().skip(1)).all(|(a, b)| {
+            length += (b.x as i128 - a.x as i128).unsigned_abs()
+                + (b.y as i128 - a.y as i128).unsigned_abs();
+            if a.x == max_x && b.x == max_x {
+                right_rise += b.y as i128 - a.y as i128;
+            }
+            (a.x == b.x && (a.x == min_x || a.x == max_x))
+                || (a.y == b.y && (a.y == min_y || a.y == max_y))
+        });
+        let width = max_x as i128 - min_x as i128;
+        let height = max_y as i128 - min_y as i128;
+        if on_frame
+            && width > 0
+            && height > 0
+            && right_rise == height
+            && length == 2 * (width + height) as u128
+        {
+            candidates.push((range.clone(), [min_x, max_x, min_y, max_y]));
+        } else {
+            others.push((range.clone(), [min_x, max_x, min_y, max_y]));
+        }
+    }
+    // Splitting can kink a rectangle, even creating a negative-winding
+    // pocket. Preserve multiplicities wherever such a contour can interact.
+    // Bound the exception scan; general batches keep the ordinary overlay.
+    if others.len() > 64 {
+        return;
+    }
+    let exceptions = others.iter().map(|(_, bounds)| *bounds).collect::<Vec<_>>();
+    let mut rectangles = Vec::with_capacity(candidates.len());
+    for (range, bounds) in candidates {
+        let protected = exceptions.iter().any(|other| {
+            bounds[0] as i128 <= other[1] as i128 + guard as i128
+                && bounds[1] as i128 >= other[0] as i128 - guard as i128
+                && bounds[2] as i128 <= other[3] as i128 + guard as i128
+                && bounds[3] as i128 >= other[2] as i128 - guard as i128
+        });
+        if protected {
+            others.push((range, bounds));
+        } else {
+            rectangles.push(bounds);
+        }
+    }
+    let before = rectangles.len();
+    for _ in 0..2 {
+        rectangles.sort_unstable();
+        let mut kept = 0;
+        for index in 0..rectangles.len() {
+            let rectangle = rectangles[index];
+            if kept > 0
+                && rectangles[kept - 1][0..2] == rectangle[0..2]
+                && rectangle[2] <= rectangles[kept - 1][3]
+            {
+                rectangles[kept - 1][3] = rectangles[kept - 1][3].max(rectangle[3]);
+            } else {
+                rectangles[kept] = rectangle;
+                kept += 1;
+            }
+        }
+        rectangles.truncate(kept);
+        for rectangle in &mut rectangles {
+            let [a, b, c, d] = *rectangle;
+            *rectangle = [c, d, a, b];
+        }
+    }
+    if rectangles.len() == before {
+        return;
+    }
+    let mut merged = FlatContoursBuffer {
+        points: Vec::with_capacity(
+            others.iter().map(|(range, _)| range.len()).sum::<usize>() + 4 * rectangles.len(),
+        ),
+        ranges: Vec::with_capacity(others.len() + rectangles.len()),
+    };
+    for (range, _) in others {
+        let start = merged.points.len();
+        merged.points.extend_from_slice(&buffer.points[range]);
+        merged.ranges.push(start..merged.points.len());
+    }
+    for [min_x, max_x, min_y, max_y] in rectangles {
+        let start = merged.points.len();
+        merged.points.extend([
+            IntPoint::new(min_x, min_y),
+            IntPoint::new(max_x, min_y),
+            IntPoint::new(max_x, max_y),
+            IntPoint::new(min_x, max_y),
+        ]);
+        merged.ranges.push(start..merged.points.len());
+    }
+    *buffer = merged;
 }
 
 /// The vertices of one overlay, indexed to find those lying on an edge.
@@ -205,10 +346,14 @@ impl VertexColumns {
     }
 
     /// Emit `ring` with every edge split at the vertices lying on it.
-    fn split(&self, ring: &[[f64; 2]], mut emit: impl FnMut([f64; 2])) {
+    fn split(
+        &self,
+        ring: &[[f64; 2]],
+        on_edge: &mut Vec<(f64, [f64; 2])>,
+        mut emit: impl FnMut([f64; 2]),
+    ) {
         let reach = ON_EDGE_MM;
         let last = self.columns.len() - 3;
-        let mut on_edge = Vec::new();
         for (index, &[ax, ay]) in ring.iter().enumerate() {
             let [bx, by] = ring[(index + 1) % ring.len()];
             let (dx, dy) = (bx - ax, by - ay);

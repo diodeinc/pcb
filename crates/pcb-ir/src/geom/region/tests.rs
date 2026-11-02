@@ -248,6 +248,27 @@ fn containment_observes_boundaries_and_holes() {
     ] {
         assert_eq!(subject.side_of(&boundary), side, "{:?}", subject.bbox);
     }
+
+    // Interleaved boundary-tree leaves can hold edges of several rings.
+    // Ignoring only some crossings of a ring outside the query point would
+    // give a false winding inside a hole or between disconnected islands.
+    let region = region.union(&block(12.0, 1.0, 15.0, 3.0)).unwrap();
+    let boundary = region.prepare_query();
+    for x in -2..17 {
+        for y in -2..12 {
+            let point = Point::new(f64::from(x) + 0.25, f64::from(y) + 0.75);
+            let expected = ((0.0..10.0).contains(&point.x)
+                && (0.0..10.0).contains(&point.y)
+                && !((4.0..6.0).contains(&point.x) && (4.0..6.0).contains(&point.y)))
+                || ((12.0..15.0).contains(&point.x) && (1.0..3.0).contains(&point.y));
+            assert_eq!(boundary.winding(point) != 0, expected, "{point:?}");
+            assert_eq!(
+                boundary.signed_distance(point).unwrap().mm < 0.0,
+                expected,
+                "{point:?}"
+            );
+        }
+    }
 }
 
 type ExpectedSpan = ((f64, f64), (f64, f64));
@@ -844,6 +865,65 @@ fn union_contains_both_regions_when_a_hole_overlaps_filled_material() {
     assert!((union.area() - 88.0).abs() <= 1e-6);
 }
 
+#[test]
+fn large_rectangle_unions_preserve_holes_islands_and_narrow_gaps() {
+    let rectangle = |x0, y0, x1, y1| vec![[x0, y0], [x1, y0], [x1, y1], [x0, y1]];
+    let rings = vec![
+        rectangle(0.0, 0.0, 1.0, 7.0),
+        rectangle(0.0, 0.0, 9.0, 2.0),
+        rectangle(0.0, 6.0, 9.0, 7.0),
+        rectangle(8.0, 0.0, 9.0, 7.0),
+        rectangle(3.0, 3.0, 4.0, 4.0),
+        rectangle(3.0, 4.01, 4.0, 5.0),
+    ];
+    for copies in [7_990, 8_010] {
+        let mut repeated = rings.clone();
+        repeated.extend(std::iter::repeat_n(rings[0].clone(), copies));
+        let union = ContourSet::from_rings(repeated, FillRule::NonZero, res(1e-6)).unwrap();
+        assert!((union.area() - 36.99).abs() < 1e-7);
+        assert_eq!(union.ring_count(), 4);
+        assert!(union.contains_point(Point::new(0.5, 3.0)));
+        assert!(union.contains_point(Point::new(3.5, 3.5)));
+        assert!(!union.contains_point(Point::new(6.0, 3.0)));
+        assert!(!union.contains_point(Point::new(3.5, 4.005)));
+    }
+
+    // Nearby vertices can kink a rectangle during on-edge splitting. Adding
+    // distant duplicate material must not change those winding pockets. Two
+    // overlapping positive covers must retain their multiplicity around a
+    // negative pocket; zero significance keeps even that tiny hole visible.
+    let mut kinked = rings;
+    kinked.extend([
+        rectangle(5.0, 3.0, 6.0, 4.0),
+        rectangle(6.0 - 2e-7, 3.0 + 7e-7, 6.12, 3.2),
+        rectangle(6.0 - 7e-7, 3.0 + 2e-7, 6.05, 3.3),
+        rectangle(5.9, 2.9, 6.1, 3.1),
+        rectangle(5.9, 2.9, 6.1, 3.1),
+    ]);
+    let control = ContourSet::from_rings(kinked.clone(), FillRule::NonZero, res(0.0)).unwrap();
+    kinked.extend(std::iter::repeat_n(kinked[0].clone(), 8_010));
+    let repeated = ContourSet::from_rings(kinked, FillRule::NonZero, res(0.0)).unwrap();
+    assert_eq!(repeated.to_rings(), control.to_rings());
+}
+
+#[test]
+fn large_rectangle_batches_preserve_signed_and_parity_multiplicity() {
+    let outer = vec![[0.0, 0.0], [9.0, 0.0], [9.0, 7.0], [0.0, 7.0]];
+    let inner = vec![[2.0, 3.0], [4.0, 3.0], [4.0, 6.0], [2.0, 6.0]];
+    let mut rings = vec![outer; 8_002];
+    rings.push(inner);
+    let parity = ContourSet::from_rings(rings.clone(), FillRule::EvenOdd, res(1e-6)).unwrap();
+    assert!((parity.area() - 6.0).abs() < 1e-7);
+    assert!(parity.contains_point(Point::new(3.0, 4.0)));
+    assert!(!parity.contains_point(Point::new(1.0, 1.0)));
+
+    rings.last_mut().unwrap().reverse();
+    let signed = ContourSet::from_rings(rings, FillRule::NonZero, res(1e-6)).unwrap();
+    assert!((signed.area() - 63.0).abs() < 1e-7);
+    assert!(signed.contains_point(Point::new(3.0, 4.0)));
+    assert!(signed.contains_point(Point::new(1.0, 1.0)));
+}
+
 /// Reduced chain of narrow complement pockets from the ControlHub A5
 /// rounded-board/V-score corner. A positive offset must contain every
 /// source point even when all of these holes collapse.
@@ -1150,7 +1230,7 @@ fn mixed_budget_booleans_fail_when_the_coarser_history_does_not_fit() {
 }
 
 #[test]
-fn intersection_and_difference_equal_the_separate_booleans() {
+fn shared_and_indexed_booleans_equal_the_separate_booleans() {
     let resolution = res(tol::REGION_MM);
     let square = |x: f64, y: f64, size: f64| -> Ring {
         vec![[x, y], [x + size, y], [x + size, y + size], [x, y + size]]
@@ -1224,6 +1304,13 @@ fn intersection_and_difference_equal_the_separate_booleans() {
     )
     .unwrap();
     let fine_square = ContourSet::rectangle(rect(0.0, 0.0, 1.0, 1.0), fine);
+    let mut exhausted = fine_square.clone();
+    exhausted.uncertainty_mm = fine.accuracy.max_error_mm();
+    let disjoint = ContourSet::rectangle(rect(4.0, 0.0, 5.0, 1.0), fine);
+    assert!(matches!(
+        exhausted.intersection(&disjoint),
+        Err(AccuracyError::BudgetExceeded { .. })
+    ));
 
     let mut pairs = (0..6)
         .map(|step| (pour.clone(), openings(0.37 * step as f64)))
@@ -1242,6 +1329,8 @@ fn intersection_and_difference_equal_the_separate_booleans() {
         (pour.clone(), lossy_empty.clone()),
         (empty.clone(), empty.clone()),
         (fine_square.clone(), coarse.clone()),
+        (exhausted, disjoint),
+        (pour.clone(), region(vec![square(2.25, 2.25, 0.5)])),
     ]);
     let same = |actual: Result<ContourSet, AccuracyError>,
                 expected: Result<ContourSet, AccuracyError>| match (actual, expected)
@@ -1263,6 +1352,10 @@ fn intersection_and_difference_equal_the_separate_booleans() {
         };
         same(inside, subject.intersection(clip));
         same(outside, subject.difference(clip));
+        same(
+            subject.intersection_with_index(clip, &clip.prepare_query()),
+            subject.intersection(clip),
+        );
     }
 }
 

@@ -199,6 +199,29 @@ impl ContourSet {
         self.boolean(clip, OverlayRule::Intersect)
     }
 
+    /// The same intersection, reusing `clip.prepare_query()` to prove an
+    /// empty result without an overlay. Contact and ambiguous cases use the
+    /// ordinary boolean; even an empty result retains its uncertainty and
+    /// checks the same accuracy budget.
+    /// `boundary` must have been prepared from `clip`.
+    pub fn intersection_with_index(
+        &self,
+        clip: &Self,
+        boundary: &PreparedRegion,
+    ) -> Result<Self, AccuracyError> {
+        if self.side_of(boundary) != Some(false) {
+            return self.intersection(clip);
+        }
+        let numeric = numerical_error(self.bbox.union(clip.bbox));
+        let uncertainty = self.uncertainty_mm.max(clip.uncertainty_mm) + numeric;
+        Self::from_regularized(
+            Vec::new(),
+            self.resolution.meet(clip.resolution),
+            uncertainty,
+        )
+        .checked()
+    }
+
     /// The parts of `self` inside and outside `clip`: exactly
     /// `(self.intersection(clip)?, self.difference(clip)?)`, with each group
     /// of rings the two share overlaid once for both. A ring of `self` that
