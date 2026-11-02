@@ -5928,7 +5928,7 @@ checksum = "6ce2be8dc25455e1f91df71bfa12ad37d7af1092ae736f3a6cd0e37bc7810596"
 [[package]]
 name = "starlark"
 version = "0.14.2"
-source = "git+https://github.com/diodeinc/starlark-rust?rev=5e2d9fddffb0804d7b56eb4ab8114a54b316cea3#5e2d9fddffb0804d7b56eb4ab8114a54b316cea3"
+source = "git+https://github.com/diodeinc/starlark-rust?rev=74312f2a947db8add89c004a3d43ff166bfb4f29#74312f2a947db8add89c004a3d43ff166bfb4f29"
 dependencies = [
  "allocative",
  "anyhow",
@@ -5973,7 +5973,7 @@ dependencies = [
 [[package]]
 name = "starlark_derive"
 version = "0.14.2"
-source = "git+https://github.com/diodeinc/starlark-rust?rev=5e2d9fddffb0804d7b56eb4ab8114a54b316cea3#5e2d9fddffb0804d7b56eb4ab8114a54b316cea3"
+source = "git+https://github.com/diodeinc/starlark-rust?rev=74312f2a947db8add89c004a3d43ff166bfb4f29#74312f2a947db8add89c004a3d43ff166bfb4f29"
 dependencies = [
  "dupe",
  "proc-macro2",
@@ -5984,7 +5984,7 @@ dependencies = [
 [[package]]
 name = "starlark_map"
 version = "0.14.2"
-source = "git+https://github.com/diodeinc/starlark-rust?rev=5e2d9fddffb0804d7b56eb4ab8114a54b316cea3#5e2d9fddffb0804d7b56eb4ab8114a54b316cea3"
+source = "git+https://github.com/diodeinc/starlark-rust?rev=74312f2a947db8add89c004a3d43ff166bfb4f29#74312f2a947db8add89c004a3d43ff166bfb4f29"
 dependencies = [
  "allocative",
  "equivalent",
@@ -5998,7 +5998,7 @@ dependencies = [
 [[package]]
 name = "starlark_syntax"
 version = "0.14.2"
-source = "git+https://github.com/diodeinc/starlark-rust?rev=5e2d9fddffb0804d7b56eb4ab8114a54b316cea3#5e2d9fddffb0804d7b56eb4ab8114a54b316cea3"
+source = "git+https://github.com/diodeinc/starlark-rust?rev=74312f2a947db8add89c004a3d43ff166bfb4f29#74312f2a947db8add89c004a3d43ff166bfb4f29"
 dependencies = [
  "allocative",
  "annotate-snippets",

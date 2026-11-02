@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Fixed
+
+- `json.encode` and `Board()` configs nested more than 32 levels deep now fail with an error instead of crashing.
+
 ## [0.4.97] - 2026-11-01
 
 ### Fixed
