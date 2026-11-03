@@ -167,9 +167,49 @@ pub fn simple_board_array_layout(doc: &Document) -> Option<SimpleBoardArrayLayou
     if root_repeats.next().is_some()
         || array_repeat.nx == 0
         || array_repeat.ny == 0
-        || !simple_array_nearly_zero(array_repeat.angle)
         || array_repeat.mirror
     {
+        return None;
+    }
+
+    // Auto arrays can place their complete, unchanged packing at 90 degrees.
+    // Recognize that rigid wrapper without treating it as a one-cell array.
+    if simple_array_nearly_zero(array_repeat.angle - 90.0)
+        && array_repeat.nx == 1
+        && array_repeat.ny == 1
+    {
+        let packing = doc.layout.steps.get(array_repeat.child_step as usize)?;
+        let instance = layout_repeat_instances(doc, array_repeat).next()?;
+        let transform = doc.layout.instances[instance as usize].transform;
+        let bounds = packing.bbox.transformed(transform);
+        if packing.kind != LayoutStepKind::Panel
+            || !simple_array_nearly_zero(bounds.min.distance_to(array_bbox.min))
+            || !simple_array_nearly_zero(bounds.max.distance_to(array_bbox.max))
+        {
+            return None;
+        }
+        let mut repeats = layout_child_repeats(doc, array_repeat.child_step, Some(instance));
+        let mut repeat = repeats.next()?.clone();
+        if repeats.next().is_some() || !simple_array_nearly_zero(repeat.angle) || repeat.mirror {
+            return None;
+        }
+        repeat.bbox = repeat.bbox.transformed(transform.inverse()?);
+        let mut array = simple_board_cell_array(doc, packing, &repeat)?;
+        std::mem::swap(&mut array.columns, &mut array.rows);
+        std::mem::swap(&mut array.board_width, &mut array.board_height);
+        std::mem::swap(&mut array.pitch_x, &mut array.pitch_y);
+        let rotate = |m: LayoutMargins| LayoutMargins {
+            top: m.right,
+            right: m.bottom,
+            bottom: m.left,
+            left: m.top,
+        };
+        array.board_margin = array.board_margin.map(rotate);
+        array.edge_rail = rotate(array.edge_rail);
+        array.margins = rotate(array.margins);
+        return Some(array);
+    }
+    if !simple_array_nearly_zero(array_repeat.angle) {
         return None;
     }
 

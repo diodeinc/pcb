@@ -64,6 +64,12 @@ host a viewer.
 
 ## Panels and copper balancing
 
+Automatic board arrays (`--auto` or `--sheet`) keep the best packing, then
+orient the complete emitted panel toward a 210 mm height: A7, A6, and A5 are
+portrait; A4 and A3 are landscape. This rigid rotation preserves boards,
+spacing, rails, tooling, routed slots, and balanced copper. Manual arrays keep
+their specified orientation.
+
 Board-array creation balances copper by default; use `--no-copper-balance`
 to disable it. Fabrication-panel creation requires `--copper-balance` to enable
 balancing. Both commands accept either flag, but not both together. See the

@@ -492,9 +492,9 @@ fn auto_create_projects_board_to_the_smallest_or_the_requested_sheet() {
             None,
             "auto",
             "A7",
-            (105.0, 74.0),
+            (74.0, 105.0),
             r#"x="6.5" y="7" nx="4" ny="3""#,
-            ("6.5", "7"),
+            ("7", "6.5"),
             12,
         ),
         (
@@ -525,6 +525,157 @@ fn auto_create_projects_board_to_the_smallest_or_the_requested_sheet() {
         }
 
         assert_array(&xml, width, height, boards);
+    }
+}
+
+#[test]
+fn auto_orientation_preserves_packing_and_all_layer_geometry() {
+    use AutoSheetSize::{A3, A4, A5, A6, A7};
+    use pcb_ir::geom::Affine2;
+    use pcb_ir::geom::attachment::transform_region;
+
+    // Independently specified winning packings for 40 x 30 mm boards with
+    // 5 mm margins. Exercise rotations in both directions around A5, and
+    // already-correct orientations, on every supported sheet.
+    let input = schema_valid_board_fixture_mm()
+        .replace(TOP_LAYER, SURFACE_LAYERS)
+        .replace(
+            &rectangle(-2.0, -3.0, 8.0, 7.0),
+            &rectangle(-2.0, -3.0, 38.0, 27.0),
+        )
+        .replace(
+            "</Profile>",
+            &format!(
+                "</Profile>{}",
+                line_feature("TOP", (1.0, 2.0), (29.0, 17.0), 0.8)
+            ),
+        )
+        .replace(r#"<Datum x="0" y="0"/>"#, r#"<Datum x="3" y="-1"/>"#);
+    let report = plan::plan(&input, None, Resolution::default()).unwrap();
+    for (sheet, grid, rails, output, rotated) in [
+        (A7, (1, 2), (12.0, 12.5), (74.0, 105.0), false),
+        (A6, (2, 2), (24.0, 12.5), (105.0, 148.0), true),
+        (A5, (4, 3), (5.0, 14.0), (148.0, 210.0), true),
+        (A4, (4, 7), (5.0, 8.5), (297.0, 210.0), true),
+        (A3, (8, 7), (10.0, 8.5), (420.0, 297.0), false),
+    ] {
+        for (separation, balanced) in [
+            (Separation::VScore, false),
+            (Separation::MouseBite, false),
+            (Separation::VScore, true),
+        ] {
+            if balanced && sheet != A6 {
+                continue;
+            }
+            let manual = create_board_array(
+                &input,
+                &options(
+                    grid.0,
+                    grid.1,
+                    BoardMarginMm::all(5.0),
+                    BoardMarginMm::new(rails.1, rails.0, rails.1, rails.0),
+                ),
+                balanced,
+                separation,
+                Resolution::default(),
+            )
+            .unwrap();
+            let auto = create_auto_board_array(
+                &input,
+                Some(sheet),
+                balanced,
+                separation,
+                Resolution::default(),
+            )
+            .unwrap();
+            assert_array(&auto.xml, output.0, output.1, (grid.0 * grid.1) as usize);
+            crate::ipc2581::validate(&auto.xml).unwrap();
+            let manual_ipc = Ipc2581::parse(&manual.xml).unwrap();
+            let auto_ipc = Ipc2581::parse(&auto.xml).unwrap();
+            if sheet == A6 {
+                let package =
+                    manufacturing_package(&auto_ipc, ArtworkScope::ArrayFlattened).unwrap();
+                assert_eq!(
+                    gerber(&package, "V_Cut.gbr").is_some(),
+                    separation == Separation::VScore
+                );
+            }
+            let (manual_design, auto_design) = (design(&manual_ipc), design(&auto_ipc));
+            let layout = geometry::extract_layout(&auto_ipc).unwrap();
+            let summary = pcb_ir::dialects::ipc::simple_board_array_layout(&layout).unwrap();
+            let expected_grid = if rotated { (grid.1, grid.0) } else { grid };
+            assert_eq!((summary.columns, summary.rows), expected_grid);
+            let row = report
+                .sheets
+                .iter()
+                .find(|row| row.sheet == sheet.name())
+                .unwrap();
+            assert_eq!((row.width_mm, row.height_mm), output);
+            assert_eq!((row.columns, row.rows), expected_grid);
+
+            let rotation = if rotated {
+                Affine2 {
+                    m00: 0.0,
+                    m01: -1.0,
+                    m02: output.0,
+                    m10: 1.0,
+                    m11: 0.0,
+                    m12: 0.0,
+                }
+            } else {
+                Affine2::IDENTITY
+            };
+            let profile = |design: &ImportedDesign| {
+                let doc = &design.geometry;
+                let (_, root) = pcb_ir::dialects::ipc::root_panel_step(doc).unwrap();
+                let contours = root
+                    .profiles
+                    .slice(&doc.profiles)
+                    .iter()
+                    .flat_map(|profile| {
+                        std::iter::once(profile.outer_path)
+                            .chain(
+                                profile
+                                    .cutouts
+                                    .slice(&doc.profile_cutouts)
+                                    .iter()
+                                    .map(|cutout| cutout.path),
+                            )
+                            .flat_map(|path| doc.transformed_path_contours(path, Affine2::IDENTITY))
+                    })
+                    .collect::<Vec<_>>();
+                ContourSet::from_contours(&contours, FillRule::EvenOdd, Resolution::default())
+                    .unwrap()
+            };
+            let expected = transform_region(&profile(&manual_design), rotation).unwrap();
+            let actual = profile(&auto_design);
+            assert!(
+                expected.difference(&actual).unwrap().area()
+                    + actual.difference(&expected).unwrap().area()
+                    < 0.1,
+                "{sheet:?} {separation:?}: routed profile changed"
+            );
+            for layer in &manual_design.layer_definitions {
+                let name = manual_design.resolve(layer.name);
+                let image = |design: &ImportedDesign| {
+                    design
+                        .composed_layer_image(
+                            design.layer_id(name).unwrap(),
+                            ArtworkScope::ArrayFlattened,
+                            Resolution::default(),
+                        )
+                        .unwrap()
+                };
+                let expected = transform_region(&image(&manual_design), rotation).unwrap();
+                let actual = image(&auto_design);
+                let difference = expected.difference(&actual).unwrap().area()
+                    + actual.difference(&expected).unwrap().area();
+                assert!(
+                    difference < 0.1,
+                    "{sheet:?} {separation:?} {name}: {difference} mm² changed"
+                );
+            }
+        }
     }
 }
 
@@ -572,7 +723,7 @@ fn auto_create_allows_large_leftover_edge_rails() {
         r#"<StepRepeat stepRef="board_cell" x="38" y="14" nx="1" ny="1" dx="134" dy="120" angle="0.00" mirror="false"/>"#
     ));
 
-    assert_array(&xml, 210.0, 148.0, 1);
+    assert_array(&xml, 148.0, 210.0, 1);
 }
 
 #[test]

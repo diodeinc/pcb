@@ -122,6 +122,8 @@ pub type BoardMarginMm = super::EdgeInsetsMm;
 #[derive(Debug, Clone)]
 struct BoardArraySpec {
     array_name: String,
+    /// An unchanged packed array nested under a rotated output Step.
+    packed_array_name: Option<String>,
     board_cell_name: String,
     board_name: String,
     vcut_spec_name: Option<String>,
@@ -435,8 +437,12 @@ fn board_courtyard_bbox(ipc: &Ipc2581, imported: &ImportedDesign) -> Result<BBox
 /// The source `doc` indexes with the array spliced in: one parse serves the
 /// board-array patch and the history append of every pass, and all edits of a
 /// pass splice at once.
-fn board_array_edited_xml(doc: &ipc2581::edit::Doc<'_>, spec: &BoardArraySpec) -> Result<String> {
-    let mut edits = board_array_edits(doc, spec)?;
+fn board_array_edited_xml(
+    doc: &ipc2581::edit::Doc<'_>,
+    spec: &BoardArraySpec,
+    orient: bool,
+) -> Result<String> {
+    let mut edits = board_array_edits(doc, spec, orient)?;
     edits.extend(crate::utils::history::file_revision_edits(
         doc,
         "Created board array",
@@ -445,7 +451,7 @@ fn board_array_edited_xml(doc: &ipc2581::edit::Doc<'_>, spec: &BoardArraySpec) -
 }
 
 fn finished_board_array_xml(doc: &ipc2581::edit::Doc<'_>, spec: &BoardArraySpec) -> Result<String> {
-    let xml = board_array_edited_xml(doc, spec)?;
+    let xml = board_array_edited_xml(doc, spec, true)?;
     let xml = crate::utils::format::reformat_xml(&xml)?;
 
     Ipc2581::parse(&xml).context("Generated IPC-2581 board array XML did not parse")?;
@@ -463,7 +469,9 @@ fn write_board_array_creation(
     if balance_copper {
         // The provisional array only feeds safe-region discovery; parsing it
         // below already validates it, so skip the cosmetic reformat pass.
-        let provisional_xml = board_array_edited_xml(&doc, &spec)?;
+        // Solve in the original packing frame, then rotate the complete
+        // result at emission, including the balancing lattice and artwork.
+        let provisional_xml = board_array_edited_xml(&doc, &spec, false)?;
         let provisional = Ipc2581::parse(&provisional_xml)
             .context("Failed to parse provisional IPC-2581 board array")?;
         let balance = balance::generate_automatic_board_array_copper_balance(
@@ -687,9 +695,20 @@ fn build_board_array_spec(
     let content_step_refs = content_step_refs(ipc, &array_name, &board_cell_name, &board_name);
     let content_layer_refs =
         content_layer_refs(ipc, &generated_geometry, &board_outline_layer_names);
+    let target = panelization
+        .sheet
+        .map(|(_, target)| target)
+        .unwrap_or(TargetSizeMm {
+            width: array_width,
+            height: array_height,
+        });
+    let packed_array_name = (mode != BoardArrayPanelizationMode::Manual
+        && target != target.output_orientation())
+    .then(|| reserve_unique_name(&mut used_step_names, "array_packing"));
 
     Ok(BoardArraySpec {
         array_name,
+        packed_array_name,
         board_cell_name,
         board_name,
         vcut_spec_name,
