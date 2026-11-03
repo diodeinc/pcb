@@ -17,15 +17,20 @@ use ipc2581::write::fmt_units;
 /// The board-array changes as byte-range edits against the source document:
 /// Content step/layer refs, generated CadHeader specs, generated layers,
 /// board-outline removal, and the generated board-cell/array steps.
-pub(super) fn board_array_edits(doc: &Doc, spec: &BoardArraySpec) -> Result<Vec<Edit>> {
-    let generated_steps_xml = write_generated_steps_xml(spec)?;
+pub(super) fn board_array_edits(
+    doc: &Doc,
+    spec: &BoardArraySpec,
+    orient: bool,
+) -> Result<Vec<Edit>> {
+    let packed_name = spec.packed_array_name.as_deref().filter(|_| orient);
+    let generated_steps_xml = write_generated_steps_xml(spec, packed_name)?;
     let root = doc.root()?;
     let mut edits = Vec::new();
 
     // Content: drop existing StepRef/LayerRef entries and write the array's
     // refs right after FunctionMode (or at the end of Content).
     if let Some(content) = doc.child(root, "Content") {
-        let refs_xml = write_content_refs_xml(spec);
+        let refs_xml = write_content_refs_xml(spec, packed_name);
         let mut function_mode = None;
         for child in doc.children(content) {
             match doc.name(child) {
@@ -92,10 +97,13 @@ pub(super) fn board_array_edits(doc: &Doc, spec: &BoardArraySpec) -> Result<Vec<
     Ok(edits)
 }
 
-fn write_content_refs_xml(spec: &BoardArraySpec) -> String {
+fn write_content_refs_xml(spec: &BoardArraySpec, packed_name: Option<&str>) -> String {
     let mut writer = XmlWriter::new();
     for step_ref in &spec.content_step_refs {
         write::step_ref(&mut writer, step_ref);
+    }
+    if let Some(name) = packed_name {
+        write::step_ref(&mut writer, name);
     }
     for layer_ref in &spec.content_layer_refs {
         write::layer_ref(&mut writer, layer_ref);
@@ -138,7 +146,7 @@ fn write_generated_layers_xml(geometry: &BoardArrayGeneratedGeometry) -> String 
 
 /// The board-cell Step, one board in its margin, then the array Step that
 /// repeats it.
-fn write_generated_steps_xml(spec: &BoardArraySpec) -> Result<String> {
+fn write_generated_steps_xml(spec: &BoardArraySpec, packed_name: Option<&str>) -> Result<String> {
     let mut writer = XmlWriter::new();
     let (units, grid) = (spec.units, &spec.grid);
 
@@ -166,9 +174,14 @@ fn write_generated_steps_xml(spec: &BoardArraySpec) -> Result<String> {
 
     writer.start_element(
         "Step",
-        &[("name", spec.array_name.as_str()), ("type", "PALLET")],
+        &[
+            ("name", packed_name.unwrap_or(&spec.array_name)),
+            ("type", "PALLET"),
+        ],
     );
-    write_panelization_metadata(&mut writer, spec);
+    if packed_name.is_none() {
+        write_panelization_metadata(&mut writer, spec, false);
+    }
     write::location(&mut writer, "Datum", 0.0, 0.0, units);
     write::profile_with_cutouts(
         &mut writer,
@@ -192,10 +205,66 @@ fn write_generated_steps_xml(spec: &BoardArraySpec) -> Result<String> {
     write_generated_layer_features(&mut writer, spec, GeneratedFeatureScope::Array)?;
     writer.end_element("Step");
 
+    if let Some(packed_name) = packed_name {
+        // A native IPC placement rotates the entire finished panel intact,
+        // including source boards, routed cutouts, tooling, and balance copper.
+        writer.start_element(
+            "Step",
+            &[("name", spec.array_name.as_str()), ("type", "PALLET")],
+        );
+        write_panelization_metadata(&mut writer, spec, true);
+        write::location(&mut writer, "Datum", 0.0, 0.0, units);
+        let cutouts = spec
+            .profile_cutouts
+            .iter()
+            .map(|polygon| rotated_polygon(polygon, grid.array_height_mm))
+            .collect::<Vec<_>>();
+        write::profile_with_cutouts(
+            &mut writer,
+            units,
+            &rounded_rectangle_polygon(
+                grid.array_height_mm,
+                grid.array_width_mm,
+                ARRAY_CORNER_RADIUS_MM,
+            ),
+            &cutouts,
+        );
+        write_step_repeat(
+            &mut writer,
+            units,
+            packed_name,
+            (grid.array_height_mm, 0.0),
+            (1, 1),
+            (0.0, 0.0),
+            "90.00",
+        );
+        writer.end_element("Step");
+    }
+
     Ok(writer.into_string())
 }
 
-fn write_panelization_metadata(writer: &mut XmlWriter, spec: &BoardArraySpec) {
+fn rotated_polygon(polygon: &Polygon, height: f64) -> Polygon {
+    let rotate = |point: IpcPoint| IpcPoint {
+        x: height - point.y,
+        y: point.x,
+    };
+    Polygon::new(
+        rotate(polygon.begin()),
+        polygon.steps().map(|step| match step {
+            PolyStep::Segment(segment) => PolyStep::Segment(PolyStepSegment {
+                point: rotate(segment.point),
+            }),
+            PolyStep::Curve(curve) => PolyStep::Curve(PolyStepCurve {
+                point: rotate(curve.point),
+                center: rotate(curve.center),
+                clockwise: curve.clockwise,
+            }),
+        }),
+    )
+}
+
+fn write_panelization_metadata(writer: &mut XmlWriter, spec: &BoardArraySpec, rotated: bool) {
     let string = |writer: &mut XmlWriter, name: &str, value: &str| {
         write_nonstandard_attribute(writer, name, "STRING", value)
     };
@@ -210,6 +279,11 @@ fn write_panelization_metadata(writer: &mut XmlWriter, spec: &BoardArraySpec) {
         spec.panelization.mode.as_str(),
     );
     if let Some((sheet, target)) = spec.panelization.sheet {
+        let target = if rotated {
+            target.output_orientation()
+        } else {
+            target
+        };
         string(writer, "diode.panelize.sheet", sheet.name());
         write_double_attribute(writer, "diode.panelize.sheet_width_mm", target.width);
         write_double_attribute(writer, "diode.panelize.sheet_height_mm", target.height);
@@ -223,12 +297,33 @@ fn write_panelization_metadata(writer: &mut XmlWriter, spec: &BoardArraySpec) {
         let tabs = spec.tabs_per_board as u32;
         integer(writer, "diode.panelize.tabs_per_board", tabs);
     }
-    integer(writer, "diode.panelize.columns", spec.grid.columns);
-    integer(writer, "diode.panelize.rows", spec.grid.rows);
+    integer(
+        writer,
+        "diode.panelize.columns",
+        if rotated {
+            spec.grid.rows
+        } else {
+            spec.grid.columns
+        },
+    );
+    integer(
+        writer,
+        "diode.panelize.rows",
+        if rotated {
+            spec.grid.columns
+        } else {
+            spec.grid.rows
+        },
+    );
     for (prefix, margin) in [
         ("board_margin", spec.board_margin_mm),
         ("edge_rail", spec.edge_rail_mm),
     ] {
+        let margin = if rotated {
+            margin.rotated_ccw()
+        } else {
+            margin
+        };
         for (side, value) in margin.sides() {
             write_double_attribute(writer, &format!("diode.panelize.{prefix}_{side}_mm"), value);
         }

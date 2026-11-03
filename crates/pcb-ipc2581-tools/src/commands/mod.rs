@@ -108,4 +108,8 @@ impl EdgeInsetsMm {
     pub(crate) fn vertical_sum(self) -> f64 {
         self.top + self.bottom
     }
+
+    pub(crate) fn rotated_ccw(self) -> Self {
+        Self::new(self.right, self.bottom, self.left, self.top)
+    }
 }

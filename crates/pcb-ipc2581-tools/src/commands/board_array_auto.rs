@@ -65,6 +65,22 @@ pub struct TargetSizeMm {
     pub height: f64,
 }
 
+impl TargetSizeMm {
+    /// Prefer a height near A5's 210 mm: smaller sheets stand upright,
+    /// larger sheets lie horizontally. This is applied after packing.
+    pub fn output_orientation(self) -> Self {
+        let portrait = self.width.max(self.height) <= 210.0;
+        if (self.height >= self.width) == portrait {
+            self
+        } else {
+            Self {
+                width: self.height,
+                height: self.width,
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct AutoBoardArrayPlan {
     pub sheet: AutoSheetSize,

@@ -57,18 +57,26 @@ pub fn plan(xml: &str, order: Option<Order>, resolution: Resolution) -> Result<P
     let plans = auto_board_array_plans(width, height, margin);
     let sheets = plans
         .iter()
-        .map(|plan| SheetRow {
-            sheet: plan.sheet.name(),
-            width_mm: plan.target.width,
-            height_mm: plan.target.height,
-            columns: plan.columns,
-            rows: plan.rows,
-            boards: plan.boards(),
-            utilization: outline_area * plan.boards() as f64 / plan.area_mm2(),
-            area_per_board_mm2: plan.area_mm2() / plan.boards() as f64,
-            grid_limited: plan.grid_limited,
-            edge_rail_mm: plan.edge_rail_mm,
-            order: order.map(|order| order.on(plan)),
+        .map(|plan| {
+            let target = plan.target.output_orientation();
+            let rotated = target != plan.target;
+            SheetRow {
+                sheet: plan.sheet.name(),
+                width_mm: target.width,
+                height_mm: target.height,
+                columns: if rotated { plan.rows } else { plan.columns },
+                rows: if rotated { plan.columns } else { plan.rows },
+                boards: plan.boards(),
+                utilization: outline_area * plan.boards() as f64 / plan.area_mm2(),
+                area_per_board_mm2: plan.area_mm2() / plan.boards() as f64,
+                grid_limited: plan.grid_limited,
+                edge_rail_mm: if rotated {
+                    plan.edge_rail_mm.rotated_ccw()
+                } else {
+                    plan.edge_rail_mm
+                },
+                order: order.map(|order| order.on(plan)),
+            }
         })
         .collect();
 
