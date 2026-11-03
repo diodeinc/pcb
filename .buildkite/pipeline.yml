@@ -89,6 +89,9 @@ steps:
       cargo nextest run --locked --workspace --profile ci
       cargo test --locked --workspace --doc
 
+      # Reuse nextest's binaries for installed-toolchain and scaffolding coverage.
+      bash .buildkite/test-cli.sh
+
       # Keep the library-only build contract without rerunning the same tests.
       cargo check --locked --lib --no-default-features -p pcb-step -p pcb-ipc2581-tools
     artifact_paths: target/nextest/ci/junit.xml
