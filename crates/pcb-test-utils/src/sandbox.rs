@@ -638,6 +638,16 @@ impl Sandbox {
         if let Ok(path) = std::env::var("PATH") {
             env_map.insert("PATH".into(), path);
         }
+        // Toolchain paths aren't user configuration: Nix installs KiCad outside /usr/bin.
+        for key in [
+            "KICAD_CLI",
+            "KICAD_PYTHON_INTERPRETER",
+            "KICAD_PYTHON_SITE_PACKAGES",
+        ] {
+            if let Ok(value) = std::env::var(key) {
+                env_map.insert(key.into(), value);
+            }
+        }
         env_map.insert(
             "GIT_CONFIG_GLOBAL".into(),
             self.gitconfig.to_string_lossy().into_owned(),

@@ -59,46 +59,44 @@ steps:
     timeout_in_minutes: 10
     command: *lint-checks
 
-  - label: ":rust: Manufacturing core and STEP"
-    key: core
+  - label: ":rust: Workspace tests"
+    key: tests
     if: build.branch != pipeline.default_branch
-    # Broad Rust inputs deliberately cover new path dependencies and shared fixtures, too.
     if_changed:
       - crates/**
+      - lib/**
+      - examples/**
+      - test-workspaces/**
       - Cargo.{toml,lock}
       - .cargo/**
       - rust-toolchain{,.toml}
       - .config/nextest.toml
       - flake.{nix,lock}
       - .buildkite/**
-    timeout_in_minutes: 5
-    command: &core-checks |
+    timeout_in_minutes: 20
+    env: &test-env
+      CARGO_INCREMENTAL: "0"
+      RUST_LOG: debug
+      RUST_BACKTRACE: full
+    command: &rust-tests |
       set -euo pipefail
 
-      # Native manufacturing and STEP libraries: no KiCad, compiler, GUI or network fixtures.
-      packages=(
-        -p pcb-ir
-        -p ipc2581
-        -p gerberx2
-        -p pcb-sexpr
-        -p pcb-intern
-        -p newstroke
-        -p pcb-step
-        -p pcb-ipc2581-tools
-      )
-      args=(--locked --no-default-features --features pcb-sexpr/serde "${packages[@]}")
+      # Snapshot normalization expects the conventional Linux temporary directory.
+      export TMPDIR=/tmp
+      cargo nextest run --locked --workspace --profile ci
+      cargo test --locked --workspace --doc
 
-      # Workspace lint owns Clippy; keep the minimal-feature build exercised by these tests.
-      cargo nextest run "${args[@]}" --profile ci
-      cargo test "${args[@]}" --doc
+      # Keep the library-only build contract without rerunning the same tests.
+      cargo check --locked --lib --no-default-features -p pcb-step -p pcb-ipc2581-tools
     artifact_paths: target/nextest/ci/junit.xml
 
   # if + if_changed is AND; always check the default branch.
-  - label: ":rust: Manufacturing core and STEP"
-    key: core-main
+  - label: ":rust: Workspace tests"
+    key: tests-main
     if: build.branch == pipeline.default_branch
-    timeout_in_minutes: 5
-    command: *core-checks
+    timeout_in_minutes: 20
+    env: *test-env
+    command: *rust-tests
     artifact_paths: target/nextest/ci/junit.xml
 
   - label: ":python: Python checks"

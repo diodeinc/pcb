@@ -22,7 +22,6 @@ jobs:
   test:
     name: Test (${{ matrix.config.name }})
     runs-on: ${{ matrix.config.runs-on }}
-    container: ${{ matrix.config.container }}
     timeout-minutes: 20
     strategy:
       fail-fast: false
@@ -32,46 +31,14 @@ jobs:
             runs-on: blacksmith-16vcpu-windows-2025
           - name: macOS
             runs-on: blacksmith-6vcpu-macos-15
-          - name: Ubuntu
-            runs-on: blacksmith-16vcpu-ubuntu-2404
-            container:
-              image: debian:trixie-slim
-              options: --user root
     steps:
       - name: Enable Windows long paths
         if: runner.os == 'Windows'
         run: git config --global core.longpaths true
 
-      - name: Cache APT packages (Ubuntu)
-        if: matrix.config.name == 'Ubuntu'
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: /tmp/apt-cache/archives
-          key: apt-${{ runner.os }}-${{ runner.arch }}-debian-trixie-ca-certificates-curl-build-essential-pkg-config-git-diode-kicad
-          restore-keys: |
-            apt-${{ runner.os }}-${{ runner.arch }}-debian-trixie-
-
-      - name: Install Dependencies (Ubuntu)
-        if: matrix.config.name == 'Ubuntu'
-        run: |
-          apt_cache_dir=/tmp/apt-cache/archives
-          mkdir -p "$apt_cache_dir/partial"
-          apt-get -o Dir::Cache::archives="$apt_cache_dir/" update
-          apt-get -o Dir::Cache::archives="$apt_cache_dir/" install -y --no-install-recommends ca-certificates curl build-essential pkg-config git
-
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-
-      - name: Install KiCad from the Diode APT repository
-        if: matrix.config.name == 'Ubuntu'
-        run: |
-          apt_cache_dir=/tmp/apt-cache/archives
-          install -m 0644 .github/diode-kicad-archive-keyring.asc /usr/share/keyrings/diode-kicad-archive-keyring.asc
-          echo "deb [signed-by=/usr/share/keyrings/diode-kicad-archive-keyring.asc] https://kicad-mirror.api.diode.computer/apt trixie main" \
-            > /etc/apt/sources.list.d/diode-kicad.list
-          apt-get -o Dir::Cache::archives="$apt_cache_dir/" update
-          apt-get -o Dir::Cache::archives="$apt_cache_dir/" install -y --no-install-recommends kicad
 
       - name: Remove unused Homebrew taps (macOS)
         if: runner.os == 'macOS'
@@ -132,11 +99,3 @@ jobs:
           RUST_LOG: debug
           RUST_BACKTRACE: full
         run: cargo nextest run --workspace --profile ci --locked
-
-      # Doctests are platform-independent; one OS is enough.
-      - name: Run doctests
-        if: matrix.config.name == 'Ubuntu'
-        env:
-          RUST_LOG: debug
-          RUST_BACKTRACE: full
-        run: cargo test --doc --workspace --locked
