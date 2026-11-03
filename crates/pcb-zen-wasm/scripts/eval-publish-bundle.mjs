@@ -147,6 +147,7 @@ function run(command, commandArgs, options = {}) {
   if (result.status !== 0) {
     throw new Error(`${command} exited with status ${result.status}`)
   }
+  return result.stdout
 }
 
 function publishBundle(args) {
@@ -161,15 +162,18 @@ function publishBundle(args) {
     ...excludedArtifacts.flatMap((artifact) => ['--exclude', artifact]),
   ])
 
-  const after = newestReleaseZip(args.publish)
+  const workspace = JSON.parse(run(args.pcbc, [
+    ...args.pcbcArgs,
+    'info', '--format', 'json', args.publish,
+  ]))
+  const after = newestReleaseZip(workspace.root)
   if (!after) {
     throw new Error(`Could not find new release zip for ${args.publish}`)
   }
   return after
 }
 
-function newestReleaseZip(zenPath) {
-  const workspaceRoot = findWorkspaceRoot(path.resolve(zenPath))
+function newestReleaseZip(workspaceRoot) {
   if (!workspaceRoot) {
     return undefined
   }
@@ -186,22 +190,6 @@ function newestReleaseZip(zenPath) {
     .map((name) => path.join(releasesDir, name))
     .map((file) => ({ file, mtimeMs: statSync(file).mtimeMs }))
     .sort((a, b) => b.mtimeMs - a.mtimeMs)[0]?.file
-}
-
-function findWorkspaceRoot(start) {
-  let dir = statSync(start).isDirectory() ? start : path.dirname(start)
-  while (true) {
-    try {
-      statSync(path.join(dir, 'pcb.toml'))
-      return dir
-    } catch {}
-
-    const parent = path.dirname(dir)
-    if (parent === dir) {
-      return undefined
-    }
-    dir = parent
-  }
 }
 
 async function loadWasm(wasmBundle) {

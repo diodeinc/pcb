@@ -160,6 +160,7 @@
                 "rustfmt"
                 "clippy"
               ];
+              targets = [ "wasm32-unknown-unknown" ];
             }
           );
         in
@@ -173,6 +174,9 @@
                 pkgs.uv
                 pkgs.ruff
                 pkgs.ty
+                pkgs.nodejs_24
+                pkgs.wasm-pack
+                pkgs.zstd
               ]
               # Tests bring their own 3D fixtures; omit the stock model library.
               ++ lib.optionals pkgs.stdenv.hostPlatform.isLinux [

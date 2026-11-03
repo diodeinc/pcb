@@ -1,7 +1,12 @@
 # pcb-zen-wasm
 
-`pcb-zen-wasm` exposes the Zener evaluator to browser applications through
-WebAssembly.
+`pcb-zen-wasm` is an internal build-and-test target for the Zener evaluator's
+WebAssembly compatibility. It is not published to npm or crates.io.
+
+Buildkite builds the WASM bindings and evaluates a locally published fixture
+with Node.js, checking module/stdlib resolution and JavaScript serialization.
+This reuses the native compiler built by the workspace tests and needs no
+private boards or service-account credentials.
 
 Results are ordinary JavaScript values (`number`, object, array, `null`).
 Values outside `Number.MAX_SAFE_INTEGER` follow JavaScript Number precision.
