@@ -2171,6 +2171,9 @@ name = "i_key_sort"
 version = "0.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "14269ee362009550495e20650ff3c2bca14a8147fe251e216760381ffed90b6f"
+dependencies = [
+ "rayon",
+]
 
 [[package]]
 name = "i_overlay"
@@ -2182,6 +2185,7 @@ dependencies = [
  "i_key_sort",
  "i_shape",
  "i_tree",
+ "rayon",
 ]
 
 [[package]]

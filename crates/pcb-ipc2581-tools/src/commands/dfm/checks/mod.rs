@@ -934,10 +934,12 @@ fn ratio_finding(rule: &Rule, measured: RatioMeasured, maximum: f64) -> Finding 
 /// `conductor`'s copper without those of `lands` that belong to it, or
 /// `None` when none does. A land is cut from its own conductor only, so
 /// another owner's copper under it is still measured.
+/// When `window` is supplied, only queries confined to it are valid.
 pub(super) fn without_own_lands<'a>(
     conductor: &CopperConductor,
     lands: impl IntoIterator<Item = &'a Land>,
     resolution: Resolution,
+    window: Option<BBox>,
 ) -> anyhow::Result<Option<ContourSet>> {
     let mut own = lands
         .into_iter()
@@ -961,7 +963,13 @@ pub(super) fn without_own_lands<'a>(
         return Ok(None);
     }
     let mut composer = PaintComposer::new(resolution);
-    composer.push(Polarity::Dark, conductor.image.clone());
+    composer.push(
+        Polarity::Dark,
+        window.map_or_else(
+            || conductor.image.clone(),
+            |window| conductor.image.reaching(window),
+        ),
+    );
     for land in own {
         composer.push(Polarity::Clear, land.clone());
     }

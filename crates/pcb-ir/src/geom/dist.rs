@@ -58,16 +58,20 @@ impl Distance {
 /// Distance from a point to a closed segment, with the closest point on the
 /// segment.
 pub fn point_segment(point: Point, start: Point, end: Point) -> (f64, Point) {
+    let closest = project(point, start, end);
+    (point.distance_to(closest), closest)
+}
+
+fn project(point: Point, start: Point, end: Point) -> Point {
     let delta = end - start;
     let length_squared = delta.x * delta.x + delta.y * delta.y;
-    let closest = if length_squared == 0.0 {
+    if length_squared == 0.0 {
         start
     } else {
         let t = (((point.x - start.x) * delta.x + (point.y - start.y) * delta.y) / length_squared)
             .clamp(0.0, 1.0);
         start + delta * t
-    };
-    (point.distance_to(closest), closest)
+    }
 }
 
 /// Distance between two closed segments, with the closest point on each.
@@ -81,23 +85,28 @@ pub fn segments(
     if let Some(point) = crossing_point(first_start, first_end, second_start, second_end) {
         return (0.0, point, point);
     }
-    let to_second = |end: Point| {
-        let (distance, closest) = point_segment(end, second_start, second_end);
-        (distance, end, closest)
-    };
-    let to_first = |end: Point| {
-        let (distance, closest) = point_segment(end, first_start, first_end);
-        (distance, closest, end)
-    };
-    [
-        to_second(first_start),
-        to_second(first_end),
-        to_first(second_start),
-        to_first(second_end),
-    ]
-    .into_iter()
-    .min_by(|left, right| left.0.total_cmp(&right.0))
-    .expect("four segment endpoint candidates")
+    let (distance, closest) = point_segment(first_start, second_start, second_end);
+    let mut nearest = (distance, first_start, closest);
+    for (first, second) in [
+        (first_end, project(first_end, second_start, second_end)),
+        (project(second_start, first_start, first_end), second_start),
+        (project(second_end, first_start, first_end), second_end),
+    ] {
+        let delta = first - second;
+        // Either coordinate is an exact lower bound on the norm. Keep the
+        // same distance calculation and endpoint order for every possible winner/tie.
+        if delta.x.is_finite()
+            && delta.y.is_finite()
+            && delta.x.abs().max(delta.y.abs()) > nearest.0
+        {
+            continue;
+        }
+        let distance = first.distance_to(second);
+        if distance.total_cmp(&nearest.0).is_lt() {
+            nearest = (distance, first, second);
+        }
+    }
+    nearest
 }
 
 /// The intersection of two properly crossing segments. Touching, collinear,

@@ -42,7 +42,8 @@ pub(super) fn evaluate(
                 .iter()
                 .flat_map(ring_edges)
                 .any(|(start, end)| {
-                    design.copper_boundaries[index]
+                    copper
+                        .boundary
                         .segment_nearest_within(start, end, tol::REGION_MM)
                         .is_some_and(|distance| distance.mm <= tol::REGION_MM)
                 });

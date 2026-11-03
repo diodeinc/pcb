@@ -73,7 +73,11 @@ pub(super) fn evaluate(
     }
     let copper_layers = &design.copper_layers;
     let hole_lands = &design.hole_lands;
-    let boundaries = &design.copper_boundaries;
+    let cached_enclosures = design.annular_enclosures.get_or_init(|| {
+        (0..design.holes.len() * copper_layers.len())
+            .map(|_| std::sync::OnceLock::new())
+            .collect()
+    });
     #[cfg(not(target_family = "wasm"))]
     let layers = copper_layers.par_iter();
     #[cfg(target_family = "wasm")]
@@ -109,25 +113,30 @@ pub(super) fn evaluate(
                         .iter()
                         .find(|link| link.copper_index as usize == copper_index)
                         .map(|link: &HoleLand| &copper.lands[link.land_index as usize]);
-                    let in_copper = boundaries[copper_index].winding(hole.center) != 0;
+                    let &(in_copper, enclosure) = cached_enclosures
+                        [hole_index * copper_layers.len() + copper_index]
+                        .get_or_init(|| {
+                            let boundary = &copper.boundary;
+                            let inside = boundary.contains_regular_point(hole.center);
+                            let enclosure = inside.then(|| {
+                                boundary.circular_enclosure(hole.center, radius, f64::INFINITY)
+                            }).flatten();
+                            (inside, enclosure)
+                        });
                     let required = land.is_some() || hole.drill_span.terminates_on(copper_index);
                     (in_copper || required).then_some((
-                        copper_index,
                         RingSubject {
                             copper,
                             ring_index: &ring_indices[copper_index],
                             land,
                             in_copper,
                         },
+                        if in_copper {
+                            enclosure.filter(|distance| distance.mm <= limit_mm + tol::EPSILON_MM)
+                        } else {
+                            Some(Distance::exact(0.0, hole.center, hole.center))
+                        },
                     ))
-                })
-                .map(|(copper_index, subject)| {
-                    let enclosure = if subject.in_copper {
-                        boundaries[copper_index].circular_enclosure(hole.center, radius, limit_mm)
-                    } else {
-                        Some(Distance::exact(0.0, hole.center, hole.center))
-                    };
-                    (subject, enclosure)
                 })
                 .collect::<Vec<_>>();
             let mut worst = enclosures
@@ -460,6 +469,35 @@ limit = { minimum = "0.2 mm" }"#,
 
         assert_eq!(evaluation.checked, 2);
         assert!(evaluation.measured.is_empty());
+    }
+
+    #[test]
+    fn passing_annular_minimum_does_not_hide_a_larger_preferred_ring() {
+        let pdk = fixtures::pdk(
+            r#"[[rules.copper.annular_ring]]
+id = "ring"
+select = { hole = "pth" }
+limit = { minimum = "0.4 mm", preferred = "0.6 mm" }"#,
+        );
+        let report = fixtures::report(
+            &board_xml(3, &[0, 2], None),
+            &pdk,
+            crate::LayoutTarget::Board,
+        );
+        let ring_findings = report
+            .findings
+            .iter()
+            .filter(|finding| finding.rule_id.starts_with("ring"))
+            .collect::<Vec<_>>();
+        assert_eq!(ring_findings.len(), 1);
+        let finding = ring_findings[0];
+        assert_eq!(finding.rule_id, "ring.preferred");
+        assert_eq!(finding.measurement.actual_mm(), Some(0.5));
+        assert_eq!(finding.sites.len(), 2);
+        for site in &finding.sites {
+            assert_eq!(site.measurement.actual_mm(), Some(0.5));
+            assert!(site.layers.iter().all(|layer| layer.name != "L1"));
+        }
     }
 
     #[test]

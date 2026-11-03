@@ -113,8 +113,9 @@ impl PreparedRegion {
     /// `d(center, boundary)`, so the enclosure is that distance minus the
     /// cutout radius: signed, negative by the depth the cutout breaches the
     /// material. The witnesses are the cutout boundary and the material
-    /// boundary along the nearest direction. `None` means the enclosure
-    /// exceeds `max_enclosure_mm`.
+    /// boundary along a nearest direction; equally close directions need not
+    /// select the same witness. `None` means the enclosure exceeds
+    /// `max_enclosure_mm`.
     pub fn circular_enclosure(
         &self,
         center: Point,
@@ -122,7 +123,7 @@ impl PreparedRegion {
         max_enclosure_mm: f64,
     ) -> Option<Distance> {
         let search = (cutout_radius_mm + max_enclosure_mm).max(0.0);
-        let nearest = self.canonical_nearest_within(center, search)?;
+        let nearest = self.nearest_within(center, search)?;
         let direction = nearest.second - center;
         let direction = if direction.length() <= f64::EPSILON {
             Point::new(1.0, 0.0)
@@ -201,6 +202,31 @@ pub fn region_clearance_within(
         return None;
     }
 
+    // Preserve the source-order nearest witnesses. If the boundaries are
+    // separated, winding is constant along each ring; one point per ring
+    // can then exclude containment without querying every vertex.
+    let nearest = first_boundary
+        .segments_meeting(second.bbox.expand(maximum_mm + tol::EPSILON_MM))
+        .filter_map(|(first_start, first_end)| {
+            second_boundary
+                .segment_nearest_within(first_start, first_end, maximum_mm)
+                .map(|distance| distance.also_uncertain(first.uncertainty_mm))
+        })
+        .min_by(|left, right| left.mm.total_cmp(&right.mm));
+    let guard =
+        crate::geom::accuracy::numerical_error(first.bbox.union(second.bbox)) + tol::EPSILON_MM;
+    if maximum_mm > guard
+        && nearest.is_none_or(|distance| distance.mm > guard)
+        && first
+            .rings()
+            .all(|ring| !second_boundary.contains_regular_point(Point::new(ring[0][0], ring[0][1])))
+        && second
+            .rings()
+            .all(|ring| !first_boundary.contains_regular_point(Point::new(ring[0][0], ring[0][1])))
+    {
+        return nearest;
+    }
+
     // Every vertex starts one boundary edge, so a region's vertices inside
     // the other's bounds are among the starts of its edges meeting them.
     let starts = |(start, _): (Point, Point)| start;
@@ -224,16 +250,7 @@ pub fn region_clearance_within(
         ));
     }
 
-    // Only the first boundary's edges within reach of the second region's
-    // bounds can come within reach of its boundary.
-    first_boundary
-        .segments_meeting(second.bbox.expand(maximum_mm + tol::EPSILON_MM))
-        .filter_map(|(first_start, first_end)| {
-            second_boundary
-                .segment_nearest_within(first_start, first_end, maximum_mm)
-                .map(|distance| distance.also_uncertain(first.uncertainty_mm))
-        })
-        .min_by(|left, right| left.mm.total_cmp(&right.mm))
+    nearest
 }
 
 /// The first of a subject's `vertices` strictly inside `container`, by the
@@ -244,7 +261,7 @@ fn contained_vertex(
 ) -> Option<Point> {
     // The sign of signed_distance is exactly the winding predicate, including
     // negative zero on an inside boundary. No nearest-boundary witness is used.
-    vertices.find(|&vertex| container.winding(vertex) != 0)
+    vertices.find(|&vertex| container.contains_regular_point(vertex))
 }
 
 /// A connected local clearance failure. The paths are the participating
@@ -298,9 +315,12 @@ pub fn linework_clearance_sites(
         midpoints.extend(gaps.iter().map(|&(a, b)| start + delta * ((a + b) / 2.0)));
         pending.push((start, end, near, gaps, midpoint_offset));
     }
-    // One sweep for the whole reference item, not one walk of a panel's
-    // complete copper image for every little boundary segment.
-    let inside = material.contains_points_batch(&midpoints);
+    // The boundary is already indexed. A height sweep over the whole image
+    // would scan every edge again for each distinct midpoint height.
+    let inside = midpoints
+        .iter()
+        .map(|&point| index.contains_regular_point(point))
+        .collect::<Vec<_>>();
     let mut spans = Vec::new();
     for (start, end, near, gaps, midpoint_offset) in pending {
         let delta = end - start;
@@ -319,7 +339,10 @@ pub fn linework_clearance_sites(
         }
     }
     let endpoints = spans.iter().flat_map(|&(a, b)| [a, b]).collect::<Vec<_>>();
-    let endpoint_inside = material.contains_points_batch(&endpoints);
+    let endpoint_inside = endpoints
+        .iter()
+        .map(|&point| index.contains_regular_point(point))
+        .collect::<Vec<_>>();
     connected_line_groups(&spans)
         .into_iter()
         .filter_map(|group| {
@@ -711,11 +734,22 @@ pub fn thin_features(
     region: &ContourSet,
     min_width_mm: f64,
 ) -> Result<Vec<ThinPiece>, AccuracyError> {
+    thin_features_with_boundary(region, min_width_mm, None)
+}
+
+/// [`thin_features`] reusing an available boundary index. When supplied,
+/// `boundary` must index `region` at its current resolution and uncertainty.
+pub fn thin_features_with_boundary(
+    region: &ContourSet,
+    min_width_mm: f64,
+    boundary: Option<&PreparedRegion>,
+) -> Result<Vec<ThinPiece>, AccuracyError> {
     Ok(pieces(
         region.disk_feature_violation_components(
             (min_width_mm + (2.0 * region.budget().max_error_mm() + region.uncertainty_mm)) / 2.0,
             min_width_mm - 2.0 * region.uncertainty_mm,
             min_width_mm,
+            boundary,
         )?,
         min_width_mm,
     ))
@@ -1106,6 +1140,22 @@ mod tests {
             clearance_within(&left, &contained, 0.1),
             region_clearance(&left, &contained)
         );
+
+        // Disjoint boundaries alone do not exclude containment, and every
+        // ring matters: the first island here is outside the container.
+        let container = rect_region(0.0, 0.0, 8.0, 6.0);
+        let island = rect_region(2.0, 2.0, 3.0, 3.0);
+        let islands = rect_region(-3.0, -3.0, -2.0, -2.0).union(&island).unwrap();
+        for (first, second) in [(&container, &islands), (&islands, &container)] {
+            assert_eq!(clearance_within(first, second, 0.1).unwrap().mm, 0.0);
+        }
+        let frame = container
+            .difference(&rect_region(1.0, 1.0, 7.0, 5.0))
+            .unwrap();
+        for (first, second) in [(&frame, &island), (&island, &frame)] {
+            assert!(clearance_within(first, second, 0.9).is_none());
+            assert_eq!(clearance_within(first, second, 1.1).unwrap().mm, 1.0);
+        }
     }
 
     #[test]
@@ -1159,7 +1209,7 @@ mod tests {
     }
 
     #[test]
-    fn a_centered_disk_reports_one_witness_whatever_the_facet_order_or_noise() {
+    fn canonical_nearest_keeps_one_witness_despite_facet_order_or_noise() {
         // A round pad flattened to 32 facets, all equally near its center.
         let facets = (0..32)
             .map(|i| {
@@ -1168,9 +1218,16 @@ mod tests {
             })
             .collect::<Vec<_>>();
         let witness = |ring: Vec<[f64; 2]>| {
-            ContourSet::from_regularized(vec![ring], res(0.001), 0.0)
-                .prepare_query()
-                .circular_enclosure(Point::ZERO, 0.3, 1.0)
+            let boundary =
+                ContourSet::from_regularized(vec![ring], res(0.001), 0.0).prepare_query();
+            let enclosure = boundary.circular_enclosure(Point::ZERO, 0.3, 1.0).unwrap();
+            let expected = (std::f64::consts::PI / 32.0).cos() - 0.3;
+            assert!((enclosure.mm - expected).abs() < 2e-12);
+            assert!((enclosure.first.length() - 0.3).abs() < 1e-14);
+            assert!((enclosure.first.distance_to(enclosure.second) - enclosure.mm).abs() < 1e-14);
+            assert!(boundary.nearest_within(enclosure.second, 1e-14).is_some());
+            boundary
+                .canonical_nearest_within(Point::ZERO, 1.3)
                 .unwrap()
                 .second
         };

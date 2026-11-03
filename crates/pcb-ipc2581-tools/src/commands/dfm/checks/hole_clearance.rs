@@ -39,6 +39,7 @@ pub(super) struct Preparation {
 
 struct LandRemainders {
     key: [usize; 3],
+    window: BBox,
     vertices: usize,
     conductors: Vec<(ConductorId, ContourSet, PreparedRegion)>,
 }
@@ -49,6 +50,7 @@ impl Preparation {
         key: [usize; 3],
         copper: &CopperLayer,
         design: &Design,
+        window: BBox,
     ) -> anyhow::Result<&[(ConductorId, ContourSet, PreparedRegion)]> {
         self.uncached.clear();
         if !design.npth_lands[key[1]]
@@ -59,10 +61,13 @@ impl Preparation {
         }
         if let Some(slot) = self.entries.iter().position(|entry| entry.key == key) {
             let entry = self.entries.remove(slot).unwrap();
-            self.entries.push_back(entry);
-            return Ok(&self.entries.back().unwrap().conductors);
+            if entry.window.contains_point(window.min) && entry.window.contains_point(window.max) {
+                self.entries.push_back(entry);
+                return Ok(&self.entries.back().unwrap().conductors);
+            }
+            self.vertices -= entry.vertices;
         }
-        let conductors = npth_land_remainders(key[1], key[2], copper, design)?;
+        let conductors = npth_land_remainders(key[1], key[2], copper, design, window)?;
         // Count empty conductor records too, bounding metadata independently
         // of whether removing a land left any boundary behind.
         let vertices = conductors
@@ -79,6 +84,7 @@ impl Preparation {
         self.vertices += vertices;
         self.entries.push_back(LandRemainders {
             key,
+            window,
             vertices,
             conductors,
         });
@@ -131,27 +137,36 @@ pub(super) fn evaluate(
             checked += usize::from(hole.branch.is_none());
             // An NPTH's own mounting land is not an offender; the rest of
             // that land's conductor is measured without it.
+            // Only rings reaching the keepout can affect its measurements or
+            // overlap sites. Keep an uncertainty/tolerance guard and retain
+            // whole rings, so this introduces no artificial clipping edges.
+            let window = hole.bbox.expand(
+                limit_mm
+                    + 2.0 * design.resolution.accuracy.max_error_mm()
+                    + design
+                        .resolution
+                        .tolerance_mm
+                        .max(pcb_ir::geom::tol::EPSILON_MM),
+            );
             let land_remainders = match class {
                 HoleClass::Npth => preparation.remainders(
                     [design_index, hole_index, copper_index],
                     copper,
                     design,
+                    window,
                 )?,
                 HoleClass::Via | HoleClass::Pth => &[],
             };
             // Only a conductor whose bounds reach the keepout can enter it.
-            let nearest = design.conductors_near[copper_index]
+            let nearest = copper
+                .conductors_near
                 .query(hole.bbox.expand(limit_mm))
                 .into_iter()
                 .map(|index| {
                     let conductor = &copper.conductors[index];
                     match land_remainders.iter().find(|(id, ..)| *id == conductor.id) {
                         Some((_, image, boundary)) => (conductor, image, boundary),
-                        None => (
-                            conductor,
-                            &conductor.image,
-                            &design.conductor_boundaries[copper_index][index],
-                        ),
+                        None => (conductor, &conductor.image, conductor.boundary()),
                     }
                 })
                 .filter(|(conductor, ..)| spans(hole.branch, conductor.branch))
@@ -249,6 +264,7 @@ fn npth_land_remainders(
     copper_index: usize,
     copper: &CopperLayer,
     design: &Design,
+    window: BBox,
 ) -> anyhow::Result<Vec<(ConductorId, ContourSet, PreparedRegion)>> {
     let lands = design.npth_lands[hole_index]
         .iter()
@@ -262,7 +278,12 @@ fn npth_land_remainders(
         .conductors
         .iter()
         .filter_map(|conductor| {
-            let image = without_own_lands(conductor, lands.iter().copied(), design.resolution);
+            let image = without_own_lands(
+                conductor,
+                lands.iter().copied(),
+                design.resolution,
+                Some(window),
+            );
             image.transpose().map(|image| {
                 let image = image?;
                 let boundary = image.prepare_query();
@@ -286,7 +307,7 @@ fn disk_to_copper_clearance(
     // do not compute an unrestricted nearest distance just to test the sign.
     let epsilon = copper.tolerance().max(pcb_ir::geom::tol::EPSILON_MM);
     if copper.bbox.contains_point(center)
-        && (boundary.winding(center) != 0
+        && (boundary.contains_regular_point(center)
             || boundary
                 .nearest_within(center, epsilon)
                 .is_some_and(|distance| distance.mm <= epsilon))
@@ -596,6 +617,13 @@ limit = {{ minimum = "0.20 mm" }}"#
         assert_eq!(
             run(&[land(0.0, true), same_net(0.62)]),
             found("L0", "MH", 0.12)
+        );
+        // This component is outside the minimum tier's guarded window but
+        // inside the preferred tier. Reusing the smaller remainder would
+        // silently lose the preferred finding.
+        assert_eq!(
+            run(&[land(0.0, true), same_net(0.67)]),
+            found("L0", "MH", 0.17)
         );
         let [(layer, net, mm)] = run(&[land(0.0, true), same_net(0.55)]).try_into().unwrap();
         assert_eq!((layer.as_str(), net.as_str()), ("L0", "MH"));

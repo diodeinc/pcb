@@ -171,7 +171,7 @@ pub struct AreaBounds {
 /// (non-overlapping, holes wound opposite their outer boundary). The winding/fill rule of
 /// the *source* geometry matters only at construction; every subsequent
 /// operation is a regularized set operation.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ContourSet {
     /// Bounds of `rings`, fixed at construction like the rings themselves:
     /// a region is built through its constructors, never edited in place.
@@ -189,6 +189,23 @@ pub struct ContourSet {
 }
 
 impl ContourSet {
+    /// Whether geometry analysis can be reused without changing coordinates
+    /// or accuracy history. This is representation equality, not set equality:
+    /// ring order and signed zeros are significant; resolution and accumulated
+    /// uncertainty must agree as well as the polygon coordinates.
+    pub fn same_representation(&self, other: &Self) -> bool {
+        self == other
+            && self.resolution.tolerance_mm.to_bits() == other.resolution.tolerance_mm.to_bits()
+            && self.uncertainty_mm.to_bits() == other.uncertainty_mm.to_bits()
+            && self
+                .rings
+                .iter()
+                .flatten()
+                .flatten()
+                .zip(other.rings.iter().flatten().flatten())
+                .all(|(a, b)| a.to_bits() == b.to_bits())
+    }
+
     /// The region's own budget applied to its accumulated approximation.
     fn checked(self) -> Result<Self, AccuracyError> {
         self.resolution.accuracy.check(self.uncertainty_mm)?;

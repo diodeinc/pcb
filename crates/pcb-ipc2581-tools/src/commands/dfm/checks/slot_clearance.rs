@@ -57,14 +57,13 @@ pub(super) fn evaluate(
         for (copper_index, copper) in spanned_layers(design, &slot.drill_span, conditions) {
             checked += usize::from(slot.branch.is_none());
             // Only a conductor whose bounds reach the limit can come within it.
-            let nearest = design.conductors_near[copper_index]
+            let nearest = copper
+                .conductors_near
                 .query(slot.outline.bbox.expand(limit_mm + tol::EPSILON_MM))
                 .into_iter()
                 .map(|index| {
-                    (
-                        &copper.conductors[index],
-                        &design.conductor_boundaries[copper_index][index],
-                    )
+                    let conductor = &copper.conductors[index];
+                    (conductor, conductor.boundary())
                 })
                 .filter(|(conductor, _)| spans(slot.branch, conductor.branch))
                 .filter(|(conductor, _)| {

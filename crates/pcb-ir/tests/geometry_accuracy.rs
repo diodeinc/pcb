@@ -33,6 +33,21 @@ fn radial_error(region: &ContourSet, rx: f64, ry: f64) -> f64 {
 }
 
 #[test]
+fn lengths_preserve_small_large_and_nonfinite_coordinates() {
+    // A 5-12-13 triangle, scaled exactly in binary. Squaring its sides
+    // underflows or overflows at the extremes, although its length exists.
+    for scale in std::iter::once(f64::from_bits(1)).chain(
+        [-900, -540, -512, -511, 0, 500, 509, 900, 1020].map(|exponent| 2.0_f64.powi(exponent)),
+    ) {
+        let length = Point::new(-5.0 * scale, 12.0 * scale).length();
+        assert!((length / scale - 13.0).abs() <= 2.0 * f64::EPSILON * 13.0);
+    }
+    assert_eq!(Point::new(-0.0, 0.0).length().to_bits(), 0);
+    assert_eq!(Point::new(f64::INFINITY, f64::NAN).length(), f64::INFINITY);
+    assert!(Point::new(1.0, f64::NAN).length().is_nan());
+}
+
+#[test]
 fn circles_converge_with_the_requested_budget() {
     let circle = shapes::circle(2.0).unwrap();
     let mut previous = f64::INFINITY;

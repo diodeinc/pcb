@@ -13,6 +13,7 @@ use rayon::prelude::*;
 use pcb_ir::dialects::ipc::FeatureKind;
 use pcb_ir::geom::BBox;
 use pcb_ir::geom::dfm::{region_clearance_sites_with_index, region_clearance_within};
+use std::borrow::Cow;
 use std::collections::HashSet;
 
 use crate::commands::dfm::design::{
@@ -26,6 +27,7 @@ use super::{Evaluation, Measured, linework_clearance, violates};
 struct Piece {
     conductor_index: usize,
     region: pcb_ir::geom::ContourSet,
+    whole: bool,
 }
 
 pub(super) fn evaluate(
@@ -90,9 +92,11 @@ pub(super) fn evaluate(
             .into_iter()
             .enumerate()
             .flat_map(|(conductor_index, components)| {
+                let whole = components.len() == 1;
                 components.into_iter().map(move |region| Piece {
                     conductor_index,
                     region,
+                    whole,
                 })
             })
             .collect::<Vec<_>>();
@@ -107,7 +111,13 @@ pub(super) fn evaluate(
 
         let boundaries = pieces
             .iter()
-            .map(|piece| piece.region.prepare_query())
+            .map(|piece| {
+                if piece.whole {
+                    Cow::Borrowed(conductors[piece.conductor_index].boundary())
+                } else {
+                    Cow::Owned(piece.region.prepare_query())
+                }
+            })
             .collect::<Vec<_>>();
         // The pairs the bounds cannot separate, in sweep order along x.
         let pairs = pieces

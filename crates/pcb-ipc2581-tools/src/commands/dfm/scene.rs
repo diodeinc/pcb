@@ -5,6 +5,7 @@
 //! are. The material is the dark image the checks measure, cutouts and
 //! negative polarity resolved into it; pads keep their exact standard shapes.
 
+use std::borrow::Cow;
 use std::collections::{BTreeSet, HashMap};
 
 use anyhow::{Context, Result, ensure};
@@ -16,7 +17,7 @@ use pcb_ir::dialects::ipc::{
 };
 use pcb_ir::geom::path::{ContourBuf, stroke_to_fill};
 use pcb_ir::geom::region::ContourSet;
-use pcb_ir::geom::{Affine2, BBox, FillRule, LineCap, Paint, Point, Resolution};
+use pcb_ir::geom::{Affine2, BBox, FillRule, LineCap, Paint, Point, Polarity, Resolution};
 #[cfg(not(target_family = "wasm"))]
 use rayon::prelude::*;
 
@@ -24,24 +25,30 @@ use super::design::Design;
 use super::report::{
     Finding, Frame, LayerRef, LayoutContext, ReportPoint, RuleResult, Scene, ScenePass, Shape,
 };
+use super::rules::Rule;
 use crate::gerber::{catalogue_aperture, standard_primitives};
 
-pub(super) fn export(
-    designs: &[Design<'_>],
-    layout: &LayoutContext,
-    rules: &[RuleResult],
-    frames: &[Frame],
-    findings: &[Finding],
-) -> Result<Scene> {
+/// Physical context depends on configured views, not measured findings.
+pub(super) fn prepare(designs: &[Design<'_>], rules: &[Rule]) -> Result<Vec<ScenePass>> {
     let wanted = rules
         .iter()
-        .flat_map(|rule| rule.view.features.iter().copied())
+        .flat_map(|rule| rule.kind.view_recipe().features)
         .collect();
     let mut passes = scene_passes(&wanted, designs)?;
     passes
         .iter_mut()
         .flat_map(|pass| &mut pass.shapes)
         .for_each(|(_, shape)| shape.simplify());
+    Ok(passes)
+}
+
+pub(super) fn export(
+    passes: Vec<ScenePass>,
+    layout: &LayoutContext,
+    rules: &[RuleResult],
+    frames: &[Frame],
+    findings: &[Finding],
+) -> Result<Scene> {
     let placed = |frame: u32, bounds: BBox| {
         frames[frame as usize]
             .placements
@@ -296,18 +303,45 @@ fn material(
     };
     let mut shapes = Vec::new();
     for (design, frame) in designs.iter().zip(0_u32..) {
-        let imported = design.imported;
-        let id = imported
-            .layer_id(layer)
-            .with_context(|| format!("IPC-2581 layer '{layer}' was not found"))?;
-        let root = design.placements[0];
-        let mut doc =
-            imported.materialize_occurrence_layer(id, design.scope, root, &|held| held == root)?;
-        process::normalize_for_artwork(&mut doc, design.resolution)?;
+        let prepared = design
+            .copper_layers
+            .iter()
+            .find(|copper| copper.layer.name == layer)
+            .and_then(|copper| copper.scene_source.as_ref());
+        let mut doc = match prepared {
+            Some(document) => Cow::Borrowed(document),
+            None => {
+                let imported = design.imported;
+                let id = imported
+                    .layer_id(layer)
+                    .with_context(|| format!("IPC-2581 layer '{layer}' was not found"))?;
+                let root = design.placements[0];
+                let mut document =
+                    imported.materialize_occurrence_layer(id, design.scope, root, &|held| {
+                        held == root
+                    })?;
+                process::normalize_for_artwork(&mut document, design.resolution)?;
+                Cow::Owned(document)
+            }
+        };
         // Cutouts only remove material here: one with nothing to cut is gone.
-        process::subtract_layer_cutouts(&mut doc, design.resolution)?;
-        process::retain_features(&mut doc, |feature| feature.bucket != FeatureBucket::Cutout);
-        process::resolve_negative_polarity(&mut doc, design.resolution)?;
+        if doc
+            .features
+            .iter()
+            .any(|feature| feature.bucket == FeatureBucket::Cutout)
+        {
+            process::subtract_layer_cutouts(doc.to_mut(), design.resolution)?;
+            process::retain_features(doc.to_mut(), |feature| {
+                feature.bucket != FeatureBucket::Cutout
+            });
+        }
+        if doc
+            .features
+            .iter()
+            .any(|feature| feature.polarity == Polarity::Clear)
+        {
+            process::resolve_negative_polarity(doc.to_mut(), design.resolution)?;
+        }
         let mut artwork = artwork::Document::<(), ()>::new();
         let objects =
             lower_layer_to_artwork_objects_with(&doc, 0, &mut artwork, &target, &|_, _| ());
