@@ -31,6 +31,34 @@ steps:
     timeout_in_minutes: 1
     command: *source-checks
 
+  - label: ":rust: Workspace lint"
+    key: lint
+    if: build.branch != pipeline.default_branch
+    if_changed:
+      - crates/**
+      - lib/std/**
+      - Cargo.{toml,lock}
+      - .cargo/**
+      - rust-toolchain{,.toml}
+      - "{clippy,.clippy}.toml"
+      - "**/.gitignore"
+      - "**/.ignore"
+      - flake.{nix,lock}
+      - .buildkite/**
+    timeout_in_minutes: 10
+    command: &lint-checks |
+      set -euo pipefail
+
+      # Compile-dependent checks stay separate from the fast source checks; no KiCad needed.
+      cargo run --locked -p pcbc -- fmt --check lib/std
+      cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+
+  - label: ":rust: Workspace lint"
+    key: lint-main
+    if: build.branch == pipeline.default_branch
+    timeout_in_minutes: 10
+    command: *lint-checks
+
   - label: ":rust: Manufacturing core and STEP"
     key: core
     if: build.branch != pipeline.default_branch
@@ -40,7 +68,6 @@ steps:
       - Cargo.{toml,lock}
       - .cargo/**
       - rust-toolchain{,.toml}
-      - "{clippy,.clippy}.toml"
       - .config/nextest.toml
       - flake.{nix,lock}
       - .buildkite/**
@@ -61,7 +88,7 @@ steps:
       )
       args=(--locked --no-default-features --features pcb-sexpr/serde "${packages[@]}")
 
-      cargo clippy "${args[@]}" --all-targets -- -D warnings
+      # Workspace lint owns Clippy; keep the minimal-feature build exercised by these tests.
       cargo nextest run "${args[@]}" --profile ci
       cargo test "${args[@]}" --doc
     artifact_paths: target/nextest/ci/junit.xml

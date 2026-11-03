@@ -19,27 +19,6 @@ permissions:
   contents: read
 
 jobs:
-  lint:
-    name: Lint and Check
-    runs-on: blacksmith-16vcpu-ubuntu-2404
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-
-      - name: Install Rust
-        uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1.17.0
-        with:
-          components: clippy
-          cache-bin: false
-
-      - name: Check stdlib .zen formatting
-        run: cargo run -p pcbc -- fmt --check lib/std
-
-      - name: Run Clippy
-        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
-
   test:
     name: Test (${{ matrix.config.name }})
     runs-on: ${{ matrix.config.runs-on }}
