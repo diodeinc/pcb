@@ -1002,9 +1002,10 @@ fn simplified(path: &[ReportPoint], closed: bool) -> Vec<ReportPoint> {
         keep[end] = true;
         let deviation =
             |index: usize| dist::point_segment(points[index], points[start], points[end]).0;
-        if let Some(index) =
-            (start + 1..end).max_by(|&left, &right| deviation(left).total_cmp(&deviation(right)))
-            && deviation(index) > SIMPLIFY_MM
+        if let Some((index, distance)) = (start + 1..end)
+            .map(|index| (index, deviation(index)))
+            .max_by(|left, right| left.1.total_cmp(&right.1))
+            && distance > SIMPLIFY_MM
         {
             spans.extend([(start, index), (index, end)]);
         }

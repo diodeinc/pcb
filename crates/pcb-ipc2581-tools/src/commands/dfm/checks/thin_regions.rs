@@ -33,14 +33,16 @@
 //! electrical-conductor boundary-distance check; morphology must not
 //! reinterpret a same-net notch as spacing between conductors.
 
-use pcb_ir::geom::dfm::{BBoxIndex, ThinPiece, circular_region, thin_features, thin_gaps};
+use pcb_ir::geom::dfm::{
+    BBoxIndex, ThinPiece, circular_region, thin_features_with_boundary, thin_gaps,
+};
 use pcb_ir::geom::{BBox, ContourSet, Point, PreparedRegion, tol};
 #[cfg(not(target_family = "wasm"))]
 use rayon::prelude::*;
 
 use super::{Evaluation, Measured, MeasuredSite};
 use crate::commands::dfm::design::{
-    ConductorId, CopperConductor, CopperLayer, Design, MaskLayer, MaskOwner, conductor_index, spans,
+    ConductorId, CopperConductor, CopperLayer, Design, MaskLayer, MaskOwner, spans,
 };
 use crate::commands::dfm::report::{Evidence, LayerRef, MeasurementKind, SourceLocator, Subject};
 use crate::commands::dfm::rules::Conditions;
@@ -52,33 +54,40 @@ pub(super) fn copper_feature_width(
     conditions: &Conditions,
     design: &Design,
 ) -> anyhow::Result<Evaluation> {
-    let measure = |(index, layer): (usize, &CopperLayer)| {
+    // Analyze each distinct image once, then attribute its pieces separately
+    // on every physical layer. Unique and shared images use the same path.
+    let mut groups: Vec<Vec<(usize, &CopperLayer)>> = Vec::new();
+    for (index, layer) in design
+        .copper_layers
+        .iter()
+        .enumerate()
+        .filter(|(_, layer)| conditions.applies_to_layer(layer))
+    {
         if copper == CopperUse::Text
-            && !(layer.conductors.iter())
-                .any(|conductor| matches!(conductor.id, ConductorId::Text { .. }))
+            && !layer
+                .conductors
+                .iter()
+                .any(|c| matches!(c.id, ConductorId::Text { .. }))
         {
-            return Ok(Vec::new());
+            continue;
         }
-        let pieces = thin_features(&layer.image, limit_mm)?;
-        if pieces.is_empty() {
-            return Ok(Vec::new());
+        match groups
+            .iter_mut()
+            .find(|group| group[0].1.image.same_representation(&layer.image))
+        {
+            Some(group) => group.push((index, layer)),
+            None => groups.push(vec![(index, layer)]),
         }
-        let survivors = Survivors::of(&layer.image, &pieces)?;
-        let local;
-        let (boundaries, near) = match design.conductor_boundaries.get(index) {
-            Some(boundaries) => (boundaries, &design.conductors_near[index]),
-            None => {
-                local = conductor_index(&layer.conductors);
-                (&local.0, &local.1)
-            }
-        };
+    }
+    let measure = |layer: &CopperLayer, pieces: &[ThinPiece], survivors: &Survivors| {
+        let near = &layer.conductors_near;
         #[cfg(not(target_family = "wasm"))]
-        let pieces = pieces.into_par_iter();
+        let pieces = pieces.par_iter();
         #[cfg(target_family = "wasm")]
-        let pieces = pieces.into_iter();
+        let pieces = pieces.iter();
         pieces
             .map(|piece| {
-                let mut measured = measured_piece(&piece, limit_mm, &layer.layer, "copper_image")?;
+                let mut measured = measured_piece(piece, limit_mm, &layer.layer, "copper_image")?;
                 // Prove ownership against final composed material. A bounding box
                 // is only a broad phase; overlapping owners remain ambiguous.
                 let mut construction = piece.candidate.clone();
@@ -89,8 +98,7 @@ pub(super) fn copper_feature_width(
                         design.resolution,
                     )?)?;
                 }
-                let owner =
-                    unique_copper_owner(&construction, &layer.conductors, boundaries, near)?;
+                let owner = unique_copper_owner(&construction, &layer.conductors, near)?;
                 let text = owner.is_some_and(|owner| matches!(owner.id, ConductorId::Text { .. }));
                 if text != (copper == CopperUse::Text) {
                     return Ok(None);
@@ -119,7 +127,7 @@ pub(super) fn copper_feature_width(
                                 geometry.disk.radius_mm,
                                 design.resolution,
                             )?)?;
-                        unique_copper_owner(&local, &layer.conductors, boundaries, near)?
+                        unique_copper_owner(&local, &layer.conductors, near)?
                     };
                     if let Some(owner) = local_owner {
                         site.subjects = vec![copper_subject(design, owner, &layer.layer)];
@@ -129,17 +137,34 @@ pub(super) fn copper_feature_width(
             })
             .collect::<anyhow::Result<Vec<_>>>()
     };
+    let measure_group = |group: Vec<(usize, &CopperLayer)>| {
+        let (_, layer) = group[0];
+        let pieces = thin_features_with_boundary(&layer.image, limit_mm, Some(&layer.boundary))?;
+        if pieces.is_empty() {
+            return Ok(Vec::new());
+        }
+        let survivors = Survivors::of(&layer.image, &pieces)?;
+        group
+            .into_iter()
+            .map(|(index, layer)| {
+                measure(layer, &pieces, &survivors).map(|measured| (index, measured))
+            })
+            .collect::<anyhow::Result<Vec<_>>>()
+    };
     #[cfg(not(target_family = "wasm"))]
-    let layers = design.copper_layers.par_iter();
+    let groups = groups.into_par_iter();
     #[cfg(target_family = "wasm")]
-    let layers = design.copper_layers.iter();
-    let measured = layers
-        .enumerate()
-        .filter(|(_, layer)| conditions.applies_to_layer(layer))
-        .map(measure)
+    let groups = groups.into_iter();
+    let mut measured = groups
+        .map(measure_group)
         .collect::<anyhow::Result<Vec<_>>>()?
         .into_iter()
         .flatten()
+        .collect::<Vec<_>>();
+    measured.sort_unstable_by_key(|(index, _)| *index);
+    let measured = measured
+        .into_iter()
+        .flat_map(|(_, measured)| measured)
         .flatten()
         .collect();
     Ok(Evaluation {
@@ -219,6 +244,7 @@ pub(super) fn soldermask_web(limit_mm: f64, design: &Design) -> anyhow::Result<E
 /// the image without every thin candidate, by connected component.
 struct Survivors {
     components: Vec<ContourSet>,
+    boundaries: Vec<PreparedRegion>,
     near: BBoxIndex,
 }
 
@@ -230,7 +256,12 @@ impl Survivors {
         )?;
         let components = image.difference(&thin)?.connected_components();
         let near = BBoxIndex::new(components.iter().map(|component| component.bbox).collect());
-        Ok(Self { components, near })
+        let boundaries = components.iter().map(ContourSet::prepare_query).collect();
+        Ok(Self {
+            components,
+            boundaries,
+            near,
+        })
     }
 
     /// What losing `candidate` does to the copper that survives.
@@ -244,7 +275,11 @@ impl Survivors {
         let grown = candidate.disk_dilate(4.0 * resolution.tolerance_mm + tol::REGION_MM)?;
         let (mut components, mut contacts) = (0, 0);
         for index in self.near.query(grown.bbox) {
-            let shared = grown.intersection(&self.components[index])?;
+            // A component's bounds may enclose a candidate inside one of its
+            // holes. Reuse its boundary to prove those intersections empty;
+            // contact and ambiguous cases still use the original overlay.
+            let shared =
+                grown.intersection_with_index(&self.components[index], &self.boundaries[index])?;
             if !shared.is_empty() {
                 components += 1;
                 contacts += shared.connected_components().len();
@@ -287,7 +322,6 @@ fn measured_piece(
 fn unique_copper_owner<'a>(
     region: &ContourSet,
     owners: &'a [CopperConductor],
-    boundaries: &[PreparedRegion],
     near: &BBoxIndex,
 ) -> anyhow::Result<Option<&'a CopperConductor>> {
     if region.is_empty() {
@@ -296,7 +330,7 @@ fn unique_copper_owner<'a>(
     let mut intersecting = Vec::new();
     for index in near.query(region.bbox) {
         let owner = &owners[index];
-        let covered = match region.side_of(&boundaries[index]) {
+        let covered = match region.side_of(owner.boundary()) {
             Some(true) => true,
             Some(false) => continue,
             None => {
@@ -439,15 +473,14 @@ pub(super) fn piece_sites(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::commands::dfm::design::ConductorId;
+    use crate::commands::dfm::design::{ConductorId, conductor_index};
     use pcb_ir::geom::Resolution;
 
     fn unique_copper_owner<'a>(
         region: &ContourSet,
         owners: &'a [CopperConductor],
     ) -> anyhow::Result<Option<&'a CopperConductor>> {
-        let (boundaries, near) = conductor_index(owners);
-        super::unique_copper_owner(region, owners, &boundaries, &near)
+        super::unique_copper_owner(region, owners, &conductor_index(owners))
     }
 
     fn rectangle(x0: f64, y0: f64, x1: f64, y1: f64) -> ContourSet {
@@ -469,6 +502,7 @@ mod tests {
             },
             branch: Some(instance),
             image,
+            boundary: Default::default(),
         }
     }
 

@@ -12,7 +12,9 @@ use crate::geom::path::{ContourBuf, PathCmd};
 use crate::geom::store::PathArena;
 use crate::geom::{AccuracyError, BBox, FillRule, Paint, Point, tol};
 use rayon::prelude::*;
+use std::borrow::Cow;
 use std::fmt;
+use std::sync::OnceLock;
 
 use boostvoronoi::prelude::{
     Builder as VoronoiBuilder, CellIndex as VoronoiCellIndex, Diagram as VoronoiDiagram,
@@ -80,13 +82,31 @@ impl ContourSet {
             components[outer] = component;
         }
         let enclosing = outers.len();
+        // Many holes can share one long outer boundary. Index that boundary
+        // once rather than scanning all its edges for every hole; small rings
+        // and regions with few holes keep the cheaper linear query.
+        let many_holes = self.ring_count() - enclosing >= 8;
+        let mut boundaries = std::collections::HashMap::new();
         for hole in (0..self.ring_count()).filter(|&ring| areas[ring] <= 0.0) {
             let larger = outers[..enclosing].partition_point(|&outer| areas[outer] <= -areas[hole]);
             let outer =
                 ring_interior_point(self.ring(hole), self.ring_bounds(hole)).and_then(|point| {
                     outers[larger..enclosing].iter().copied().find(|&outer| {
                         self.ring_bounds(outer).contains_point(point)
-                            && ring_winding(self.ring(outer), point) != 0
+                            && if many_holes && self.ring(outer).len() >= 64 {
+                                boundaries
+                                    .entry(outer)
+                                    .or_insert_with(|| {
+                                        PreparedRegion::from_segments(
+                                            edges_of(self.ring(outer)).collect(),
+                                            self.uncertainty_mm,
+                                        )
+                                    })
+                                    .winding(point)
+                                    != 0
+                            } else {
+                                ring_winding(self.ring(outer), point) != 0
+                            }
                     })
                 });
             components[hole] = outer.map_or(outers.len(), |outer| components[outer]);
@@ -119,10 +139,12 @@ impl ContourSet {
         material_mm: f64,
         void_mm: f64,
         reach_mm: f64,
+        prepared: &FacingBoundary,
     ) -> Result<Self, AccuracyError> {
         let (components, outers) = self.ring_components();
-        let segments = source_boundary_segments(self);
-        let boundary = boundary_index(&segments, self.uncertainty_mm);
+        let FacingBoundary {
+            segments, boundary, ..
+        } = prepared;
         let sees_left = |wall: &OrientedBoundarySegment, across: Point| {
             let along = wall.end - wall.start;
             let turn = along.x * across.y - along.y * across.x;
@@ -156,24 +178,20 @@ impl ContourSet {
             };
             separation <= reach
         };
-        let mut facing = vec![false; segments.len()];
-        for (id, segment) in segments.iter().enumerate() {
-            for other in boundary.segment_ids_meeting(segment.bbox.expand(material_mm.max(void_mm)))
-            {
-                let partner = &segments[other];
-                if other <= id || (facing[id] && facing[other]) || !faces(segment, partner) {
-                    continue;
-                }
-                facing[id] = true;
-                facing[other] = true;
-            }
-        }
+        let reach = material_mm.max(void_mm);
+        let facing = boundary.paired_segments(reach, |left, right| {
+            let (Some(left), Some(right)) = (prepared.wall_ids[left], prepared.wall_ids[right])
+            else {
+                return false;
+            };
+            let (left, right) = (&segments[left], &segments[right]);
+            left.bbox.expand(reach).intersects(right.bbox) && faces(left, right)
+        });
         let mut kept = vec![false; self.ring_count()];
         let mut windows = Vec::new();
         for segment in segments
             .iter()
-            .zip(&facing)
-            .filter_map(|(segment, &facing)| facing.then_some(segment))
+            .filter(|segment| facing[segment.source_edge])
         {
             let window = segment.bbox.expand(reach_mm);
             windows.push(vec![
@@ -182,7 +200,7 @@ impl ContourSet {
                 [window.max.x, window.max.y],
                 [window.min.x, window.max.y],
             ]);
-            for other in boundary.segment_ids_meeting(window) {
+            for other in prepared.walls_meeting(window) {
                 kept[segments[other].topology.ring] = true;
             }
         }
@@ -401,6 +419,7 @@ impl ContourSet {
             self,
             limit_mm / 2.0,
             limit_mm,
+            &FacingBoundary::new(self),
         ))
     }
 
@@ -414,6 +433,7 @@ impl ContourSet {
         radius: f64,
         width_mm: f64,
         minimum_mm: f64,
+        prepared: Option<&PreparedRegion>,
     ) -> Result<Vec<TwoSidedResidualComponent>, AccuracyError> {
         // A width is a disk touching two facing walls, so it is at least
         // their separation: material whose walls never face each other that
@@ -425,11 +445,11 @@ impl ContourSet {
         // uses the source walls directly, and `M \ (X ∩ M)` is `M \ X`, so
         // the opening's clip to the source is not needed to find what the
         // opening removed.
-        self.two_sided_residual(radius, minimum_mm, |region, radius| {
+        self.two_sided_residual(radius, minimum_mm, prepared, |region, radius, boundary| {
             let facing = width_mm + 4.0 * region.tolerance();
             let touching = 3.0 * region.tolerance() + region.uncertainty_mm;
             let reach = 3.0 * (radius + 2.0 * region.tolerance());
-            let candidates = region.facing_components(facing, touching, reach)?;
+            let candidates = region.facing_components(facing, touching, reach, boundary)?;
             candidates.difference(&candidates.disk_erode(radius)?.disk_dilate(radius)?)
         })
     }
@@ -448,10 +468,10 @@ impl ContourSet {
         // of its walls and the disks that decide it reach a diameter
         // further, so the closing of the material within two diameters of
         // facing walls is the closing of the whole region there.
-        self.two_sided_residual(radius, minimum_mm, |region, radius| {
+        self.two_sided_residual(radius, minimum_mm, None, |region, radius, boundary| {
             let facing = width_mm + 4.0 * region.tolerance();
             let reach = gap_reach_mm(radius, region.tolerance());
-            let candidates = region.facing_components(0.0, facing, reach)?;
+            let candidates = region.facing_components(0.0, facing, reach, boundary)?;
             closing_residual(&candidates, radius)
         })
     }
@@ -462,13 +482,18 @@ impl ContourSet {
         &self,
         radius: f64,
         minimum_mm: f64,
-        residual: impl FnOnce(&Self, f64) -> Result<Self, AccuracyError>,
+        prepared: Option<&PreparedRegion>,
+        residual: impl FnOnce(&Self, f64, &FacingBoundary) -> Result<Self, AccuracyError>,
     ) -> Result<Vec<TwoSidedResidualComponent>, AccuracyError> {
         if self.is_empty() || !(radius > 0.0 && radius.is_finite()) {
             return Ok(Vec::new());
         }
-        let residue = residual(self, radius)?;
-        let components = two_sided_residual_components(self, &residue, radius, minimum_mm);
+        // Facing-wall selection and the residual's axes read the same source
+        // segments. Prepare their topology and spatial index only once.
+        let boundary = FacingBoundary::with_boundary(self, prepared);
+        let residue = residual(self, radius, &boundary)?;
+        let components =
+            two_sided_residual_components(self, &residue, radius, minimum_mm, &boundary);
         Ok(components)
     }
 }
@@ -512,6 +537,8 @@ struct BoundarySegment {
 
 #[derive(Debug, Clone, Copy)]
 struct OrientedBoundarySegment {
+    /// Edge id in the complete source boundary, including short edges.
+    source_edge: usize,
     topology: BoundarySegment,
     start: Point,
     end: Point,
@@ -530,10 +557,14 @@ fn closing_residual(region: &ContourSet, radius: f64) -> Result<ContourSet, Accu
 /// order. The kept edges are numbered consecutively, so two that meet
 /// across a dropped sub-tolerance edge remain adjacent.
 fn source_boundary_segments(source: &ContourSet) -> Vec<OrientedBoundarySegment> {
+    let mut source_offset = 0;
     source
         .rings()
         .enumerate()
+        .filter(|(_, ring)| signed_area_of(ring) != 0.0)
         .flat_map(|(ring_id, ring)| {
+            let first_edge = source_offset;
+            source_offset += ring.len();
             let metric = RingArcLength::new(ring);
             // Keep the two-sided chord local even when the whole ring is
             // smaller than the ordinary geometry resolution.
@@ -551,6 +582,7 @@ fn source_boundary_segments(source: &ContourSet) -> Vec<OrientedBoundarySegment>
                 .enumerate()
                 .map(
                     move |(index, (edge, (start, end)))| OrientedBoundarySegment {
+                        source_edge: first_edge + edge,
                         topology: BoundarySegment {
                             ring: ring_id,
                             index,
@@ -575,6 +607,44 @@ fn boundary_index(segments: &[OrientedBoundarySegment], uncertainty_mm: f64) -> 
             .collect(),
         uncertainty_mm,
     )
+}
+
+/// One complete source index for wall selection and axis validation. Wall
+/// eligibility is metadata over stable source edge ids, not a second BVH.
+struct FacingBoundary<'a> {
+    segments: Vec<OrientedBoundarySegment>,
+    boundary: Cow<'a, PreparedRegion>,
+    wall_ids: Vec<Option<usize>>,
+    contacts: OnceLock<ContactIndex>,
+}
+
+impl<'a> FacingBoundary<'a> {
+    fn new(source: &ContourSet) -> Self {
+        Self::with_boundary(source, None)
+    }
+
+    fn with_boundary(source: &ContourSet, complete: Option<&'a PreparedRegion>) -> Self {
+        let boundary = complete.map_or_else(|| Cow::Owned(source.prepare_query()), Cow::Borrowed);
+        let segments = source_boundary_segments(source);
+        let mut wall_ids = vec![None; boundary.segments.len()];
+        for (id, segment) in segments.iter().enumerate() {
+            wall_ids[segment.source_edge] = Some(id);
+        }
+        Self {
+            segments,
+            boundary,
+            wall_ids,
+            contacts: OnceLock::new(),
+        }
+    }
+
+    fn walls_meeting(&self, bounds: BBox) -> Vec<usize> {
+        self.boundary
+            .segment_ids_meeting(bounds)
+            .into_iter()
+            .filter_map(|id| self.wall_ids[id])
+            .collect()
+    }
 }
 
 /// Canonical arc-length parameterization of a closed polygonal ring.
@@ -640,37 +710,28 @@ fn two_sided_residual_components(
     residual: &ContourSet,
     reach: f64,
     minimum_mm: f64,
+    prepared: &FacingBoundary,
 ) -> Vec<TwoSidedResidualComponent> {
     if residual.is_empty() {
         return Vec::new();
     }
-    let segments = source_boundary_segments(source);
-    let boundary = boundary_index(&segments, source.uncertainty_mm);
-    let complete_boundary = source.prepare_query();
     let boundary_uncertainty = source.uncertainty_mm + numerical_error(source.bbox);
     // The downstream measurement only keeps axis portions whose radius is at
     // most this acceptance threshold (see `pieces`): it matches that clip
     // exactly, so narrowing to it cannot change the kept set.
     let radius_cap = ((minimum_mm - 2.0 * boundary_uncertainty) / 2.0).next_down();
-    // Contact constraints are resolved through this index so they match the
-    // un-narrowed spatial query exactly (see `in_region_with_contact_index`).
-    let contact_index = ContactIndex::for_segments(&complete_boundary.segments);
-    // Candidate axes use the source edges near the component, while
-    // validation sees every (including short) source edge through
-    // `complete_boundary`. A component without an axis has no width.
+    // Candidates use significant walls; validation uses every source edge.
+    // A component without an axis has no width.
     // Only disks below the acceptance threshold survive. Their contacts
     // cannot be farther than half the minimum width from their centers;
     // keep the original sites and clip predicates, but bound pair searches.
     let measure = |component: ContourSet| {
         let axis = component_axis(
-            &boundary.segment_ids_meeting(component.bbox.expand(reach)),
-            &segments,
-            &boundary,
+            &prepared.walls_meeting(component.bbox.expand(reach)),
+            prepared,
             &component.prepare_query(),
-            &complete_boundary,
             reach.min(minimum_mm / 2.0),
             radius_cap,
-            &contact_index,
         );
         (!axis.is_empty()).then_some(TwoSidedResidualComponent {
             region: component,
@@ -692,21 +753,20 @@ fn two_sided_residual_components(
 /// Enumerate exact bisectors of every reachable pair of facing walls,
 /// then let the analytic axis clip and validate itself against the residue
 /// and the complete source boundary. `sites` are the ids, ascending, of the
-/// `segments` near the component, and `boundary` indexes all of `segments`.
-#[allow(clippy::too_many_arguments)]
+/// significant walls near the component.
 fn component_axis(
     sites: &[usize],
-    segments: &[OrientedBoundarySegment],
-    boundary: &PreparedRegion,
+    prepared: &FacingBoundary,
     component: &PreparedRegion,
-    complete_boundary: &PreparedRegion,
     reach: f64,
     radius_cap: f64,
-    contact_index: &ContactIndex,
 ) -> Vec<WidthAxis> {
     if sites.len() < 2 {
         return Vec::new();
     }
+    let FacingBoundary {
+        segments, boundary, ..
+    } = prepared;
     let error = numerical_error(component.bounds());
     // A component disk is no larger than its clearance to its nearest
     // source site. The farthest component vertex from that site is an exact
@@ -731,7 +791,11 @@ fn component_axis(
         .map(|site| component.has_segment_within(site.start, site.end, clearance_bound))
         .collect::<Vec<_>>();
     let reachable = reachable.as_slice();
-    let candidate_diameter = 2.0 * reach + error;
+    // A disk touching two finite walls is at least their separation wide.
+    // Radius clipping retains at most radius_cap + error, and contact
+    // constraints allow another error at each wall. Pairs beyond that
+    // cannot contribute a retained axis, even at a tolerated endpoint.
+    let candidate_diameter = (2.0 * reach + error).min(2.0 * radius_cap + 4.0 * error);
 
     // Validate one first wall's partners at a time, retaining only their
     // axes, not a quadratic list of wall pairs and empty validation results.
@@ -745,6 +809,7 @@ fn component_axis(
         boundary
             .segment_ids_near(wall.start, wall.end, candidate_diameter)
             .into_iter()
+            .filter_map(|id| prepared.wall_ids[id])
             .filter_map(|id| sites.binary_search(&id).ok())
             .filter(|&second| second > first && reachable[second])
             .map(|second| &segments[sites[second]])
@@ -763,9 +828,11 @@ fn component_axis(
                 .flat_map(|axis| {
                     axis.in_region_with_contact_index(
                         component,
-                        complete_boundary,
+                        boundary,
                         radius_cap,
-                        contact_index,
+                        prepared
+                            .contacts
+                            .get_or_init(|| ContactIndex::for_segments(&boundary.segments)),
                     )
                 })
             })
@@ -1293,7 +1360,9 @@ mod tests {
         assert_eq!(region.ring_components(), (vec![0, 0], vec![0]));
         // The hole's walls face the outer wall they touch, which brings the
         // hole's component along.
-        let facing = region.facing_components(0.0, 0.3, 1.0).unwrap();
+        let facing = region
+            .facing_components(0.0, 0.3, 1.0, &FacingBoundary::new(&region))
+            .unwrap();
         assert!(!facing.is_empty());
     }
 
@@ -1305,7 +1374,11 @@ mod tests {
         let (components, outers) = region.ring_components();
         assert_eq!(outers, [0, 1]);
         assert_eq!(components, [0, 1]);
-        assert!(region.facing_components(0.3, 0.3, 1.0).is_ok());
+        assert!(
+            region
+                .facing_components(0.3, 0.3, 1.0, &FacingBoundary::new(&region))
+                .is_ok()
+        );
     }
 
     fn notch(corner: &[[f64; 2]]) -> ContourSet {
@@ -1373,17 +1446,18 @@ mod tests {
         };
         // The trace's long walls face across material; a reach past the
         // whole trace keeps all of it and none of the pads.
-        let material = region.facing_components(0.2, 0.01, 1.0).unwrap();
+        let boundary = FacingBoundary::new(&region);
+        let material = region.facing_components(0.2, 0.01, 1.0, &boundary).unwrap();
         assert_eq!(material.rings.len(), 1);
         assert!(same_bounds(material.bbox, trace.bbox));
 
         // The pads face each other across their gap, along their whole
         // aligned edges, and the trace is out of reach.
-        let void = region.facing_components(0.0, 0.2, 0.5).unwrap();
+        let void = region.facing_components(0.0, 0.2, 0.5, &boundary).unwrap();
         assert_eq!(void.rings.len(), 2);
         assert!(same_bounds(void.bbox, pad.bbox.union(neighbour.bbox)));
 
-        let with_context = region.facing_components(0.0, 0.2, 10.0).unwrap();
+        let with_context = region.facing_components(0.0, 0.2, 10.0, &boundary).unwrap();
         assert_eq!(with_context.rings.len(), 3);
 
         // A notch faces across void; a plane web between holes across material.
@@ -1392,7 +1466,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             notched
-                .facing_components(0.0, 0.3, 1.0)
+                .facing_components(0.0, 0.3, 1.0, &FacingBoundary::new(&notched))
                 .unwrap()
                 .rings
                 .len(),
@@ -1400,7 +1474,7 @@ mod tests {
         );
         assert!(
             notched
-                .facing_components(0.15, 0.15, 1.0)
+                .facing_components(0.15, 0.15, 1.0, &FacingBoundary::new(&notched))
                 .unwrap()
                 .is_empty()
         );
@@ -1411,12 +1485,18 @@ mod tests {
             .unwrap()
             .difference(&block(6.0, 1.0, 7.0, 3.0))
             .unwrap();
-        let nearby_web = webbed.facing_components(0.3, 0.0, 1.0).unwrap();
+        let boundary = FacingBoundary::new(&webbed);
+        let nearby_web = webbed.facing_components(0.3, 0.0, 1.0, &boundary).unwrap();
         assert_eq!(nearby_web.rings.len(), 3);
         assert!(nearby_web.contains_point(Point::new(2.0, 2.0)));
         assert!(nearby_web.contains_point(Point::new(2.0, 3.5)));
         assert!(!nearby_web.contains_point(Point::new(6.5, 2.0)));
         assert!(!nearby_web.contains_point(Point::new(5.0, 3.5)));
-        assert!(webbed.facing_components(0.0, 0.15, 1.0).unwrap().is_empty());
+        assert!(
+            webbed
+                .facing_components(0.0, 0.15, 1.0, &boundary)
+                .unwrap()
+                .is_empty()
+        );
     }
 }

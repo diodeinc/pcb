@@ -22,7 +22,16 @@ impl Point {
     }
 
     pub fn length(self) -> f64 {
-        self.x.hypot(self.y)
+        let squared = self.x * self.x + self.y * self.y;
+        if squared.is_normal() {
+            squared.sqrt()
+        } else {
+            // Preserve hypot's scaling and nonfinite semantics outside the
+            // normal squared range. Ordinary geometry needs neither scaling
+            // nor its correction to the last bit; coordinate arithmetic is
+            // already covered by the geometry's numerical error allowance.
+            self.x.hypot(self.y)
+        }
     }
 
     pub fn angle_from(self, center: Point) -> f64 {

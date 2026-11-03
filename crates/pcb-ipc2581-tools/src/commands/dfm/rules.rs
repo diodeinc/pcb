@@ -296,8 +296,6 @@ impl Pools {
     pub const SLOT_WIDTHS: Self = Self(1 << 16);
     pub const COPPER: Self = Self(1 << 2);
     pub const CONDUCTOR_OWNERSHIP: Self = Self(1 << 3);
-    pub const COPPER_BOUNDARIES: Self = Self(1 << 4);
-    pub const CONDUCTOR_BOUNDARIES: Self = Self(1 << 5);
     pub const HOLE_LANDS: Self = Self(1 << 6);
     pub const SLOT_LANDS: Self = Self(1 << 7);
     pub const RESOLVED_DRILL_SPANS: Self = Self(1 << 8);
@@ -510,7 +508,6 @@ impl RuleKind {
                 pools: Pools::STACKUP
                     | Pools::SLOTS
                     | Pools::COPPER
-                    | Pools::COPPER_BOUNDARIES
                     | Pools::SLOT_LANDS
                     | Pools::RESOLVED_DRILL_SPANS,
             },
@@ -521,7 +518,7 @@ impl RuleKind {
                 finding_title: format!("{} annular ring is below minimum", class.label()),
                 quantity_label: format!("{} annular ring", class.label()),
                 witness_roles: Some(["hole_boundary", "copper_boundary"]),
-                pools: Pools::HOLES | Pools::COPPER | Pools::COPPER_BOUNDARIES | Pools::HOLE_LANDS,
+                pools: Pools::HOLES | Pools::COPPER | Pools::HOLE_LANDS,
             },
             Self::HoleToCopperClearance(class) => Semantics {
                 subject: "hole_layer_pair",
@@ -538,7 +535,6 @@ impl RuleKind {
                 witness_roles: Some(["drilled_hole", "offending_copper"]),
                 pools: Pools::HOLES
                     | Pools::COPPER
-                    | Pools::CONDUCTOR_BOUNDARIES
                     | Pools::NET_SHORTS
                     | Pools::HOLE_LANDS
                     | Pools::RESOLVED_DRILL_SPANS,
@@ -559,7 +555,6 @@ impl RuleKind {
                 pools: Pools::STACKUP
                     | Pools::SLOTS
                     | Pools::COPPER
-                    | Pools::CONDUCTOR_BOUNDARIES
                     | Pools::NET_SHORTS
                     | Pools::SLOT_LANDS
                     | Pools::RESOLVED_DRILL_SPANS,
@@ -571,7 +566,7 @@ impl RuleKind {
                 finding_title: "V-score centerline is too close to copper".to_owned(),
                 quantity_label: "V-score centerline-to-copper clearance".to_owned(),
                 witness_roles: Some(["vscore_centerline", "copper_boundary"]),
-                pools: Pools::SCORES | Pools::COPPER | Pools::COPPER_BOUNDARIES,
+                pools: Pools::SCORES | Pools::COPPER,
             },
             Self::LineworkToCopperClearance(Linework::BoardEdge) => Semantics {
                 subject: "outline_layer_pair",
@@ -580,7 +575,7 @@ impl RuleKind {
                 finding_title: "Board edge is too close to copper".to_owned(),
                 quantity_label: "board-edge-to-copper clearance".to_owned(),
                 witness_roles: Some(["board_outline", "copper_boundary"]),
-                pools: Pools::BOARD_OUTLINES | Pools::COPPER | Pools::COPPER_BOUNDARIES,
+                pools: Pools::BOARD_OUTLINES | Pools::COPPER,
             },
             Self::BoardArrayPairClearance => Semantics {
                 subject: "array_pair",
@@ -1414,7 +1409,11 @@ limit = { minimum = "0.30 mm" }
             position: LayerPosition::Outer,
             copper_weight_oz: Some(thickness_mm / 0.0348),
             image: pcb_ir::geom::ContourSet::empty(pcb_ir::geom::Resolution::default()),
+            boundary: pcb_ir::geom::ContourSet::empty(pcb_ir::geom::Resolution::default())
+                .prepare_query(),
+            scene_source: None,
             conductors: Vec::new(),
+            conductors_near: pcb_ir::geom::dfm::BBoxIndex::new(Vec::new()),
             net_shorts: Vec::new(),
             piece_pairs: 0,
             lands: Vec::new(),

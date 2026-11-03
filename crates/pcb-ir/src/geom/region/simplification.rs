@@ -10,7 +10,22 @@ use i_overlay::core::overlay::{IntOverlayOptions, Overlay};
 use i_overlay::core::overlay_rule::OverlayRule;
 use i_overlay::core::simplify::Simplify;
 use i_overlay::i_float::int::point::IntPoint;
+use i_overlay::i_shape::flat::buffer::FlatContoursBuffer;
 use i_overlay::i_shape::int::shape::IntShapes;
+use std::collections::VecDeque;
+use std::hash::Hasher;
+use std::sync::{Arc, Mutex};
+
+struct Regularization {
+    fingerprint: u64,
+    fill: OverlayFillRule,
+    input: Vec<Ring>,
+    output: Arc<Vec<Shape>>,
+    vertices: usize,
+}
+
+static REGULARIZATIONS: Mutex<VecDeque<Regularization>> = Mutex::new(VecDeque::new());
+const CACHED_VERTICES: usize = 4_000_000;
 
 /// Regularize rings under the given fill rule into non-overlapping shapes.
 pub(crate) fn simplify_rings(rings: Vec<Ring>, fill_rule: FillRule) -> Vec<Ring> {
@@ -42,10 +57,136 @@ pub(super) fn overlay(
     rule: OverlayRule,
     fill_rule: OverlayFillRule,
 ) -> Vec<Shape> {
-    let [shapes] = overlay_on_lattice(subject, clip, true, |mut overlay| {
-        [overlay.overlay(rule, fill_rule)]
+    // This caches only the pure polygon operation, never a ContourSet or its
+    // budget. Callers still inherit and validate their own accuracy history.
+    let vertices = subject.iter().map(Vec::len).sum::<usize>();
+    let fingerprint = (rule == OverlayRule::Subject
+        && clip.is_empty()
+        && (4096..=CACHED_VERTICES / 2).contains(&vertices))
+    .then(|| {
+        let mut hash = rustc_hash::FxHasher::default();
+        hash.write_usize(subject.len());
+        for ring in subject {
+            hash.write_usize(ring.len());
+            for point in ring {
+                hash.write_u64(point[0].to_bits());
+                hash.write_u64(point[1].to_bits());
+            }
+        }
+        hash.finish()
     });
+    if let Some(fingerprint) = fingerprint {
+        let hit = REGULARIZATIONS.try_lock().ok().and_then(|mut cache| {
+            let index = cache.iter().position(|entry| {
+                entry.fingerprint == fingerprint
+                    && entry.fill == fill_rule
+                    && entry.input.len() == subject.len()
+                    && entry.input.iter().zip(subject).all(|(left, right)| {
+                        left.len() == right.len()
+                            && left
+                                .iter()
+                                .flatten()
+                                .zip(right.iter().flatten())
+                                .all(|(a, b)| a.to_bits() == b.to_bits())
+                    })
+            })?;
+            let entry = cache.remove(index)?;
+            let output = Arc::clone(&entry.output);
+            cache.push_back(entry);
+            Some(output)
+        });
+        if let Some(output) = hit {
+            return (*output).clone();
+        }
+    }
+    let [shapes] = overlay_on_lattice(subject, clip, true, fill_rule, |subject, clip| {
+        if rule == OverlayRule::Subject && clip.points.is_empty() {
+            [regularize_lattice(subject, fill_rule)]
+        } else {
+            [Overlay::from_subj_and_clip(subject, clip).overlay(rule, fill_rule)]
+        }
+    });
+    let retained = vertices + shapes.iter().flatten().map(Vec::len).sum::<usize>();
+    if let Some(fingerprint) = fingerprint
+        && retained <= CACHED_VERTICES
+    {
+        let entry = Regularization {
+            fingerprint,
+            fill: fill_rule,
+            input: subject.to_vec(),
+            output: Arc::new(shapes.clone()),
+            vertices: retained,
+        };
+        if let Ok(mut cache) = REGULARIZATIONS.try_lock() {
+            let mut size = cache.iter().map(|entry| entry.vertices).sum::<usize>();
+            while size + retained > CACHED_VERTICES || cache.len() >= 64 {
+                size -= cache.pop_front().unwrap().vertices;
+            }
+            cache.push_back(entry);
+        }
+    }
     shapes
+}
+
+/// Let the kernel detect simple contours and resolve intersections. Keep hull
+/// starts canonical even when its single-contour path preserves input order.
+fn regularize_lattice(subject: &FlatContoursBuffer<i64>, fill: OverlayFillRule) -> IntShapes<i64> {
+    let mut shapes = subject.simplify(fill, IntOverlayOptions::default());
+    for shape in &mut shapes {
+        let ring = &mut shape[0];
+        let first = ring
+            .iter()
+            .enumerate()
+            .min_by_key(|(_, point)| (point.x, point.y))
+            .unwrap()
+            .0;
+        let start = (first + ring.len() - 1) % ring.len();
+        ring.rotate_left(start);
+    }
+    shapes
+}
+
+/// Convex orientation requiring nonincident vertices to clear
+/// every supporting line by `margin` lattice units. On a convex contour the
+/// nearest such vertices are the two adjacent to the edge's endpoints.
+fn convex_turn(points: &[IntPoint<i64>], margin: f64) -> Option<i128> {
+    if points.len() < 3 {
+        return None;
+    }
+    let mut turn = 0;
+    let mut first_direction = 0;
+    let mut direction = 0;
+    let mut reversals = 0;
+    for index in 0..points.len() {
+        let a = points[index];
+        let b = points[(index + 1) % points.len()];
+        let c = points[(index + 2) % points.len()];
+        let cross = (b.x as i128 - a.x as i128) * (c.y as i128 - b.y as i128)
+            - (b.y as i128 - a.y as i128) * (c.x as i128 - b.x as i128);
+        let sign = cross.signum();
+        if sign == 0 || (turn != 0 && sign != turn) {
+            return None;
+        }
+        // L1 length bounds Euclidean length from above, so this comparison
+        // is a conservative lower bound on distance to either adjacent line.
+        let ab = (b.x as i128 - a.x as i128).abs() + (b.y as i128 - a.y as i128).abs();
+        let bc = (c.x as i128 - b.x as i128).abs() + (c.y as i128 - b.y as i128).abs();
+        if cross.abs() as f64 <= margin * ab.max(bc) as f64 {
+            return None;
+        }
+        turn = sign;
+        let next = b.x.cmp(&a.x) as i8;
+        if next != 0 {
+            if first_direction == 0 {
+                first_direction = next;
+            } else if next != direction {
+                reversals += 1;
+            }
+            direction = next;
+        }
+    }
+    reversals += usize::from(first_direction != direction);
+    (reversals == 2).then_some(turn)
 }
 
 /// Several rules over one overlay of the same operands. The graph is split,
@@ -57,7 +198,8 @@ pub(super) fn overlay_rules<const N: usize>(
     rules: [OverlayRule; N],
     fill_rule: OverlayFillRule,
 ) -> [Vec<Shape>; N] {
-    overlay_on_lattice(subject, clip, true, |mut overlay| {
+    overlay_on_lattice(subject, clip, true, fill_rule, |subject, clip| {
+        let mut overlay = Overlay::from_subj_and_clip(subject, clip);
         let mut buffer = BooleanExtractionBuffer::default();
         match overlay.build_graph_view(fill_rule) {
             Some(graph) => rules.map(|rule| graph.extract_shapes(rule, &mut buffer)),
@@ -71,9 +213,13 @@ pub(super) fn overlay_rules<const N: usize>(
 /// cancels seams where source fills were cut along each other, and a curve
 /// built from regularized rings has none.
 pub(super) fn positive_winding(rings: &[Ring]) -> Vec<Ring> {
-    let [shapes] = overlay_on_lattice(rings, &[], false, |mut overlay| {
-        [overlay.overlay(OverlayRule::Subject, OverlayFillRule::Positive)]
-    });
+    let [shapes] = overlay_on_lattice(
+        rings,
+        &[],
+        false,
+        OverlayFillRule::Positive,
+        |subject, _| [regularize_lattice(subject, OverlayFillRule::Positive)],
+    );
     flatten_shapes(shapes)
 }
 
@@ -83,35 +229,83 @@ fn overlay_on_lattice<const N: usize>(
     subject: &[Ring],
     clip: &[Ring],
     split: bool,
-    extract: impl FnOnce(Overlay<i64>) -> [IntShapes<i64>; N],
+    fill_rule: OverlayFillRule,
+    extract: impl FnOnce(&FlatContoursBuffer<i64>, &FlatContoursBuffer<i64>) -> [IntShapes<i64>; N],
 ) -> [Vec<Shape>; N] {
     let bbox = rings_bbox(subject).union(rings_bbox(clip));
-    let vertices = split.then(|| VertexColumns::new(&[subject, clip], bbox));
     let scale = lattice_per_mm(bbox);
-    let lattice = |rings: &[Ring]| {
-        rings
-            .iter()
-            .map(|ring| {
-                let mut lattice = Vec::with_capacity(ring.len());
+    let isolated = (split && subject.len() == 1 && clip.is_empty())
+        .then(|| {
+            let points = subject[0]
+                .iter()
+                .map(|&[x, y]| {
+                    IntPoint::new((x * scale).round() as i64, (y * scale).round() as i64)
+                })
+                .collect::<Vec<_>>();
+            // Keep the joint lattice. Only omit the vertex index when no
+            // nonincident vertex could pass its on-edge test, even after
+            // source arithmetic and integer rounding move the supporting line.
+            let margin = (ON_EDGE_MM + 2.0 * numerical_error(bbox)) * scale + 4.0;
+            convex_turn(&points, margin)?;
+            let ranges = std::iter::once(0..points.len()).collect();
+            Some(FlatContoursBuffer { points, ranges })
+        })
+        .flatten();
+    let (subject, clip) = if let Some(subject) = isolated {
+        (subject, FlatContoursBuffer::default())
+    } else {
+        let vertices = split.then(|| VertexColumns::new(&[subject, clip], bbox));
+        let mut on_edge = Vec::new();
+        // Point arenas and contour ranges replace one allocation per ring.
+        // Preserve the split points and their order before optional exact
+        // rectangle consolidation; reserve kernel segments from this count.
+        let mut lattice = |rings: &[Ring]| {
+            let mut buffer = FlatContoursBuffer {
+                points: Vec::with_capacity(rings.iter().map(Vec::len).sum()),
+                ranges: Vec::with_capacity(rings.len()),
+            };
+            for ring in rings {
+                let start = buffer.points.len();
                 let mut emit = |[x, y]: [f64; 2]| {
-                    lattice.push(IntPoint::new(
+                    buffer.points.push(IntPoint::new(
                         (x * scale).round() as i64,
                         (y * scale).round() as i64,
                     ));
                 };
                 match &vertices {
-                    Some(vertices) => vertices.split(ring, &mut emit),
+                    Some(vertices) => vertices.split(ring, &mut on_edge, &mut emit),
                     None => ring.iter().copied().for_each(&mut emit),
                 }
-                lattice
+                buffer.ranges.push(start..buffer.points.len());
+            }
+            buffer
+        };
+        // Scratch arenas and the vertex index die before graph construction.
+        let mut prepared_subject = lattice(subject);
+        let clip = lattice(clip);
+        // A large union of positive rectangles can lose internal strip edges
+        // exactly on the existing lattice. Do not alter winding multiplicities
+        // under parity fill or in the presence of negative/nonrectangular rings.
+        if clip.points.is_empty()
+            && fill_rule == OverlayFillRule::NonZero
+            && subject.len() > 256
+            && subject.iter().all(|ring| match ring.as_slice() {
+                [a, b, c, d] => {
+                    a[1] == b[1]
+                        && b[0] == c[0]
+                        && c[1] == d[1]
+                        && d[0] == a[0]
+                        && a[0] < b[0]
+                        && a[1] < d[1]
+                }
+                _ => false,
             })
-            .collect::<Vec<_>>()
+        {
+            coalesce_rectangle_strips(&mut prepared_subject, (ON_EDGE_MM * scale).ceil() as i64);
+        }
+        (prepared_subject, clip)
     };
-    extract(Overlay::from_subj_and_clip(
-        lattice(subject).as_slice(),
-        lattice(clip).as_slice(),
-    ))
-    .map(|shapes| {
+    extract(&subject, &clip).map(|shapes| {
         shapes
             .into_iter()
             .map(|shape| {
@@ -126,6 +320,232 @@ fn overlay_on_lattice<const N: usize>(
             })
             .collect()
     })
+}
+
+/// Consolidate equal-span, touching or overlapping rectangles after all source
+/// edge splitting and lattice conversion. Kinked contours remain untouched.
+/// Two in-place sort/compact passes bound construction to O(n log n) and O(n)
+/// scratch, rather than iterating a potentially quadratic strip fixed point.
+fn coalesce_rectangle_strips(buffer: &mut FlatContoursBuffer<i64>, guard: i64) {
+    let mut candidates = Vec::with_capacity(buffer.ranges.len());
+    let mut others = Vec::new();
+    for range in &buffer.ranges {
+        let ring = &buffer.points[range.clone()];
+        let min_x = ring.iter().map(|p| p.x).min().unwrap();
+        let max_x = ring.iter().map(|p| p.x).max().unwrap();
+        let min_y = ring.iter().map(|p| p.y).min().unwrap();
+        let max_y = ring.iter().map(|p| p.y).max().unwrap();
+        let mut length = 0_u128;
+        let mut right_rise = 0_i128;
+        let on_frame = ring.iter().zip(ring.iter().cycle().skip(1)).all(|(a, b)| {
+            length += (b.x as i128 - a.x as i128).unsigned_abs()
+                + (b.y as i128 - a.y as i128).unsigned_abs();
+            if a.x == max_x && b.x == max_x {
+                right_rise += b.y as i128 - a.y as i128;
+            }
+            (a.x == b.x && (a.x == min_x || a.x == max_x))
+                || (a.y == b.y && (a.y == min_y || a.y == max_y))
+        });
+        let width = max_x as i128 - min_x as i128;
+        let height = max_y as i128 - min_y as i128;
+        if on_frame
+            && width > 0
+            && height > 0
+            && right_rise == height
+            && length == 2 * (width + height) as u128
+        {
+            candidates.push((range.clone(), [min_x, max_x, min_y, max_y]));
+        } else {
+            others.push((range.clone(), [min_x, max_x, min_y, max_y]));
+        }
+    }
+    // Splitting can kink a rectangle, even creating a negative-winding
+    // pocket. Preserve multiplicities wherever such a contour can interact.
+    // Bound the exception scan; general batches keep the ordinary overlay.
+    if others.len() > 64 {
+        return;
+    }
+    let exceptions = others.iter().map(|(_, bounds)| *bounds).collect::<Vec<_>>();
+    let mut rectangles = Vec::with_capacity(candidates.len());
+    for (range, bounds) in candidates {
+        let protected = exceptions.iter().any(|other| {
+            bounds[0] as i128 <= other[1] as i128 + guard as i128
+                && bounds[1] as i128 >= other[0] as i128 - guard as i128
+                && bounds[2] as i128 <= other[3] as i128 + guard as i128
+                && bounds[3] as i128 >= other[2] as i128 - guard as i128
+        });
+        if protected {
+            others.push((range, bounds));
+        } else {
+            rectangles.push(bounds);
+        }
+    }
+    let before = rectangles.len();
+    for _ in 0..2 {
+        rectangles.sort_unstable();
+        let mut kept = 0;
+        for index in 0..rectangles.len() {
+            let rectangle = rectangles[index];
+            if kept > 0
+                && rectangles[kept - 1][0..2] == rectangle[0..2]
+                && rectangle[2] <= rectangles[kept - 1][3]
+            {
+                rectangles[kept - 1][3] = rectangles[kept - 1][3].max(rectangle[3]);
+            } else {
+                rectangles[kept] = rectangle;
+                kept += 1;
+            }
+        }
+        rectangles.truncate(kept);
+        for rectangle in &mut rectangles {
+            let [a, b, c, d] = *rectangle;
+            *rectangle = [c, d, a, b];
+        }
+    }
+    if let Some(union) = rectangle_union_strips(&rectangles) {
+        rectangles = union;
+    }
+    if rectangles.len() == before {
+        return;
+    }
+    let mut merged = FlatContoursBuffer {
+        points: Vec::with_capacity(
+            others.iter().map(|(range, _)| range.len()).sum::<usize>() + 4 * rectangles.len(),
+        ),
+        ranges: Vec::with_capacity(others.len() + rectangles.len()),
+    };
+    for (range, _) in others {
+        let start = merged.points.len();
+        merged.points.extend_from_slice(&buffer.points[range]);
+        merged.ranges.push(start..merged.points.len());
+    }
+    for [min_x, max_x, min_y, max_y] in rectangles {
+        let start = merged.points.len();
+        merged.points.extend([
+            IntPoint::new(min_x, min_y),
+            IntPoint::new(max_x, min_y),
+            IntPoint::new(max_x, max_y),
+            IntPoint::new(min_x, max_y),
+        ]);
+        merged.ranges.push(start..merged.points.len());
+    }
+    *buffer = merged;
+}
+
+/// Exact sweep over the already-snapped positive rectangles. Coverage counts
+/// retain overlap multiplicity; only covered spans are emitted. A bounded
+/// traversal falls back to the original rectangles for fragmented sweeps.
+fn rectangle_union_strips(rectangles: &[[i64; 4]]) -> Option<Vec<[i64; 4]>> {
+    use std::collections::BTreeMap;
+    if rectangles.len() < 2 {
+        return None;
+    }
+    let mut ys = rectangles
+        .iter()
+        .flat_map(|r| [r[2], r[3]])
+        .collect::<Vec<_>>();
+    ys.sort_unstable();
+    ys.dedup();
+    let mut events = Vec::with_capacity(2 * rectangles.len());
+    for &[left, right, bottom, top] in rectangles {
+        let low = ys.binary_search(&bottom).unwrap();
+        let high = ys.binary_search(&top).unwrap();
+        events.extend([(left, low, high, 1_i32), (right, low, high, -1)]);
+    }
+    events.sort_unstable();
+    struct Coverage {
+        // The range's own count, and the minimum/maximum including children.
+        nodes: Vec<[i32; 3]>,
+    }
+    impl Coverage {
+        fn add(&mut self, node: usize, span: (usize, usize), range: (usize, usize), delta: i32) {
+            let (left, right) = span;
+            if range.0 <= left && right <= range.1 {
+                for count in &mut self.nodes[node] {
+                    *count += delta;
+                }
+                return;
+            }
+            let middle = (left + right) / 2;
+            if range.0 < middle {
+                self.add(2 * node, (left, middle), range, delta);
+            }
+            if range.1 > middle {
+                self.add(2 * node + 1, (middle, right), range, delta);
+            }
+            self.nodes[node][1] =
+                self.nodes[node][0] + self.nodes[2 * node][1].min(self.nodes[2 * node + 1][1]);
+            self.nodes[node][2] =
+                self.nodes[node][0] + self.nodes[2 * node][2].max(self.nodes[2 * node + 1][2]);
+        }
+
+        fn spans(
+            &self,
+            node: usize,
+            ys: &[i64],
+            inherited: i32,
+            work: &mut usize,
+            out: &mut Vec<(i64, i64)>,
+        ) -> Option<()> {
+            *work = work.checked_sub(1)?;
+            let [local, low, high] = self.nodes[node];
+            if low + inherited > 0 {
+                let (start, end) = (ys[0], ys[ys.len() - 1]);
+                if let Some(last) = out.last_mut()
+                    && last.1 == start
+                {
+                    last.1 = end;
+                } else {
+                    out.push((start, end));
+                }
+            } else if high + inherited > 0 {
+                let middle = (ys.len() - 1) / 2;
+                self.spans(2 * node, &ys[..=middle], inherited + local, work, out)?;
+                self.spans(2 * node + 1, &ys[middle..], inherited + local, work, out)?;
+            }
+            Some(())
+        }
+    }
+    let mut coverage = Coverage {
+        nodes: vec![[0; 3]; 4 * ys.len()],
+    };
+    let mut work = 128 * rectangles.len();
+    let mut result: Vec<[i64; 4]> = Vec::new();
+    let mut active = BTreeMap::<(i64, i64), usize>::new();
+    let mut index = 0;
+    let mut spans = Vec::new();
+    while index < events.len() {
+        let x = events[index].0;
+        while index < events.len() && events[index].0 == x {
+            let (_, low, high, delta) = events[index];
+            coverage.add(1, (0, ys.len() - 1), (low, high), delta);
+            index += 1;
+        }
+        let Some(&(next, ..)) = events.get(index) else {
+            break;
+        };
+        spans.clear();
+        coverage.spans(1, &ys, 0, &mut work, &mut spans)?;
+        let mut continued = BTreeMap::new();
+        for &span in &spans {
+            let id = match active.remove(&span) {
+                Some(id) => {
+                    result[id][1] = next;
+                    id
+                }
+                None => {
+                    result.push([x, next, span.0, span.1]);
+                    result.len() - 1
+                }
+            };
+            continued.insert(span, id);
+        }
+        if result.len() >= rectangles.len() {
+            return None;
+        }
+        active = continued;
+    }
+    Some(result)
 }
 
 /// The vertices of one overlay, indexed to find those lying on an edge.
@@ -205,10 +625,14 @@ impl VertexColumns {
     }
 
     /// Emit `ring` with every edge split at the vertices lying on it.
-    fn split(&self, ring: &[[f64; 2]], mut emit: impl FnMut([f64; 2])) {
+    fn split(
+        &self,
+        ring: &[[f64; 2]],
+        on_edge: &mut Vec<(f64, [f64; 2])>,
+        mut emit: impl FnMut([f64; 2]),
+    ) {
         let reach = ON_EDGE_MM;
         let last = self.columns.len() - 3;
-        let mut on_edge = Vec::new();
         for (index, &[ax, ay]) in ring.iter().enumerate() {
             let [bx, by] = ring[(index + 1) % ring.len()];
             let (dx, dy) = (bx - ax, by - ay);

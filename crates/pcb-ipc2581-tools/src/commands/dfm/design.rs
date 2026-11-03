@@ -14,8 +14,8 @@
 //!
 //! Exactly the pools the configured rules read are extracted; the rest stay
 //! empty. Pools are flat vectors; copper follows physical stackup order
-//! when available, otherwise declaration order. Derived facts that
-//! relate pools (a hole's lands, a copper layer's boundary index) are side
+//! when available, otherwise declaration order. Geometry indexes live with
+//! their source images; relations between pools (a hole's lands) are side
 //! tables indexed like their primary pool. Extraction fails closed without
 //! failing whole: a drilled feature whose plating, diameter, or outline the
 //! file does not state is never a quietly dropped subject — it blocks the
@@ -23,6 +23,7 @@
 
 use pcb_ir::geom::Resolution;
 use std::collections::{HashMap, HashSet};
+use std::sync::OnceLock;
 
 use anyhow::{Context, Result, bail};
 use ipc2581::Symbol;
@@ -57,6 +58,9 @@ use super::report::{
 use super::rules::{self, Pools, Rule};
 use crate::assembly::{self, ComponentFacts};
 
+/// Whether a drill center is in copper, and its radial copper enclosure.
+type AnnularEnclosure = (bool, Option<Distance>);
+
 pub(super) struct Design<'a> {
     pub imported: &'a ImportedDesign,
     pub scope: ArtworkScope,
@@ -75,14 +79,9 @@ pub(super) struct Design<'a> {
     /// when a width rule requests them. Placed slots belong to their own Step.
     pub slot_widths: Vec<Option<SlotWidth>>,
     pub copper_layers: Vec<CopperLayer>,
-    /// One boundary index per copper layer, for clearance and enclosure
-    /// queries against the Step's composed copper.
-    pub copper_boundaries: Vec<PreparedRegion>,
-    /// One boundary index per attributed conductor on each copper layer.
-    pub conductor_boundaries: Vec<Vec<PreparedRegion>>,
-    /// Each copper layer's conductors by their bounds, so a drilled feature
-    /// meets the few conductors near it rather than every one on the layer.
-    pub conductors_near: Vec<BBoxIndex>,
+    /// Plated-hole containment and radial enclosure, independent of rule
+    /// tier. Cells are indexed by hole then copper layer and filled on demand.
+    pub annular_enclosures: OnceLock<Vec<OnceLock<AnnularEnclosure>>>,
     /// Each hole's lands, one per copper layer it owns a land on, indexed
     /// like `holes`.
     pub hole_lands: Vec<Vec<HoleLand>>,
@@ -588,21 +587,6 @@ impl<'a> Design<'a> {
             Some(Ok(physical_holes)) => link_lands(drilled, &land_indices, physical_holes),
             _ => Ok(Vec::new()),
         };
-        let (conductor_boundaries, conductors_near) = pool(
-            wanted,
-            Pools::CONDUCTOR_BOUNDARIES,
-            Pools::COPPER,
-            &mut blockers,
-            || {
-                #[cfg(not(target_family = "wasm"))]
-                let layers = copper_layers.par_iter();
-                #[cfg(target_family = "wasm")]
-                let layers = copper_layers.iter();
-                Ok(layers
-                    .map(|layer| conductor_index(&layer.conductors))
-                    .unzip())
-            },
-        );
         let components = pool(
             wanted,
             Pools::COMPONENTS,
@@ -629,29 +613,15 @@ impl<'a> Design<'a> {
             step,
             placements,
             resolution,
-            conductor_boundaries,
+            annular_enclosures: OnceLock::new(),
             npth_lands,
             partial_spans,
-            conductors_near,
             slot_widths: pool(
                 wanted,
                 Pools::SLOT_WIDTHS,
                 Pools::SLOTS,
                 &mut blockers,
                 || collect_slot_widths(&slots),
-            ),
-            copper_boundaries: pool(
-                wanted,
-                Pools::COPPER_BOUNDARIES,
-                Pools::COPPER,
-                &mut blockers,
-                || {
-                    #[cfg(not(target_family = "wasm"))]
-                    let layers = copper_layers.par_iter();
-                    #[cfg(target_family = "wasm")]
-                    let layers = copper_layers.iter();
-                    Ok(layers.map(|layer| layer.image.prepare_query()).collect())
-                },
             ),
             hole_lands: pool(
                 wanted,
@@ -1362,9 +1332,15 @@ pub(super) struct CopperLayer {
     /// image — its width, the ring it leaves a hole, its distance to a line —
     /// is measured in the design of the Step that paints it.
     pub image: ContourSet,
+    pub boundary: PreparedRegion,
+    /// Native curves already normalized while preparing this layer. A scene
+    /// draws only the Step itself, so layers carrying placed content cannot
+    /// share this document with it.
+    pub scene_source: Option<GeometryDocument>,
     /// The final copper of the Step's own conductors, and of those it places
     /// that come within a rule's reach of anything outside their placement.
     pub conductors: Vec<CopperConductor>,
+    pub conductors_near: BBoxIndex,
     pub net_shorts: Vec<NetShort>,
     /// How many pairs of connected conductor pieces the design decides: all
     /// it places and its own, but for the pairs inside one placement.
@@ -1474,22 +1450,27 @@ pub(super) struct CopperConductor {
     /// As for [`Hole::branch`].
     pub branch: Option<u32>,
     pub image: ContourSet,
+    // Keep conductors compact while sorting/scanning their identities and bounds.
+    pub boundary: OnceLock<Box<PreparedRegion>>,
 }
 
-/// Boundary queries for each conductor and a bounds index over them, as
-/// [`Design::conductor_boundaries`] and [`Design::conductors_near`] hold.
-pub(super) fn conductor_index(conductors: &[CopperConductor]) -> (Vec<PreparedRegion>, BBoxIndex) {
-    (
+impl CopperConductor {
+    pub fn boundary(&self) -> &PreparedRegion {
+        self.boundary
+            .get_or_init(|| Box::new(self.image.prepare_query()))
+    }
+}
+
+/// Prepare each conductor's boundary and index their bounds for nearby queries.
+pub(super) fn conductor_index(conductors: &[CopperConductor]) -> BBoxIndex {
+    for conductor in conductors {
+        conductor.boundary();
+    }
+    BBoxIndex::new(
         conductors
             .iter()
-            .map(|conductor| conductor.image.prepare_query())
+            .map(|conductor| conductor.image.bbox)
             .collect(),
-        BBoxIndex::new(
-            conductors
-                .iter()
-                .map(|conductor| conductor.image.bbox)
-                .collect(),
-        ),
     )
 }
 
@@ -2255,19 +2236,22 @@ fn collect_copper_layers(
                 Vec::new()
             };
             let owners = images.pop().context("missing copper image")?;
-            let mut composer = pcb_ir::geom::region::PaintComposer::new(source.resolution);
-            for (_, image) in owners.iter().filter(|(id, _)| id.instance().is_none()) {
-                composer.push(Polarity::Dark, image.clone());
-            }
-            let image = composer.finish()?;
             let conductors = owners
                 .into_iter()
                 .map(|(id, image)| CopperConductor {
                     id,
                     branch: source.branch(id.instance()),
                     image,
+                    boundary: OnceLock::new(),
                 })
                 .collect::<Vec<_>>();
+            let (image, boundary) = ContourSet::union_partitioned(
+                source.resolution,
+                conductors
+                    .iter()
+                    .filter(|c| c.id.instance().is_none())
+                    .map(|c| (&c.image, c.boundary())),
+            )?;
             let mut conductors = text_islands(source, conductors, drilled)?;
             conductors.sort_by_key(|conductor| conductor_order(imported, conductor.id));
             // The file's side attribute is authoritative; the stackup
@@ -2284,6 +2268,13 @@ fn collect_copper_layers(
                     },
                     copper_weight_oz: copper_weight_oz(imported, layer.name),
                     image,
+                    boundary,
+                    scene_source: document
+                        .features
+                        .iter()
+                        .all(|feature| source.placed(feature).is_none())
+                        .then_some(document),
+                    conductors_near: conductor_index(&conductors),
                     conductors,
                     net_shorts,
                     piece_pairs: 0,
@@ -2328,7 +2319,7 @@ fn text_islands(
         union.push(Polarity::Dark, conductor.image.clone());
     }
     let union = union.finish()?;
-    let (boundaries, near) = conductor_index(&others);
+    let near = conductor_index(&others);
     let drills = BBoxIndex::new(drilled.iter().map(|(bbox, _)| *bbox).collect());
     let mut members = Vec::new();
     let islands = union.connected_components();
@@ -2343,7 +2334,7 @@ fn text_islands(
         let isolated = near
             .query(island.bbox.expand(tol::REGION_MM))
             .into_iter()
-            .all(|index| !touches(&others[index].image, &boundaries[index]))
+            .all(|index| !touches(&others[index].image, others[index].boundary()))
             && drills.query(island.bbox).into_iter().all(|index| {
                 island
                     .intersection(&ContourSet::rectangle(drilled[index].0, source.resolution))
@@ -2408,6 +2399,7 @@ fn text_islands(
             },
             branch: None,
             image: island,
+            boundary: OnceLock::new(),
         });
     }
     others.extend(
@@ -2694,22 +2686,43 @@ fn collect_mask_layers(source: Source<'_>) -> Result<Vec<MaskLayer>> {
                     || !opens_mask(feature)
                     || !webbed.query(feature.bbox).is_empty()
             });
-            let image = document.clone().into_layer_image(
-                0,
-                LayerRole::Soldermask,
-                pcb_ir::dialects::Side::None,
-                resolution,
-            )?;
+            let owner_of = |feature: &Feature| (feature.source_step_ref, source.placed(feature));
+            let mut painted_owners = document
+                .features
+                .iter()
+                .filter(|feature| feature.polarity == Polarity::Dark)
+                .map(owner_of);
+            let first_owner = painted_owners.next();
+            let single_owner = painted_owners.all(|owner| Some(owner) == first_owner);
+            // For one source owner, its composed openings ARE the complete
+            // image. Multiple owners still compose together separately:
+            // individually insignificant pieces can join into a significant
+            // opening, so unioning their already-filtered images is unsound.
+            let separate_image = (!single_owner)
+                .then(|| {
+                    document.clone().into_layer_image(
+                        0,
+                        LayerRole::Soldermask,
+                        pcb_ir::dialects::Side::None,
+                        resolution,
+                    )
+                })
+                .transpose()?;
             pcb_ir::dialects::ipc::process::expand_feature_placement_groups(&mut document);
             pcb_ir::dialects::ipc::process::normalize_for_artwork(&mut document, resolution)?;
             let artwork =
                 lower_attributed_artwork(&document, LayerRole::Soldermask, &|_, feature| {
-                    (feature.source_step_ref, source.placed(feature))
+                    owner_of(feature)
                 })?;
             let owners = artwork::compose_owner_regions(&artwork, |owner| *owner, resolution)?
                 .0
                 .pop()
                 .context("missing soldermask image")?;
+            let image = separate_image.unwrap_or_else(|| {
+                owners
+                    .first()
+                    .map_or_else(|| ContourSet::empty(resolution), |(_, image)| image.clone())
+            });
             Ok(MaskLayer {
                 layer: layer_ref(
                     name,

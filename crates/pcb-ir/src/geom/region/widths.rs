@@ -508,10 +508,10 @@ impl WidthAxis {
             .flat_map(|&polynomial| roots(polynomial))
             .collect::<Vec<_>>();
         cuts.extend(roots(self.radius));
-        // Every edge's line cuts the axis, even one the axis never reaches:
-        // a cut is also a point where the axis is judged within tolerance,
-        // and a tapering sliver may validate at such points alone.
-        for &(a, b) in &region.segments {
+        // Containment changes only when the center crosses a finite region
+        // edge. Remote supporting lines do not introduce containment events.
+        // Keep an error margin for tangencies at rounded range endpoints.
+        for (a, b) in region.segments_meeting(self.bounds().expand(error)) {
             cuts.extend(roots(self.projection(a, perpendicular(b - a))));
         }
         let mut clearance = Vec::new();

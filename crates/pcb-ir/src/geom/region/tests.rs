@@ -6,6 +6,94 @@ pub(super) fn res(tolerance_mm: f64) -> Resolution {
 }
 
 #[test]
+fn indexed_union_keeps_holes_separated_islands_contacts_and_budgets() {
+    let resolution = res(0.0);
+    let rectangle = |x0, y0, x1, y1| ContourSet::rectangle(rect(x0, y0, x1, y1), resolution);
+    let frame = rectangle(0.0, 0.0, 8.0, 6.0)
+        .difference(&rectangle(1.0, 1.0, 7.0, 5.0))
+        .unwrap();
+    let regions = [
+        frame,
+        rectangle(2.0, 2.0, 3.0, 4.0),
+        rectangle(2.2, 2.2, 2.6, 3.8),
+        rectangle(8.0, 2.0, 10.0, 3.0),
+        rectangle(7.0, 2.0, 9.0, 4.0),
+        rectangle(10.000003, 2.0, 11.000003, 3.0),
+    ];
+    let boundaries = regions
+        .iter()
+        .map(ContourSet::prepare_query)
+        .collect::<Vec<_>>();
+    let (union, boundary) =
+        ContourSet::union_partitioned(resolution, regions.iter().zip(&boundaries)).unwrap();
+    assert!((union.area() - 30.0).abs() < 1e-9);
+    assert_eq!(union.connected_components().len(), 3);
+    // Analytic distances in the frame, hole, island, merged seam and tiny gap.
+    for (point, expected) in [
+        (Point::new(0.5, 3.0), -0.5),
+        (Point::new(5.0, 3.0), 2.0),
+        (Point::new(2.5, 3.0), -0.5),
+        (Point::new(8.0, 3.0), -1.0),
+        (Point::new(10.0000015, 2.5), 0.0000015),
+        (Point::new(12.0, 2.5), 0.999997),
+    ] {
+        let actual = boundary.signed_distance(point).unwrap();
+        assert!((actual.mm - expected).abs() < 1e-12, "{point:?}");
+        assert_eq!(actual.uncertainty_mm, union.uncertainty_mm);
+        assert_eq!(union.contains_point(point), expected < 0.0);
+        assert_eq!(boundary.contains_regular_point(point), expected < 0.0);
+    }
+    let mut exhausted = rectangle(-4.0, -3.0, -2.0, -1.0);
+    exhausted.uncertainty_mm = resolution.accuracy.max_error_mm();
+    let boundary = exhausted.prepare_query();
+    assert!(matches!(
+        ContourSet::union_partitioned(resolution, [(&exhausted, &boundary)]),
+        Err(AccuracyError::BudgetExceeded { .. })
+    ));
+}
+
+#[test]
+fn components_keep_nested_holes_islands_and_point_contacts() {
+    // A long zigzag outer boundary with many holes, each holding an island.
+    // The top's alternating 20/20.2 heights give area 40 * 30.1 = 1204.
+    let mut outer = vec![[-20.0, -10.0], [20.0, -10.0]];
+    outer.extend((0..=80).map(|i| [20.0 - f64::from(i) * 0.5, 20.0 + f64::from(i % 2) * 0.2]));
+    let mut rings = vec![outer];
+    for i in 0..12 {
+        let x = -18.0 + f64::from(i) * 3.0;
+        rings.push(vec![[x, 0.0], [x, 1.0], [x + 1.0, 1.0], [x + 1.0, 0.0]]);
+        rings.push(vec![
+            [x + 0.25, 0.25],
+            [x + 0.75, 0.25],
+            [x + 0.75, 0.75],
+            [x + 0.25, 0.75],
+        ]);
+    }
+    rings.extend([
+        vec![[22.0, 1.0], [24.0, 1.0], [24.0, 2.0], [22.0, 2.0]],
+        vec![[24.0, 2.0], [25.0, 2.0], [25.0, 4.0], [24.0, 4.0]],
+    ]);
+    let region = ContourSet::from_rings(rings, FillRule::NonZero, res(0.0)).unwrap();
+    let components = region.connected_components();
+    assert_eq!(components.len(), 15);
+    let surrounding = components.iter().find(|c| c.area() > 4.0).unwrap();
+    assert!((surrounding.area() - 1192.0).abs() < 1e-8);
+    assert!((components.iter().map(ContourSet::area).sum::<f64>() - 1199.0).abs() < 1e-8);
+    assert!(components.iter().all(|c| c.resolution == region.resolution && c.uncertainty_mm == region.uncertainty_mm));
+    for i in 0..12 {
+        let x = -18.0 + f64::from(i) * 3.0;
+        assert!(!surrounding.contains_point(Point::new(x + 0.5, 0.5)));
+        assert!(
+            components
+                .iter()
+                .any(|c| c.contains_point(Point::new(x + 0.5, 0.5))
+                    && (c.area() - 0.25).abs() < 1e-10)
+        );
+        assert!(!region.contains_point(Point::new(x + 0.1, 0.5)));
+    }
+}
+
+#[test]
 fn width_requires_a_disk_that_survives_boundary_uncertainty() {
     let mut region = ContourSet::rectangle(rect(0.0, 0.0, 1.0, 0.003), res(1e-6));
     assert!(
@@ -18,6 +106,49 @@ fn width_requires_a_disk_that_survives_boundary_uncertainty() {
         crate::geom::dfm::thin_features(&region, 0.127)
             .unwrap()
             .is_empty()
+    );
+}
+
+#[test]
+fn prepared_width_queries_keep_short_edges_and_thresholds() {
+    let mut region = ContourSet::from_regularized(
+        vec![vec![
+            [0.123, 5.125],
+            [0.1230001, 5.125],
+            [3.8, 5.125],
+            [3.8, 5.128],
+            [0.123, 5.128],
+        ]],
+        res(1e-6),
+        0.0,
+    );
+    for limit in [0.0029, 0.0031] {
+        let boundary = region.prepare_query();
+        let pieces =
+            crate::geom::dfm::thin_features_with_boundary(&region, limit, Some(&boundary)).unwrap();
+        assert_eq!(pieces.len(), usize::from(limit > 0.003));
+        if let Some(piece) = pieces.first() {
+            assert!((piece.width.mm - 0.003).abs() < 1e-12);
+        }
+    }
+    region.uncertainty_mm = 0.002;
+    assert!(
+        crate::geom::dfm::thin_features_with_boundary(
+            &region,
+            0.0031,
+            Some(&region.prepare_query())
+        )
+        .unwrap()
+        .is_empty()
+    );
+    region.uncertainty_mm = region.budget().max_error_mm().next_up();
+    assert!(
+        crate::geom::dfm::thin_features_with_boundary(
+            &region,
+            0.0031,
+            Some(&region.prepare_query())
+        )
+        .is_err()
     );
 }
 
@@ -247,6 +378,92 @@ fn containment_observes_boundaries_and_holes() {
         (ContourSet::empty(region.resolution), Some(false)),
     ] {
         assert_eq!(subject.side_of(&boundary), side, "{:?}", subject.bbox);
+    }
+
+    // Interleaved boundary-tree leaves can hold edges of several rings.
+    // Ignoring only some crossings of a ring outside the query point would
+    // give a false winding inside a hole or between disconnected islands.
+    let region = region
+        .union(&block(12.0, 1.0, 15.0, 3.0))
+        .unwrap()
+        .difference(&block(7.0, 7.0, 11.0, 11.0))
+        .unwrap();
+    let boundary = region.prepare_query();
+    for x in -2..17 {
+        for y in -2..12 {
+            let point = Point::new(f64::from(x) + 0.25, f64::from(y) + 0.75);
+            let expected = ((0.0..10.0).contains(&point.x)
+                && (0.0..10.0).contains(&point.y)
+                && !((4.0..6.0).contains(&point.x) && (4.0..6.0).contains(&point.y))
+                && !(point.x >= 7.0 && point.y >= 7.0))
+                || ((12.0..15.0).contains(&point.x) && (1.0..3.0).contains(&point.y));
+            assert_eq!(boundary.winding(point) != 0, expected, "{point:?}");
+            assert_eq!(
+                boundary.contains_regular_point(point),
+                expected,
+                "{point:?}"
+            );
+            assert_eq!(
+                boundary.signed_distance(point).unwrap().mm < 0.0,
+                expected,
+                "{point:?}"
+            );
+        }
+    }
+    // Tangent continuations and exact contacts need the half-open winding
+    // convention; a zero cross product alone cannot choose the material side.
+    for (point, inside) in [
+        (Point::new(-1.0, 0.0), false),
+        (Point::new(5.0, 0.0), true),
+        (Point::new(0.0, 5.0), true),
+        (Point::new(10.0, 5.0), false),
+        (Point::new(5.0, 10.0), false),
+        (Point::new(7.0 - 1e-10, 7.0 - 2e-10), true),
+        (Point::new(7.0 + 1e-10, 7.0 + 2e-10), false),
+        (Point::new(5.0, 5.0), false),
+    ] {
+        assert_eq!(boundary.contains_regular_point(point), inside, "{point:?}");
+        assert_eq!(
+            boundary
+                .signed_distance(point)
+                .unwrap()
+                .mm
+                .is_sign_negative(),
+            inside,
+            "{point:?}"
+        );
+    }
+}
+
+#[test]
+fn regular_containment_keeps_tangent_crossings_and_nested_islands() {
+    let hole = ContourSet::from_rings(
+        vec![vec![[4.0, 2.0], [3.0, 4.0], [5.0, 4.0]]],
+        FillRule::NonZero,
+        res(0.0),
+    )
+    .unwrap();
+    let region = block(0.0, 0.0, 9.0, 7.0)
+        .difference(&hole)
+        .unwrap()
+        .union(&block(3.9, 2.9, 4.2, 3.3))
+        .unwrap();
+    let boundary = region.prepare_query();
+    for (point, expected) in [
+        (Point::new(6.0, 2.0), true),
+        (Point::new(6.0, 4.0), true),
+        (Point::new(4.0, 2.0 - 1e-9), true),
+        (Point::new(4.0, 2.0 + 1e-9), false),
+        (Point::new(4.0, 2.7), false),
+        (Point::new(4.0, 3.1), true),
+        (Point::new(4.3, 3.1), false),
+        (Point::new(10.0, 2.0), false),
+    ] {
+        assert_eq!(
+            boundary.contains_regular_point(point),
+            expected,
+            "{point:?}"
+        );
     }
 }
 
@@ -844,6 +1061,131 @@ fn union_contains_both_regions_when_a_hole_overlaps_filled_material() {
     assert!((union.area() - 88.0).abs() <= 1e-6);
 }
 
+#[test]
+fn regularization_preserves_wound_star_fill() {
+    // A pentagram has consistent local turns but winds twice. Treating it
+    // as a simple convex ring would fill its EvenOdd central hole.
+    let star = vec![
+        [0.0, 3.0],
+        [-2.0, -3.0],
+        [3.0, 1.0],
+        [-3.0, 1.0],
+        [2.0, -3.0],
+    ];
+    for fill in [FillRule::NonZero, FillRule::EvenOdd] {
+        let region = ContourSet::from_rings(vec![star.clone()], fill, res(0.0)).unwrap();
+        assert_eq!(
+            region.contains_point(Point::ZERO),
+            fill == FillRule::NonZero
+        );
+        assert!(region.contains_point(Point::new(0.0, 2.5)));
+        assert!(!region.contains_point(Point::new(2.8, 2.5)));
+    }
+}
+
+#[test]
+fn large_rectangle_unions_preserve_holes_islands_and_narrow_gaps() {
+    let rectangle = |x0, y0, x1, y1| vec![[x0, y0], [x1, y0], [x1, y1], [x0, y1]];
+    let rings = vec![
+        rectangle(0.0, 0.0, 1.0, 7.0),
+        rectangle(0.0, 0.0, 9.0, 2.0),
+        rectangle(0.0, 6.0, 9.0, 7.0),
+        rectangle(8.0, 0.0, 9.0, 7.0),
+        rectangle(3.0, 3.0, 4.0, 4.0),
+        rectangle(3.0, 4.01, 4.0, 5.0),
+    ];
+    for copies in [7_990, 8_010] {
+        let mut repeated = rings.clone();
+        repeated.extend(std::iter::repeat_n(rings[0].clone(), copies));
+        let union = ContourSet::from_rings(repeated, FillRule::NonZero, res(1e-6)).unwrap();
+        assert!((union.area() - 36.99).abs() < 1e-7);
+        assert_eq!(union.ring_count(), 4);
+        assert!(union.contains_point(Point::new(0.5, 3.0)));
+        assert!(union.contains_point(Point::new(3.5, 3.5)));
+        assert!(!union.contains_point(Point::new(6.0, 3.0)));
+        assert!(!union.contains_point(Point::new(3.5, 4.005)));
+    }
+
+    // Nearby vertices can kink a rectangle during on-edge splitting. Adding
+    // distant duplicate material must not change those winding pockets. Two
+    // overlapping positive covers must retain their multiplicity around a
+    // negative pocket; zero significance keeps even that tiny hole visible.
+    let mut kinked = rings;
+    kinked.extend([
+        rectangle(5.0, 3.0, 6.0, 4.0),
+        rectangle(6.0 - 2e-7, 3.0 + 7e-7, 6.12, 3.2),
+        rectangle(6.0 - 7e-7, 3.0 + 2e-7, 6.05, 3.3),
+        rectangle(5.9, 2.9, 6.1, 3.1),
+        rectangle(5.9, 2.9, 6.1, 3.1),
+    ]);
+    let control = ContourSet::from_rings(kinked.clone(), FillRule::NonZero, res(0.0)).unwrap();
+    kinked.extend(std::iter::repeat_n(kinked[0].clone(), 8_010));
+    let repeated = ContourSet::from_rings(kinked, FillRule::NonZero, res(0.0)).unwrap();
+    assert_eq!(repeated.to_rings(), control.to_rings());
+}
+
+#[test]
+fn large_rectangle_batches_preserve_signed_and_parity_multiplicity() {
+    let outer = vec![[0.0, 0.0], [9.0, 0.0], [9.0, 7.0], [0.0, 7.0]];
+    let inner = vec![[2.0, 3.0], [4.0, 3.0], [4.0, 6.0], [2.0, 6.0]];
+    let mut rings = vec![outer; 8_002];
+    rings.push(inner);
+    let parity = ContourSet::from_rings(rings.clone(), FillRule::EvenOdd, res(1e-6)).unwrap();
+    assert!((parity.area() - 6.0).abs() < 1e-7);
+    assert!(parity.contains_point(Point::new(3.0, 4.0)));
+    assert!(!parity.contains_point(Point::new(1.0, 1.0)));
+
+    rings.last_mut().unwrap().reverse();
+    let signed = ContourSet::from_rings(rings, FillRule::NonZero, res(1e-6)).unwrap();
+    assert!((signed.area() - 63.0).abs() < 1e-7);
+    assert!(signed.contains_point(Point::new(3.0, 4.0)));
+    assert!(signed.contains_point(Point::new(1.0, 1.0)));
+}
+
+#[test]
+fn overlapping_rectangle_batches_match_independent_cell_coverage() {
+    let mut rectangles = vec![
+        [0, 33, 0, 1],
+        [0, 33, 30, 31],
+        [0, 1, 0, 31],
+        [32, 33, 0, 31],
+        [13, 15, 11, 14],
+    ];
+    let mut state = 293_u32;
+    for _ in 0..120 {
+        state = state.wrapping_mul(1664525).wrapping_add(1013904223);
+        let left = state as usize % 28;
+        let bottom = (state >> 8) as usize % 27;
+        let right = (left + 1 + (state >> 16) as usize % 6).min(33);
+        let top = (bottom + 1 + (state >> 24) as usize % 5).min(31);
+        if right <= 11 || left >= 19 || top <= 9 || bottom >= 17 {
+            rectangles.push([left, right, bottom, top]);
+        }
+    }
+    let rings = (0..8_100)
+        .map(|i| {
+            let [a, b, c, d] = rectangles[i % rectangles.len()].map(|n| n as f64);
+            vec![[a, c], [b, c], [b, d], [a, d]]
+        })
+        .collect();
+    let region = ContourSet::from_rings(rings, FillRule::NonZero, res(0.0)).unwrap();
+    let mut area = 0;
+    for x in 0..33 {
+        for y in 0..31 {
+            let expected = rectangles
+                .iter()
+                .any(|&[a, b, c, d]| a <= x && x < b && c <= y && y < d);
+            area += usize::from(expected);
+            assert_eq!(
+                region.contains_point(Point::new(x as f64 + 0.5, y as f64 + 0.5)),
+                expected,
+                "cell ({x},{y})"
+            );
+        }
+    }
+    assert!((region.area() - area as f64).abs() < 1e-9);
+}
+
 /// Reduced chain of narrow complement pockets from the ControlHub A5
 /// rounded-board/V-score corner. A positive offset must contain every
 /// source point even when all of these holes collapse.
@@ -1114,6 +1456,39 @@ fn overlapping_and_adjoining_rectangles_equal_one_rectangle() {
 }
 
 #[test]
+fn repeated_regularization_keeps_fill_significance_and_accuracy_separate() {
+    let ring = (0..5000)
+        .map(|index| {
+            let angle = index as f64 * std::f64::consts::TAU / 5000.0;
+            [2.0 * angle.cos(), angle.sin()]
+        })
+        .collect::<Ring>();
+    let rings = vec![ring.clone(), ring];
+    let resolution = res(0.0);
+    let nonzero = ContourSet::from_rings(rings.clone(), FillRule::NonZero, resolution).unwrap();
+    assert!((nonzero.area() - 2.0 * std::f64::consts::PI).abs() < 1e-5);
+    assert!(
+        ContourSet::from_rings(rings.clone(), FillRule::EvenOdd, resolution)
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        ContourSet::from_rings(rings.clone(), FillRule::NonZero, resolution).unwrap(),
+        nonzero
+    );
+    assert!(
+        ContourSet::from_rings(rings.clone(), FillRule::NonZero, res(3.0))
+            .unwrap()
+            .is_empty()
+    );
+    let strict = resolution.with_accuracy(GeometryAccuracy::new(1e-30).unwrap());
+    assert!(matches!(
+        ContourSet::from_rings(rings, FillRule::NonZero, strict),
+        Err(AccuracyError::BudgetExceeded { .. })
+    ));
+}
+
+#[test]
 fn mixed_budget_booleans_fail_when_the_coarser_history_does_not_fit() {
     let coarse_resolution = Resolution::new(0.0, GeometryAccuracy::new(0.05).unwrap());
     let fine_resolution = Resolution::new(0.0, GeometryAccuracy::new(0.001).unwrap());
@@ -1150,7 +1525,68 @@ fn mixed_budget_booleans_fail_when_the_coarser_history_does_not_fit() {
 }
 
 #[test]
-fn intersection_and_difference_equal_the_separate_booleans() {
+fn enclosing_booleans_keep_holes_islands_and_accuracy_history() {
+    let resolution = res(0.0);
+    let rectangle = |x0, y0, x1, y1| ContourSet::rectangle(rect(x0, y0, x1, y1), resolution);
+    let hole = rectangle(0.0, 0.0, 3.0, 2.0);
+    let source = rectangle(-2.0, -1.0, 5.0, 4.0)
+        .difference(&hole)
+        .unwrap()
+        .union(&rectangle(0.7, 0.5, 1.2, 1.4))
+        .unwrap();
+    let diamond = ContourSet::from_rings(
+        vec![vec![[-8.0, 1.0], [2.0, -9.0], [12.0, 1.0], [2.0, 11.0]]],
+        FillRule::NonZero,
+        resolution,
+    )
+    .unwrap();
+    for (cover, area) in [
+        (rectangle(-9.0, -10.0, 13.0, 12.0), 484.0),
+        (diamond.clone(), 200.0),
+    ] {
+        for result in [source.intersection(&cover), cover.intersection(&source)] {
+            let result = result.unwrap();
+            assert!((result.area() - 29.45).abs() < 1e-9);
+            assert_eq!(result.connected_components().len(), 2);
+            assert!(!result.contains_point(Point::new(2.0, 1.0)));
+            assert!(result.contains_point(Point::new(0.9, 0.8)));
+            assert!(result.contains_point(Point::new(-1.0, 0.0)));
+        }
+        assert!(source.difference(&cover).unwrap().is_empty());
+        for result in [source.union(&cover), cover.union(&source)] {
+            assert!((result.unwrap().area() - area).abs() < 1e-9);
+        }
+        let mut exhausted = source.clone();
+        exhausted.uncertainty_mm = resolution.accuracy.max_error_mm();
+        for result in [
+            exhausted.intersection(&cover),
+            exhausted.difference(&cover),
+            exhausted.union(&cover),
+            cover.intersection(&exhausted),
+        ] {
+            assert!(matches!(result, Err(AccuracyError::BudgetExceeded { .. })));
+        }
+    }
+    // Bounding-box containment cannot certify a cover, nor can its outer
+    // ring alone when there are holes.
+    assert!(
+        diamond
+            .intersection(&rectangle(9.0, 8.0, 10.0, 9.0))
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        diamond
+            .difference(&hole)
+            .unwrap()
+            .intersection(&rectangle(1.7, 0.4, 2.4, 1.5))
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
+fn shared_and_indexed_booleans_equal_the_separate_booleans() {
     let resolution = res(tol::REGION_MM);
     let square = |x: f64, y: f64, size: f64| -> Ring {
         vec![[x, y], [x + size, y], [x + size, y + size], [x, y + size]]
@@ -1224,6 +1660,13 @@ fn intersection_and_difference_equal_the_separate_booleans() {
     )
     .unwrap();
     let fine_square = ContourSet::rectangle(rect(0.0, 0.0, 1.0, 1.0), fine);
+    let mut exhausted = fine_square.clone();
+    exhausted.uncertainty_mm = fine.accuracy.max_error_mm();
+    let disjoint = ContourSet::rectangle(rect(4.0, 0.0, 5.0, 1.0), fine);
+    assert!(matches!(
+        exhausted.intersection(&disjoint),
+        Err(AccuracyError::BudgetExceeded { .. })
+    ));
 
     let mut pairs = (0..6)
         .map(|step| (pour.clone(), openings(0.37 * step as f64)))
@@ -1242,6 +1685,8 @@ fn intersection_and_difference_equal_the_separate_booleans() {
         (pour.clone(), lossy_empty.clone()),
         (empty.clone(), empty.clone()),
         (fine_square.clone(), coarse.clone()),
+        (exhausted, disjoint),
+        (pour.clone(), region(vec![square(2.25, 2.25, 0.5)])),
     ]);
     let same = |actual: Result<ContourSet, AccuracyError>,
                 expected: Result<ContourSet, AccuracyError>| match (actual, expected)
@@ -1263,6 +1708,10 @@ fn intersection_and_difference_equal_the_separate_booleans() {
         };
         same(inside, subject.intersection(clip));
         same(outside, subject.difference(clip));
+        same(
+            subject.intersection_with_index(clip, &clip.prepare_query()),
+            subject.intersection(clip),
+        );
     }
 }
 

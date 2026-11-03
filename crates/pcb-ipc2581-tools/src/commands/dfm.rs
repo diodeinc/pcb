@@ -144,7 +144,19 @@ fn check_with_scene(
     rules.push(rules::board_outline());
     rules.push(rules::drill_spans(&pdk.profiles[&selection.profile]));
     let designs = design::Design::frames(imported, scope, &rules, resolution)?;
-    let checked = checks::run(&rules, &designs)?;
+    let check = || checks::run(&rules, &designs);
+    let prepare = || scene.then(|| scene::prepare(&designs, &rules)).transpose();
+    #[cfg(not(target_family = "wasm"))]
+    let (checked, passes) = if scene {
+        rayon::join(check, prepare)
+    } else {
+        (check(), Ok(None))
+    };
+    #[cfg(target_family = "wasm")]
+    let (checked, passes) = (check(), prepare());
+    // Checks retain error precedence; preparation only builds physical context.
+    let checked = checked?;
+    let passes = passes?;
     let summary = summarize(&checked);
     let layout = designs[0].report_layout();
     let frames = checked
@@ -152,16 +164,8 @@ fn check_with_scene(
         .iter()
         .map(|(design, placements)| designs[*design as usize].report_frame(placements))
         .collect::<Vec<_>>();
-    let scene = scene
-        .then(|| {
-            scene::export(
-                &designs,
-                &layout,
-                &checked.rules,
-                &frames,
-                &checked.findings,
-            )
-        })
+    let scene = passes
+        .map(|passes| scene::export(passes, &layout, &checked.rules, &frames, &checked.findings))
         .transpose()?;
     Ok(DfmReport {
         schema_version: report::REPORT_SCHEMA_VERSION,
@@ -427,7 +431,6 @@ pub fn write_error_report(
 fn build_report(file: &Path, options: &CheckOptions, resolution: Resolution) -> Result<DfmReport> {
     let input_bytes = std::fs::read(file)
         .with_context(|| format!("failed to read IPC-2581 file {}", file.display()))?;
-    let input = report::FileIdentity::new(file.display().to_string(), &input_bytes);
     let pdk_path = options.pdk.display().to_string();
     let pdk_source = if builtin_pdks::find(&pdk_path).is_none() {
         let bytes = std::fs::read(&options.pdk)
@@ -438,7 +441,15 @@ fn build_report(file: &Path, options: &CheckOptions, resolution: Resolution) -> 
     };
     let generated_at = generation_time();
     let content = file_utils::ipc_text(file, &input_bytes)?;
-    let ipc = Ipc2581::parse(&content).context("failed to parse IPC-2581 file")?;
+    // Identity covers the original bytes, including compression. Hashing and
+    // parsing only read them, and share the existing Rayon worker budget.
+    let identity = || report::FileIdentity::new(file.display().to_string(), &input_bytes);
+    let parse = || Ipc2581::parse(&content).context("failed to parse IPC-2581 file");
+    #[cfg(not(target_family = "wasm"))]
+    let (input, ipc) = rayon::join(identity, parse);
+    #[cfg(target_family = "wasm")]
+    let (input, ipc) = (identity(), parse());
+    let ipc = ipc?;
     drop(content);
     drop(input_bytes);
     let imported =
@@ -1679,6 +1690,50 @@ limit = { minimum = "300 mil" }
         );
         assert!(!width(&two_ounce, "2-layer-2oz"));
         assert!(matches!(two_ounce.verdict, report::Verdict::Fail));
+
+        // Equal images on distinct layers retain separate findings and owners.
+        let both = weighted_board("0.07").replace(
+            "</Step>",
+            r#"
+            <LayerFeature layerRef="BOTTOM"><Set polarity="POSITIVE" net="N2"><Features>
+              <Line startX="1" startY="1" endX="29" endY="1">
+                <LineDesc lineWidth="0.12" lineEnd="ROUND"/>
+              </Line>
+            </Features></Set></LayerFeature></Step>"#,
+        );
+        let both = check_builtin(&both, "jlc").unwrap();
+        let findings = both
+            .findings
+            .iter()
+            .filter(|finding| finding.rule_id == "jlc.copper.minimum_feature_width.2-layer-2oz")
+            .collect::<Vec<_>>();
+        assert_eq!(findings.len(), 2);
+        for (layer, net) in [("TOP", "N1"), ("BOTTOM", "N2")] {
+            let finding = findings
+                .iter()
+                .find(|finding| finding.layers[0].name == layer)
+                .unwrap();
+            assert!(
+                (finding.measurement.actual_mm().unwrap() - 0.12).abs()
+                    <= 2.0 * Resolution::default().accuracy.max_error_mm(),
+                "{:?}",
+                finding.measurement
+            );
+            assert!(!finding.sites.is_empty());
+            for site in &finding.sites {
+                assert_eq!(site.layers[0].name, layer);
+                assert_eq!(site.subjects[0].net.as_deref(), Some(net));
+                assert_eq!(
+                    site.subjects[0]
+                        .provenance
+                        .as_ref()
+                        .unwrap()
+                        .layer
+                        .as_deref(),
+                    Some(layer)
+                );
+            }
+        }
 
         // Naming the 1 oz profile still runs it, and its support fails.
         let explicit = check_builtin(&weighted_board("0.07"), "jlcpcb-1oz").unwrap();

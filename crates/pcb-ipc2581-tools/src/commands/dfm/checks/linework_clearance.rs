@@ -211,7 +211,8 @@ fn castellation_cuts(design: &Design) -> anyhow::Result<Vec<Option<(ContourSet, 
                 .iter()
                 .filter(|conductor| conductor.id.instance().is_none())
             {
-                let own = without_own_lands(conductor, lands.iter().copied(), design.resolution)?;
+                let own =
+                    without_own_lands(conductor, lands.iter().copied(), design.resolution, None)?;
                 image.push(
                     Polarity::Dark,
                     own.unwrap_or_else(|| conductor.image.clone()),
@@ -246,9 +247,12 @@ fn measure(
     {
         let (image, boundary) = match cuts.get(copper_index) {
             Some(Some((image, boundary))) => (image, boundary),
-            _ => (&copper.image, &design.copper_boundaries[copper_index]),
+            _ => (&copper.image, &copper.boundary),
         };
-        let inside = image.contains_points_batch(&endpoints);
+        let inside = endpoints
+            .iter()
+            .map(|&point| boundary.winding(point) != 0)
+            .collect::<Vec<_>>();
         for item in items {
             let Some(nearest) = item
                 .segments

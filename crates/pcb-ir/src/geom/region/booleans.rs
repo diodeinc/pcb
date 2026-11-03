@@ -3,9 +3,9 @@
 use super::simplification::{
     ON_EDGE_MM, bounds_connected_groups, overlay, overlay_rules, resolve_groups, untagged,
 };
-use super::{ContourSet, PreparedRegion, Ring, Shape, flatten_shapes, rings_bbox, simplify_shapes};
+use super::{ContourSet, PreparedRegion, Ring, Shape, flatten_shapes, rings_bbox};
 use crate::geom::accuracy::numerical_error;
-use crate::geom::{AccuracyError, BBox, FillRule, Polarity, Resolution};
+use crate::geom::{AccuracyError, BBox, Polarity, Resolution};
 use i_overlay::core::fill_rule::FillRule as OverlayFillRule;
 use i_overlay::core::overlay_rule::OverlayRule;
 use rustc_hash::FxHashMap;
@@ -46,6 +46,40 @@ fn union_rings(rings: Vec<(Ring, u32)>) -> Vec<Ring> {
             ))
         }
     })
+}
+
+/// Union a dark run and subtract its following clear run in one graph.
+/// Each dark source winds zero or one, so their sum denotes their union.
+fn union_difference_rings(subject: Vec<(Ring, u32)>, clip: Vec<Ring>) -> Vec<Ring> {
+    resolve_groups(
+        subject
+            .into_iter()
+            .map(|(ring, id)| (ring, Some(id)))
+            .chain(clip.into_iter().map(|ring| (ring, None)))
+            .collect(),
+        0.0,
+        |group| {
+            let (subject, clip): (Vec<_>, Vec<_>) =
+                group.into_iter().partition(|(_, source)| source.is_some());
+            if subject.is_empty() {
+                Vec::new()
+            } else if clip.is_empty() {
+                union_rings(
+                    subject
+                        .into_iter()
+                        .map(|(ring, id)| (ring, id.unwrap()))
+                        .collect(),
+                )
+            } else {
+                flatten_shapes(overlay(
+                    &untagged(subject),
+                    &untagged(clip),
+                    OverlayRule::Difference,
+                    OverlayFillRule::NonZero,
+                ))
+            }
+        },
+    )
 }
 
 /// Difference or intersection of two regularized operands. A group holding
@@ -167,6 +201,92 @@ impl ContourSet {
         composer.finish()
     }
 
+    /// Union using source boundary indexes to prove disjoint material even
+    /// when bounds overlap, retaining their trees for the union's index.
+    /// Each index must describe its paired region.
+    pub fn union_partitioned<'a>(
+        mut resolution: Resolution,
+        regions: impl IntoIterator<Item = (&'a Self, &'a PreparedRegion)>,
+    ) -> Result<(Self, PreparedRegion), AccuracyError> {
+        let regions = regions.into_iter().collect::<Vec<_>>();
+        let mut bounds = BBox::empty();
+        let mut uncertainty: f64 = 0.0;
+        for &(region, _) in &regions {
+            resolution = resolution.meet(region.resolution);
+            uncertainty = uncertainty.max(region.uncertainty_mm);
+            bounds = bounds.union(region.bbox);
+        }
+        let numeric = numerical_error(bounds);
+        let guard = ON_EDGE_MM + 2.0 * numeric;
+        let mut parents = (0..regions.len()).collect::<Vec<_>>();
+        fn root(parents: &mut [usize], mut id: usize) -> usize {
+            while parents[id] != id {
+                parents[id] = parents[parents[id]];
+                id = parents[id];
+            }
+            id
+        }
+        for first in 0..regions.len() {
+            let (left, left_boundary) = regions[first];
+            for (second, &(right, right_boundary)) in regions[..first].iter().enumerate() {
+                if !left.bbox.expand(guard).intersects(right.bbox) {
+                    continue;
+                }
+                let a = root(&mut parents, first);
+                let b = root(&mut parents, second);
+                if a == b {
+                    continue;
+                }
+                // Once boundaries are separated, winding is constant on
+                // each ring; one vertex settles its containment.
+                let contains = |region: &Self, boundary: &PreparedRegion| {
+                    region.rings().any(|ring| {
+                        boundary
+                            .contains_regular_point(crate::geom::Point::new(ring[0][0], ring[0][1]))
+                    })
+                };
+                if left_boundary.has_boundary_within(right_boundary, guard)
+                    || contains(left, right_boundary)
+                    || contains(right, left_boundary)
+                {
+                    parents[a] = b;
+                }
+            }
+        }
+        let mut groups = (0..regions.len()).map(|_| Vec::new()).collect::<Vec<_>>();
+        for (id, region) in regions.into_iter().enumerate() {
+            groups[root(&mut parents, id)].push(region);
+        }
+        let mut rings = Vec::new();
+        let mut boundaries = Vec::new();
+        for group in groups.into_iter().filter(|group| !group.is_empty()) {
+            if let [(region, boundary)] = group.as_slice() {
+                rings.extend(region.to_rings());
+                boundaries.push(std::borrow::Cow::Borrowed(*boundary));
+            } else {
+                let group = Self::from_regularized(
+                    union_rings(
+                        group
+                            .into_iter()
+                            .enumerate()
+                            .flat_map(|(id, (region, _))| sourced(region.to_rings(), id as u32))
+                            .collect(),
+                    ),
+                    resolution,
+                    uncertainty + numeric,
+                );
+                boundaries.push(std::borrow::Cow::Owned(group.prepare_query()));
+                rings.extend(group.into_rings());
+            }
+        }
+        let region = Self::from_regularized(rings, resolution, uncertainty + numeric).checked()?;
+        let boundary = PreparedRegion::joined(
+            &boundaries.iter().map(|b| b.as_ref()).collect::<Vec<_>>(),
+            region.uncertainty_mm,
+        );
+        Ok((region, boundary))
+    }
+
     /// Regularized union: `self ∪ other`.
     pub fn union(&self, other: &Self) -> Result<Self, AccuracyError> {
         // An empty operand that lost nothing on its way here leaves the
@@ -197,6 +317,51 @@ impl ContourSet {
     /// Regularized intersection: `self ∩ clip`.
     pub fn intersection(&self, clip: &Self) -> Result<Self, AccuracyError> {
         self.boolean(clip, OverlayRule::Intersect)
+    }
+
+    /// The same intersection, reusing `clip.prepare_query()` to prove an
+    /// empty result without an overlay. Contact and ambiguous cases use the
+    /// ordinary boolean; even an empty result retains its uncertainty and
+    /// checks the same accuracy budget.
+    /// `boundary` must have been prepared from `clip`.
+    pub fn intersection_with_index(
+        &self,
+        clip: &Self,
+        boundary: &PreparedRegion,
+    ) -> Result<Self, AccuracyError> {
+        let numeric = numerical_error(self.bbox.union(clip.bbox));
+        let separated = match self.side_of(boundary) {
+            Some(inside) => !inside,
+            None => {
+                // Overlapping boxes need not mean overlapping regions. With
+                // separated boundaries, winding is constant along each ring.
+                // Check both containment directions, including clip islands
+                // enclosed by the subject. Near contacts still use the kernel.
+                let guard = ON_EDGE_MM + 2.0 * numeric;
+                self.rings().all(|ring| {
+                    !boundary
+                        .contains_regular_point(crate::geom::Point::new(ring[0][0], ring[0][1]))
+                }) && self
+                    .edges()
+                    .all(|(a, b)| !boundary.has_segment_within(a, b, guard))
+                    && {
+                        let subject = self.prepare_query();
+                        boundary
+                            .segments_meeting(self.bbox.expand(guard))
+                            .all(|(a, _)| !subject.contains_regular_point(a))
+                    }
+            }
+        };
+        if !separated {
+            return self.intersection(clip);
+        }
+        let uncertainty = self.uncertainty_mm.max(clip.uncertainty_mm) + numeric;
+        Self::from_regularized(
+            Vec::new(),
+            self.resolution.meet(clip.resolution),
+            uncertainty,
+        )
+        .checked()
     }
 
     /// The parts of `self` inside and outside `clip`: exactly
@@ -235,7 +400,7 @@ impl ContourSet {
             .segments_meeting(self.bbox.expand(ON_EDGE_MM + 2.0 * numeric))
             .next()
             .is_none()
-            .then(|| boundary.winding(self.bbox.center()) != 0)
+            .then(|| boundary.contains_regular_point(self.bbox.center()))
     }
 
     /// Every point of the result's boundary is a point of an operand's
@@ -245,10 +410,45 @@ impl ContourSet {
     /// operands' history does not fit it.
     fn boolean(&self, other: &Self, rule: OverlayRule) -> Result<Self, AccuracyError> {
         let numeric = numerical_error(self.bbox.union(other.bbox));
+        let covers = |region: &Self, bounds: BBox| {
+            if region.ring_count() != 1
+                || !region.bbox.contains_point(bounds.min)
+                || !region.bbox.contains_point(bounds.max)
+            {
+                return false;
+            }
+            // The intersection of a simple CCW ring's inward half-planes
+            // lies inside it, even when the ring is concave. Test the least
+            // favorable box corner against each plane. Keep near contacts
+            // in the kernel, including its joint on-edge splitting.
+            let guard = ON_EDGE_MM + 2.0 * numeric;
+            super::edges_of(region.ring(0)).all(|(a, b)| {
+                let delta = b - a;
+                let x = if delta.y >= 0.0 {
+                    bounds.max.x
+                } else {
+                    bounds.min.x
+                };
+                let y = if delta.x >= 0.0 {
+                    bounds.min.y
+                } else {
+                    bounds.max.y
+                };
+                delta.x * (y - a.y) - delta.y * (x - a.x) > guard * (delta.x.abs() + delta.y.abs())
+            })
+        };
         // Only rings that reach the other operand can change the result, so
         // cutting a small subject out of a panel-sized region never copies
         // the panel.
         let rings = match rule {
+            // A certified cover cannot change the contained operand's holes
+            // or islands. The ordinary uncertainty and budget check below
+            // still apply, although no new lattice pass is necessary.
+            OverlayRule::Intersect if covers(other, self.bbox) => self.to_rings(),
+            OverlayRule::Intersect if covers(self, other.bbox) => other.to_rings(),
+            OverlayRule::Difference if covers(other, self.bbox) => Vec::new(),
+            OverlayRule::Union if covers(other, self.bbox) => other.to_rings(),
+            OverlayRule::Union if covers(self, other.bbox) => self.to_rings(),
             OverlayRule::Union => union_rings(
                 sourced(self.to_rings(), 0)
                     .chain(sourced(other.to_rings(), 1))
@@ -283,7 +483,20 @@ impl ContourSet {
     /// Connected components, each retaining its own hole rings, in the same
     /// order every time for the same region.
     pub fn connected_components(&self) -> Vec<Self> {
-        simplify_shapes(self.to_rings(), FillRule::NonZero)
+        // The source is already regularized. Re-overlaying it reconstructs
+        // intersections that no longer exist and can snap its boundary again.
+        // Recover the nesting instead, retaining the prepared coordinates.
+        let (owners, outers) = self.ring_components();
+        let mut shapes = outers
+            .iter()
+            .map(|&outer| vec![self.ring(outer).to_vec()])
+            .collect::<Vec<_>>();
+        for (ring, &owner) in owners.iter().enumerate() {
+            if ring != outers[owner] {
+                shapes[owner].push(self.ring(ring).to_vec());
+            }
+        }
+        shapes
             .into_iter()
             .map(|shape| Self::from_regularized(shape, self.resolution, self.uncertainty_mm))
             .collect()
@@ -298,6 +511,8 @@ impl ContourSet {
 #[derive(Debug)]
 pub struct PaintComposer {
     image: Vec<Ring>,
+    /// A dark run deferred until the following clear run can cut it directly.
+    pending_dark: Vec<(Ring, u32)>,
     /// The pending same-polarity run, each ring tagged with the pushed
     /// region it came from; the image itself is source zero.
     run: Vec<(Ring, u32)>,
@@ -311,6 +526,7 @@ impl PaintComposer {
     pub fn new(resolution: Resolution) -> Self {
         Self {
             image: Vec::new(),
+            pending_dark: Vec::new(),
             run: Vec::new(),
             run_sources: 0,
             run_polarity: None,
@@ -328,7 +544,22 @@ impl PaintComposer {
             return;
         }
         if self.run_polarity != Some(polarity) {
-            self.flush_run();
+            if self.run_polarity == Some(Polarity::Dark) && polarity == Polarity::Clear {
+                self.pending_dark = sourced(std::mem::take(&mut self.image), 0)
+                    .chain(std::mem::take(&mut self.run))
+                    .collect();
+                // Retain the original run's conservative error charge even
+                // though its rounding pass is no longer necessary.
+                self.uncertainty_mm += numerical_error(
+                    self.pending_dark
+                        .iter()
+                        .map(|(ring, _)| rings_bbox(std::slice::from_ref(ring)))
+                        .fold(BBox::empty(), |a, b| a.union(b)),
+                );
+                self.run_sources = 0;
+            } else {
+                self.flush_run();
+            }
             self.run_polarity = Some(polarity);
         }
         self.run_sources += 1;
@@ -348,14 +579,19 @@ impl PaintComposer {
         };
         let run = std::mem::take(&mut self.run);
         let image = std::mem::take(&mut self.image);
+        let pending_dark = std::mem::take(&mut self.pending_dark);
         self.run_sources = 0;
         self.uncertainty_mm += numerical_error(
             run.iter()
+                .chain(&pending_dark)
                 .map(|(ring, _)| rings_bbox(std::slice::from_ref(ring)))
                 .fold(rings_bbox(&image), |bbox, ring| bbox.union(ring)),
         );
         self.image = match polarity {
             Polarity::Dark => union_rings(sourced(image, 0).chain(run).collect()),
+            Polarity::Clear if !pending_dark.is_empty() => {
+                union_difference_rings(pending_dark, untagged(run))
+            }
             Polarity::Clear => overlay_rings(image, untagged(run), OverlayRule::Difference),
         };
     }

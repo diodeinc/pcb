@@ -11,6 +11,8 @@
 //! rest of that land's net is measured. Measurements are made only on copper layers in
 //! the declared drill span.
 
+use std::collections::VecDeque;
+
 use pcb_ir::geom::dfm::{Distance, circular_region, region_clearance_sites_with_index};
 use pcb_ir::geom::{BBox, ContourSet, Point, PreparedRegion};
 
@@ -24,11 +26,79 @@ use super::{
     linework_clearance, spanned_layers, violates, without_own_lands,
 };
 
+/// Preparation shared by adjacent NPTH tiers in one rule-engine run. Keys
+/// identify the immutable design, hole and layer, not just their geometry.
+/// Retain at most 1,000,000 vertices and 16 entries, never hole×conductor results
+/// for a whole design. An oversized result lives only until the next query.
+#[derive(Default)]
+pub(super) struct Preparation {
+    entries: VecDeque<LandRemainders>,
+    vertices: usize,
+    uncached: Vec<(ConductorId, ContourSet, PreparedRegion)>,
+}
+
+struct LandRemainders {
+    key: [usize; 3],
+    window: BBox,
+    vertices: usize,
+    conductors: Vec<(ConductorId, ContourSet, PreparedRegion)>,
+}
+
+impl Preparation {
+    fn remainders(
+        &mut self,
+        key: [usize; 3],
+        copper: &CopperLayer,
+        design: &Design,
+        window: BBox,
+    ) -> anyhow::Result<&[(ConductorId, ContourSet, PreparedRegion)]> {
+        self.uncached.clear();
+        if !design.npth_lands[key[1]]
+            .iter()
+            .any(|link| link.copper_index as usize == key[2])
+        {
+            return Ok(&[]);
+        }
+        if let Some(slot) = self.entries.iter().position(|entry| entry.key == key) {
+            let entry = self.entries.remove(slot).unwrap();
+            if entry.window.contains_point(window.min) && entry.window.contains_point(window.max) {
+                self.entries.push_back(entry);
+                return Ok(&self.entries.back().unwrap().conductors);
+            }
+            self.vertices -= entry.vertices;
+        }
+        let conductors = npth_land_remainders(key[1], key[2], copper, design, window)?;
+        // Count empty conductor records too, bounding metadata independently
+        // of whether removing a land left any boundary behind.
+        let vertices = conductors
+            .iter()
+            .map(|(_, image, _)| 1 + image.rings().map(<[_]>::len).sum::<usize>())
+            .sum::<usize>();
+        if vertices > 1_000_000 {
+            self.uncached = conductors;
+            return Ok(&self.uncached);
+        }
+        while self.vertices + vertices > 1_000_000 || self.entries.len() == 16 {
+            self.vertices -= self.entries.pop_front().unwrap().vertices;
+        }
+        self.vertices += vertices;
+        self.entries.push_back(LandRemainders {
+            key,
+            window,
+            vertices,
+            conductors,
+        });
+        Ok(&self.entries.back().unwrap().conductors)
+    }
+}
+
 pub(super) fn evaluate(
     limit_mm: f64,
     class: HoleClass,
     conditions: &Conditions,
     design: &Design,
+    preparation: &mut Preparation,
+    design_index: usize,
 ) -> anyhow::Result<Evaluation> {
     let mut checked = 0;
     let mut measured = Vec::new();
@@ -67,23 +137,36 @@ pub(super) fn evaluate(
             checked += usize::from(hole.branch.is_none());
             // An NPTH's own mounting land is not an offender; the rest of
             // that land's conductor is measured without it.
+            // Only rings reaching the keepout can affect its measurements or
+            // overlap sites. Keep an uncertainty/tolerance guard and retain
+            // whole rings, so this introduces no artificial clipping edges.
+            let window = hole.bbox.expand(
+                limit_mm
+                    + 2.0 * design.resolution.accuracy.max_error_mm()
+                    + design
+                        .resolution
+                        .tolerance_mm
+                        .max(pcb_ir::geom::tol::EPSILON_MM),
+            );
             let land_remainders = match class {
-                HoleClass::Npth => npth_land_remainders(hole_index, copper_index, copper, design)?,
-                HoleClass::Via | HoleClass::Pth => Vec::new(),
+                HoleClass::Npth => preparation.remainders(
+                    [design_index, hole_index, copper_index],
+                    copper,
+                    design,
+                    window,
+                )?,
+                HoleClass::Via | HoleClass::Pth => &[],
             };
             // Only a conductor whose bounds reach the keepout can enter it.
-            let nearest = design.conductors_near[copper_index]
+            let nearest = copper
+                .conductors_near
                 .query(hole.bbox.expand(limit_mm))
                 .into_iter()
                 .map(|index| {
                     let conductor = &copper.conductors[index];
                     match land_remainders.iter().find(|(id, ..)| *id == conductor.id) {
                         Some((_, image, boundary)) => (conductor, image, boundary),
-                        None => (
-                            conductor,
-                            &conductor.image,
-                            &design.conductor_boundaries[copper_index][index],
-                        ),
+                        None => (conductor, &conductor.image, conductor.boundary()),
                     }
                 })
                 .filter(|(conductor, ..)| spans(hole.branch, conductor.branch))
@@ -181,6 +264,7 @@ fn npth_land_remainders(
     copper_index: usize,
     copper: &CopperLayer,
     design: &Design,
+    window: BBox,
 ) -> anyhow::Result<Vec<(ConductorId, ContourSet, PreparedRegion)>> {
     let lands = design.npth_lands[hole_index]
         .iter()
@@ -194,7 +278,12 @@ fn npth_land_remainders(
         .conductors
         .iter()
         .filter_map(|conductor| {
-            let image = without_own_lands(conductor, lands.iter().copied(), design.resolution);
+            let image = without_own_lands(
+                conductor,
+                lands.iter().copied(),
+                design.resolution,
+                Some(window),
+            );
             image.transpose().map(|image| {
                 let image = image?;
                 let boundary = image.prepare_query();
@@ -211,7 +300,18 @@ fn disk_to_copper_clearance(
     boundary: &pcb_ir::geom::PreparedRegion,
     limit_mm: f64,
 ) -> Option<Distance> {
-    if copper.contains_point(center) {
+    // Match ContourSet's closed, tolerance-inclusive containment, but reuse
+    // the conductor's boundary hierarchy instead of scanning every edge for
+    // every hole. Keep its exact bounds gate, including near an outer edge.
+    // Only boundary proximity within the tolerance matters for containment;
+    // do not compute an unrestricted nearest distance just to test the sign.
+    let epsilon = copper.tolerance().max(pcb_ir::geom::tol::EPSILON_MM);
+    if copper.bbox.contains_point(center)
+        && (boundary.contains_regular_point(center)
+            || boundary
+                .nearest_within(center, epsilon)
+                .is_some_and(|distance| distance.mm <= epsilon))
+    {
         return Some(Distance::with_uncertainty(
             0.0,
             center,
@@ -456,10 +556,38 @@ limit = {{ minimum = "0.20 mm" }}"#
                     r#"<Datum x="0" y="0"/>"#,
                     r#"<Datum x="0" y="0"/><PadStackDef name="land-stack"><PadstackPadDef layerRef="L0" padUse="REGULAR"><Location x="0" y="0"/><StandardPrimitiveRef id="land"/></PadstackPadDef></PadStackDef>"#,
                 );
-            run(&xml, "npth")
+            // Each tier has its own keepout and sites, but prepares the same
+            // land remainders. The 0.12/0.15 mm cases below pass the minimum
+            // and fail only the preferred tier; the 0.05/0.10 mm cases fail both.
+            let tiers = fixtures::run_board(
+                &xml,
+                &pdk("npth").replace(
+                    "minimum = \"0.20 mm\"",
+                    "minimum = \"0.11 mm\", preferred = \"0.20 mm\"",
+                ),
+            );
+            assert_eq!(tiers.rules.len(), 2);
+            assert!(tiers.rules.iter().all(|rule| rule.checked == 3));
+            tiers
                 .findings
                 .iter()
                 .map(|finding| {
+                    let limit = match finding.rule_id.as_str() {
+                        "hole-clearance" => 0.11,
+                        "hole-clearance.preferred" => 0.20,
+                        other => panic!("unexpected rule {other}"),
+                    };
+                    let actual = finding.measurement.actual_mm().unwrap();
+                    assert!(actual < limit);
+                    assert_eq!(actual < 0.11, finding.rule_id == "hole-clearance");
+                    for site in &finding.sites {
+                        let keepout = site
+                            .evidence
+                            .iter()
+                            .find(|evidence| evidence.role == "required_copper_keepout")
+                            .unwrap();
+                        assert_eq!(keepout.shape.diameter, Some(1.0 + 2.0 * limit));
+                    }
                     (
                         finding.layers[1].name.clone(),
                         finding.subjects[1].net.clone().unwrap_or_default(),
@@ -490,6 +618,13 @@ limit = {{ minimum = "0.20 mm" }}"#
             run(&[land(0.0, true), same_net(0.62)]),
             found("L0", "MH", 0.12)
         );
+        // This component is outside the minimum tier's guarded window but
+        // inside the preferred tier. Reusing the smaller remainder would
+        // silently lose the preferred finding.
+        assert_eq!(
+            run(&[land(0.0, true), same_net(0.67)]),
+            found("L0", "MH", 0.17)
+        );
         let [(layer, net, mm)] = run(&[land(0.0, true), same_net(0.55)]).try_into().unwrap();
         assert_eq!((layer.as_str(), net.as_str()), ("L0", "MH"));
         assert!(
@@ -505,6 +640,21 @@ limit = {{ minimum = "0.20 mm" }}"#
         assert_eq!(
             run(&[land(0.0, true), copper(1, Some("MH"), 0.55)]),
             found("L1", "MH", 0.05)
+        );
+        // Both layers have a land but different remaining copper. Sharing
+        // preparation must not substitute one layer's remainder for another.
+        let second_land = land(0.0, true).replace("layerRef=\"L0\"", "layerRef=\"L1\"");
+        assert_eq!(
+            run(&[
+                land(0.0, true),
+                second_land,
+                same_net(0.62),
+                copper(1, Some("MH"), 0.65),
+            ]),
+            vec![
+                ("L0".to_owned(), "MH".to_owned(), 0.12),
+                ("L1".to_owned(), "MH".to_owned(), 0.15),
+            ]
         );
     }
 
