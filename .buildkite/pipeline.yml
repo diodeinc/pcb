@@ -83,6 +83,9 @@ steps:
 
       # Snapshot normalization expects the conventional Linux temporary directory.
       export TMPDIR=/tmp
+      # The persistent Cargo target lives outside the checkout; binaries need stdlib beside them.
+      mkdir -p "${CARGO_TARGET_DIR:-target}"
+      ln -sfn "$PWD/lib" "${CARGO_TARGET_DIR:-target}/lib"
       cargo nextest run --locked --workspace --profile ci
       cargo test --locked --workspace --doc
 

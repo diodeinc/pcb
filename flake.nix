@@ -175,7 +175,10 @@
                 pkgs.ty
               ]
               # Tests bring their own 3D fixtures; omit the stock model library.
-              ++ lib.optionals pkgs.stdenv.hostPlatform.isLinux [ pkgs.kicad-small ];
+              ++ lib.optionals pkgs.stdenv.hostPlatform.isLinux [
+                pkgs.kicad-small
+                pkgs.procps
+              ];
               UV_PYTHON = "${pkgs.python3}/bin/python3";
             }
             // lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
