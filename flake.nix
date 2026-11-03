@@ -164,17 +164,32 @@
           );
         in
         {
-          ci = pkgs.mkShell {
-            packages = [
-              rust
-              pkgs.cargo-nextest
-              pkgs.python3
-              pkgs.uv
-              pkgs.ruff
-              pkgs.ty
-            ];
-            UV_PYTHON = "${pkgs.python3}/bin/python3";
-          };
+          ci = pkgs.mkShell (
+            {
+              packages = [
+                rust
+                pkgs.cargo-nextest
+                pkgs.python3
+                pkgs.uv
+                pkgs.ruff
+                pkgs.ty
+              ]
+              # Tests bring their own 3D fixtures; omit the stock model library.
+              ++ lib.optionals pkgs.stdenv.hostPlatform.isLinux [
+                pkgs.kicad-small
+                pkgs.procps
+              ];
+              UV_PYTHON = "${pkgs.python3}/bin/python3";
+            }
+            // lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
+              KICAD_PYTHON_INTERPRETER = lib.getExe (
+                pkgs.python3.withPackages (ps: [
+                  ps.kicad
+                  ps.wxpython_4_3
+                ])
+              );
+            }
+          );
         }
       );
 
