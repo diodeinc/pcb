@@ -170,6 +170,8 @@
               pkgs.cargo-nextest
               pkgs.python3
               pkgs.uv
+              pkgs.ruff
+              pkgs.ty
             ];
             UV_PYTHON = "${pkgs.python3}/bin/python3";
           };
