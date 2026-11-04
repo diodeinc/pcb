@@ -1,0 +1,77 @@
+#!/usr/bin/env python3
+"""Compare pcb-build-perf JSON results and print a Markdown report."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import math
+from pathlib import Path
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("results", type=Path)
+    args = parser.parse_args()
+    base_paths = sorted(args.results.glob("*-base.json"))
+    head_names = {
+        path.name.removesuffix("-head.json")
+        for path in args.results.glob("*-head.json")
+    }
+    base_names = {path.name.removesuffix("-base.json") for path in base_paths}
+    if not base_names or base_names != head_names:
+        raise SystemExit("Expected matching base/head benchmark results")
+
+    lines = [
+        "### Build Performance",
+        "",
+        "| Board | Base (median) | Head (median) | Change |",
+        "|:------|-----:|-----:|:------|",
+    ]
+    for base_path in base_paths:
+        name = base_path.name.removesuffix("-base.json")
+        base = json.loads(base_path.read_text())
+        head = json.loads((args.results / f"{name}-head.json").read_text())
+        base_boards = {board["zen_path"]: board for board in base["boards"]}
+        head_boards = {board["zen_path"]: board for board in head["boards"]}
+        if not base_boards or base_boards.keys() != head_boards.keys():
+            raise SystemExit(f"Expected matching base/head boards for {name}")
+
+        for path, base_board in sorted(base_boards.items()):
+            head_board = head_boards[path]
+            label = head_board.get("name") or path
+            if label.lower() != name.lower():
+                label = f"{name}/{label}"
+            else:
+                label = name
+            base_median = base_board["median_seconds"]
+            head_median = head_board["median_seconds"]
+            base_stddev = base_board["stddev_seconds"]
+            head_stddev = head_board["stddev_seconds"]
+            delta = head_median - base_median
+            percent = delta / base_median * 100
+            significant = abs(percent) >= 5 and abs(delta) > 2 * math.hypot(
+                base_stddev, head_stddev
+            )
+            change = f"{percent:+.1f}%"
+            if significant:
+                change = f"**{change}**"
+            lines.append(
+                f"| {label} | {base_median * 1000:.0f}ms ±{base_stddev * 1000:.1f}"
+                f" | {head_median * 1000:.0f}ms ±{head_stddev * 1000:.1f} | {change} |"
+            )
+
+    lines.extend(
+        [
+            "",
+            (
+                "<sub>Measured with [hyperfine](https://github.com/sharkdp/hyperfine). "
+                "Times show median ±stddev. Bold changes are at least 5% and exceed twice the combined standard deviation.</sub>"
+            ),
+        ]
+    )
+    print("\n".join(lines))
+
+
+if __name__ == "__main__":
+    main()
