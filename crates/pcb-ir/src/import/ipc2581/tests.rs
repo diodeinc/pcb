@@ -1156,6 +1156,72 @@ fn board_cell_margins_follow_where_the_board_datum_places_the_board() {
     assert_eq!(margins((10, 0), (15, 5)), (5.0, 5.0, 5.0, 5.0));
 }
 
+#[test]
+fn a_turned_root_repeat_reports_its_board_cells_in_the_panel_frame() {
+    // A 30 x 20 board at (2, 3) in a 40 x 30 cell: board margins left 2,
+    // right 8, bottom 3, top 7 in the cell's frame. Two cells turned about
+    // their Datum sit side by side 30 mm apart, with rails of 5 mm left and
+    // bottom, 7 mm right and 8 mm top.
+    let array = |placement: &str| {
+        let ipc = parse(
+            "array",
+            "",
+            &format!(
+                r#"{TOP}
+      <Step name="board" type="BOARD">{board}</Step>
+      <Step name="cell" type="PALLET">{cell}
+        <StepRepeat stepRef="board" x="2" y="3" nx="1" ny="1" dx="0" dy="0"/>
+      </Step>
+      <Step name="array" type="PALLET">{array}
+        <StepRepeat stepRef="cell" {placement} nx="2" ny="1" dx="30" dy="0"/>
+      </Step>"#,
+                board = profile(30, 20),
+                cell = profile(40, 30),
+                array = profile(72, 53),
+            ),
+        );
+        simple_board_array_layout(&extract_layout(&ipc).unwrap())
+    };
+    let summary = |placement: &str| {
+        let array = array(placement).expect("a simple board-cell array");
+        // Turning about the Datum leaves floating-point noise in the rails.
+        let mm = |value: f64| (value * 1e6).round() / 1e6;
+        let margins = |m: LayoutMargins| (mm(m.left), mm(m.right), mm(m.bottom), mm(m.top));
+        (
+            (array.columns, array.rows),
+            (array.board_width, array.board_height),
+            (array.pitch_x, array.pitch_y),
+            margins(array.board_margin.unwrap()),
+            margins(array.edge_rail),
+        )
+    };
+
+    // A counterclockwise quarter turn takes the cell's right side to the top.
+    assert_eq!(
+        summary(r#"x="35" y="5" angle="90""#),
+        (
+            (2, 1),
+            (20.0, 30.0),
+            (Some(30.0), None),
+            (7.0, 3.0, 2.0, 8.0),
+            (5.0, 7.0, 5.0, 8.0),
+        )
+    );
+    // Three quarter turns take the cell's left side to the top.
+    assert_eq!(
+        summary(r#"x="5" y="45" angle="270""#),
+        (
+            (2, 1),
+            (20.0, 30.0),
+            (Some(30.0), None),
+            (3.0, 7.0, 8.0, 2.0),
+            (5.0, 7.0, 5.0, 8.0),
+        )
+    );
+    assert!(array(r#"x="35" y="5" angle="45""#).is_none());
+    assert!(array(r#"x="35" y="5" angle="90" mirror="true""#).is_none());
+}
+
 const PAD_PADSTACK: &str = r#"<PadStackDef name="padstack">
           <PadstackPadDef layerRef="TOP" padUse="REGULAR"><StandardPrimitiveRef id="pad"/></PadstackPadDef>
         </PadStackDef>"#;
