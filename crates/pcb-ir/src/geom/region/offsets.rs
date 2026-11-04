@@ -1,9 +1,9 @@
-//! Disk offsets, opening, and closing within the region's budget.
+//! Offsets, opening, and closing within the region's budget.
 
 use super::simplification::{positive_winding, resolve_groups, untagged};
 use super::{ContourSet, PreparedRegion, Ring, decimate_rings_inward, edges_of, signed_area_of};
 use crate::geom::accuracy::numerical_error;
-use crate::geom::{AccuracyError, Point};
+use crate::geom::{AccuracyError, FillRule, Point};
 
 impl ContourSet {
     /// Morphological opening by a disk: `(self ⊖ D_radius) ⊕ D_radius`.
@@ -41,6 +41,36 @@ impl ContourSet {
             return Err(AccuracyError::InvalidGeometry("negative disk radius"));
         }
         self.disk_offset(-radius)
+    }
+
+    /// Centres where the entire segment `[-half, half]` fits in the region,
+    /// excluding swept boundaries so enclosed holes cannot be skipped.
+    pub fn segment_erode(&self, half: Point) -> Result<Self, AccuracyError> {
+        if !half.is_finite() {
+            return Err(AccuracyError::InvalidGeometry("non-finite erosion segment"));
+        }
+        if half == Point::new(0.0, 0.0) {
+            self.budget().check(self.uncertainty_mm)?;
+            return Ok(self.clone());
+        }
+        let mut swept = Vec::new();
+        for (a, b) in self.edges() {
+            let edge = b - a;
+            let cross = edge.x * half.y - edge.y * half.x;
+            if cross == 0.0 {
+                continue;
+            }
+            let mut polygon = [a - half, b - half, b + half, a + half]
+                .map(|p| [p.x, p.y])
+                .to_vec();
+            if cross < 0.0 {
+                polygon.reverse();
+            }
+            swept.push(polygon);
+        }
+        let mut swept = Self::from_rings(swept, FillRule::NonZero, self.resolution)?;
+        swept.uncertainty_mm += self.uncertainty_mm;
+        self.difference(&swept)
     }
 
     fn disk_offset(&self, offset: f64) -> Result<Self, AccuracyError> {
