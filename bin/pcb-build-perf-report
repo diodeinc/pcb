@@ -40,10 +40,7 @@ def main() -> None:
         for path, base_board in sorted(base_boards.items()):
             head_board = head_boards[path]
             label = head_board.get("name") or path
-            if label.lower() != name.lower():
-                label = f"{name}/{label}"
-            else:
-                label = name
+            label = name if label.lower() == name.lower() else f"{name}/{label}"
             base_median = base_board["median_seconds"]
             head_median = head_board["median_seconds"]
             base_stddev = base_board["stddev_seconds"]
@@ -61,16 +58,11 @@ def main() -> None:
                 f" | {head_median * 1000:.0f}ms ±{head_stddev * 1000:.1f} | {change} |"
             )
 
-    lines.extend(
-        [
-            "",
-            (
-                "<sub>Measured with [hyperfine](https://github.com/sharkdp/hyperfine). "
-                "Times show median ±stddev. Bold changes are at least 5% and exceed twice the combined standard deviation.</sub>"
-            ),
-        ]
-    )
     print("\n".join(lines))
+    print(
+        "\n<sub>Measured with [hyperfine](https://github.com/sharkdp/hyperfine). "
+        "Times show median ±stddev. Bold changes are at least 5% and exceed twice the combined standard deviation.</sub>"
+    )
 
 
 if __name__ == "__main__":

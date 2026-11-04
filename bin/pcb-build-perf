@@ -26,9 +26,8 @@ def run_json(cmd: list[str], cwd: str | None) -> dict:
 
 def run_hyperfine(cmd: list[str], cwd: str, warmup: int) -> dict:
     """Run hyperfine and return its results."""
-    with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
-        tmp_path = f.name
-    try:
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_path = os.path.join(tmp, "hyperfine.json")
         # With --shell=none, hyperfine expects the command as a single string
         cmd_str = " ".join(cmd)
         subprocess.run(
@@ -47,8 +46,6 @@ def run_hyperfine(cmd: list[str], cwd: str, warmup: int) -> dict:
         with open(tmp_path) as f:
             data = json.load(f)
         return data["results"][0]
-    finally:
-        os.unlink(tmp_path)
 
 
 def normalize_rel_path(rel_path: object) -> str:
