@@ -3,6 +3,39 @@ agents:
   queue: pfet
 
 steps:
+  - label: ":apple: Local installer"
+    key: installer-macos
+    agents:
+      queue: macos-large
+    if_changed:
+      - crates/**
+      - lib/std/**
+      - test-workspaces/with-pcb-toml/**
+      - Cargo.{toml,lock}
+      - .cargo/**
+      - rust-toolchain{,.toml}
+      - install.sh
+      - .buildkite/**
+    timeout_in_minutes: 20
+    env:
+      BUILDKITE_PTY: "false"
+    cache:
+      - "~/.cargo/registry"
+      - "~/.cargo/git"
+      - "~/.rustup"
+      - target
+    command: |
+      set -euo pipefail
+
+      # Prefer Rustup's shims over Homebrew Rust to honor rust-toolchain.toml.
+      PATH="$(brew --prefix rustup)/bin:$HOME/.local/bin:$PATH"
+      export PATH
+      rustup set profile minimal
+      ./install.sh --local
+      pcb toolchain list
+      pcb +local --help
+      pcb +local build test-workspaces/with-pcb-toml/boards/WorkspaceTestBoard.zen -S bom
+
   - label: ":mag: Source checks"
     key: source
     if: build.branch != pipeline.default_branch
