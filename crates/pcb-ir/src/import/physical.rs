@@ -372,6 +372,85 @@ impl ImportedDesign {
         )
     }
 
+    /// Top/bottom surface openings after mask, caps and fill, given the outer
+    /// copper layers in that order. Unknown drill depth remains open; unknown
+    /// fill depth cannot establish protection at a surface.
+    pub fn surface_openings(
+        &self,
+        scope: ArtworkScope,
+        copper: [Symbol; 2],
+        resolution: Resolution,
+    ) -> Result<[ContourSet; 2]> {
+        let view = self
+            .physical_view(scope, resolution)
+            .context("read measurement surfaces, mask openings and hole protection")?;
+        let mut fills = HashMap::new();
+        for hole in &view.holes {
+            for evidence in &hole.protection {
+                if evidence.function == LayerFunction::HoleFill
+                    && !fills.contains_key(&evidence.layer)
+                {
+                    fills.insert(
+                        evidence.layer,
+                        self.composed_layer_image(evidence.layer, scope, resolution)?,
+                    );
+                }
+            }
+        }
+        let mut result = [ContourSet::empty(resolution), ContourSet::empty(resolution)];
+        for (index, (side, copper)) in [Side::Top, Side::Bottom]
+            .into_iter()
+            .zip(copper)
+            .enumerate()
+        {
+            let mask = view
+                .mask_openings
+                .iter()
+                .filter(|opening| opening.side == side || opening.side == Side::None)
+                .map(|opening| opening.image.clone())
+                .collect::<Vec<_>>();
+            let known_mask = !mask.is_empty();
+            let mask = ContourSet::union_all(resolution, mask)?;
+            let mut openings = Vec::new();
+            let known_copper = |name| {
+                self.layer_definitions
+                    .iter()
+                    .any(|layer| layer.name == name && is_copper(layer.layer_function))
+            };
+            let reaches = |span, unknown| match span {
+                FeatureSpan::ThroughBoard => true,
+                FeatureSpan::Layer(layer) => layer == copper || (!known_copper(layer) && unknown),
+                FeatureSpan::FromTo { from, to } => {
+                    from == Some(copper)
+                        || to == Some(copper)
+                        || (unknown
+                            && (!from.is_some_and(known_copper) || !to.is_some_and(known_copper)))
+                }
+                FeatureSpan::Unknown => unknown,
+            };
+            for hole in &view.holes {
+                if !reaches(hole.span, true) || hole.plating == PlatingKind::ViaCapped {
+                    continue;
+                }
+                let mut opening = hole.image.clone();
+                for evidence in &hole.protection {
+                    if (evidence.side == side || evidence.side == Side::None)
+                        && reaches(evidence.span, evidence.side == side)
+                        && let Some(fill) = fills.get(&evidence.layer)
+                    {
+                        opening = opening.difference(fill)?;
+                    }
+                }
+                if known_mask && hole.plating == PlatingKind::Via {
+                    opening = opening.intersection(&mask)?;
+                }
+                openings.push(opening);
+            }
+            result[index] = ContourSet::union_all(resolution, openings)?;
+        }
+        Ok(result)
+    }
+
     /// Derive physical lands, exact electrical terminations, independent paste
     /// islands, mask openings, and drilled openings without reinterpreting
     /// source XML or duplicating geometry.
