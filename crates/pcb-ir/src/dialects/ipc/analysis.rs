@@ -137,8 +137,7 @@ pub fn panel_step_count(doc: &Document) -> usize {
 ///
 /// This is not independent IR state. It is a convenience view over the IPC
 /// layout graph for the common `array -> board_cell -> board` or
-/// `array -> board` shapes. The root repeat may turn its copies by a multiple
-/// of 90 degrees; every field is reported in the root panel's frame.
+/// `array -> board` shapes, reported in the root panel's frame.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SimpleBoardArrayLayout {
     pub board_step: u32,
@@ -174,8 +173,7 @@ pub fn simple_board_array_layout(doc: &Document) -> Option<SimpleBoardArrayLayou
     }
 
     // Auto arrays can place their complete, unchanged packing turned as a
-    // whole. Recognize that rigid wrapper without treating it as a one-cell
-    // array, and report its grid in the panel's frame.
+    // whole. Recognize that rigid wrapper without treating it as a one-cell array.
     let turns = simple_quarter_turns(array_repeat.angle)?;
     if turns != 0
         && array_repeat.nx == 1
@@ -193,8 +191,6 @@ pub fn simple_board_array_layout(doc: &Document) -> Option<SimpleBoardArrayLayou
     }
 }
 
-/// A packing Panel placed once, turned, and filling the root: read its grid in
-/// the packing's frame, then turn the description into the root's frame.
 fn simple_turned_packing_array(
     doc: &Document,
     array_bbox: BBox,
@@ -240,8 +236,6 @@ fn simple_direct_board_array(
     if board_step.kind != LayoutStepKind::Board {
         return None;
     }
-    // The repeat steps in the parent's frame and turns each copy about its
-    // Datum, so the grid spans the turned board.
     let turns = simple_quarter_turns(repeat.angle)?;
     let (board_width, board_height) =
         simple_turn_dimensions(simple_step_dimensions(board_step)?, turns);
@@ -290,8 +284,7 @@ fn simple_board_cell_array(
 ) -> Option<SimpleBoardArrayLayout> {
     let board_cell_step = doc.layout.steps.get(repeat.child_step as usize)?;
     let (cell_width, cell_height) = simple_step_dimensions(board_cell_step)?;
-    // The grid steps in the parent's frame over turned cells; the board is
-    // measured in the cell's frame and turned with it at the end.
+    // The grid steps in the parent's frame over turned cells.
     let turns = simple_quarter_turns(repeat.angle)?;
     let (span_x, span_y) = simple_turn_dimensions((cell_width, cell_height), turns);
     let pitch_x = (repeat.nx > 1)
@@ -372,8 +365,7 @@ fn simple_board_cell_array(
     })
 }
 
-/// Counterclockwise quarter turns, as IPC-2581 turns a StepRepeat, for an
-/// angle that is a multiple of 90 degrees.
+/// Counterclockwise quarter turns for an angle that is a multiple of 90 degrees.
 fn simple_quarter_turns(angle: f64) -> Option<u32> {
     let turns = (angle / 90.0).round();
     simple_array_nearly_equal(angle, turns * 90.0).then(|| (turns as i64).rem_euclid(4) as u32)
