@@ -16,11 +16,10 @@ rm -rf "$bundle_dir"
 
 wasm-pack build \
   --target web \
-  --release \
   --scope diodeinc \
   --out-dir "../../$bundle_dir" \
   --out-name "${crate//-/_}" \
   "$@" \
-  "crates/$crate"
+  "crates/$crate" --locked
 
 rm -f "$bundle_dir/.gitignore"

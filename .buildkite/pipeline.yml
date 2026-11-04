@@ -71,6 +71,7 @@ steps:
       - .cargo/**
       - rust-toolchain{,.toml}
       - .config/nextest.toml
+      - bin/build-wasm-bundle.sh
       - flake.{nix,lock}
       - .buildkite/**
     timeout_in_minutes: 20
@@ -89,7 +90,10 @@ steps:
       cargo nextest run --locked --workspace --profile ci
       cargo test --locked --workspace --doc
 
-      # Reuse nextest's binaries for installed-toolchain and scaffolding coverage.
+      # Check WASM compatibility without optimizing or packaging a published product.
+      RUST_LOG=warn CARGO_PROFILE_DEV_DEBUG=0 bin/build-wasm-bundle.sh zen --dev --no-opt --no-pack
+
+      # Reuse nextest's native binaries for CLI smoke and a publish -> WASM round trip.
       bash .buildkite/test-cli.sh
 
       # Keep the library-only build contract without rerunning the same tests.

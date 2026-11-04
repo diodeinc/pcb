@@ -720,7 +720,16 @@ fn build_wasm_frozen_resolution<F: FileProvider>(
 ) -> Result<FrozenResolutionMap, String> {
     let selected_remote = selected_remote_from_hydrated_manifest(workspace, package_url)
         .map_err(|e| e.to_string())?;
-    let mut packages = BTreeMap::new();
+    // The stdlib archive is separate from workspace/vendor manifests, but its
+    // files still need a package scope, just as in the native resolver.
+    let mut packages = BTreeMap::from([(
+        workspace.workspace_stdlib_dir(),
+        FrozenPackage {
+            identity: FrozenPackageIdentity::Stdlib,
+            deps: BTreeMap::new(),
+            parts: Vec::new(),
+        },
+    )]);
 
     for (root, deps) in package_resolutions {
         let Some(identity) = frozen_identity_for_root(workspace, &selected_remote, root) else {
