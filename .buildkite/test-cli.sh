@@ -8,6 +8,11 @@ host="$(rustc -vV | sed -n 's/^host: //p')"
 scratch="$(mktemp -d)"
 trap 'rm -rf "$scratch"' EXIT
 
+# Clone before isolating HOME so Git can use the agent's managed GitHub credentials.
+git clone --depth 1 https://github.com/diodeinc/kicad-test-fixtures.git "$scratch/fixtures"
+mapfile -d '' -t projects < <(find "$scratch/fixtures" -name '*.kicad_pro' -print0)
+test "${#projects[@]}" -gt 0
+
 # Exercise the installed shim/toolchain boundary, not binaries running in the checkout.
 # nextest already built both binaries; the release installer is still tested on macOS.
 export HOME="$scratch/home"
@@ -16,6 +21,7 @@ export XDG_CONFIG_HOME="$scratch/config"
 export XDG_CACHE_HOME="$scratch/cache"
 export PATH="$scratch/bin:$PATH"
 export DIODE_API_AUTH=none
+export RUST_LOG=warn
 toolchain="$XDG_DATA_HOME/pcb/toolchains/local/$host"
 mkdir -p "$HOME" "$scratch/bin" "$toolchain/lib"
 install -m 755 "$binaries/pcb" "$scratch/bin/pcb"
@@ -37,14 +43,20 @@ test -s TB0001.zen
 test -s modules/mod_a/mod_a.zen
 pcb +local build .
 
-# Test the actual JS/WASM bindings against a real release archive, without private fixtures.
+# Publish once, then evaluate that same archive through the actual JS/WASM bindings.
 git -C "$scratch/workspace" init -q
 git -C "$scratch/workspace" add .
 git -C "$scratch/workspace" -c user.name=CI -c user.email=ci@example.invalid commit -qm Fixture
+board="$scratch/workspace/boards/WorkspaceTestBoard.zen"
+pcb +local bom "$board"
+pcb +local layout "$board" --no-open
+pcb +local publish "$board" -S layout.drc.invalid_outline
+bundles=("$scratch/workspace"/.pcb/releases/*.zip)
+test "${#bundles[@]}" -eq 1
+test -s "${bundles[0]}"
 tar -C "$toolchain/lib/std" -cf - . | zstd -q -3 -c > "$scratch/stdlib.tar.zst"
 node "$repo/crates/pcb-zen-wasm/scripts/eval-publish-bundle.mjs" \
-  --publish "$scratch/workspace/boards/WorkspaceTestBoard.zen" \
-  --pcbc "$scratch/bin/pcb" --pcbc-arg +local \
+  --bundle "${bundles[0]}" \
   --stdlib "$scratch/stdlib.tar.zst" \
   --wasm-bundle "$repo/target/wasm-bundle" > "$scratch/wasm-netlist.json"
 
@@ -61,3 +73,14 @@ assert.deepEqual(Object.keys(schematic.nets).sort(), [
 ])
 console.log('WASM round trip: 5 components and 5 nets; JS serialization checks passed')
 JS
+
+for project in "${projects[@]}"; do
+  echo "--- :kicad: Import, build and layout $(basename "$project")"
+  out="$scratch/imports/$(basename "${project%.kicad_pro}")"
+  pcb +local import "$project" "$out"
+  for board_zen in "$out"/*.zen; do
+    pcb +local build "$board_zen" -S bom
+    pcb +local layout "$board_zen" --no-open -S bom
+  done
+done
+echo "KiCad E2E: ${#projects[@]} projects imported, built and laid out"

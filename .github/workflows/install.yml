@@ -1,0 +1,42 @@
+name: Local Installer
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  install:
+    name: Installer (macOS)
+    runs-on: blacksmith-6vcpu-macos-15
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Rust
+        uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1.17.0
+        with:
+          cache-bin: false
+
+      - name: Install local pcb toolchain
+        run: |
+          ./install.sh --local
+          export PATH="$HOME/.local/bin:$PATH"
+          pcb toolchain list
+          pcb +local --help
+
+      - name: Build with the installed toolchain
+        run: pcb +local build test-workspaces/with-pcb-toml/boards/WorkspaceTestBoard.zen -S bom
