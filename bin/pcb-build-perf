@@ -87,7 +87,7 @@ def collect_boards(workspace_info: dict) -> list[dict]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Measure pcb build performance across boards in a workspace."
+        description="Measure pcb build performance across boards in a workspace (requires Hyperfine 2)."
     )
     parser.add_argument(
         "--workspace",
@@ -159,21 +159,23 @@ def main() -> int:
         cmd = [pcbc_path, "build", *build_flags, zen_path]
 
         hf = run_hyperfine(cmd, cwd=workspace, warmup=args.warmup)
+        timing = hf["summary"]["time_wall_clock"]
+        runs = [measurement["time_wall_clock"]["value"] for measurement in hf["measurements"]]
 
         board_results.append(
             {
                 "name": board["name"],
                 "zen_path": zen_path,
                 # Hyperfine metrics (all times in seconds)
-                "mean_seconds": hf["mean"],
-                "stddev_seconds": hf["stddev"],
-                "median_seconds": hf["median"],
-                "min_seconds": hf["min"],
-                "max_seconds": hf["max"],
-                "user_seconds": hf["user"],
-                "system_seconds": hf["system"],
-                "runs": hf["times"],
-                "n": len(hf["times"]),
+                "mean_seconds": timing["mean"],
+                "stddev_seconds": timing["stddev"],
+                "median_seconds": timing["median"],
+                "min_seconds": timing["min"],
+                "max_seconds": timing["max"],
+                "user_seconds": hf["summary"]["time_user"]["mean"],
+                "system_seconds": hf["summary"]["time_system"]["mean"],
+                "runs": runs,
+                "n": len(runs),
             }
         )
 

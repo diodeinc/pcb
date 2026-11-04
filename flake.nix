@@ -177,6 +177,7 @@
                 pkgs.nodejs_24
                 pkgs.wasm-pack
                 pkgs.zstd
+                pkgs.hyperfine
               ]
               # Tests bring their own 3D fixtures; omit the stock model library.
               ++ lib.optionals pkgs.stdenv.hostPlatform.isLinux [

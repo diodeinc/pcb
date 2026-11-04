@@ -114,7 +114,7 @@ steps:
     if: build.branch != pipeline.default_branch
     if_changed:
       - "**/*.{py,pyi}"
-      - bin/pcb-build-perf
+      - bin/pcb-build-perf*
       - pyproject.toml
       - "{ruff,.ruff,ty}.toml"
       - uv.lock
@@ -142,3 +142,32 @@ steps:
     timeout_in_minutes: 3
     command: *python-checks
     artifact_paths: target/pytest/junit.xml
+
+  - label: ":stopwatch: Build performance"
+    key: build-perf
+    # Branch builds are reused for PRs and may have no pull-request metadata.
+    if: build.branch != pipeline.default_branch && build.pull_request.repository.fork != true
+    agents:
+      queue: pfet
+      arch: amd64
+    timeout_in_minutes: 15
+    secrets:
+      - DIODE_CLIENT_ID
+      - DIODE_CLIENT_SECRET
+    command: |
+      set -euo pipefail
+
+      git fetch --no-tags origin "${BUILDKITE_PULL_REQUEST_BASE_BRANCH:-$BUILDKITE_PIPELINE_DEFAULT_BRANCH}"
+      # Keep DM0001 before the AM32 redesign, which needs an unavailable INA199 symbol.
+      bash .buildkite/build-perf.sh FETCH_HEAD \
+        demo/b/Demeter \
+        demo/b/DM0001@a02803dbc47eb6a31ef6a511c77ec921ecf85a16 \
+        demo/b/DM0002 \
+        demo/b/DM0003 \
+        demo/b/Feign \
+        demo/b/Renfield \
+        demo/b/Seward \
+        arduino/b/Nano \
+        arduino/b/unoQ
+      buildkite-agent annotate --context build-perf --style info < target/build-perf/report.md
+    artifact_paths: target/build-perf/*
