@@ -76,6 +76,8 @@ steps:
       - .buildkite/**
     timeout_in_minutes: 20
     env: &test-env
+      # These CLI checks must run non-interactively, including release warning review.
+      BUILDKITE_PTY: "false"
       CARGO_INCREMENTAL: "0"
       RUST_LOG: debug
       RUST_BACKTRACE: full

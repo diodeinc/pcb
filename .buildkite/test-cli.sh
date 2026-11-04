@@ -1,9 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Buildkite supplies a PTY; smoke checks must never wait for interactive input.
-exec </dev/null
-
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 repo="$PWD"
 binaries="$(realpath "${CARGO_TARGET_DIR:-target}/debug")"
