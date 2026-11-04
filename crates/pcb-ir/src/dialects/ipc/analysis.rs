@@ -137,7 +137,7 @@ pub fn panel_step_count(doc: &Document) -> usize {
 ///
 /// This is not independent IR state. It is a convenience view over the IPC
 /// layout graph for the common `array -> board_cell -> board` or
-/// `array -> board` shapes.
+/// `array -> board` shapes, reported in the root panel's frame.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SimpleBoardArrayLayout {
     pub board_step: u32,
@@ -172,45 +172,15 @@ pub fn simple_board_array_layout(doc: &Document) -> Option<SimpleBoardArrayLayou
         return None;
     }
 
-    // Auto arrays can place their complete, unchanged packing at 90 degrees.
-    // Recognize that rigid wrapper without treating it as a one-cell array.
-    if simple_array_nearly_zero(array_repeat.angle - 90.0)
+    // Auto arrays can place their complete, unchanged packing turned as a
+    // whole. Recognize that rigid wrapper without treating it as a one-cell array.
+    let turns = simple_quarter_turns(array_repeat.angle)?;
+    if turns != 0
         && array_repeat.nx == 1
         && array_repeat.ny == 1
+        && let Some(array) = simple_turned_packing_array(doc, array_bbox, array_repeat, turns)
     {
-        let packing = doc.layout.steps.get(array_repeat.child_step as usize)?;
-        let instance = layout_repeat_instances(doc, array_repeat).next()?;
-        let transform = doc.layout.instances[instance as usize].transform;
-        let bounds = packing.bbox.transformed(transform);
-        if packing.kind != LayoutStepKind::Panel
-            || !simple_array_nearly_zero(bounds.min.distance_to(array_bbox.min))
-            || !simple_array_nearly_zero(bounds.max.distance_to(array_bbox.max))
-        {
-            return None;
-        }
-        let mut repeats = layout_child_repeats(doc, array_repeat.child_step, Some(instance));
-        let mut repeat = repeats.next()?.clone();
-        if repeats.next().is_some() || !simple_array_nearly_zero(repeat.angle) || repeat.mirror {
-            return None;
-        }
-        repeat.bbox = repeat.bbox.transformed(transform.inverse()?);
-        let mut array = simple_board_cell_array(doc, packing, &repeat)?;
-        std::mem::swap(&mut array.columns, &mut array.rows);
-        std::mem::swap(&mut array.board_width, &mut array.board_height);
-        std::mem::swap(&mut array.pitch_x, &mut array.pitch_y);
-        let rotate = |m: LayoutMargins| LayoutMargins {
-            top: m.right,
-            right: m.bottom,
-            bottom: m.left,
-            left: m.top,
-        };
-        array.board_margin = array.board_margin.map(rotate);
-        array.edge_rail = rotate(array.edge_rail);
-        array.margins = rotate(array.margins);
         return Some(array);
-    }
-    if !simple_array_nearly_zero(array_repeat.angle) {
-        return None;
     }
 
     let child_step = doc.layout.steps.get(array_repeat.child_step as usize)?;
@@ -219,6 +189,42 @@ pub fn simple_board_array_layout(doc: &Document) -> Option<SimpleBoardArrayLayou
         LayoutStepKind::Panel => simple_board_cell_array(doc, array_step, array_repeat),
         _ => None,
     }
+}
+
+fn simple_turned_packing_array(
+    doc: &Document,
+    array_bbox: BBox,
+    wrapper: &LayoutRepeat,
+    turns: u32,
+) -> Option<SimpleBoardArrayLayout> {
+    let packing = doc.layout.steps.get(wrapper.child_step as usize)?;
+    let instance = layout_repeat_instances(doc, wrapper).next()?;
+    let transform = doc.layout.instances[instance as usize].transform;
+    let bounds = packing.bbox.transformed(transform);
+    if packing.kind != LayoutStepKind::Panel
+        || !simple_array_nearly_zero(bounds.min.distance_to(array_bbox.min))
+        || !simple_array_nearly_zero(bounds.max.distance_to(array_bbox.max))
+    {
+        return None;
+    }
+    let mut repeats = layout_child_repeats(doc, wrapper.child_step, Some(instance));
+    let mut repeat = repeats.next()?.clone();
+    if repeats.next().is_some() || repeat.mirror {
+        return None;
+    }
+    repeat.bbox = repeat.bbox.transformed(transform.inverse()?);
+    let mut array = simple_board_cell_array(doc, packing, &repeat)?;
+    if turns % 2 == 1 {
+        std::mem::swap(&mut array.columns, &mut array.rows);
+        std::mem::swap(&mut array.board_width, &mut array.board_height);
+        std::mem::swap(&mut array.pitch_x, &mut array.pitch_y);
+    }
+    array.board_margin = array
+        .board_margin
+        .map(|margins| simple_turn_margins(margins, turns));
+    array.edge_rail = simple_turn_margins(array.edge_rail, turns);
+    array.margins = simple_turn_margins(array.margins, turns);
+    Some(array)
 }
 
 fn simple_direct_board_array(
@@ -230,7 +236,9 @@ fn simple_direct_board_array(
     if board_step.kind != LayoutStepKind::Board {
         return None;
     }
-    let (board_width, board_height) = simple_step_dimensions(board_step)?;
+    let turns = simple_quarter_turns(repeat.angle)?;
+    let (board_width, board_height) =
+        simple_turn_dimensions(simple_step_dimensions(board_step)?, turns);
     let instance_count = layout_repeat_instances(doc, repeat).count() as u32;
     if instance_count != repeat.nx.saturating_mul(repeat.ny) || repeat.bbox.is_empty() {
         return None;
@@ -276,12 +284,15 @@ fn simple_board_cell_array(
 ) -> Option<SimpleBoardArrayLayout> {
     let board_cell_step = doc.layout.steps.get(repeat.child_step as usize)?;
     let (cell_width, cell_height) = simple_step_dimensions(board_cell_step)?;
+    // The grid steps in the parent's frame over turned cells.
+    let turns = simple_quarter_turns(repeat.angle)?;
+    let (span_x, span_y) = simple_turn_dimensions((cell_width, cell_height), turns);
     let pitch_x = (repeat.nx > 1)
         .then_some(repeat.dx)
-        .filter(|pitch| simple_valid_pitch(*pitch, cell_width));
+        .filter(|pitch| simple_valid_pitch(*pitch, span_x));
     let pitch_y = (repeat.ny > 1)
         .then_some(repeat.dy)
-        .filter(|pitch| simple_valid_pitch(*pitch, cell_height));
+        .filter(|pitch| simple_valid_pitch(*pitch, span_y));
     if (repeat.nx > 1 && pitch_x.is_none()) || (repeat.ny > 1 && pitch_y.is_none()) {
         return None;
     }
@@ -329,6 +340,7 @@ fn simple_board_cell_array(
         cell_width,
         cell_height,
     )?;
+    let (board_width, board_height) = simple_turn_dimensions((board_width, board_height), turns);
 
     let edge_margins = simple_margins_between(repeat.bbox, array_step.bbox)?;
     let edge_rail_width = simple_average_if_consistent(vec![
@@ -346,10 +358,34 @@ fn simple_board_cell_array(
         board_height,
         pitch_x,
         pitch_y,
-        board_margin: Some(board_margin),
+        board_margin: Some(simple_turn_margins(board_margin, turns)),
         edge_rail_width,
         edge_rail: edge_margins,
         margins: edge_margins,
+    })
+}
+
+/// Counterclockwise quarter turns for an angle that is a multiple of 90 degrees.
+fn simple_quarter_turns(angle: f64) -> Option<u32> {
+    let turns = (angle / 90.0).round();
+    simple_array_nearly_equal(angle, turns * 90.0).then(|| (turns as i64).rem_euclid(4) as u32)
+}
+
+fn simple_turn_dimensions((width, height): (f64, f64), turns: u32) -> (f64, f64) {
+    if turns % 2 == 1 {
+        (height, width)
+    } else {
+        (width, height)
+    }
+}
+
+/// Margins of a rectangle turned counterclockwise by `turns` quarter turns.
+fn simple_turn_margins(margins: LayoutMargins, turns: u32) -> LayoutMargins {
+    (0..turns).fold(margins, |m, _| LayoutMargins {
+        top: m.right,
+        right: m.bottom,
+        bottom: m.left,
+        left: m.top,
     })
 }
 
