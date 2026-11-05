@@ -192,10 +192,10 @@ steps:
       # The job's OIDC token assumes buildkite-pcb-build-perf, the only reader of this secret.
       export AWS_ROLE_ARN=arn:aws:iam::689688455535:role/buildkite-pcb-build-perf AWS_REGION=us-west-2
       export AWS_WEB_IDENTITY_TOKEN_FILE=$(mktemp)
+      trap 'rm -f "$AWS_WEB_IDENTITY_TOKEN_FILE"' EXIT
       buildkite-agent oidc request-token --audience sts.amazonaws.com > "$AWS_WEB_IDENTITY_TOKEN_FILE"
       client=$(uvx --from awscli aws secretsmanager get-secret-value \
         --secret-id buildkite/pcb-build-perf/diode-client --query SecretString --output text)
-      rm "$AWS_WEB_IDENTITY_TOKEN_FILE"
       DIODE_CLIENT_ID=$(jq -er .client_id <<< "$client")
       DIODE_CLIENT_SECRET=$(jq -er .client_secret <<< "$client")
       printf '%s' "$DIODE_CLIENT_SECRET" | buildkite-agent redactor add
