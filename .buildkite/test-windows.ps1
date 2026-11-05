@@ -15,12 +15,10 @@ rustup set profile minimal
 rustc --version --verbose
 
 $cargoBin = Join-Path $HOME '.cargo/bin'
-if (!(Test-Path (Join-Path $cargoBin 'cargo-nextest.exe'))) {
-    $archive = Join-Path $env:TEMP 'cargo-nextest.zip'
-    Invoke-WebRequest https://get.nexte.st/0.9.151/windows -OutFile $archive
-    Expand-Archive $archive -DestinationPath $cargoBin -Force
-    Remove-Item $archive
-}
+$archive = Join-Path $env:TEMP 'cargo-nextest.zip'
+Invoke-WebRequest https://get.nexte.st/0.9.151/windows -OutFile $archive
+Expand-Archive $archive -DestinationPath $cargoBin -Force
+Remove-Item $archive
 cargo nextest --version
 
 Write-Output '--- Windows workspace tests'

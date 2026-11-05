@@ -11,8 +11,6 @@ caches:
         fallback_limit: true
       - checksum: Cargo.lock
     target_paths:
-      - ~/.cargo/bin
       - ~/.cargo/registry
       - ~/.cargo/git
-      - ~/.rustup
       - target
