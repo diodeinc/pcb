@@ -190,7 +190,7 @@ steps:
       set -euo pipefail
 
       # The job's OIDC token assumes buildkite-pcb-build-perf, the only reader of this secret.
-      export AWS_ROLE_ARN=arn:aws:iam::689688455535:role/buildkite-pcb-build-perf AWS_REGION=us-west-2
+      export AWS_ROLE_ARN=arn:aws:iam::689688455535:role/buildkite-pcb-build-perf AWS_DEFAULT_REGION=us-west-2
       export AWS_WEB_IDENTITY_TOKEN_FILE=$(mktemp)
       trap 'rm -f "$AWS_WEB_IDENTITY_TOKEN_FILE"' EXIT
       buildkite-agent oidc request-token --audience sts.amazonaws.com > "$AWS_WEB_IDENTITY_TOKEN_FILE"
