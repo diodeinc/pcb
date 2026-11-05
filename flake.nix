@@ -223,6 +223,7 @@
               pkgs.cargo-zigbuild
               pkgs.zig
             ];
+            PCB_RELEASE_NIX = "1";
             UV_PYTHON = "${pkgs.python3}/bin/python3";
           };
         }

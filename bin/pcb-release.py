@@ -364,7 +364,7 @@ def build(target: str) -> None:
     if run("git", "rev-parse", "FETCH_HEAD") != release["sha"]:
         raise ValueError("Source bundle does not match release commit")
     run("git", "checkout", "--detach", release["sha"])
-    nix = bool(os.environ.get("IN_NIX_SHELL"))
+    nix = os.environ.get("PCB_RELEASE_NIX") == "1"
     if not nix:
         run("rustup", "set", "profile", "minimal")
         run("rustup", "target", "add", target)
