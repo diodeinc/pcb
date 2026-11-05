@@ -336,6 +336,14 @@ def prepare() -> None:
         run("zstd", "-q", "-f", "-3", str(tar), "-o", str(ASSETS / "stdlib.tar.zst"))
         tar.unlink()
         checksum_file(ASSETS / "stdlib.tar.zst")
+    # Persist recovery artifacts before making the version bump visible on main.
+    run(
+        "buildkite-agent",
+        "artifact",
+        "upload",
+        f"{ROOT}/release.json;{ROOT}/source.bundle"
+        + (f";{ASSETS}/*" if product == "compiler" else ""),
+    )
     with credentials("prepare", release["dry_run"]):
         if not release["dry_run"]:
             git_push(f"{sha}:refs/heads/main")

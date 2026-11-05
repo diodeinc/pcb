@@ -16,6 +16,8 @@ overwritten; older shim retries cannot downgrade latest.
 
 ## Recovery
 
+Prepare uploads its recovery artifacts before pushing the version bump. If that
+upload fails, retry prepare from the original checkout; main is unchanged.
 Retry failed build/publish jobs in the **same build**, retaining its artifacts.
 Do not retry prepare once its bump reached main or start another release with
 the same version. Publish resumes matching S3 objects and GitHub draft assets.

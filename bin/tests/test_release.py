@@ -9,6 +9,7 @@ import json
 import shutil
 import subprocess
 import sys
+from contextlib import nullcontext
 from pathlib import Path
 
 import pytest
@@ -57,6 +58,8 @@ class Cloud:
         self.denied = False
         self.writes = 0
         self.metadata = {}
+        self.fail_artifact = None
+        self.uploaded_artifacts = {}
 
     def run(self, args, **kwargs):
         def result(value=None, error=None):
@@ -157,6 +160,13 @@ class Cloud:
             return result(self.github)
         if args[0] == "buildkite-agent":
             if args[1:3] == ("artifact", "download"):
+                return result({})
+            if args[1:3] == ("artifact", "upload"):
+                for pattern in args[3].split(";"):
+                    for path in sorted(Path().glob(pattern)):
+                        if str(path) == self.fail_artifact:
+                            return result(error="Simulated Buildkite artifact outage")
+                        self.uploaded_artifacts[str(path)] = path.read_bytes()
                 return result({})
             assert args[1:3] == ("meta-data", "get")
             return subprocess.CompletedProcess(args, 0, self.metadata[args[3]], "")
@@ -352,8 +362,9 @@ def test_dry_run_never_needs_writers(release, cloud):
 
 
 @pytest.mark.parametrize("product", ["compiler", "shim"])
+@pytest.mark.parametrize("dry_run", [True, False])
 def test_prepare_bumps_actual_cargo_versions_without_tagging(
-    release, cloud, product, monkeypatch
+    release, cloud, product, dry_run, monkeypatch
 ):
     Path("Cargo.toml").write_text(
         '[workspace]\nmembers = ["crates/*"]\nresolver = "2"\n[workspace.package]\nversion = "1.2.3-rc.1"\n[profile.dist]\ninherits = "release"\n'
@@ -384,13 +395,36 @@ def test_prepare_bumps_actual_cargo_versions_without_tagging(
     cloud.metadata = {
         "release-product": product,
         "release-version": "1.2.3",
-        "release-dry-run": "true",
+        "release-dry-run": str(dry_run).lower(),
     }
+    if not dry_run:
+        # Only the local Git remote is writable; no AWS/GitHub credentials are acquired.
+        monkeypatch.setattr(release, "credentials", lambda *_: nullcontext())
+        cloud.fail_artifact = str(
+            release.ASSETS / "stdlib.tar.zst.sha256"
+            if product == "compiler"
+            else release.ROOT / "source.bundle"
+        )
+        with pytest.raises(subprocess.CalledProcessError):
+            release.prepare()
+        assert git("ls-remote", "origin", "refs/heads/main").split()[0] == base
+        assert (
+            release.remote_tag(("v" if product == "compiler" else "pcb/v") + "1.2.3")
+            is None
+        )
+        # Buildkite retries prepare from the original build checkout.
+        git("reset", "--hard", base)
+        cloud.fail_artifact = None
     release.prepare()
     config = release.load_release()
     assert config["sha"] != base
     assert config["version"] == "1.2.3"
-    assert git("ls-remote", "origin", "refs/heads/main").split()[0] == base
+    assert git("ls-remote", "origin", "refs/heads/main").split()[0] == (
+        base if dry_run else config["sha"]
+    )
+    for name in ("release.json", "source.bundle"):
+        path = release.ROOT / name
+        assert cloud.uploaded_artifacts[str(path)] == path.read_bytes()
     assert release.remote_tag(config["tag"]) is None
     metadata = json.loads(
         REAL_RUN(
@@ -412,6 +446,8 @@ def test_prepare_bumps_actual_cargo_versions_without_tagging(
     if product == "compiler":
         assert "## [1.2.3] - " in Path("CHANGELOG.md").read_text()
         assert (release.ASSETS / "stdlib.tar.zst").is_file()
+        for path in release.ASSETS.iterdir():
+            assert cloud.uploaded_artifacts[str(path)] == path.read_bytes()
     else:
         assert "## [1.2.3] - " not in Path("CHANGELOG.md").read_text()
     assert cloud.objects == {}

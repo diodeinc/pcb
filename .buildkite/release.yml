@@ -36,10 +36,6 @@ steps:
     concurrency_group: pcb-release-prepare
     concurrency: 1
     command: nix develop .#release --command python3 bin/pcb-release.py prepare
-    artifact_paths:
-      - target/release-pipeline/release.json
-      - target/release-pipeline/source.bundle
-      - target/release-pipeline/artifacts/*
 
   - &linux-build
     label: Build {{matrix}}
