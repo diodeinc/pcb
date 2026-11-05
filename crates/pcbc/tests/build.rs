@@ -1103,3 +1103,36 @@ fn test_inline_no_cross_line_contamination() {
         .snapshot_run("pcbc", ["build", "test.zen"]);
     assert_snapshot!("inline_no_cross_line_contamination", output);
 }
+
+#[test]
+fn test_build_netlist_is_printed_on_failure() {
+    let mut sandbox = Sandbox::new().with_workspace();
+    sandbox
+        .write(
+            "board.zen",
+            r#"
+Component(
+    name = "U1",
+    prefix = "U",
+    footprint = File("test.kicad_mod"),
+    pin_defs = {"A": "1"},
+    pins = {"A": Net("A")},
+)
+"#,
+        )
+        .write("test.kicad_mod", TEST_ONE_PAD_KICAD_MOD);
+
+    let output = sandbox
+        .run("pcbc", ["build", "--offline", "--netlist", "board.zen"])
+        .stdout_capture()
+        .stderr_capture()
+        .unchecked()
+        .run()
+        .expect("build command should run");
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("missing part information"), "{stderr}");
+    let netlist: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("stdout should be the netlist JSON");
+    assert!(!netlist["instances"].as_object().unwrap().is_empty());
+}

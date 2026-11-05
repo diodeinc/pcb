@@ -1783,6 +1783,7 @@ fn explicit_mpn(component: &ImportComponentData) -> Option<&str> {
             "mpn",
             "manufacturer_part_number",
             "manufacturer part number",
+            "manufacturer part",
             "mfr part number",
             "manufacturer_pn",
             "part number",
@@ -2843,6 +2844,33 @@ mod tests {
             footprint_qualified_component_dir_name("Part", "SO 8"),
             "Part__SO_8"
         );
+    }
+
+    #[test]
+    fn altium_manufacturer_part_is_the_mpn() {
+        let unit = ImportSchematicUnit {
+            lib_name: None,
+            lib_id: None,
+            unit: None,
+            at: None,
+            mirror: None,
+            in_bom: None,
+            on_board: None,
+            dnp: None,
+            exclude_from_sim: None,
+            instance_path: None,
+            properties: BTreeMap::from([
+                ("Manufacturer".to_string(), "TI".to_string()),
+                (
+                    "Manufacturer Part".to_string(),
+                    "SN74LVC2T45DCUR".to_string(),
+                ),
+            ]),
+            pins: None,
+        };
+        let component = make_component("U1", BTreeMap::from([(make_anchor("u1"), unit)]));
+        assert_eq!(explicit_mpn(&component), Some("SN74LVC2T45DCUR"));
+        assert_eq!(explicit_manufacturer(&component), Some("TI"));
     }
 
     fn make_anchor(symbol_uuid: &str) -> KiCadUuidPathKey {
