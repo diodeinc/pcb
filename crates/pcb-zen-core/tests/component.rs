@@ -954,6 +954,7 @@ snapshot_eval!(module_dnp_propagates_to_children, {
             footprint = "0402",
             pin_defs = {"1": "1", "2": "2"},
             pins = {"1": vcc, "2": gnd},
+            dnp = False,  # A DNP parent must still win.
             properties = {"resistance": "10k"}
         )
         
@@ -988,6 +989,78 @@ snapshot_eval!(module_dnp_propagates_to_children, {
         )
     "#
 });
+
+#[test]
+fn module_controls_override_properties() {
+    for (control, properties, dnp, mode) in [
+        ("dnp=True", "", true, ""),
+        ("dnp=False", r#""dnp": True"#, false, ""),
+        ("dnp=True", r#""dnp": False"#, true, ""),
+        (
+            r#"schematic="collapse""#,
+            r#""embed": True"#,
+            false,
+            "collapse",
+        ),
+        (
+            r#"schematic="embed""#,
+            r#""collapse": True"#,
+            false,
+            "embed",
+        ),
+    ] {
+        let properties = format!(r#"{{"tag": "kept", {properties}}}"#);
+        for args in [
+            format!("{control}, properties={properties}"),
+            format!("properties={properties}, {control}"),
+        ] {
+            let result = common::eval_zen(vec![
+                (
+                    "Child.zen".into(),
+                    r#"Component(name="C", footprint="test", pin_defs={}, pins={})"#.into(),
+                ),
+                (
+                    "test.zen".into(),
+                    format!(r#"Module("Child.zen")(name="child", {args})"#),
+                ),
+            ]);
+            assert!(result.is_success(), "{args}: {:?}", result.diagnostics);
+            let output = result.output.unwrap();
+            let tree = output.module_tree();
+            let child = tree.values().find(|m| !m.path().is_root()).unwrap();
+            assert_eq!(child.components().next().unwrap().dnp(), dnp, "{args}");
+            assert_eq!(
+                child.properties().get("tag").unwrap().unpack_str(),
+                Some("kept")
+            );
+            for key in ["collapse", "embed"] {
+                assert_eq!(
+                    child
+                        .properties()
+                        .get(key)
+                        .and_then(|v| v.unpack_bool())
+                        .unwrap_or(false),
+                    key == mode,
+                    "{args}",
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn module_dnp_requires_a_boolean() {
+    for value in ["None", "1", r#""true""#] {
+        let result = common::eval_zen(vec![
+            ("Child.zen".into(), String::new()),
+            (
+                "test.zen".into(),
+                format!(r#"Module("Child.zen")(name="child", dnp={value})"#),
+            ),
+        ]);
+        assert!(!result.is_success(), "dnp={value} must fail");
+    }
+}
 
 snapshot_eval!(component_inherits_reference_prefix, {
     "ic_symbol.kicad_sym" => r#"(kicad_symbol_lib

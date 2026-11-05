@@ -970,6 +970,8 @@ impl<'v> StarlarkValue<'v> for ModuleLoader {
         let mut override_name: Option<String> = None;
         // Optional map of properties passed via `properties = {...}`.
         let mut properties_override: Option<SmallMap<String, Value<'v>>> = None;
+        let mut dnp = None;
+        let mut schematic = None;
 
         for (arg_name, value) in args.names_map()? {
             if arg_name.as_str() == "name" {
@@ -1013,9 +1015,9 @@ impl<'v> StarlarkValue<'v> for ModuleLoader {
             }
 
             if arg_name.as_str() == "dnp" {
-                properties_override
-                    .get_or_insert_with(SmallMap::new)
-                    .insert("dnp".to_string(), value.to_value());
+                dnp = Some(value.unpack_bool().ok_or_else(|| {
+                    starlark::Error::new_other(anyhow::anyhow!("dnp parameter must be a bool"))
+                })?);
                 continue;
             }
 
@@ -1026,21 +1028,13 @@ impl<'v> StarlarkValue<'v> for ModuleLoader {
                     ))
                 })?;
 
-                let props = properties_override.get_or_insert_with(SmallMap::new);
-                match schematic_str {
-                    "collapse" => {
-                        props.insert("collapse".to_string(), heap.alloc(true));
-                    }
-                    "embed" => {
-                        props.insert("embed".to_string(), heap.alloc(true));
-                    }
-                    _ => {
-                        return Err(starlark::Error::new_other(anyhow::anyhow!(
-                            "schematic parameter must be \"collapse\" or \"embed\", got {:?}",
-                            schematic_str
-                        )));
-                    }
+                if !matches!(schematic_str, "collapse" | "embed") {
+                    return Err(starlark::Error::new_other(anyhow::anyhow!(
+                        "schematic parameter must be \"collapse\" or \"embed\", got {:?}",
+                        schematic_str
+                    )));
                 }
+                schematic = Some(schematic_str);
                 continue;
             }
 
@@ -1048,6 +1042,20 @@ impl<'v> StarlarkValue<'v> for ModuleLoader {
             // Store parent value temporarily (will copy to child heap before eval)
             parent_values.insert(arg_name.as_str().to_string(), value.to_value());
         }
+
+        // Explicit controls override metadata regardless of argument order.
+        if let Some(dnp) = dnp {
+            properties_override
+                .get_or_insert_with(SmallMap::new)
+                .insert("dnp".to_string(), heap.alloc(dnp));
+        }
+        if let Some(mode) = schematic {
+            let props = properties_override.get_or_insert_with(SmallMap::new);
+            props.shift_remove("collapse");
+            props.shift_remove("embed");
+            props.insert(mode.to_string(), heap.alloc(true));
+        }
+
         // `name` is required when instantiating a module via its loader.  If the
         // caller omitted it, emit a *soft* diagnostic (non-fatal) and fall back
         // to the loaderʼs default name so evaluation can continue.
