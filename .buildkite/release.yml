@@ -63,7 +63,7 @@ steps:
   - label: Build x86_64-pc-windows-msvc
     key: release-windows
     depends_on: prepare-release
-    agents: {queue: windows-large}
+    agents: {queue: windows}
     timeout_in_minutes: 45
     command: python bin/pcb-release.py build x86_64-pc-windows-msvc
     artifact_paths: target/release-pipeline/artifacts/*
