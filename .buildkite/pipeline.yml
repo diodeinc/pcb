@@ -20,6 +20,10 @@ steps:
       - "**/.ignore"
       - .buildkite/**
     timeout_in_minutes: 20
+    # Check a fresh hosted worker/cache without rerunning unrelated jobs.
+    retry:
+      manual:
+        permit_on_passed: true
     env:
       CARGO_INCREMENTAL: "0"
       CARGO_TERM_COLOR: always
