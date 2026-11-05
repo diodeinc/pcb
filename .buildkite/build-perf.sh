@@ -21,7 +21,7 @@ mkdir -p "$target"
 rm -rf "$results"
 mkdir -p "$results"
 
-# Native step secrets are automatically redacted; register the tokens minted from them too.
+# The step registers the client secret with the redactor; register the tokens minted from it too.
 redact() {
   if [[ ${BUILDKITE:-false} == true ]]; then
     printf '%s' "$1" | buildkite-agent redactor add
