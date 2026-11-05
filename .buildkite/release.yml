@@ -1,6 +1,9 @@
-# Protected pcb-release pipeline only; never upload from PR CI.
+# Manual pcb-release pipeline; signed by the existing pfet uploader.
 agents:
-  queue: release-linux-amd64
+  queue: pfet
+
+env:
+  BUILDKITE_NIX_SHELL: ""
 
 steps:
   - block: Release PCB
@@ -27,6 +30,7 @@ steps:
 
   - label: Prepare release commit
     key: prepare-release
+    agents: {queue: pcb-release}
     depends_on: release-input
     timeout_in_minutes: 10
     concurrency_group: pcb-release-prepare
@@ -40,6 +44,7 @@ steps:
   - &linux-build
     label: Build {{matrix}}
     key: release-linux-amd64
+    agents: {queue: pfet, arch: amd64, heavy: "true"}
     depends_on: prepare-release
     timeout_in_minutes: 45
     matrix: [x86_64-unknown-linux-gnu, x86_64-unknown-linux-musl]
@@ -48,13 +53,13 @@ steps:
 
   - <<: *linux-build
     key: release-linux-arm64
-    agents: {queue: release-linux-arm64}
+    agents: {queue: pfet, arch: arm64, heavy: "true"}
     matrix: [aarch64-unknown-linux-gnu, aarch64-unknown-linux-musl]
 
   - label: Build aarch64-apple-darwin
     key: release-macos
     depends_on: prepare-release
-    agents: {queue: release-macos}
+    agents: {queue: macos-large}
     timeout_in_minutes: 45
     command: python3 bin/pcb-release.py build aarch64-apple-darwin
     artifact_paths: target/release-pipeline/artifacts/*
@@ -62,13 +67,14 @@ steps:
   - label: Build x86_64-pc-windows-msvc
     key: release-windows
     depends_on: prepare-release
-    agents: {queue: release-windows}
+    agents: {queue: windows-large}
     timeout_in_minutes: 45
     command: python bin/pcb-release.py build x86_64-pc-windows-msvc
     artifact_paths: target/release-pipeline/artifacts/*
 
   - label: Verify, publish, then tag
     key: publish-release
+    agents: {queue: pcb-release}
     depends_on: [prepare-release, release-linux-amd64, release-linux-arm64, release-macos, release-windows]
     timeout_in_minutes: 30
     concurrency_group: pcb-release-publish
