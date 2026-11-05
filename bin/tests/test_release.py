@@ -236,11 +236,19 @@ def artifacts(release, product="compiler", version="1.2.3", dry_run=False):
 
 
 @pytest.mark.parametrize("product,count", [("compiler", 20), ("shim", 36)])
-def test_publish_complete_release_then_tag_and_resume(release, cloud, product, count):
+def test_publish_complete_release_then_tag_and_resume(
+    release, cloud, product, count, monkeypatch
+):
     config = artifacts(release, product)
+    release.write_json(release.ROOT / "release.json", config)
+    monkeypatch.setenv("BUILDKITE_PIPELINE_SLUG", "pcb-release")
+    monkeypatch.setenv("BUILDKITE_BRANCH", "main")
+    monkeypatch.setattr(sys, "argv", [str(SCRIPT), "publish"])
+    monkeypatch.setattr(release, "credentials", lambda *_: nullcontext())
+    # Publication needs verified artifacts and an ancestor of main, not the build bundle.
     cloud.fail_tag = True
     with pytest.raises(subprocess.CalledProcessError):
-        release.publish(config)
+        release.main()
     assert release.remote_tag(config["tag"]) is None
     marker = ("pcb/index/" if product == "compiler" else "pcb/shim-index/") + config[
         "tag"
@@ -254,7 +262,7 @@ def test_publish_complete_release_then_tag_and_resume(release, cloud, product, c
         )
     writes = cloud.writes
     cloud.fail_tag = False
-    release.publish(config)
+    release.main()
     assert release.remote_tag(config["tag"]) == config["sha"]
     assert cloud.writes == writes  # Recovery did not overwrite any immutable S3 object.
     if product == "compiler":
@@ -263,7 +271,7 @@ def test_publish_complete_release_then_tag_and_resume(release, cloud, product, c
     else:
         assert json.loads(cloud.objects["pcb/pcb-latest.json"])["sha"] == config["sha"]
         assert cloud.github is None
-    release.publish(config)  # A completely successful finalization is also idempotent.
+    release.main()  # A completely successful finalization is also idempotent.
     assert cloud.writes == writes
 
 

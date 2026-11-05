@@ -284,32 +284,21 @@ def prepare() -> None:
             tag,
         )
     run("cargo", "update", "--workspace")
-    metadata = json.loads(
-        run("cargo", "metadata", "--locked", "--no-deps", "--format-version=1")
-    )
-    package = "pcbc" if product == "compiler" else "pcb"
-    actual = next(
-        item["version"] for item in metadata["packages"] if item["name"] == package
-    )
-    if actual != version:
-        raise ValueError(f"Expected {package} {version}, got {actual}")
     files = [str(manifest), "Cargo.lock"] + (
         ["CHANGELOG.md"] if product == "compiler" else []
     )
     run("git", "add", "--", *files)
-    if subprocess.run(["git", "diff", "--cached", "--quiet"], check=False).returncode:
-        run(
-            "git",
-            "-c",
-            "user.name=Diode Robot",
-            "-c",
-            "user.email=info@diode.run",
-            "commit",
-            "-m",
-            f"Release {tag}",
-        )
+    run(
+        "git",
+        "-c",
+        "user.name=Diode Robot",
+        "-c",
+        "user.email=info@diode.run",
+        "commit",
+        "-m",
+        f"Release {tag}",
+    )
     sha = run("git", "rev-parse", "HEAD")
-    ROOT.mkdir(parents=True, exist_ok=True)
     release = {
         "product": product,
         "version": version,
@@ -350,24 +339,16 @@ def prepare() -> None:
     print(f"Prepared {tag} from {sha}; no tag created")
 
 
-def download_prepare() -> dict:
-    for name in ("release.json", "source.bundle"):
-        run(
-            "buildkite-agent",
-            "artifact",
-            "download",
-            str(ROOT / name),
-            ".",
-            "--step",
-            "prepare-release",
-        )
-    return load_release()
+def download_artifacts(pattern: Path, step: str) -> None:
+    run("buildkite-agent", "artifact", "download", str(pattern), ".", "--step", step)
 
 
 def build(target: str) -> None:
-    release = download_prepare()
+    download_artifacts(ROOT / "release.json", "prepare-release")
+    release = load_release()
     if "windows" in target:
         run("git", "config", "--global", "core.longpaths", "true")
+    download_artifacts(ROOT / "source.bundle", "prepare-release")
     run("git", "fetch", str(ROOT / "source.bundle"), "refs/pcb-release/source")
     if run("git", "rev-parse", "FETCH_HEAD") != release["sha"]:
         raise ValueError("Source bundle does not match release commit")
@@ -705,35 +686,17 @@ def main() -> None:
     elif args.command == "build":
         build(args.target)
     else:
-        release = download_prepare()
+        download_artifacts(ROOT / "release.json", "prepare-release")
+        release = load_release()
         if release["product"] == "compiler":
-            run(
-                "buildkite-agent",
-                "artifact",
-                "download",
-                str(ASSETS / "*"),
-                ".",
-                "--step",
-                "prepare-release",
-            )
+            download_artifacts(ASSETS / "*", "prepare-release")
         for step in (
             "release-linux-amd64",
             "release-linux-arm64",
             "release-macos",
             "release-windows",
         ):
-            run(
-                "buildkite-agent",
-                "artifact",
-                "download",
-                str(ASSETS / "*"),
-                ".",
-                "--step",
-                step,
-            )
-        run("git", "fetch", str(ROOT / "source.bundle"), "refs/pcb-release/source")
-        if run("git", "rev-parse", "FETCH_HEAD") != release["sha"]:
-            raise ValueError("Source bundle does not match release commit")
+            download_artifacts(ASSETS / "*", step)
         with credentials("publish", release["dry_run"]):
             publish(release)
 

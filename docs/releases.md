@@ -30,5 +30,5 @@ The pipeline stays archived until the companion Diode infrastructure is ready.
 Follow `infrastructure/terraform/environments/buildkite/pcb-release.md` for
 shared CI/deploy workers, AWS roles and GitHub App setup. Run the full
 six-target dry run and writer-access checks before enabling publication.
-This change removes the four old stable Actions workflows: coordinate merging
-with activation to avoid a stable-release outage. Keep nightly and its AWS role.
+This pipeline replaces the four former stable Actions workflows. Nightly keeps
+its existing workflow and AWS role.
