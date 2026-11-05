@@ -398,7 +398,15 @@ def prepare() -> bool:
 
 
 def download_artifacts(pattern: Path, step: str) -> None:
-    run("buildkite-agent", "artifact", "download", str(pattern), ".", "--step", step)
+    run(
+        "buildkite-agent",
+        "artifact",
+        "download",
+        pattern.as_posix(),
+        ".",
+        "--step",
+        step,
+    )
 
 
 def build(target: str) -> None:
