@@ -417,11 +417,18 @@ def test_prepare_bumps_actual_cargo_versions_without_tagging(
     assert cloud.objects == {}
     target_dir = Path("build-cache").resolve()
     monkeypatch.setenv("CARGO_TARGET_DIR", str(target_dir))
-    release.build("x86_64-unknown-linux-gnu")
+    target = REAL_RUN(
+        ["rustc", "--print", "host-tuple"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    release.build(target)
+    exe = ".exe" if "windows" in target else ""
     for name in ["pcbc"] if product == "compiler" else ["pcb", "pcb-launcher"]:
-        path = release.ASSETS / f"{name}-x86_64-unknown-linux-gnu"
+        path = release.ASSETS / f"{name}-{target}{exe}"
         assert REAL_RUN(
-            [str(target_dir / "x86_64-unknown-linux-gnu/dist" / name)],
+            [str(target_dir / target / "dist" / (name + exe))],
             check=True,
             capture_output=True,
             text=True,
