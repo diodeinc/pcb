@@ -186,11 +186,21 @@ steps:
       queue: pfet
       arch: amd64
     timeout_in_minutes: 15
-    secrets:
-      - DIODE_CLIENT_ID
-      - DIODE_CLIENT_SECRET
     command: |
       set -euo pipefail
+
+      # The job's OIDC token assumes buildkite-pcb-build-perf, the only reader of this secret.
+      export AWS_ROLE_ARN=arn:aws:iam::689688455535:role/buildkite-pcb-build-perf AWS_DEFAULT_REGION=us-west-2
+      export AWS_WEB_IDENTITY_TOKEN_FILE=$(mktemp)
+      trap 'rm -f "$AWS_WEB_IDENTITY_TOKEN_FILE"' EXIT
+      buildkite-agent oidc request-token --audience sts.amazonaws.com > "$AWS_WEB_IDENTITY_TOKEN_FILE"
+      client=$(uvx --from awscli aws secretsmanager get-secret-value \
+        --secret-id buildkite/pcb-build-perf/diode-client --query SecretString --output text)
+      DIODE_CLIENT_ID=$(jq -er .client_id <<< "$client")
+      DIODE_CLIENT_SECRET=$(jq -er .client_secret <<< "$client")
+      printf '%s' "$DIODE_CLIENT_SECRET" | buildkite-agent redactor add
+      export DIODE_CLIENT_ID DIODE_CLIENT_SECRET
+      unset client
 
       git fetch --no-tags origin "${BUILDKITE_PULL_REQUEST_BASE_BRANCH:-$BUILDKITE_PIPELINE_DEFAULT_BRANCH}"
       # Keep DM0001 before the AM32 redesign, which needs an unavailable INA199 symbol.
