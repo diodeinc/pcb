@@ -3,38 +3,61 @@ agents:
   queue: pfet
 
 steps:
-  - label: ":apple: Local installer"
-    key: installer-macos
+  - label: ":apple: Workspace tests and installer"
+    key: tests-macos
     agents:
       queue: macos-large
     if_changed:
       - crates/**
-      - lib/std/**
-      - test-workspaces/with-pcb-toml/**
+      - lib/**
+      - examples/**
+      - test-workspaces/**
       - Cargo.{toml,lock}
       - .cargo/**
       - rust-toolchain{,.toml}
+      - .config/nextest.toml
+      - "**/.gitignore"
+      - "**/.ignore"
       - install.sh
       - .buildkite/**
     timeout_in_minutes: 20
     env:
       BUILDKITE_PTY: "false"
+      CARGO_INCREMENTAL: "0"
+      RUST_LOG: debug
+      RUST_BACKTRACE: full
+      HOMEBREW_NO_AUTO_UPDATE: "1"
+      HOMEBREW_NO_INSTALL_CLEANUP: "1"
     cache:
       - "~/.cargo/registry"
       - "~/.cargo/git"
       - "~/.rustup"
+      - "~/Library/Caches/Homebrew"
       - target
     command: |
       set -euo pipefail
+
+      echo "--- Install test tools"
+      brew install cargo-nextest
+      brew install --cask kicad
+      kicad-cli --version
+      /Applications/KiCad/KiCad.app/Contents/Frameworks/Python.framework/Versions/Current/bin/python3 \
+        -c 'import pcbnew; print(pcbnew.GetBuildVersion())'
 
       # Prefer Rustup's shims over Homebrew Rust to honor rust-toolchain.toml.
       PATH="$(brew --prefix rustup)/bin:$HOME/.local/bin:$PATH"
       export PATH
       rustup set profile minimal
+
+      echo "--- macOS workspace tests"
+      cargo nextest run --locked --workspace --profile ci
+
+      echo "--- Local installer smoke test"
       ./install.sh --local
       pcb toolchain list
       pcb +local --help
       pcb +local build test-workspaces/with-pcb-toml/boards/WorkspaceTestBoard.zen -S bom
+    artifact_paths: target/nextest/ci/junit.xml
 
   - label: ":mag: Source checks"
     key: source

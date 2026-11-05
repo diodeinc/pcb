@@ -11,13 +11,13 @@ fi
 base=$(git merge-base HEAD "$1")
 shift
 repo=$(git rev-parse --show-toplevel)
-target=$(realpath -m "${CARGO_TARGET_DIR:-$repo/target}")
+# Let Cargo create and mark its own directory; the shared cache may lack CACHEDIR.TAG.
+target=$(realpath -m "${CARGO_TARGET_DIR:-$repo/target}/build-perf-target")
 results=$repo/target/build-perf
 scratch=$(mktemp -d)
 trap 'git -C "$repo" worktree remove --force "$scratch/base" >/dev/null 2>&1 || true; rm -rf "$scratch"' EXIT
 
 git -C "$repo" worktree add --detach "$scratch/base" "$base"
-mkdir -p "$target"
 rm -rf "$results"
 mkdir -p "$results"
 
