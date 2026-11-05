@@ -195,6 +195,37 @@
               );
             }
           );
+
+          release = pkgs.mkShell {
+            packages = [
+              (pkgs.rust-bin.fromRustupToolchain (
+                (lib.importTOML ./rust-toolchain.toml).toolchain
+                // {
+                  profile = "minimal";
+                  targets = lib.optionals pkgs.stdenv.hostPlatform.isLinux [
+                    "${pkgs.stdenv.hostPlatform.parsed.cpu.name}-unknown-linux-gnu"
+                    "${pkgs.stdenv.hostPlatform.parsed.cpu.name}-unknown-linux-musl"
+                  ];
+                }
+              ))
+              pkgs.python3
+              pkgs.git
+              pkgs.uv
+              pkgs.zstd
+              pkgs.openssl
+              pkgs.gh
+              pkgs.awscli2
+              pkgs.cmake
+              pkgs.pkg-config
+              pkgs.gnumake
+            ]
+            ++ lib.optionals pkgs.stdenv.hostPlatform.isLinux [
+              pkgs.cargo-zigbuild
+              pkgs.zig
+            ];
+            PCB_RELEASE_NIX = "1";
+            UV_PYTHON = "${pkgs.python3}/bin/python3";
+          };
         }
       );
 
