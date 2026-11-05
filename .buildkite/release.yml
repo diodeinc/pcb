@@ -36,17 +36,7 @@ steps:
     timeout_in_minutes: 10
     concurrency_group: pcb-release-prepare
     concurrency: 1
-    command: |
-      set -euo pipefail
-      if [[ "${PCB_RELEASE_CHANNEL:-}" == nightly ]]; then
-        args=(--nightly)
-        if [[ "${PCB_RELEASE_DRY_RUN:-false}" == true ]]; then
-          args+=(--dry-run)
-        fi
-        nix develop .#release --command python3 bin/pcb-release.py prepare "${args[@]}"
-      else
-        nix develop .#release --command python3 bin/pcb-release.py prepare
-      fi
+    command: nix develop .#release --command python3 bin/pcb-release.py prepare
 
   # Only the uploader holds the signing key; unchanged nightlies allocate no builders.
   - label: Upload release builds

@@ -11,18 +11,12 @@ verified GitHub Release; shims stay S3-only.
 
 ## Nightly
 
-The same `pcb-release` pipeline builds nightly from `main` with build environment
-`PCB_RELEASE_CHANNEL=nightly`. It bypasses the version form and reuses the stable
-six-target builders, stdlib packaging, checksums and immutable S3 uploads. It does
-not bump versions, push commits/tags, or acquire GitHub App credentials.
-
-The daily schedule is **07:17 UTC**. Prepare checks `pcb/nightly/latest.json` and
-skips all builders when its SHA is unchanged. After verifying every target,
-publish updates that pointer with the existing download URL/JSON contract. Failed
-uploads cannot expose an incomplete nightly; older retries cannot downgrade it.
-Manual dry runs use both `PCB_RELEASE_CHANNEL=nightly` and
-`PCB_RELEASE_DRY_RUN=true`; they build even an unchanged SHA without AWS credentials
-or publication. Dry runs must also use `main`.
+`PCB_RELEASE_CHANNEL=nightly` runs the same six-target pipeline from `main`,
+without version bumps, GitHub credentials or tags. The **07:17 UTC** schedule skips
+unchanged SHAs; publication advances `pcb/nightly/latest.json` only after every
+artifact is verified. Older retries cannot downgrade it. Add
+`PCB_RELEASE_DRY_RUN=true` for a credential-free manual dry run, even on an
+unchanged SHA.
 
 S3 and GitHub cannot commit atomically: complete downloads can precede the tag.
 Direct version URLs may be accessible during upload, but version discovery
@@ -45,8 +39,6 @@ The pipeline stays archived until the companion Diode infrastructure is ready.
 Follow `infrastructure/terraform/environments/buildkite/pcb-release.md` for
 shared CI/deploy workers, AWS roles and GitHub App setup. Run the full
 six-target dry run and writer-access checks before enabling publication.
-The companion infrastructure adds the nightly schedule **disabled** for a staged
-cutover. Apply its S3 permissions and worker admission changes, run a nightly
-six-target dry run, then enable the schedule as the Actions nightly workflow is
-removed. Do not land the Actions removal before Buildkite is ready. The former
-GitHub nightly AWS role can be retired separately after successful publication.
+The nightly schedule starts **disabled**. Apply its S3 permissions and worker
+hook, then run a six-target nightly dry run before coordinating schedule
+enablement with the Actions removal. Retire the old GitHub AWS role afterward.

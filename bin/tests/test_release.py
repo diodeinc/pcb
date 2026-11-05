@@ -369,9 +369,9 @@ def test_dry_run_never_needs_writers(release, cloud):
     assert release.remote_tag(config["tag"]) is None
 
 
-@pytest.mark.parametrize("product", ["compiler", "shim"])
+@pytest.mark.parametrize("product", ["compiler", "shim", "nightly"])
 @pytest.mark.parametrize("dry_run", [True, False])
-def test_prepare_bumps_actual_cargo_versions_without_tagging(
+def test_prepare_builds_requested_release_without_tagging(
     release, cloud, product, dry_run, monkeypatch
 ):
     Path("Cargo.toml").write_text(
@@ -405,9 +405,14 @@ def test_prepare_bumps_actual_cargo_versions_without_tagging(
         "release-version": "1.2.3",
         "release-dry-run": str(dry_run).lower(),
     }
+    nightly = product == "nightly"
+    if nightly:
+        monkeypatch.setenv("PCB_RELEASE_CHANNEL", "nightly")
+        monkeypatch.setenv("PCB_RELEASE_DRY_RUN", str(dry_run).lower())
     if not dry_run:
         # Only the local Git remote is writable; no AWS/GitHub credentials are acquired.
         monkeypatch.setattr(release, "credentials", lambda *_, **__: nullcontext())
+    if not dry_run and not nightly:
         cloud.fail_artifact = str(
             release.ASSETS / "stdlib.tar.zst.sha256"
             if product == "compiler"
@@ -425,12 +430,12 @@ def test_prepare_bumps_actual_cargo_versions_without_tagging(
         cloud.fail_artifact = None
     release.prepare()
     config = release.load_release()
-    assert config["sha"] != base
-    assert config["version"] == "1.2.3"
+    assert (config["sha"] == base) is nightly
+    assert config.get("version") == (None if nightly else "1.2.3")
     assert git("ls-remote", "origin", "refs/heads/main").split()[0] == (
-        base if dry_run else config["sha"]
+        base if dry_run or nightly else config["sha"]
     )
-    for name in ("release.json", "source.bundle"):
+    for name in ("release.json",) if nightly else ("release.json", "source.bundle"):
         path = release.ROOT / name
         assert cloud.uploaded_artifacts[str(path)] == path.read_bytes()
     assert release.remote_tag(config["tag"]) is None
@@ -442,22 +447,21 @@ def test_prepare_bumps_actual_cargo_versions_without_tagging(
             text=True,
         ).stdout
     )
-    assert (
-        next(
-            item["version"]
-            for item in metadata["packages"]
-            if item["name"] == ("pcbc" if product == "compiler" else "pcb")
-        )
-        == "1.2.3"
-    )
-    git("bundle", "verify", str(release.ROOT / "source.bundle"))
+    assert next(
+        item["version"]
+        for item in metadata["packages"]
+        if item["name"] == ("pcb" if product == "shim" else "pcbc")
+    ) == ("1.2.3-rc.1" if nightly else "1.2.3")
+    if not nightly:
+        git("bundle", "verify", str(release.ROOT / "source.bundle"))
     if product == "compiler":
         assert "## [1.2.3] - " in Path("CHANGELOG.md").read_text()
+    else:
+        assert "## [1.2.3] - " not in Path("CHANGELOG.md").read_text()
+    if product != "shim":
         assert (release.ASSETS / "stdlib.tar.zst").is_file()
         for path in release.ASSETS.iterdir():
             assert cloud.uploaded_artifacts[str(path)] == path.read_bytes()
-    else:
-        assert "## [1.2.3] - " not in Path("CHANGELOG.md").read_text()
     assert cloud.objects == {}
     target_dir = Path("build-cache").resolve()
     monkeypatch.setenv("CARGO_TARGET_DIR", str(target_dir))
@@ -469,14 +473,16 @@ def test_prepare_bumps_actual_cargo_versions_without_tagging(
     ).stdout.strip()
     release.build(target)
     exe = ".exe" if "windows" in target else ""
-    for name in ["pcbc"] if product == "compiler" else ["pcb", "pcb-launcher"]:
+    for name in ["pcb", "pcb-launcher"] if product == "shim" else ["pcbc"]:
         path = release.ASSETS / f"{name}-{target}{exe}"
         assert REAL_RUN(
             [str(target_dir / target / "dist" / (name + exe))],
             check=True,
             capture_output=True,
             text=True,
-        ).stdout.strip() == ("1.2.3-rc.1" if name == "pcb-launcher" else "1.2.3")
+        ).stdout.strip() == (
+            "1.2.3-rc.1" if nightly or name == "pcb-launcher" else "1.2.3"
+        )
         assert (
             REAL_RUN(
                 ["zstd", "-q", "-d", "-c", str(path) + ".zst"],
@@ -485,6 +491,15 @@ def test_prepare_bumps_actual_cargo_versions_without_tagging(
             ).stdout
             == path.read_bytes()
         )
+    if nightly:
+        cloud.objects["pcb/nightly/latest.json"] = json.dumps({"sha": base}).encode()
+        assert release.prepare() is dry_run
+        cloud.denied = True
+        if dry_run:
+            assert release.prepare() is True
+        else:
+            with pytest.raises(subprocess.CalledProcessError):
+                release.prepare()
 
 
 @pytest.mark.parametrize(
@@ -538,73 +553,3 @@ def test_nightly_publication_preserves_download_contract(
         with pytest.raises(subprocess.CalledProcessError):
             release.main()
         assert json.loads(cloud.objects[pointer]) == newer
-
-
-@pytest.mark.parametrize("mode", ["new", "unchanged", "dry-run", "denied"])
-def test_nightly_prepare_skips_unchanged_and_builds_unmodified_source(
-    release, cloud, mode, monkeypatch
-):
-    Path("Cargo.toml").write_text(
-        '[package]\nname = "pcbc"\nversion = "1.2.3"\nedition = "2021"\n'
-        '[profile.dist]\ninherits = "release"\n'
-    )
-    Path("src").mkdir()
-    Path("src/main.rs").write_text('fn main() { println!("nightly source"); }\n')
-    Path("lib/std").mkdir(parents=True)
-    Path("lib/std/test.zen").write_text("# Nightly standard library\n")
-    REAL_RUN(["cargo", "generate-lockfile"], check=True)
-    git("add", ".")
-    git("commit", "-m", "Nightly source")
-    git("push", "origin", "main")
-    sha = git("rev-parse", "HEAD")
-    if mode in ("unchanged", "dry-run"):
-        cloud.objects["pcb/nightly/latest.json"] = json.dumps({"sha": sha}).encode()
-    cloud.denied = mode in ("denied", "dry-run")
-    if mode != "dry-run":
-        monkeypatch.setattr(release, "credentials", lambda *_, **__: nullcontext())
-    if mode == "denied":
-        with pytest.raises(subprocess.CalledProcessError):
-            release.prepare_nightly(False)
-        assert cloud.uploaded_artifacts == {}
-        return
-    assert release.prepare_nightly(mode == "dry-run") is (mode != "unchanged")
-    assert git("rev-parse", "HEAD") == sha
-    assert git("status", "--porcelain") == ""
-    assert git("ls-remote", "--tags", "origin") == ""
-    if mode == "unchanged":
-        assert cloud.uploaded_artifacts == {}
-        return
-    config = release.load_release()
-    assert config["sha"] == sha
-    assert config["channel"] == "nightly"
-    assert config["tag"] == f"nightly/{config['date']}/{sha}"
-    assert "version" not in config
-    archive = REAL_RUN(
-        ["zstd", "-q", "-d", "-c", str(release.ASSETS / "stdlib.tar.zst")],
-        check=True,
-        capture_output=True,
-    ).stdout
-    assert (
-        archive
-        == REAL_RUN(
-            ["git", "archive", "--format=tar", "HEAD:lib/std"],
-            check=True,
-            capture_output=True,
-        ).stdout
-    )
-    target = REAL_RUN(
-        ["rustc", "--print", "host-tuple"],
-        check=True,
-        capture_output=True,
-        text=True,
-    ).stdout.strip()
-    release.build(target)
-    assert (
-        REAL_RUN(
-            [str(Path("target") / target / "dist/pcbc")],
-            check=True,
-            capture_output=True,
-            text=True,
-        ).stdout
-        == "nightly source\n"
-    )

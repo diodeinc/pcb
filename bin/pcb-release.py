@@ -293,7 +293,9 @@ def prepare_nightly(dry_run: bool) -> bool:
     return True
 
 
-def prepare() -> None:
+def prepare() -> bool:
+    if os.environ.get("PCB_RELEASE_CHANNEL") == "nightly":
+        return prepare_nightly(os.environ.get("PCB_RELEASE_DRY_RUN") == "true")
     product = run("buildkite-agent", "meta-data", "get", "release-product")
     version = run("buildkite-agent", "meta-data", "get", "release-version")
     dry_run = run("buildkite-agent", "meta-data", "get", "release-dry-run")
@@ -392,6 +394,7 @@ def prepare() -> None:
         if not release["dry_run"]:
             git_push(f"{sha}:refs/heads/main")
     print(f"Prepared {tag} from {sha}; no tag created")
+    return True
 
 
 def download_artifacts(pattern: Path, step: str) -> None:
@@ -527,8 +530,9 @@ def put_immutable(key: str, path: Path) -> None:
         raise ValueError(f"Uploaded object failed checksum verification: {key}")
 
 
-def publish_shim_pointer(release: dict) -> None:
-    key = "pcb/pcb-latest.json"
+def publish_pointer(release: dict) -> None:
+    nightly = release.get("channel") == "nightly"
+    key = "pcb/nightly/latest.json" if nightly else "pcb/pcb-latest.json"
     existing = head(key)
     condition = ["--if-none-match", "*"]
     if existing is not None:
@@ -546,72 +550,29 @@ def publish_shim_pointer(release: dict) -> None:
             str(old),
         )
         previous = json.loads(old.read_text())
-        current = VERSION.fullmatch(previous["version"])
-        desired = VERSION.fullmatch(release["version"])
-        assert current is not None and desired is not None
-        if tuple(map(int, current.group(1, 2, 3))) > tuple(
-            map(int, desired.group(1, 2, 3))
-        ):
-            print("A newer shim is already latest; leaving its pointer unchanged")
-            return
-        if previous["tag"] == release["tag"]:
-            if previous.get("sha") != release["sha"]:
-                raise ValueError("Latest shim pointer conflicts with this release")
-            return
+        if nightly:
+            if previous["sha"] == release["sha"]:
+                return
+            # A delayed retry must never move nightly back to an older commit.
+            run("git", "merge-base", "--is-ancestor", previous["sha"], release["sha"])
+        else:
+            if (
+                version_key(previous["version"])[:3]
+                > version_key(release["version"])[:3]
+            ):
+                print("A newer shim is already latest; leaving its pointer unchanged")
+                return
+            if previous["tag"] == release["tag"]:
+                if previous.get("sha") != release["sha"]:
+                    raise ValueError("Latest shim pointer conflicts with this release")
+                return
         condition = ["--if-match", existing["ETag"]]
+    latest = release
+    if nightly:
+        latest = {key: release[key] for key in ("channel", "date", "sha", "tag")}
+        latest["published_at"] = datetime.now(timezone.utc).isoformat()
     pointer = ROOT / "latest.json"
-    write_json(pointer, {**release, "base_url": f"{BASE_URL}/{release['tag']}"})
-    run(
-        "aws",
-        "s3api",
-        "put-object",
-        "--bucket",
-        BUCKET,
-        "--key",
-        key,
-        "--body",
-        str(pointer),
-        "--content-type",
-        "application/json",
-        "--cache-control",
-        "public, max-age=60",
-        *condition,
-    )
-
-
-def publish_nightly_pointer(release: dict) -> None:
-    key = "pcb/nightly/latest.json"
-    existing = head(key)
-    condition = ["--if-none-match", "*"]
-    if existing is not None:
-        old = ROOT / "previous-latest.json"
-        run(
-            "aws",
-            "s3api",
-            "get-object",
-            "--bucket",
-            BUCKET,
-            "--key",
-            key,
-            "--if-match",
-            existing["ETag"],
-            str(old),
-        )
-        previous = json.loads(old.read_text())
-        if previous["sha"] == release["sha"]:
-            return
-        # A delayed retry must never move nightly back to an older commit.
-        run("git", "merge-base", "--is-ancestor", previous["sha"], release["sha"])
-        condition = ["--if-match", existing["ETag"]]
-    pointer = ROOT / "latest.json"
-    write_json(
-        pointer,
-        {key: release[key] for key in ("channel", "date", "sha", "tag")}
-        | {
-            "base_url": f"{BASE_URL}/{release['tag']}",
-            "published_at": datetime.now(timezone.utc).isoformat(),
-        },
-    )
+    write_json(pointer, {**latest, "base_url": f"{BASE_URL}/{release['tag']}"})
     run(
         "aws",
         "s3api",
@@ -762,7 +723,7 @@ def publish(release: dict) -> None:
     for path in sorted(paths):
         put_immutable(f"{prefix}/{path.name}", path)
     if nightly:
-        publish_nightly_pointer(release)
+        publish_pointer(release)
         print(f"Published {release['tag']} from {release['sha']}; no GitHub writes")
         return
     marker = (
@@ -772,7 +733,7 @@ def publish(release: dict) -> None:
     )
     put_immutable(marker, manifest)
     if release["product"] == "shim" and "-" not in release["version"].split("+")[0]:
-        publish_shim_pointer(release)
+        publish_pointer(release)
     # S3 completion must precede the tag.
     if tag_sha is None:
         git_push(f"{release['sha']}:refs/tags/{release['tag']}")
@@ -784,9 +745,7 @@ def publish(release: dict) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
-    prepare_parser = commands.add_parser("prepare")
-    prepare_parser.add_argument("--nightly", action="store_true")
-    prepare_parser.add_argument("--dry-run", action="store_true")
+    commands.add_parser("prepare")
     commands.add_parser("build").add_argument("target", choices=TARGETS)
     commands.add_parser("publish")
     args = parser.parse_args()
@@ -796,17 +755,12 @@ def main() -> None:
     ):
         parser.error("Only the protected pcb-release pipeline on main may run releases")
     if args.command == "prepare":
-        if args.nightly:
-            should_build = prepare_nightly(args.dry_run)
-        else:
-            prepare()
-            should_build = True
         run(
             "buildkite-agent",
             "meta-data",
             "set",
             "release-should-build",
-            str(should_build).lower(),
+            str(prepare()).lower(),
         )
     elif args.command == "build":
         build(args.target)
