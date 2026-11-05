@@ -924,7 +924,7 @@ mod tests {
             write_manufacturing_package(&package, &zip).unwrap();
             let mut archive = zip::ZipArchive::new(fs::File::open(zip).unwrap()).unwrap();
             assert_eq!(archive.len(), 1);
-            assert_eq!(archive.by_index(0).unwrap().name(), "F_Cu.gtl");
+            assert_eq!(archive.by_index(0).unwrap().name().unwrap(), "F_Cu.gtl");
             fs::remove_file(output.join(name)).unwrap();
             write_manufacturing_package(&package, &output).unwrap();
             assert_eq!(

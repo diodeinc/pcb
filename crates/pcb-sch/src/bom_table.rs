@@ -2,7 +2,6 @@ use std::io::{self, Write};
 
 use colored::Colorize;
 use comfy_table::{Cell, Color, Table};
-use terminal_hyperlink::Hyperlink as _;
 use urlencoding::encode as urlencode;
 
 use crate::bom::availability::BOARD_QUANTITY;
@@ -246,7 +245,7 @@ fn ceil_cents(value: f64) -> f64 {
 /// Create a hyperlink if the terminal supports it, otherwise return plain text
 fn hyperlink(url: &str, text: &str) -> String {
     if supports_hyperlinks::on(supports_hyperlinks::Stream::Stdout) {
-        text.hyperlink(url)
+        format!("\x1b]8;;{url}\x1b\\{text}\x1b]8;;\x1b\\")
     } else {
         text.to_string()
     }

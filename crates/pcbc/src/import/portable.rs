@@ -1509,7 +1509,7 @@ mod tests {
         let file = fs::File::open(&zip_path)?;
         let mut zip = ZipArchive::new(file)?;
         let mut names = (0..zip.len())
-            .map(|i| zip.by_index(i).unwrap().name().to_string())
+            .map(|i| zip.by_index(i).unwrap().name().unwrap().into_owned())
             .collect::<Vec<_>>();
         names.sort();
 
@@ -1863,7 +1863,7 @@ mod tests {
         let file = fs::File::open(&zip_path)?;
         let mut zip = ZipArchive::new(file)?;
         let mut names = (0..zip.len())
-            .map(|i| zip.by_index(i).unwrap().name().to_string())
+            .map(|i| zip.by_index(i).unwrap().name().unwrap().into_owned())
             .collect::<Vec<_>>();
         names.sort();
 

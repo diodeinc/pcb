@@ -33,6 +33,5 @@ same-file = { workspace = true }
 [dev-dependencies]
 assert_fs = { workspace = true }
 insta = { workspace = true }
-paste = { workspace = true }
 pcb-zen = { workspace = true }
 regex = { workspace = true }

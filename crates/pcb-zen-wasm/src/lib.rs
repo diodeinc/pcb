@@ -314,13 +314,14 @@ fn parse_zip_bundle(bundle_bytes: &[u8]) -> Result<ParsedBundle, zip::result::Zi
             continue;
         }
 
+        let name = file.name()?;
         let path = if is_release_bundle {
-            let Some(stripped) = file.name().strip_prefix("src/") else {
+            let Some(stripped) = name.strip_prefix("src/") else {
                 continue;
             };
             stripped.to_string()
         } else {
-            file.name().to_string()
+            name.into_owned()
         };
         if path.is_empty() {
             continue;

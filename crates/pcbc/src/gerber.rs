@@ -264,13 +264,11 @@ fn read_fabrication_files(source: &Path) -> Result<Vec<FabricationFile>> {
         if !entry.is_file() {
             continue;
         }
+        let name = entry.name()?.into_owned();
         let mut contents = Vec::new();
         std::io::Read::read_to_end(&mut entry, &mut contents)
-            .with_context(|| format!("Failed to read {} from the archive", entry.name()))?;
-        files.push(FabricationFile {
-            name: entry.name().to_owned(),
-            contents,
-        });
+            .with_context(|| format!("Failed to read {name} from the archive"))?;
+        files.push(FabricationFile { name, contents });
     }
     Ok(files)
 }
