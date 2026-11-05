@@ -385,10 +385,11 @@ impl LspEvalContext {
         ZenerEvaluateResponse {
             success: schematic_result.is_success(),
             parameters,
+            // Return the schematic even with error diagnostics so viewers can
+            // still render it; `success` reports the failure.
             schematic: schematic_result
                 .output
                 .as_ref()
-                .filter(|_| schematic_result.is_success())
                 .and_then(|schematic| serde_json::to_value(schematic).ok()),
             diagnostics: schematic_result
                 .diagnostics

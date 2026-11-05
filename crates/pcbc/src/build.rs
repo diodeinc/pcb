@@ -470,7 +470,13 @@ pub fn execute(args: BuildArgs) -> Result<()> {
             );
         }
 
-        let Some(schematic) = build_result.schematic else {
+        // A failed build still prints its netlist, so callers can show the
+        // board alongside its errors; the exit code still reports failure.
+        let schematic = build_result.schematic.or_else(|| {
+            let output = build_result.eval_output.as_ref().filter(|_| args.netlist)?;
+            output.to_schematic_with_diagnostics().output
+        });
+        let Some(schematic) = schematic else {
             continue;
         };
 
