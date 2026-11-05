@@ -25,10 +25,6 @@ steps:
       CARGO_TERM_COLOR: always
       RUST_LOG: debug
       RUST_BACKTRACE: full
-      # Apply to checkout as well as tests, without modifying the hosted image.
-      GIT_CONFIG_COUNT: "1"
-      GIT_CONFIG_KEY_0: core.longpaths
-      GIT_CONFIG_VALUE_0: "true"
     command: pwsh -NoLogo -NoProfile -NonInteractive -File .buildkite/test-windows.ps1
     artifact_paths: target/nextest/ci/junit.xml
 

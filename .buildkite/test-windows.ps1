@@ -7,6 +7,8 @@ Write-Output '--- Restore Windows Rust cache'
 buildkite-agent cache restore --name windows_rust
 
 Write-Output '--- Install test tools'
+# Cargo's Git dependency checkouts include paths longer than MAX_PATH.
+git config --global core.longpaths true
 rustup set default-host x86_64-pc-windows-msvc
 rustup set profile minimal
 # rust-toolchain.toml selects and installs the repository's pinned toolchain.
