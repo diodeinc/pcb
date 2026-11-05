@@ -6,7 +6,8 @@ steps:
   - label: ":windows: Workspace tests"
     key: tests-windows
     agents:
-      queue: windows-large
+      # nfet's Windows VM: one job per boot, with Cargo and checkouts kept on its cache disk.
+      queue: windows
     if_changed:
       - crates/**
       - lib/**
@@ -20,7 +21,7 @@ steps:
       - "**/.ignore"
       - .buildkite/**
     timeout_in_minutes: 20
-    # Check a fresh hosted worker/cache without rerunning unrelated jobs.
+    # Rerun on a fresh boot without rerunning unrelated jobs.
     retry:
       manual:
         permit_on_passed: true

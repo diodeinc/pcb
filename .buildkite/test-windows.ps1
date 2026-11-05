@@ -1,10 +1,8 @@
 #Requires -Version 7.4
 $ErrorActionPreference = 'Stop'
-# A failed native command must stop the job before a successful cache save.
+# A failed native command fails the job.
 $PSNativeCommandUseErrorActionPreference = $true
-
-Write-Output '--- Restore Windows Rust cache'
-buildkite-agent cache restore --name windows_rust
+# The worker keeps Cargo, rustup and the checkout on its cache disk between jobs.
 
 Write-Output '--- Install test tools'
 # Cargo's Git dependency checkouts include paths longer than MAX_PATH.
@@ -26,6 +24,3 @@ cargo nextest --version
 
 Write-Output '--- Windows workspace tests'
 cargo nextest run --workspace --profile ci --locked
-
-Write-Output '--- Save Windows Rust cache'
-buildkite-agent cache save --name windows_rust
