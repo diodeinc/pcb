@@ -3,6 +3,35 @@ agents:
   queue: pfet
 
 steps:
+  - label: ":windows: Workspace tests"
+    key: tests-windows
+    agents:
+      queue: windows-large
+    if_changed:
+      - crates/**
+      - lib/**
+      - examples/**
+      - test-workspaces/**
+      - Cargo.{toml,lock}
+      - .cargo/**
+      - rust-toolchain{,.toml}
+      - .config/nextest.toml
+      - "**/.gitignore"
+      - "**/.ignore"
+      - .buildkite/**
+    timeout_in_minutes: 20
+    # Check a fresh hosted worker/cache without rerunning unrelated jobs.
+    retry:
+      manual:
+        permit_on_passed: true
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_TERM_COLOR: always
+      RUST_LOG: debug
+      RUST_BACKTRACE: full
+    command: pwsh -NoLogo -NoProfile -NonInteractive -File .buildkite/test-windows.ps1
+    artifact_paths: target/nextest/ci/junit.xml
+
   - label: ":apple: Workspace tests and installer"
     key: tests-macos
     agents:

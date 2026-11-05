@@ -1,0 +1,16 @@
+caches:
+  - name: windows_rust
+    cache_key:
+      - windows-rust
+      - agent: pipeline
+      - agent: os
+      - agent: arch
+      - checksum:
+          - rust-toolchain.toml
+          - .buildkite/test-windows.ps1
+        fallback_limit: true
+      - checksum: Cargo.lock
+    target_paths:
+      - ~/.cargo/registry
+      - ~/.cargo/git
+      - target
