@@ -3,6 +3,25 @@ agents:
   queue: pfet
 
 steps:
+  - label: ":windows: Hosted environment probe"
+    key: tests-windows
+    agents:
+      queue: windows-large
+    if_changed:
+      - .buildkite/**
+    timeout_in_minutes: 5
+    command: >-
+      powershell.exe -NoLogo -NoProfile -NonInteractive -Command
+      "$ErrorActionPreference = 'Stop';
+      [Environment]::OSVersion.VersionString;
+      Get-Command powershell,pwsh,rustup,cargo,rustc,cl,cmake,git,buildkite-agent -ErrorAction SilentlyContinue | Select-Object Name,Source | Format-Table -AutoSize;
+      Get-ChildItem Env:CARGO_HOME,Env:RUSTUP_HOME,Env:USERPROFILE,Env:BUILDKITE_SHELL -ErrorAction SilentlyContinue | Format-Table -AutoSize;
+      & buildkite-agent --version;
+      $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe';
+      if (Test-Path $vswhere) { & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath };
+      & buildkite-agent cache --help;
+      exit 0"
+
   - label: ":apple: Workspace tests and installer"
     key: tests-macos
     agents:
