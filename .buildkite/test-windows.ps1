@@ -4,7 +4,7 @@ $ErrorActionPreference = 'Stop'
 $PSNativeCommandUseErrorActionPreference = $true
 
 Write-Output '--- Restore Windows Rust cache'
-buildkite-agent cache restore --name windows-rust
+buildkite-agent cache restore --name windows_rust
 
 Write-Output '--- Install test tools'
 rustup set default-host x86_64-pc-windows-msvc
@@ -25,4 +25,4 @@ Write-Output '--- Windows workspace tests'
 cargo nextest run --workspace --profile ci --locked
 
 Write-Output '--- Save Windows Rust cache'
-buildkite-agent cache save --name windows-rust
+buildkite-agent cache save --name windows_rust

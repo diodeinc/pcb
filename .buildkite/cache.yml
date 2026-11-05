@@ -1,5 +1,5 @@
 caches:
-  - name: windows-rust
+  - name: windows_rust
     cache_key:
       - windows-rust
       - agent: pipeline
