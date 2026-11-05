@@ -96,19 +96,27 @@ def load_release() -> dict:
     release = json.loads((ROOT / "release.json").read_text())
     if (
         release["product"] not in ("compiler", "shim")
-        or not VERSION.fullmatch(release["version"])
         or not re.fullmatch(r"[0-9a-f]{40}", release["sha"])
         or not isinstance(release["dry_run"], bool)
     ):
         raise ValueError("Invalid release metadata")
-    prefix = "v" if release["product"] == "compiler" else "pcb/v"
-    if release["tag"] != prefix + release["version"]:
+    if release.get("channel") == "nightly":
+        date = datetime.strptime(release["date"], "%Y-%m-%d").strftime("%Y-%m-%d")
+        expected = f"nightly/{date}/{release['sha']}"
+        if release["product"] != "compiler":
+            raise ValueError("Nightly only builds the compiler")
+    else:
+        if not VERSION.fullmatch(release["version"]):
+            raise ValueError("Invalid release version")
+        prefix = "v" if release["product"] == "compiler" else "pcb/v"
+        expected = prefix + release["version"]
+    if release["tag"] != expected:
         raise ValueError("Release tag does not match product/version")
     return release
 
 
 @contextmanager
-def credentials(stage: str, dry_run: bool):
+def credentials(stage: str, dry_run: bool, *, github: bool = True):
     if dry_run:
         yield
         return
@@ -141,6 +149,9 @@ def credentials(stage: str, dry_run: bool):
                 "AWS_PROFILE",
             ):
                 os.environ.pop(key, None)
+            if not github:
+                yield
+                return
             app = json.loads(
                 run(
                     "aws",
@@ -233,6 +244,55 @@ def checksum_file(path: Path) -> None:
     path.with_name(path.name + ".sha256").write_text(f"{sha256(path)}  {path.name}\n")
 
 
+def prepare_stdlib(sha: str) -> None:
+    ASSETS.mkdir(parents=True, exist_ok=True)
+    tar = ROOT / "stdlib.tar"
+    run("git", "archive", "--format=tar", f"--output={tar}", f"{sha}:lib/std")
+    run("zstd", "-q", "-f", "-3", str(tar), "-o", str(ASSETS / "stdlib.tar.zst"))
+    tar.unlink()
+    checksum_file(ASSETS / "stdlib.tar.zst")
+
+
+def prepare_nightly(dry_run: bool) -> bool:
+    sha = run("git", "rev-parse", "HEAD")
+    ROOT.mkdir(parents=True, exist_ok=True)
+    with credentials("prepare", dry_run, github=False):
+        if not dry_run:
+            existing = head("pcb/nightly/latest.json")
+            if existing is not None:
+                previous = ROOT / "previous-latest.json"
+                run(
+                    "aws",
+                    "s3api",
+                    "get-object",
+                    "--bucket",
+                    BUCKET,
+                    "--key",
+                    "pcb/nightly/latest.json",
+                    "--if-match",
+                    existing["ETag"],
+                    str(previous),
+                )
+                if json.loads(previous.read_text())["sha"] == sha:
+                    print(f"Nightly already published {sha}; skipping builds")
+                    return False
+    date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    write_json(
+        ROOT / "release.json",
+        {
+            "channel": "nightly",
+            "product": "compiler",
+            "date": date,
+            "sha": sha,
+            "tag": f"nightly/{date}/{sha}",
+            "dry_run": dry_run,
+        },
+    )
+    prepare_stdlib(sha)
+    run("buildkite-agent", "artifact", "upload", f"{ROOT}/release.json;{ASSETS}/*")
+    return True
+
+
 def prepare() -> None:
     product = run("buildkite-agent", "meta-data", "get", "release-product")
     version = run("buildkite-agent", "meta-data", "get", "release-version")
@@ -319,12 +379,7 @@ def prepare() -> None:
         f"^{base}",
     )
     if product == "compiler":
-        ASSETS.mkdir(parents=True, exist_ok=True)
-        tar = ROOT / "stdlib.tar"
-        run("git", "archive", "--format=tar", f"--output={tar}", f"{sha}:lib/std")
-        run("zstd", "-q", "-f", "-3", str(tar), "-o", str(ASSETS / "stdlib.tar.zst"))
-        tar.unlink()
-        checksum_file(ASSETS / "stdlib.tar.zst")
+        prepare_stdlib(sha)
     # Persist recovery artifacts before making the version bump visible on main.
     run(
         "buildkite-agent",
@@ -348,10 +403,11 @@ def build(target: str) -> None:
     release = load_release()
     if "windows" in target:
         run("git", "config", "--global", "core.longpaths", "true")
-    download_artifacts(ROOT / "source.bundle", "prepare-release")
-    run("git", "fetch", str(ROOT / "source.bundle"), "refs/pcb-release/source")
-    if run("git", "rev-parse", "FETCH_HEAD") != release["sha"]:
-        raise ValueError("Source bundle does not match release commit")
+    if release.get("channel") != "nightly":
+        download_artifacts(ROOT / "source.bundle", "prepare-release")
+        run("git", "fetch", str(ROOT / "source.bundle"), "refs/pcb-release/source")
+        if run("git", "rev-parse", "FETCH_HEAD") != release["sha"]:
+            raise ValueError("Source bundle does not match release commit")
     run("git", "checkout", "--detach", release["sha"])
     nix = os.environ.get("PCB_RELEASE_NIX") == "1"
     if not nix:
@@ -523,6 +579,57 @@ def publish_shim_pointer(release: dict) -> None:
     )
 
 
+def publish_nightly_pointer(release: dict) -> None:
+    key = "pcb/nightly/latest.json"
+    existing = head(key)
+    condition = ["--if-none-match", "*"]
+    if existing is not None:
+        old = ROOT / "previous-latest.json"
+        run(
+            "aws",
+            "s3api",
+            "get-object",
+            "--bucket",
+            BUCKET,
+            "--key",
+            key,
+            "--if-match",
+            existing["ETag"],
+            str(old),
+        )
+        previous = json.loads(old.read_text())
+        if previous["sha"] == release["sha"]:
+            return
+        # A delayed retry must never move nightly back to an older commit.
+        run("git", "merge-base", "--is-ancestor", previous["sha"], release["sha"])
+        condition = ["--if-match", existing["ETag"]]
+    pointer = ROOT / "latest.json"
+    write_json(
+        pointer,
+        {key: release[key] for key in ("channel", "date", "sha", "tag")}
+        | {
+            "base_url": f"{BASE_URL}/{release['tag']}",
+            "published_at": datetime.now(timezone.utc).isoformat(),
+        },
+    )
+    run(
+        "aws",
+        "s3api",
+        "put-object",
+        "--bucket",
+        BUCKET,
+        "--key",
+        key,
+        "--body",
+        str(pointer),
+        "--content-type",
+        "application/json",
+        "--cache-control",
+        "public, max-age=60",
+        *condition,
+    )
+
+
 def github_release(release: dict, assets: dict[str, str]) -> None:
     endpoint = f"repos/{REPO}/releases"
     # The by-tag endpoint misses drafts left by interrupted publication.
@@ -644,7 +751,8 @@ def publish(release: dict) -> None:
     if release["dry_run"]:
         print(f"Dry run verified {len(assets)} artifacts; no GitHub/S3 writes or tag")
         return
-    tag_sha = remote_tag(release["tag"])
+    nightly = release.get("channel") == "nightly"
+    tag_sha = None if nightly else remote_tag(release["tag"])
     if tag_sha is not None and tag_sha != release["sha"]:
         raise ValueError("Existing tag points at another commit")
     run("git", "fetch", "--no-tags", "origin", "main")
@@ -653,6 +761,10 @@ def publish(release: dict) -> None:
     put_immutable(f"{prefix}/release-manifest.json", manifest)
     for path in sorted(paths):
         put_immutable(f"{prefix}/{path.name}", path)
+    if nightly:
+        publish_nightly_pointer(release)
+        print(f"Published {release['tag']} from {release['sha']}; no GitHub writes")
+        return
     marker = (
         f"pcb/index/{release['tag']}"
         if release["product"] == "compiler"
@@ -672,7 +784,9 @@ def publish(release: dict) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
-    commands.add_parser("prepare")
+    prepare_parser = commands.add_parser("prepare")
+    prepare_parser.add_argument("--nightly", action="store_true")
+    prepare_parser.add_argument("--dry-run", action="store_true")
     commands.add_parser("build").add_argument("target", choices=TARGETS)
     commands.add_parser("publish")
     args = parser.parse_args()
@@ -682,7 +796,18 @@ def main() -> None:
     ):
         parser.error("Only the protected pcb-release pipeline on main may run releases")
     if args.command == "prepare":
-        prepare()
+        if args.nightly:
+            should_build = prepare_nightly(args.dry_run)
+        else:
+            prepare()
+            should_build = True
+        run(
+            "buildkite-agent",
+            "meta-data",
+            "set",
+            "release-should-build",
+            str(should_build).lower(),
+        )
     elif args.command == "build":
         build(args.target)
     else:
@@ -697,7 +822,9 @@ def main() -> None:
             "release-windows",
         ):
             download_artifacts(ASSETS / "*", step)
-        with credentials("publish", release["dry_run"]):
+        with credentials(
+            "publish", release["dry_run"], github=release.get("channel") != "nightly"
+        ):
             publish(release)
 
 

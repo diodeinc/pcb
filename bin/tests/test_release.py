@@ -244,7 +244,7 @@ def test_publish_complete_release_then_tag_and_resume(
     monkeypatch.setenv("BUILDKITE_PIPELINE_SLUG", "pcb-release")
     monkeypatch.setenv("BUILDKITE_BRANCH", "main")
     monkeypatch.setattr(sys, "argv", [str(SCRIPT), "publish"])
-    monkeypatch.setattr(release, "credentials", lambda *_: nullcontext())
+    monkeypatch.setattr(release, "credentials", lambda *_, **__: nullcontext())
     # Publication needs verified artifacts and an ancestor of main, not the build bundle.
     cloud.fail_tag = True
     with pytest.raises(subprocess.CalledProcessError):
@@ -407,7 +407,7 @@ def test_prepare_bumps_actual_cargo_versions_without_tagging(
     }
     if not dry_run:
         # Only the local Git remote is writable; no AWS/GitHub credentials are acquired.
-        monkeypatch.setattr(release, "credentials", lambda *_: nullcontext())
+        monkeypatch.setattr(release, "credentials", lambda *_, **__: nullcontext())
         cloud.fail_artifact = str(
             release.ASSETS / "stdlib.tar.zst.sha256"
             if product == "compiler"
@@ -485,3 +485,126 @@ def test_prepare_bumps_actual_cargo_versions_without_tagging(
             ).stdout
             == path.read_bytes()
         )
+
+
+@pytest.mark.parametrize(
+    "mode", ["publish", "dry-run", "upload-failure", "older-retry"]
+)
+def test_nightly_publication_preserves_download_contract(
+    release, cloud, mode, monkeypatch
+):
+    config = artifacts(release, dry_run=mode == "dry-run")
+    config.update(channel="nightly", date="2026-11-05")
+    config["tag"] = f"nightly/2026-11-05/{config['sha']}"
+    del config["version"]
+    release.write_json(release.ROOT / "release.json", config)
+    monkeypatch.setenv("BUILDKITE_PIPELINE_SLUG", "pcb-release")
+    monkeypatch.setenv("BUILDKITE_BRANCH", "main")
+    monkeypatch.setattr(sys, "argv", [str(SCRIPT), "publish"])
+    monkeypatch.setattr(release, "credentials", lambda *_, **__: nullcontext())
+    pointer = "pcb/nightly/latest.json"
+    if mode == "upload-failure":
+        cloud.fail_key = f"pcb/{config['tag']}/pcbc-x86_64-pc-windows-msvc.exe"
+        with pytest.raises(subprocess.CalledProcessError):
+            release.main()
+        assert pointer not in cloud.objects
+        cloud.fail_key = None
+    release.main()
+    assert cloud.github is None
+    assert git("ls-remote", "--tags", "origin") == ""
+    if mode == "dry-run":
+        assert cloud.objects == {}
+        return
+    latest = json.loads(cloud.objects[pointer])
+    assert latest == {
+        "channel": "nightly",
+        "date": "2026-11-05",
+        "sha": config["sha"],
+        "tag": f"nightly/2026-11-05/{config['sha']}",
+        "base_url": f"{release.BASE_URL}/nightly/2026-11-05/{config['sha']}",
+        "published_at": latest["published_at"],
+    }
+    for path in release.ASSETS.iterdir():
+        assert cloud.objects[f"pcb/{config['tag']}/{path.name}"] == path.read_bytes()
+    writes = cloud.writes
+    release.main()
+    assert cloud.writes == writes
+    if mode == "older-retry":
+        Path("source").write_text("newer nightly\n")
+        git("commit", "-am", "Newer nightly")
+        git("push", "origin", "main")
+        newer = {**latest, "sha": git("rev-parse", "HEAD")}
+        cloud.objects[pointer] = json.dumps(newer).encode()
+        with pytest.raises(subprocess.CalledProcessError):
+            release.main()
+        assert json.loads(cloud.objects[pointer]) == newer
+
+
+@pytest.mark.parametrize("mode", ["new", "unchanged", "dry-run", "denied"])
+def test_nightly_prepare_skips_unchanged_and_builds_unmodified_source(
+    release, cloud, mode, monkeypatch
+):
+    Path("Cargo.toml").write_text(
+        '[package]\nname = "pcbc"\nversion = "1.2.3"\nedition = "2021"\n'
+        '[profile.dist]\ninherits = "release"\n'
+    )
+    Path("src").mkdir()
+    Path("src/main.rs").write_text('fn main() { println!("nightly source"); }\n')
+    Path("lib/std").mkdir(parents=True)
+    Path("lib/std/test.zen").write_text("# Nightly standard library\n")
+    REAL_RUN(["cargo", "generate-lockfile"], check=True)
+    git("add", ".")
+    git("commit", "-m", "Nightly source")
+    git("push", "origin", "main")
+    sha = git("rev-parse", "HEAD")
+    if mode in ("unchanged", "dry-run"):
+        cloud.objects["pcb/nightly/latest.json"] = json.dumps({"sha": sha}).encode()
+    cloud.denied = mode in ("denied", "dry-run")
+    if mode != "dry-run":
+        monkeypatch.setattr(release, "credentials", lambda *_, **__: nullcontext())
+    if mode == "denied":
+        with pytest.raises(subprocess.CalledProcessError):
+            release.prepare_nightly(False)
+        assert cloud.uploaded_artifacts == {}
+        return
+    assert release.prepare_nightly(mode == "dry-run") is (mode != "unchanged")
+    assert git("rev-parse", "HEAD") == sha
+    assert git("status", "--porcelain") == ""
+    assert git("ls-remote", "--tags", "origin") == ""
+    if mode == "unchanged":
+        assert cloud.uploaded_artifacts == {}
+        return
+    config = release.load_release()
+    assert config["sha"] == sha
+    assert config["channel"] == "nightly"
+    assert config["tag"] == f"nightly/{config['date']}/{sha}"
+    assert "version" not in config
+    archive = REAL_RUN(
+        ["zstd", "-q", "-d", "-c", str(release.ASSETS / "stdlib.tar.zst")],
+        check=True,
+        capture_output=True,
+    ).stdout
+    assert (
+        archive
+        == REAL_RUN(
+            ["git", "archive", "--format=tar", "HEAD:lib/std"],
+            check=True,
+            capture_output=True,
+        ).stdout
+    )
+    target = REAL_RUN(
+        ["rustc", "--print", "host-tuple"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    release.build(target)
+    assert (
+        REAL_RUN(
+            [str(Path("target") / target / "dist/pcbc")],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout
+        == "nightly source\n"
+    )
