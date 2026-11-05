@@ -227,9 +227,9 @@ gnd = Ground("GND")
 # Normal module - components should NOT be DNP
 Resistor(name = "R1", value = "1kOhm", package = "0603", P1 = vcc, P2 = gnd)
 
-# Module with dnp=True - all child components should be DNP
-Resistor(name = "R2_DNP", value = "10kOhm", package = "0603", P1 = vcc, P2 = gnd, dnp = True)
-Capacitor(name = "C1_DNP", value = "100nF", package = "0402", P1 = vcc, P2 = gnd, dnp = True)
+# Module with dnp=True - properties must not erase DNP in either argument order
+Resistor(name = "R2_DNP", value = "10kOhm", package = "0603", P1 = vcc, P2 = gnd, dnp = True, properties = {})
+Capacitor(name = "C1_DNP", value = "100nF", package = "0402", P1 = vcc, P2 = gnd, properties = {}, dnp = True)
 
 # Normal module again - should NOT be DNP
 Capacitor(name = "C2", value = "10uF", package = "0805", P1 = vcc, P2 = gnd)

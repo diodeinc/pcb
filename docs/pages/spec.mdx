@@ -355,8 +355,11 @@ PowerSupply(name="PSU1", VIN=vin, VOUT=vout, GND=gnd, output_voltage="3.3V")
 ```
 
 Additional instantiation parameters:
-- `properties`: Dict of property overrides for the module instance.
-- `dnp`: Bool — mark as Do Not Populate.
+- `properties`: Optional module-instance metadata; omit when empty. Not `config()` inputs or forwarded to child components: BOM alternatives belong on components, not their containing modules.
+- `dnp`: Bool — mark the module and its descendants as Do Not Populate. A DNP ancestor dominates a descendant's `dnp=False`.
+- `schematic`: `"collapse"` or `"embed"` — control the module's schematic presentation.
+
+Explicit `dnp=` and `schematic=` override the corresponding metadata properties regardless of argument order.
 
 ### io()
 
