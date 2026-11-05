@@ -681,9 +681,10 @@ fn test_publish_board_full() {
     assert_eq!(
         archive
             .file_names()
+            .map(|name| name.unwrap().into_owned())
             .filter(|name| name.starts_with("manufacturing/"))
             .collect::<BTreeSet<_>>(),
-        BTreeSet::from(["manufacturing/ipc2581.xml"])
+        BTreeSet::from(["manufacturing/ipc2581.xml".to_string()])
     );
 }
 

@@ -26,10 +26,9 @@ anyhow = { workspace = true }
 comfy-table = { workspace = true, optional = true }
 colored = { workspace = true, optional = true }
 supports-hyperlinks = { workspace = true, optional = true }
-terminal_hyperlink = { workspace = true, optional = true }
 urlencoding = { workspace = true, optional = true }
 
 [features]
 default = ["starlark"]
 starlark = ["dep:starlark", "dep:starlark_map", "dep:mini_map", "dep:allocative", "dep:pagable"]
-table = ["comfy-table", "colored", "supports-hyperlinks", "terminal_hyperlink", "urlencoding"]
+table = ["comfy-table", "colored", "supports-hyperlinks", "urlencoding"]

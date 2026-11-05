@@ -5,7 +5,7 @@ requires-python = ">=3.10"
 dependencies = ["click>=8.5.0"]
 
 [dependency-groups]
-dev = [{ include-group = "test" }, "ruff>=0.17.3", "ty>=0.0.95"]
+dev = [{ include-group = "test" }, "ruff>=0.17.3", "ty>=0.0.97"]
 test = ["pytest>=9.2.0", "hypothesis>=6.168.5"]
 
 [tool.ruff]

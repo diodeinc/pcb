@@ -70,7 +70,8 @@ inquire = "0.9"
 itertools = "0.15"
 heck = "0.5.0"
 hex = "0.4"
-httpmock = "0.9"
+# Tests match HTTP requests, not cookies; omit the cookie header/SHA-1 stack.
+httpmock = { version = "0.9", default-features = false }
 libm = { version = "0.2.16", default-features = false }
 log = "0.4.34"
 minijinja = { version = "3.0", features = ["serde"] }
@@ -112,7 +113,6 @@ maplit = "1.0.2"
 memchr = "2.8"
 md-5 = "0.11"
 os_pipe = "1.2.3"
-paste = "1.0"
 pathdiff = "0.2"
 percent-encoding = "2.3"
 petgraph = "0.8"
@@ -137,7 +137,6 @@ pdf-writer = "0.15"
 flate2 = "1"
 ruzstd = "0.9.1"
 terminal_size = "0.4.4"
-terminal_hyperlink = "0.1"
 uppsala = "0.12"
 termimad = "0.35.5"
 # regex-fancy (pure Rust, and fancy-regex is already in the tree via pagable)
@@ -147,8 +146,9 @@ textwrap = { version = "0.16", default-features = false, features = ["std"] }
 unicode-width = "0.2.2"
 urlencoding = "2.1"
 wasm-bindgen = "0.2.129"
-# Share Ruff's zip major rather than compiling a second archive stack.
-zip = { version = "8", default-features = false, features = ["deflate"] }
+# ZIP 9 fixes unsafe extraction; Ruff still brings ZIP 8 for its virtual filesystem.
+# The default compression level uses flate2; Zopfli's high levels are unused.
+zip = { version = "9.3", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 fslock = "0.2"
 rust_decimal = { version = "1.43", features = ["serde", "serde-with-str"] }
 comfy-table = { version = "8", features = ["custom_styling"] }
@@ -162,7 +162,8 @@ semver = { version = "1.0", features = ["serde"] }
 kurbo = "0.13"
 tiny-skia = "0.12"
 zstd = "0.14"
-jiff = "0.2"
+# Only UTC timestamps and fixed Git offsets are used, not timezone databases.
+jiff = { version = "0.2", default-features = false, features = ["std"] }
 # r2d2_sqlite 0.35 requires rusqlite 0.40 and its matching SQLite bindings.
 rusqlite = { version = "0.40.2", features = ["bundled"] }
 r2d2 = "0.8"
