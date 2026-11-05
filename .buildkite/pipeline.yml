@@ -3,24 +3,34 @@ agents:
   queue: pfet
 
 steps:
-  - label: ":windows: Hosted environment probe"
+  - label: ":windows: Workspace tests"
     key: tests-windows
     agents:
       queue: windows-large
     if_changed:
+      - crates/**
+      - lib/**
+      - examples/**
+      - test-workspaces/**
+      - Cargo.{toml,lock}
+      - .cargo/**
+      - rust-toolchain{,.toml}
+      - .config/nextest.toml
+      - "**/.gitignore"
+      - "**/.ignore"
       - .buildkite/**
-    timeout_in_minutes: 5
-    command: >-
-      powershell.exe -NoLogo -NoProfile -NonInteractive -Command
-      "$ErrorActionPreference = 'Stop';
-      [Environment]::OSVersion.VersionString;
-      Get-Command powershell,pwsh,rustup,cargo,rustc,cl,cmake,git,buildkite-agent -ErrorAction SilentlyContinue | Select-Object Name,Source | Format-Table -AutoSize;
-      Get-ChildItem Env:CARGO_HOME,Env:RUSTUP_HOME,Env:USERPROFILE,Env:BUILDKITE_SHELL -ErrorAction SilentlyContinue | Format-Table -AutoSize;
-      & buildkite-agent --version;
-      $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe';
-      if (Test-Path $vswhere) { & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath };
-      & buildkite-agent cache --help;
-      exit 0"
+    timeout_in_minutes: 20
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_TERM_COLOR: always
+      RUST_LOG: debug
+      RUST_BACKTRACE: full
+      # Apply to checkout as well as tests, without modifying the hosted image.
+      GIT_CONFIG_COUNT: "1"
+      GIT_CONFIG_KEY_0: core.longpaths
+      GIT_CONFIG_VALUE_0: "true"
+    command: pwsh -NoLogo -NoProfile -NonInteractive -File .buildkite/test-windows.ps1
+    artifact_paths: target/nextest/ci/junit.xml
 
   - label: ":apple: Workspace tests and installer"
     key: tests-macos
