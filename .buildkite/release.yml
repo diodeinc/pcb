@@ -1,4 +1,4 @@
-# Manual pcb-release pipeline; signed by the existing pfet uploader.
+# Stable and nightly pcb-release pipeline; signed by the existing pfet uploader.
 agents:
   queue: pfet
 
@@ -8,6 +8,7 @@ env:
 steps:
   - block: Release PCB
     key: release-input
+    if: build.env("PCB_RELEASE_CHANNEL") != "nightly"
     fields:
       - select: Product
         key: release-product
@@ -37,42 +38,14 @@ steps:
     concurrency: 1
     command: nix develop .#release --command python3 bin/pcb-release.py prepare
 
-  - &linux-build
-    label: Build {{matrix}}
-    key: release-linux-amd64
-    agents: {queue: pfet, arch: amd64, heavy: "true"}
+  # Only the uploader holds the signing key; unchanged nightlies allocate no builders.
+  - label: Upload release builds
+    key: upload-release
     depends_on: prepare-release
-    timeout_in_minutes: 45
-    matrix: [x86_64-unknown-linux-gnu, x86_64-unknown-linux-musl]
-    command: nix develop .#release --command python3 bin/pcb-release.py build {{matrix}}
-    artifact_paths: target/release-pipeline/artifacts/*
-
-  - <<: *linux-build
-    key: release-linux-arm64
-    agents: {queue: pfet, arch: arm64, heavy: "true"}
-    matrix: [aarch64-unknown-linux-gnu, aarch64-unknown-linux-musl]
-
-  - label: Build aarch64-apple-darwin
-    key: release-macos
-    depends_on: prepare-release
-    agents: {queue: macos-large}
-    timeout_in_minutes: 45
-    command: python3 bin/pcb-release.py build aarch64-apple-darwin
-    artifact_paths: target/release-pipeline/artifacts/*
-
-  - label: Build x86_64-pc-windows-msvc
-    key: release-windows
-    depends_on: prepare-release
-    agents: {queue: windows}
-    timeout_in_minutes: 45
-    command: python bin/pcb-release.py build x86_64-pc-windows-msvc
-    artifact_paths: target/release-pipeline/artifacts/*
-
-  - label: Verify, publish, then tag
-    key: publish-release
-    agents: {queue: pcb-release}
-    depends_on: [prepare-release, release-linux-amd64, release-linux-arm64, release-macos, release-windows]
-    timeout_in_minutes: 30
-    concurrency_group: pcb-release-publish
-    concurrency: 1
-    command: nix develop .#release --command python3 bin/pcb-release.py publish
+    agents: {queue: pfet-upload}
+    timeout_in_minutes: 2
+    command: |
+      set -euo pipefail
+      if [[ "$(buildkite-agent meta-data get release-should-build)" == true ]]; then
+        buildkite-agent pipeline upload --no-interpolation .buildkite/release-builds.yml
+      fi
