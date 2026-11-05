@@ -364,8 +364,10 @@ def build(target: str) -> None:
     if run("git", "rev-parse", "FETCH_HEAD") != release["sha"]:
         raise ValueError("Source bundle does not match release commit")
     run("git", "checkout", "--detach", release["sha"])
-    run("rustup", "set", "profile", "minimal")
-    run("rustup", "target", "add", target)
+    nix = bool(os.environ.get("IN_NIX_SHELL"))
+    if not nix:
+        run("rustup", "set", "profile", "minimal")
+        run("rustup", "target", "add", target)
     host = run("rustc", "-vV").split("host: ")[1].splitlines()[0]
     if (
         target.split("-")[0] != host.split("-")[0]
@@ -376,18 +378,28 @@ def build(target: str) -> None:
     os.environ["CARGO_INCREMENTAL"] = "0"
     os.environ["RUSTFLAGS"] = ""
     if target.endswith("linux-musl"):
-        os.environ.update(
-            CC="musl-gcc",
-            RUSTFLAGS="-C linker=musl-gcc",
-            CFLAGS="-Du_int8_t=uint8_t -Du_int16_t=uint16_t -Du_int32_t=uint32_t -Du_int64_t=uint64_t",
+        os.environ["CFLAGS"] = (
+            "-Du_int8_t=uint8_t -Du_int16_t=uint16_t -Du_int32_t=uint32_t -Du_int64_t=uint64_t"
         )
+        if not nix:
+            os.environ.update(CC="musl-gcc", RUSTFLAGS="-C linker=musl-gcc")
     packages = [
         item
         for binary in binaries(release["product"])
         for item in ("-p", binary, "--bin", binary)
     ]
+    zig = nix and "linux" in target
+    # Zig avoids Nix store interpreters/RPATHs and pins GNU's minimum glibc ABI.
+    build_target = target + ".2.28" if zig and target.endswith("linux-gnu") else target
     run(
-        "cargo", "build", "--locked", "--profile", "dist", "--target", target, *packages
+        "cargo",
+        "zigbuild" if zig else "build",
+        "--locked",
+        "--profile",
+        "dist",
+        "--target",
+        build_target,
+        *packages,
     )
     ASSETS.mkdir(parents=True, exist_ok=True)
     for binary in binaries(release["product"]):

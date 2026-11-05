@@ -352,7 +352,9 @@ def test_dry_run_never_needs_writers(release, cloud):
 
 
 @pytest.mark.parametrize("product", ["compiler", "shim"])
-def test_prepare_bumps_actual_cargo_versions_without_tagging(release, cloud, product):
+def test_prepare_bumps_actual_cargo_versions_without_tagging(
+    release, cloud, product, monkeypatch
+):
     Path("Cargo.toml").write_text(
         '[workspace]\nmembers = ["crates/*"]\nresolver = "2"\n[workspace.package]\nversion = "1.2.3-rc.1"\n[profile.dist]\ninherits = "release"\n'
     )
@@ -413,11 +415,13 @@ def test_prepare_bumps_actual_cargo_versions_without_tagging(release, cloud, pro
     else:
         assert "## [1.2.3] - " not in Path("CHANGELOG.md").read_text()
     assert cloud.objects == {}
+    target_dir = Path("build-cache").resolve()
+    monkeypatch.setenv("CARGO_TARGET_DIR", str(target_dir))
     release.build("x86_64-unknown-linux-gnu")
     for name in ["pcbc"] if product == "compiler" else ["pcb", "pcb-launcher"]:
         path = release.ASSETS / f"{name}-x86_64-unknown-linux-gnu"
         assert REAL_RUN(
-            [str(Path("target/x86_64-unknown-linux-gnu/dist") / name)],
+            [str(target_dir / "x86_64-unknown-linux-gnu/dist" / name)],
             check=True,
             capture_output=True,
             text=True,

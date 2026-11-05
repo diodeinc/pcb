@@ -31,7 +31,7 @@ steps:
     timeout_in_minutes: 10
     concurrency_group: pcb-release-prepare
     concurrency: 1
-    command: python3 bin/pcb-release.py prepare
+    command: nix develop .#release --command python3 bin/pcb-release.py prepare
     artifact_paths:
       - target/release-pipeline/release.json
       - target/release-pipeline/source.bundle
@@ -43,7 +43,7 @@ steps:
     depends_on: prepare-release
     timeout_in_minutes: 45
     matrix: [x86_64-unknown-linux-gnu, x86_64-unknown-linux-musl]
-    command: python3 bin/pcb-release.py build {{matrix}}
+    command: nix develop .#release --command python3 bin/pcb-release.py build {{matrix}}
     artifact_paths: target/release-pipeline/artifacts/*
 
   - <<: *linux-build
@@ -73,4 +73,4 @@ steps:
     timeout_in_minutes: 30
     concurrency_group: pcb-release-publish
     concurrency: 1
-    command: python3 bin/pcb-release.py publish
+    command: nix develop .#release --command python3 bin/pcb-release.py publish
