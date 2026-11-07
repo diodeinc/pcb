@@ -397,7 +397,7 @@ def prepare() -> bool:
     return True
 
 
-def download_artifacts(pattern: Path, step: str) -> None:
+def download_artifacts(pattern: Path, step: str = "") -> None:
     run(
         "buildkite-agent",
         "artifact",
@@ -775,15 +775,7 @@ def main() -> None:
     else:
         download_artifacts(ROOT / "release.json", "prepare-release")
         release = load_release()
-        if release["product"] == "compiler":
-            download_artifacts(ASSETS / "*", "prepare-release")
-        for step in (
-            "release-linux-amd64",
-            "release-linux-arm64",
-            "release-macos",
-            "release-windows",
-        ):
-            download_artifacts(Path("*"), step)
+        download_artifacts(Path("*"))
         with credentials(
             "publish", release["dry_run"], github=release.get("channel") != "nightly"
         ):
