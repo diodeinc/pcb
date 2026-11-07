@@ -773,8 +773,9 @@ def main() -> None:
     elif args.command == "build":
         build(args.target)
     else:
-        download_artifacts(Path("*"))
+        download_artifacts(ROOT / "release.json", "prepare-release")
         release = load_release()
+        download_artifacts(Path("*"))
         with credentials(
             "publish", release["dry_run"], github=release.get("channel") != "nightly"
         ):
