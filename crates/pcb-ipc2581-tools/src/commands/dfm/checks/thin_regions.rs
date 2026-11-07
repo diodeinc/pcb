@@ -27,7 +27,7 @@
 //! piece is noted by how it meets the surviving copper: joining two
 //! components severs a connection, meeting one twice narrows a conductor,
 //! otherwise it is lost detail. The note never changes a verdict.
-//! Only declared, isolated text ([`CopperUse::Text`]) is judged apart.
+//! Only text islands ([`CopperUse::Text`]) are judged apart.
 //! A soldermask image is the mask *openings*, so its closing residue flags the
 //! web of mask remaining between them. Copper clearance is a separate
 //! electrical-conductor boundary-distance check; morphology must not

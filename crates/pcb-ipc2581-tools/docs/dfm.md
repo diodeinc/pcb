@@ -277,6 +277,9 @@ Each Step's findings apply at its placements; the report lists these in
   width its outline contradicts, is never silently discarded or measured as
   something it is not: it leaves every hole rule, or every slot rule,
   `incomplete`.
+  A hole's class is its IPC plating status, except that a `PLATED` hole of
+  at most 0.5 mm whose every land is a pad of a `SURFACE` package pin holds
+  no lead and is judged as a via.
 - Hole aspect ratio is physical drilled-span thickness divided by finished
   circular hole diameter. A through hole uses IPC-2581 `overallThickness` when
   it is positive and finite, otherwise a complete sum of physical stackup
@@ -379,12 +382,13 @@ Each Step's findings apply at its placements; the report lists these in
   without a net leaves this rule `incomplete` instead of being guessed into an
   electrical domain; rules that measure the composed image are unaffected. Fiducials, copper-balance
   support, and netless pads remain explicit auxiliary conductors.
-- Netless `geometryUsage="TEXT"` copper that touches no other copper or
-  drill (nor shares a feature with text that does) forms text islands.
-  Each copper width and clearance tier has a warning companion,
-  `<id>.text` or `<id>.text.preferred`, that measures their narrow pieces
-  and the gaps between two of them; the functional rule measures the rest.
-  `GRAPHIC` copper states no intent, so it stays functional.
+- Netless `geometryUsage="TEXT"` copper, and the netless copper of an
+  unpopulated part none of whose copper has a net, forms text islands where it touches no drill and the
+  copper of at most one net, which it then joins (nor shares a feature with
+  copper that does not). Each copper width and clearance tier has a warning
+  companion, `<id>.text` or `<id>.text.preferred`, that measures their narrow
+  pieces and the gaps between two of them; the functional rule measures the
+  rest. Other `GRAPHIC` copper states no intent, so it stays functional.
 - Explicit IPC `NetShort` declarations permit validated net-tie contacts on the
   containing copper layer: a matching component graphic/pad contact permits
   that graphic to meet the declared nets; a pad-only tie permits only the pad

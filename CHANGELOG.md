@@ -14,6 +14,8 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - `pcb import` reads the MPN from Altium's `Manufacturer Part` symbol field.
 - `pcb build --netlist` and the LSP's `zener/evaluate` return the netlist even when the build has errors; the build still fails.
 - The JLCPCB DFM PDK fails odd copper layer counts with `profile.support.even_copper_layers`; a 5-layer board no longer passes for want of a stackup template.
+- DFM judges the copper of unpopulated parts with no net, and text touching one net, under the warning-level `.text` rules.
+- DFM judges a plated hole of at most 0.5 mm that only drills `SURFACE` pin pads as a via.
 
 ## [0.4.97] - 2026-11-01
 

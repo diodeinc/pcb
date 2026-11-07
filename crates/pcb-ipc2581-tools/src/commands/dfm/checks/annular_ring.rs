@@ -464,6 +464,86 @@ limit = { minimum = "0.2 mm" }"#,
     }
 
     #[test]
+    fn a_plated_hole_drilling_only_surface_pins_is_judged_as_a_via() {
+        // A 0.3 mm plated hole with 0.4 mm lands (0.05 mm rings), drilled
+        // through pin 1 of U1.
+        let xml = |pin_type: &str| {
+            let pads = ["L0", "L1"]
+                .map(|layer| {
+                    format!(
+                        r#"<LayerFeature layerRef="{layer}"><Set net="N1"><Pad padstackDefRef="P"><Location x="0" y="0"/>
+                        <StandardPrimitiveRef id="land"/><PinRef componentRef="U1" pin="1"/></Pad></Set></LayerFeature>"#
+                    )
+                })
+                .concat();
+            format!(
+                r#"<?xml version="1.0" encoding="UTF-8"?>
+<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
+  <Content roleRef="owner"><FunctionMode mode="FABRICATION"/><StepRef name="board"/>
+    <LayerRef name="L0"/><LayerRef name="L1"/><LayerRef name="DRILL"/>
+    <DictionaryStandard units="MILLIMETER"><EntryStandard id="land"><Circle diameter="0.4"/></EntryStandard></DictionaryStandard>
+  </Content>
+  <Ecad><CadHeader units="MILLIMETER"/><CadData>
+    <Layer name="L0" layerFunction="CONDUCTOR" side="TOP" polarity="POSITIVE"/>
+    <Layer name="L1" layerFunction="CONDUCTOR" side="BOTTOM" polarity="POSITIVE"/>
+    <Layer name="DRILL" layerFunction="DRILL" side="ALL" polarity="POSITIVE"/>
+    <Step name="board" type="BOARD">
+      <Datum x="0" y="0"/>
+      <PadStackDef name="P">
+        <PadstackHoleDef name="H" diameter="0.3" platingStatus="PLATED" plusTol="0" minusTol="0" x="0" y="0"/>
+        <PadstackPadDef layerRef="L0" padUse="REGULAR"><Location x="0" y="0"/><StandardPrimitiveRef id="land"/></PadstackPadDef>
+        <PadstackPadDef layerRef="L1" padUse="REGULAR"><Location x="0" y="0"/><StandardPrimitiveRef id="land"/></PadstackPadDef>
+      </PadStackDef>
+      <Package name="pkg" type="OTHER"><Pin number="1" type="{pin_type}"><Location x="0" y="0"/><StandardPrimitiveRef id="land"/></Pin></Package>
+      <Component refDes="U1" packageRef="pkg" layerRef="L0" mountType="THMT" part="u"><Location x="0" y="0"/></Component>
+      {pads}
+      <LayerFeature layerRef="DRILL"><Set geometry="P" net="N1">
+        <Hole name="H1" diameter="0.3" platingStatus="PLATED" plusTol="0" minusTol="0" x="0" y="0"/>
+      </Set></LayerFeature>
+    </Step>
+  </CadData></Ecad>
+</IPC-2581>"#
+            )
+        };
+        let pdk = fixtures::pdk(
+            r#"[[rules.copper.annular_ring]]
+id = "via-ring"
+select = { hole = "via" }
+limit = { minimum = "0.04 mm" }
+
+[[rules.copper.annular_ring]]
+id = "pth-ring"
+select = { hole = "pth" }
+limit = { minimum = "0.2 mm" }"#,
+        );
+        let judged = |pin_type: &str| {
+            let report = fixtures::report(&xml(pin_type), &pdk, crate::LayoutTarget::Board);
+            // Whether each rule judged the hole, and how many findings it made.
+            let judged = |id: &str| {
+                let rule = report.rules.iter().find(|rule| rule.id == id).unwrap();
+                (rule.checked > 0, rule.finding_count)
+            };
+            (judged("via-ring"), judged("pth-ring"))
+        };
+        // A surface pin carries no lead: the 0.05 mm ring meets the via
+        // minimum, and no PTH is left to judge.
+        assert_eq!(judged("SURFACE"), ((true, 0), (false, 0)));
+        // A through pin's hole holds a lead and keeps the PTH minimum.
+        assert_eq!(judged("THRU"), ((false, 0), (true, 1)));
+        // The class does not depend on which other rules the PDK has.
+        let diameter = fixtures::pdk(
+            "[[rules.drilling.hole_diameter]]\nid = \"via-drill\"\nselect = { hole = \"via\" }\nlimit = { minimum = \"0.1 mm\" }",
+        );
+        let report = fixtures::report(&xml("SURFACE"), &diameter, crate::LayoutTarget::Board);
+        assert!(
+            report
+                .rules
+                .iter()
+                .any(|rule| rule.id == "via-drill" && rule.checked == 1)
+        );
+    }
+
+    #[test]
     fn intermediate_antipad_without_a_source_land_is_not_an_annular_subject() {
         let evaluation = evaluate_pth(&board(3, &[0, 2], None));
 

@@ -48,7 +48,7 @@ use crate::geometry::GeometryDocument;
 use crate::layers;
 use pcb_ir::import::ipc2581::{
     BomReferenceId, ComponentDefinitionId, ComponentOccurrenceId, FeatureOccurrenceId,
-    ImportedDesign, LayerId, LayoutOccurrenceId, feature_occurrence_id,
+    ImportedDesign, LayerId, LayoutOccurrenceId, PopulationState, feature_occurrence_id,
 };
 use pcb_ir::import::physical::{Association, LandId, PhysicalHole};
 
@@ -525,9 +525,10 @@ impl<'a> Design<'a> {
         .filter(|(_, span, branch)| branch.is_none() && span.partial_depth.is_some())
         .map(|(feature, span, _)| (feature, span.clone()))
         .collect();
-        let holes = (holes.into_iter())
+        let mut holes = (holes.into_iter())
             .filter(|hole| supported(&hole.drill_span))
             .collect::<Vec<_>>();
+        reclass_leadless_holes(imported, &mut holes);
         let slots = (slots.into_iter())
             .filter(|slot| supported(&slot.drill_span))
             .collect::<Vec<_>>();
@@ -1373,14 +1374,16 @@ pub(super) enum ConductorId {
         instance: Option<u32>,
         source_set_index: u32,
     },
-    /// An island of declared text touching no other copper or drill.
+    /// An island of declared text or artwork (see [`text_islands`]).
     /// `occurrence` is its first source feature, which other islands of the
-    /// layer may share; `island` tells them apart.
+    /// layer may share; `island` tells them apart. `net` is the one net whose
+    /// copper the island touches, if any.
     Text {
         step: Option<Symbol>,
         instance: Option<u32>,
         occurrence: FeatureOccurrenceId,
         island: u32,
+        net: Option<Symbol>,
     },
     Unattributed {
         step: Option<Symbol>,
@@ -1415,10 +1418,8 @@ impl ConductorId {
     pub fn net(self) -> Option<Symbol> {
         match self {
             Self::Net { net, .. } => Some(net),
-            Self::Isolated { .. }
-            | Self::Auxiliary { .. }
-            | Self::Text { .. }
-            | Self::Unattributed { .. } => None,
+            Self::Text { net, .. } => net,
+            Self::Isolated { .. } | Self::Auxiliary { .. } | Self::Unattributed { .. } => None,
         }
     }
 
@@ -1432,6 +1433,12 @@ impl ConductorId {
                 step,
                 instance,
                 net,
+                ..
+            }
+            | Self::Text {
+                step,
+                instance,
+                net: Some(net),
                 ..
             } => Self::Net {
                 step,
@@ -1877,6 +1884,67 @@ fn hole_class(plating: PlatingKind) -> Option<HoleClass> {
     }
 }
 
+/// A plated hole whose every land is a pad of a pin its package declares
+/// `SURFACE` holds no lead, so a via-sized one is a via. Larger leadless
+/// holes hold fasteners and stay PTHs.
+const LEADLESS_VIA_MAX_DRILL_MM: f64 = 0.5;
+
+fn reclass_leadless_holes(imported: &ImportedDesign, holes: &mut [Hole]) {
+    let document = &imported.geometry;
+    let surface_pins = imported
+        .components
+        .iter()
+        .filter_map(|component| {
+            let package = imported.package_definition(component.package?)?;
+            Some((part(imported, component)?, &package.source.pins))
+        })
+        .flat_map(|((step, part), pins)| {
+            pins.iter()
+                .filter(|pin| pin.pin_type == ipc2581::types::PackagePinType::Surface)
+                .map(move |pin| (step, part, pin.number))
+        })
+        .collect::<HashSet<_>>();
+    // Each padstack's copper pads: their centres, and whether each is a
+    // surface pin's.
+    let mut pads = HashMap::<(Option<Symbol>, Symbol), Vec<(Point, bool)>>::new();
+    for feature in &document.features {
+        let Some(padstack) = feature.padstack_ref else {
+            continue;
+        };
+        if feature.kind != FeatureKind::Padstack
+            || feature.polarity != Polarity::Dark
+            || feature.intent.domain != FeatureDomain::Copper
+        {
+            continue;
+        }
+        let surface = feature
+            .pin_refs
+            .slice(&document.pin_refs)
+            .first()
+            .and_then(|pin| Some((feature.source_step_ref, pin.component_ref?, pin.pin)))
+            .is_some_and(|pin| surface_pins.contains(&pin));
+        pads.entry((feature.source_step_ref, padstack))
+            .or_default()
+            .push((feature.center, surface));
+    }
+    for hole in holes.iter_mut().filter(|hole| {
+        hole.class == HoleClass::Pth
+            && hole.branch.is_none()
+            && hole.diameter_mm <= LEADLESS_VIA_MAX_DRILL_MM
+    }) {
+        let mut lands = hole
+            .padstack
+            .and_then(|padstack| pads.get(&(hole.step, padstack)))
+            .into_iter()
+            .flatten()
+            .filter(|(center, _)| center.distance_to(hole.center) <= tol::REGION_MM)
+            .peekable();
+        if lands.peek().is_some() && lands.all(|&(_, surface)| surface) {
+            hole.class = HoleClass::Via;
+        }
+    }
+}
+
 /// The conductor a copper feature belongs to.
 fn copper_conductor(
     source: Source<'_>,
@@ -2289,27 +2357,73 @@ fn collect_copper_layers(
     Ok((copper_layers, blockers.into_iter().flatten().collect()))
 }
 
-/// Whether the source declares a netless conductor to be text. A graphic
-/// states no intent: it may be an antenna element or heat spreader.
-fn declared_text(imported: &ImportedDesign, id: ConductorId) -> bool {
-    let ConductorId::Unattributed { occurrence, .. } = id else {
+/// Unpopulated parts with no net on any of their copper, by Step. Their
+/// copper connects nothing, so it is artwork, declared as plainly as text.
+fn artwork_parts(imported: &ImportedDesign) -> HashSet<(Option<Symbol>, Symbol)> {
+    let document = &imported.geometry;
+    let netted = document
+        .features
+        .iter()
+        .filter(|feature| feature.net.is_some() && feature.intent.domain == FeatureDomain::Copper)
+        .filter_map(|feature| {
+            Some((
+                feature.source_step_ref,
+                component_copper(document, feature)?,
+            ))
+        })
+        .collect::<HashSet<_>>();
+    imported
+        .components
+        .iter()
+        .filter(|component| component.population == PopulationState::DoNotPopulate)
+        .filter_map(|component| part(imported, component))
+        .filter(|part| !netted.contains(part))
+        .collect()
+}
+
+/// A component's Step and designator, as copper features name it.
+fn part(
+    imported: &ImportedDesign,
+    component: &pcb_ir::import::ipc2581::ComponentDefinition,
+) -> Option<(Option<Symbol>, Symbol)> {
+    let step = imported.geometry.layout.steps[component.step as usize].source_step_ref;
+    Some((Some(step), component.source.ref_des?))
+}
+
+/// Whether the source declares netless copper to be text: `TEXT` usage, or
+/// copper of an [`artwork_parts`] part. A bare graphic states no intent.
+fn declared_text(
+    imported: &ImportedDesign,
+    artwork: &HashSet<(Option<Symbol>, Symbol)>,
+    id: ConductorId,
+) -> bool {
+    let (ConductorId::Unattributed { occurrence, .. } | ConductorId::Isolated { occurrence, .. }) =
+        id
+    else {
+        return false;
+    };
+    let Some(feature) = imported.feature_definition(occurrence.feature) else {
         return false;
     };
     imported
-        .feature_definition(occurrence.feature)
-        .and_then(|feature| imported.geometry.feature_set(feature))
+        .geometry
+        .feature_set(feature)
         .is_some_and(|set| set.geometry_usage == Some(ipc2581::types::GeometryUsage::Text))
+        || component_copper(&imported.geometry, feature)
+            .is_some_and(|part| artwork.contains(&(feature.source_step_ref, part)))
 }
 
-/// Make each island of the Step's own declared text that touches no other
-/// copper and no drill one [`ConductorId::Text`] conductor.
+/// Make each island of the Step's own declared text that touches no drill
+/// and the copper of at most one net one [`ConductorId::Text`] conductor.
+/// Touching a net, the island is that net's copper, as the fab etches it.
 fn text_islands(
     source: Source<'_>,
     conductors: Vec<CopperConductor>,
     drilled: &[(BBox, Option<u32>)],
 ) -> Result<Vec<CopperConductor>> {
+    let artwork = artwork_parts(source.imported);
     let (text, mut others): (Vec<_>, Vec<_>) = conductors.into_iter().partition(|conductor| {
-        conductor.id.instance().is_none() && declared_text(source.imported, conductor.id)
+        conductor.id.instance().is_none() && declared_text(source.imported, &artwork, conductor.id)
     });
     if text.is_empty() {
         return Ok(others);
@@ -2331,15 +2445,18 @@ fn text_islands(
                     distance.mm <= island.uncertainty_mm + image.uncertainty_mm + tol::REGION_MM
                 })
         };
-        let isolated = near
-            .query(island.bbox.expand(tol::REGION_MM))
-            .into_iter()
-            .all(|index| !touches(&others[index].image, others[index].boundary()))
-            && drills.query(island.bbox).into_iter().all(|index| {
-                island
-                    .intersection(&ContourSet::rectangle(drilled[index].0, source.resolution))
-                    .is_ok_and(|inside| inside.is_empty())
-            });
+        let drilled = drills.query(island.bbox).into_iter().any(|index| {
+            island
+                .intersection(&ContourSet::rectangle(drilled[index].0, source.resolution))
+                .is_ok_and(|inside| !inside.is_empty())
+        });
+        let mut touched = Vec::new();
+        for index in near.query(island.bbox.expand(tol::REGION_MM)) {
+            let id = others[index].id.electrical();
+            if !touched.contains(&id) && touches(&others[index].image, others[index].boundary()) {
+                touched.push(id);
+            }
+        }
         let mut owned = Vec::new();
         for (index, conductor) in text.iter().enumerate() {
             if conductor.image.bbox.intersects(island.bbox)
@@ -2348,13 +2465,29 @@ fn text_islands(
                 owned.push(index);
             }
         }
-        members.push((isolated, owned));
+        // The net the island joins: `Some(None)` for none, `None` when it
+        // cannot be text.
+        let net = match (drilled, &touched[..]) {
+            (false, []) => Some(None),
+            (
+                false,
+                [
+                    ConductorId::Net {
+                        instance: None,
+                        net,
+                        ..
+                    },
+                ],
+            ) => Some(Some(*net)),
+            _ => None,
+        };
+        members.push((net, owned));
     }
     // A feature is text only if every island it shares, transitively, is
-    // isolated.
+    // one.
     let mut blocked = members
         .iter()
-        .map(|(isolated, _)| !isolated)
+        .map(|(net, _)| net.is_none())
         .collect::<Vec<_>>();
     let mut tainted = vec![false; text.len()];
     loop {
@@ -2375,18 +2508,19 @@ fn text_islands(
     }
     let mut claimed = vec![false; text.len()];
     let mut merged = Vec::new();
-    for (((_, owned), island), blocked) in members.into_iter().zip(islands).zip(blocked) {
-        if blocked || owned.is_empty() {
+    for (((net, owned), island), blocked) in members.into_iter().zip(islands).zip(blocked) {
+        let Some(net) = net.filter(|_| !blocked && !owned.is_empty()) else {
             continue;
-        }
+        };
         let occurrence = owned
             .iter()
             .filter_map(|&index| match text[index].id {
-                ConductorId::Unattributed { occurrence, .. } => Some(occurrence),
+                ConductorId::Unattributed { occurrence, .. }
+                | ConductorId::Isolated { occurrence, .. } => Some(occurrence),
                 _ => None,
             })
             .min()
-            .expect("declared text is unattributed copper");
+            .expect("text is unattributed or isolated copper");
         for &index in &owned {
             claimed[index] = true;
         }
@@ -2396,6 +2530,7 @@ fn text_islands(
                 instance: None,
                 occurrence,
                 island: merged.len() as u32,
+                net,
             },
             branch: None,
             image: island,

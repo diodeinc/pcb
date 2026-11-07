@@ -569,7 +569,7 @@ mod tests {
     }
 
     #[test]
-    fn only_declared_isolated_text_is_judged_as_text() {
+    fn only_declared_text_and_artwork_is_judged_as_text() {
         let pdk = fixtures::pdk(
             r#"[[rules.copper.feature_width]]
 id = "width"
@@ -586,9 +586,8 @@ limit = { minimum = "0.15 mm" }"#,
             rect(1.0, 0.475, 2.0, 0.525),
             rect(0.0, 1.1, 1.0, 2.1)
         );
-        let judged = |sets: &str| {
-            let report =
-                fixtures::report(&declared_components(sets), &pdk, crate::LayoutTarget::Board);
+        let judge = |xml: &str| {
+            let report = fixtures::report(xml, &pdk, crate::LayoutTarget::Board);
             let mut findings = report
                 .findings
                 .iter()
@@ -603,6 +602,7 @@ limit = { minimum = "0.15 mm" }"#,
                 .collect::<Vec<_>>();
             (findings, incomplete)
         };
+        let judged = |sets: &str| judge(&declared_components(sets));
         let set = |usage: &str, component: &str, shapes: &str| {
             format!(
                 r#"<Set geometryUsage="{usage}" componentRef="{component}"><Features>{shapes}</Features></Set>"#
@@ -620,14 +620,15 @@ limit = { minimum = "0.15 mm" }"#,
             found(&[("width", error)]),
             vec!["gap".to_owned(), "gap.text".to_owned()],
         );
+        let text = (
+            found(&[("gap.text", warning), ("width.text", warning)]),
+            Vec::new(),
+        );
 
         for component in ["", "LOGO1"] {
             assert_eq!(
                 judged(&set("TEXT", component, &shapes)),
-                (
-                    found(&[("gap.text", warning), ("width.text", warning)]),
-                    Vec::new()
-                ),
+                text,
                 "{component}"
             );
         }
@@ -639,6 +640,26 @@ limit = { minimum = "0.15 mm" }"#,
                 "{component}"
             );
         }
+        // Unless it is the copper of a part the BOM leaves unpopulated; a
+        // populated part's copper stays functional.
+        let bom = |populate: &str| {
+            format!(
+                r#"<Bom name="bom"><BomHeader revision="1" assembly="a"><StepRef name="board"/></BomHeader>
+                <BomItem OEMDesignNumberRef="logo" quantity="1" category="ELECTRICAL">
+                <RefDes name="LOGO1" packageRef="logo" populate="{populate}" layerRef="TOP"/></BomItem></Bom>"#
+            )
+        };
+        let with_bom = |populate: &str| {
+            judge(
+                &declared_components(&set("GRAPHIC", "LOGO1", &shapes)).replacen(
+                    "<Ecad>",
+                    &format!("{}<Ecad>", bom(populate)),
+                    1,
+                ),
+            )
+        };
+        assert_eq!(with_bom("false"), text);
+        assert_eq!(with_bom("true"), functional);
         // Two islands one feature draws are still two islands.
         let one_feature = format!(
             r#"<Set geometryUsage="TEXT"><Features><UserSpecial>{}{}</UserSpecial></Features></Set>"#,
@@ -649,22 +670,52 @@ limit = { minimum = "0.15 mm" }"#,
             judged(&one_feature),
             (found(&[("gap.text", warning)]), Vec::new())
         );
-        // Text touching N1 stays functional.
+        // Text touching only N1 is N1's artwork: its spur is lost detail,
+        // and N1's copper 0.1 mm from the other island is a functional gap.
         let touching = format!(
             "{}<Set net=\"N1\"><Features>{}</Features></Set>",
             set("TEXT", "", &shapes),
             rect(-1.0, 0.0, 0.0, 1.0)
         );
-        let (findings, incomplete) = judged(&touching);
+        assert_eq!(
+            judged(&touching),
+            (
+                found(&[
+                    ("gap", error),
+                    ("gap.text", warning),
+                    ("width.text", warning)
+                ]),
+                Vec::new()
+            )
+        );
+        // Text bridging two nets stays functional copper without a net.
+        let bridging = format!(
+            "{}<Set net=\"N1\"><Features>{}</Features></Set><Set net=\"N2\"><Features>{}</Features></Set>",
+            set("TEXT", "", &shapes),
+            rect(-1.0, 0.0, 0.0, 1.0),
+            rect(0.0, -1.0, 1.0, 0.0)
+        );
+        let (findings, incomplete) = judged(&bridging);
         assert_eq!(findings, found(&[("width", error)]));
         assert!(incomplete.contains(&"gap".to_owned()), "{incomplete:?}");
-        // One feature spanning an isolated island and one touching N1.
+        // One feature spanning an isolated island and one touching N1: both
+        // are artwork, so the isolated sliver is a text warning.
         let split = format!(
             r#"<Set geometryUsage="TEXT"><Features><UserSpecial>{}{}</UserSpecial></Features></Set><Set net="N1"><Features>{}</Features></Set>"#,
             rect(5.0, 0.0, 5.05, 1.0),
             rect(8.0, 0.0, 9.0, 1.0),
             rect(9.0, 0.0, 10.0, 1.0)
         );
+        assert_eq!(
+            judged(&split),
+            (found(&[("width.text", warning)]), Vec::new())
+        );
+        // The same feature also touching N2 keeps all of it functional.
+        let split = split
+            + &format!(
+                "<Set net=\"N2\"><Features>{}</Features></Set>",
+                rect(8.0, -1.0, 9.0, 0.0)
+            );
         let (findings, incomplete) = judged(&split);
         assert_eq!(findings, found(&[("width", error)]));
         assert!(incomplete.contains(&"gap".to_owned()), "{incomplete:?}");
