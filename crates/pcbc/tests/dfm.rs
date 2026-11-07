@@ -628,11 +628,21 @@ fn ipc_dfm_replaces_stale_report_and_reports_all_incomplete_runs() {
     assert_eq!(complete_report["verdict"], "fail");
     assert!(complete_report["scene"]["bounds"].is_object());
 
-    // Copper no net owns leaves copper clearance uncertified, not the run:
-    // that rule is incomplete and fails the verdict, the rest is reported.
+    // Netless copper bridging two nets has no one owner, which leaves copper
+    // clearance uncertified, not the run: that rule is incomplete and fails
+    // the verdict, the rest is reported.
+    sandbox.write(
+        "bridged.xml",
+        IPC_BOARD.replace(
+            "</LayerFeature>",
+            r#"<Set net="N1"><Features><Line startX="5" startY="20" endX="8" endY="20"><LineDesc lineWidth="0.2" lineEnd="ROUND"/></Line></Features></Set>
+          <Set net="N2"><Features><Line startX="22" startY="20" endX="25" endY="20"><LineDesc lineWidth="0.2" lineEnd="ROUND"/></Line></Features></Set>
+        </LayerFeature>"#,
+        ),
+    );
     let unattributed = run_pcbc(
         &mut sandbox,
-        ["ipc", "dfm", "check", "board.xml", "--pdk", "standard"],
+        ["ipc", "dfm", "check", "bridged.xml", "--pdk", "standard"],
     );
     assert!(!unattributed.status.success());
     let unattributed = summary(&unattributed);

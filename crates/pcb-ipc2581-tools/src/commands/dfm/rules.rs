@@ -626,7 +626,13 @@ impl RuleKind {
                 .to_owned(),
                 quantity_label: "copper-to-copper clearance".to_owned(),
                 witness_roles: Some(["first_conductor", "second_conductor"]),
-                pools: Pools::COPPER | Pools::CONDUCTOR_OWNERSHIP | Pools::NET_SHORTS,
+                // Netless copper a drill crosses joins no net, so ownership
+                // needs every drilled feature.
+                pools: Pools::COPPER
+                    | Pools::CONDUCTOR_OWNERSHIP
+                    | Pools::NET_SHORTS
+                    | Pools::HOLES
+                    | Pools::SLOTS,
             },
             Self::SoldermaskWeb => Semantics {
                 subject: "soldermask_layer",

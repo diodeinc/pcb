@@ -1805,6 +1805,22 @@ limit = { minimum = "0.15 mm" }
             pairs(&joined),
             [pair("N1", "N2", 0.1), base[0].clone(), base[1].clone()]
         );
+        // A drill through it may connect it to other layers, so it joins no
+        // net, even for a PDK with no hole rules.
+        let drilled = run(&BOARD
+            .replace(
+                r#"<Layer name="TOP""#,
+                r#"<Layer name="DRILL" layerFunction="DRILL" side="ALL" polarity="POSITIVE"/><Layer name="TOP""#,
+            )
+            .replace(
+                "</LayerFeature>",
+                &format!(
+                    r#"<Set geometryUsage="GRAPHIC"><Features>{}</Features></Set></LayerFeature>
+                    <LayerFeature layerRef="DRILL"><Set><Hole name="V1" diameter="0.3" platingStatus="VIA" plusTol="0" minusTol="0" x="3" y="0.5"/></Set></LayerFeature>"#,
+                    rect(2.1, 0.0, 4.0, 1.0)
+                ),
+            ));
+        assert_eq!(drilled.rules[0].status, RuleStatus::Incomplete);
         // Copper touching nothing is its own conductor.
         let alone = with(rect(6.1, 0.0, 7.0, 1.0));
         assert_eq!(alone.rules[0].status, RuleStatus::Fail);
