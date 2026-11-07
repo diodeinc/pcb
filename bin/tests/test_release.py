@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import fnmatch
 import hashlib
 import importlib.util
 import json
@@ -60,6 +61,7 @@ class Cloud:
         self.metadata = {}
         self.fail_artifact = None
         self.uploaded_artifacts = {}
+        self.artifact_sources = None
 
     def run(self, args, **kwargs):
         def result(value=None, error=None):
@@ -160,6 +162,18 @@ class Cloud:
             return result(self.github)
         if args[0] == "buildkite-agent":
             if args[1:3] == ("artifact", "download"):
+                if self.artifact_sources is not None:
+                    matches = {
+                        path: data
+                        for path, data in self.artifact_sources[flag("--step")].items()
+                        if fnmatch.fnmatchcase(path, args[3])
+                    }
+                    if not matches:
+                        return result(error="No artifacts found")
+                    for path, data in matches.items():
+                        destination = Path(args[4]) / path.replace("\\", "/")
+                        destination.parent.mkdir(parents=True, exist_ok=True)
+                        destination.write_bytes(data)
                 return result({})
             if args[1:3] == ("artifact", "upload"):
                 for pattern in args[3].split(";"):
@@ -503,7 +517,7 @@ def test_prepare_builds_requested_release_without_tagging(
 
 
 @pytest.mark.parametrize(
-    "mode", ["publish", "dry-run", "upload-failure", "older-retry"]
+    "mode", ["publish", "dry-run", "upload-failure", "older-retry", "windows-artifacts"]
 )
 def test_nightly_publication_preserves_download_contract(
     release, cloud, mode, monkeypatch
@@ -517,6 +531,26 @@ def test_nightly_publication_preserves_download_contract(
     monkeypatch.setenv("BUILDKITE_BRANCH", "main")
     monkeypatch.setattr(sys, "argv", [str(SCRIPT), "publish"])
     monkeypatch.setattr(release, "credentials", lambda *_, **__: nullcontext())
+    if mode == "windows-artifacts":
+        cloud.artifact_sources = {}
+        for path in release.ROOT.rglob("*"):
+            if not path.is_file():
+                continue
+            if "windows" in path.name:
+                step = "release-windows"
+                remote_path = str(path).replace("/", "\\")
+            else:
+                remote_path = path.as_posix()
+                if "apple" in path.name:
+                    step = "release-macos"
+                elif "x86_64" in path.name:
+                    step = "release-linux-amd64"
+                elif "aarch64" in path.name:
+                    step = "release-linux-arm64"
+                else:
+                    step = "prepare-release"
+            cloud.artifact_sources.setdefault(step, {})[remote_path] = path.read_bytes()
+        shutil.rmtree(release.ROOT)
     pointer = "pcb/nightly/latest.json"
     if mode == "upload-failure":
         cloud.fail_key = f"pcb/{config['tag']}/pcbc-x86_64-pc-windows-msvc.exe"

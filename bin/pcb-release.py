@@ -398,11 +398,15 @@ def prepare() -> bool:
 
 
 def download_artifacts(pattern: Path, step: str) -> None:
+    # Search uses the uploader's separators; the agent normalizes downloaded paths.
+    query = pattern.as_posix()
+    if step == "release-windows":
+        query = query.replace("/", "\\")
     run(
         "buildkite-agent",
         "artifact",
         "download",
-        pattern.as_posix(),
+        query,
         ".",
         "--step",
         step,
