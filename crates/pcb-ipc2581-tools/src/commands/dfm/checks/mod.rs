@@ -562,6 +562,7 @@ fn missing_subjects(kind: RuleKind, design: &Design) -> Option<String> {
         // The stackup and the board's properties are the layout's: its root
         // Step's design measures them.
         RuleKind::CopperLayerCount
+        | RuleKind::CopperLayerParity
         | RuleKind::CopperWeight(_)
         | RuleKind::BoardThickness
         | RuleKind::DielectricGaps
@@ -736,7 +737,8 @@ fn evaluate(
             copper_clearance::evaluate(limit(), copper, &rule.conditions, design)?.into()
         }
         RuleKind::SoldermaskWeb => thin_regions::soldermask_web(limit(), design)?.into(),
-        RuleKind::CopperWeight(_)
+        RuleKind::CopperLayerParity
+        | RuleKind::CopperWeight(_)
         | RuleKind::BoardThickness
         | RuleKind::DielectricGaps
         | RuleKind::SurfaceFinish

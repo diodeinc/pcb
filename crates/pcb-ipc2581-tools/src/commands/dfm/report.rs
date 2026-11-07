@@ -182,6 +182,7 @@ pub struct RejectedProfile {
 #[derive(Debug, Serialize)]
 pub struct PdkProfileSupport {
     pub copper_layers: Option<PdkCountRange>,
+    pub even_copper_layers: bool,
     pub outer_copper_weight: Option<Vec<String>>,
     pub inner_copper_weight: Option<Vec<String>>,
     pub board_thickness: Option<String>,
@@ -268,6 +269,7 @@ impl PdkIdentity {
                     minimum: range.minimum,
                     maximum: range.maximum,
                 }),
+                even_copper_layers: support.even_copper_layers,
                 outer_copper_weight: weights(&support.outer_copper_weight),
                 inner_copper_weight: weights(&support.inner_copper_weight),
                 board_thickness: support

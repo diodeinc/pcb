@@ -14,6 +14,7 @@ pub const RESERVED_RULE_IDS: &[&str] = &[
     BOARD_OUTLINE_RULE_ID,
     "profile.support.copper_layers.minimum",
     "profile.support.copper_layers.maximum",
+    "profile.support.even_copper_layers",
     "profile.support.outer_copper_weight",
     "profile.support.inner_copper_weight",
     "profile.support.board_thickness",
@@ -183,6 +184,10 @@ pub struct Profile {
 pub struct ProfileSupport {
     #[serde(default)]
     pub copper_layers: Option<CountRange>,
+    /// The profile builds only even copper layer counts: laminated from
+    /// double-sided cores, a fab may quote no 3-, 5- or 7-layer board.
+    #[serde(default)]
+    pub even_copper_layers: bool,
     #[serde(default)]
     pub outer_copper_weight: Option<Vec<CopperWeight>>,
     #[serde(default)]

@@ -2264,6 +2264,30 @@ templates = [
     }
 
     #[test]
+    fn jlc_fails_odd_copper_layer_counts_that_no_stackup_template_covers() {
+        let judge = |layers: usize| {
+            let gaps = vec!["0.2"; layers - 1];
+            let xml = stacked_board("0.035", "0.0152", &gaps, "1.6");
+            let report = check_builtin(&xml, "jlc").unwrap();
+            let (parity, message) = judged(&report, "profile.support.even_copper_layers");
+            let (gaps, _) = judged(&report, "jlc.stackup.dielectric_gaps");
+            (parity, message, gaps, report.verdict)
+        };
+        let (parity, message, gaps, verdict) = judge(5);
+        // No 5-layer template exists, so the gap rule alone would not fail it.
+        assert_eq!((parity.as_str(), gaps.as_str()), ("Fail", "NotApplicable"));
+        assert_eq!(
+            message.as_deref(),
+            Some("copper layer count is 5; the profile builds only even copper layer counts")
+        );
+        assert!(matches!(verdict, report::Verdict::Fail));
+        assert_eq!(judge(3).0, "Fail");
+        for layers in [2, 4] {
+            assert_eq!(judge(layers).0, "Pass", "{layers} layers");
+        }
+    }
+
+    #[test]
     fn jlc_thicker_finished_boards_are_offered_only_from_12_layers() {
         let thickness = |layers: usize, thickness: &str| {
             let gaps = vec!["0.2"; layers - 1];
