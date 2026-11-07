@@ -783,7 +783,7 @@ def main() -> None:
             "release-macos",
             "release-windows",
         ):
-            download_artifacts(ASSETS / "*", step)
+            download_artifacts(Path("*"), step)
         with credentials(
             "publish", release["dry_run"], github=release.get("channel") != "nightly"
         ):
