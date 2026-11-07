@@ -489,7 +489,8 @@ The bundled TOML files own the exact thresholds and source citations:
   most relaxed JLCPCB 1 oz values. This is Diode policy, not a qualified
   manufacturer's process.
 - [`jlcpcb`](../pdks/jlcpcb.toml) covers a subset of JLCPCB's rigid FR-4 service
-  for 2–32 copper layers. `jlc` selects `one-ounce` or `two-ounce` by finished
+  for 2–32 copper layers, even counts only: JLCPCB quotes no 3-, 5- or
+  7-layer board. `jlc` selects `one-ounce` or `two-ounce` by finished
   outer copper weight; `jlcpcb-1oz` fixes `one-ounce`. Track width and spacing
   depend on each layer's weight. Profiles also check board thickness, finish,
   soldermask color, and size; outer copper outside 1 oz or 2 oz fails support.

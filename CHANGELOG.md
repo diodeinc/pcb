@@ -13,6 +13,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - `json.encode` and `Board()` configs nested more than 32 levels deep now fail with an error instead of crashing.
 - `pcb import` reads the MPN from Altium's `Manufacturer Part` symbol field.
 - `pcb build --netlist` and the LSP's `zener/evaluate` return the netlist even when the build has errors; the build still fails.
+- The JLCPCB DFM PDK fails odd copper layer counts with `profile.support.even_copper_layers`; a 5-layer board no longer passes for want of a stackup template.
 
 ## [0.4.97] - 2026-11-01
 

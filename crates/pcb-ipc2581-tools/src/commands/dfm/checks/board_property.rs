@@ -89,6 +89,21 @@ pub(super) fn evaluate(rule: &Rule, design: &Design) -> Result<Evaluation, Unjud
             });
             Ok(judged(1, nonconforming))
         }
+        (RuleKind::CopperLayerParity, Allowed::EvenCopperLayers) => {
+            let stackup = design
+                .stackup
+                .as_ref()
+                .expect("layer-count rules request stackup extraction");
+            let layers = stackup.copper_layers.len();
+            let nonconforming = (layers % 2 == 1).then(|| Nonconforming {
+                message: format!(
+                    "copper layer count is {layers}; the profile builds only even copper layer counts"
+                ),
+                layers: stackup.copper_layers.clone(),
+                subject: subject("stackup", stackup.name.clone()),
+            });
+            Ok(judged(1, nonconforming))
+        }
         (RuleKind::DielectricGaps, Allowed::StackupTemplates { tolerance, builds }) => {
             dielectric_gaps(tolerance, builds, design)
         }

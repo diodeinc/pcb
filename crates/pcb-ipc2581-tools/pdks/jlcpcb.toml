@@ -44,7 +44,7 @@ note = "Diode prefers a 0.10 mm soldermask web as advisory guidance. Shortfalls 
 name = "1 oz rigid FR-4"
 description = "Standard rigid FR-4 service with advisory 0.10 mm soldermask-web guidance."
 technologies = ["rigid"]
-coverage = ["2-32 copper layers", "1 oz outer copper", "standard FR-4 thicknesses 0.4-2.0 mm, 2.5-4.5 mm for 12+ layers", "preferred soldermask web at 0.10 mm, warning only"]
+coverage = ["2-32 copper layers, even counts only", "1 oz outer copper", "standard FR-4 thicknesses 0.4-2.0 mm, 2.5-4.5 mm for 12+ layers", "preferred soldermask web at 0.10 mm, warning only"]
 source = "jlc-capabilities"
 
 [profiles.one-ounce.defaults]
@@ -55,13 +55,15 @@ inner_copper_weight = "0.5 oz"
 
 [profiles.one-ounce.support]
 copper_layers = { minimum = 2, maximum = 32 }
+# JLCPCB's quote form offers 1, 2, 4, 6 ... layers, never 3, 5 or 7.
+even_copper_layers = true
 outer_copper_weight = ["1 oz"]
 
 [profiles.two-ounce]
 name = "2 oz rigid FR-4"
 description = "Heavy-copper rigid FR-4 service with 2 oz finished outer copper."
 technologies = ["rigid"]
-coverage = ["2-32 copper layers", "2 oz outer copper", "standard FR-4 thicknesses 0.4-2.0 mm, 2.5-4.5 mm for 12+ layers", "preferred soldermask web at 0.20 mm, warning only"]
+coverage = ["2-32 copper layers, even counts only", "2 oz outer copper", "standard FR-4 thicknesses 0.4-2.0 mm, 2.5-4.5 mm for 12+ layers", "preferred soldermask web at 0.20 mm, warning only"]
 source = "jlc-capabilities"
 
 [profiles.two-ounce.defaults]
@@ -72,6 +74,8 @@ inner_copper_weight = "0.5 oz"
 
 [profiles.two-ounce.support]
 copper_layers = { minimum = 2, maximum = 32 }
+# JLCPCB's quote form offers 1, 2, 4, 6 ... layers, never 3, 5 or 7.
+even_copper_layers = true
 outer_copper_weight = ["2 oz"]
 
 [[rules.drilling.hole_diameter]]

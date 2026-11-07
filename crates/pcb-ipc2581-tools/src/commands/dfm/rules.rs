@@ -125,6 +125,7 @@ pub(super) enum Allowed {
         builds: Vec<StackupBuild>,
     },
     DrillSpans(Vec<PartialDepth>),
+    EvenCopperLayers,
 }
 
 impl Allowed {
@@ -153,6 +154,7 @@ impl Allowed {
                 .chain(spans.iter().map(|span| span.label()))
                 .collect::<Vec<_>>()
                 .join(", "),
+            Self::EvenCopperLayers => "an even copper layer count".to_owned(),
         }
     }
 }
@@ -203,6 +205,8 @@ pub(super) enum RuleKind {
     AssemblyDiagnostic(AssemblyDiagnostic),
     /// Count: conductive layers in the one physical stackup.
     CopperLayerCount,
+    /// Property: the physical stackup has an even number of conductive layers.
+    CopperLayerParity,
     /// Size: each hole's drilled diameter meets the limit.
     HoleDiameter(HoleClass),
     /// Ratio: drilled physical span thickness divided by finished hole diameter.
@@ -327,7 +331,9 @@ impl RuleKind {
         const COPPER_AND_DRILLS: &[&str] = &["copper", "drills", "board_outlines"];
         let (kind, title, features): (_, _, &[_]) = match self {
             Self::AssemblyDiagnostic(_) => ("assembly_readiness", "Assembly readiness", &[]),
-            Self::CopperLayerCount => ("copper_layer_count", "Copper layer count", &["stackup"]),
+            Self::CopperLayerCount | Self::CopperLayerParity => {
+                ("copper_layer_count", "Copper layer count", &["stackup"])
+            }
             Self::HoleDiameter(_) => ("hole_diameter", "Hole diameter", DRILLS),
             Self::HoleAspectRatio(_) => ("hole_aspect_ratio", "Plated-hole aspect ratio", DRILLS),
             Self::SlotWidth(_) => ("slot_width", "Slot width", DRILLS),
@@ -391,6 +397,7 @@ impl RuleKind {
             spatial: !matches!(
                 self,
                 Self::CopperLayerCount
+                    | Self::CopperLayerParity
                     | Self::AssemblyDiagnostic(_)
                     | Self::CopperWeight(_)
                     | Self::BoardThickness
@@ -426,6 +433,15 @@ impl RuleKind {
                 quantity: "copper_layer_count",
                 method: "physical_stackup_conductive_layer_count",
                 finding_title: "Copper layer count is outside the supported range".to_owned(),
+                quantity_label: "copper layer count".to_owned(),
+                witness_roles: None,
+                pools: Pools::STACKUP,
+            },
+            Self::CopperLayerParity => Semantics {
+                subject: "stackup",
+                quantity: "copper_layer_count",
+                method: "physical_stackup_conductive_layer_count_parity",
+                finding_title: "Copper layer count is odd".to_owned(),
                 quantity_label: "copper layer count".to_owned(),
                 witness_roles: None,
                 pools: Pools::STACKUP,
@@ -1152,6 +1168,14 @@ pub(super) fn support(profile: &Profile) -> Vec<Rule> {
                 RuleKind::CopperLayerCount,
             )
         }),
+        allowed(
+            "profile.support.even_copper_layers",
+            "Profile even copper layer count",
+            support
+                .even_copper_layers
+                .then_some(Allowed::EvenCopperLayers),
+            RuleKind::CopperLayerParity,
+        ),
         allowed(
             "profile.support.outer_copper_weight",
             "Profile outer copper weight",
