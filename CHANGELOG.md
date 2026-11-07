@@ -10,8 +10,8 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Fixed
 
-- DFM no longer leaves `stackup.dielectric_gaps` incomplete when a stackup that is not `stackupStatus="SPECIFIED"` matches no template; the fab builds such a stackup on its own template, so the rule is not applicable. A build with no template still leaves it incomplete.
-- DFM measures netless functional copper that touches one net, such as an antenna or net-tie graphic, as that net's copper, and netless copper that touches nothing as its own conductor. Copper-to-copper clearance stays incomplete only for netless copper that touches two nets, a drill or other netless conductors.
+- DFM dielectric gaps apply only to `SPECIFIED` stackups.
+- DFM measures netless copper touching one net as that net's copper.
 
 ## [0.4.98] - 2026-11-07
 

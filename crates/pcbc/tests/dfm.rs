@@ -628,9 +628,8 @@ fn ipc_dfm_replaces_stale_report_and_reports_all_incomplete_runs() {
     assert_eq!(complete_report["verdict"], "fail");
     assert!(complete_report["scene"]["bounds"].is_object());
 
-    // Netless copper bridging two nets has no one owner, which leaves copper
-    // clearance uncertified, not the run: that rule is incomplete and fails
-    // the verdict, the rest is reported.
+    // Netless copper bridging two nets leaves copper clearance uncertified,
+    // not the run: that rule is incomplete, the rest is reported.
     sandbox.write(
         "bridged.xml",
         IPC_BOARD.replace(

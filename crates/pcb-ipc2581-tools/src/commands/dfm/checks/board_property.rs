@@ -272,8 +272,7 @@ fn dielectric_gaps(
         )));
     };
     let message = mismatch(build, &gaps, tolerance);
-    // Only a required stackup violates a template it does not match; the fab
-    // builds a proposed or approved one on its template for the build.
+    // The fab builds a stackup that is not required on its own template.
     let message = match message {
         Some(message) if !stackup.required => {
             return Err((

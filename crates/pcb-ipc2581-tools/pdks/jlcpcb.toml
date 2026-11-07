@@ -257,12 +257,8 @@ limit = { preferred = "0.20 mm" }
 source = "jlc-capabilities"
 
 # IPC overallThickness includes foil and soldermask, as the finished board does.
-# JLCPCB's capability page (jlc-capabilities, rechecked 2026-11-07) lists
-# FR-4 thicknesses "0.4/0.6/0.8/1.0/1.2/1.6/2.0 mm (2.5 mm and above are for
-# 12+ layer PCBs only)"; the thicker nominals are those its stackup templates
-# offer for 12-32 layers. Those templates (jlc-stackup-templates) also list
-# 2.5 mm at 4 and 8-10 layers, 3.0 mm at 6-10 layers and 1.8 mm at 6 layers;
-# these cases follow the capability page, which states what is orderable.
+# jlc-capabilities: "2.5 mm and above are for 12+ layer PCBs only". The
+# stackup templates also list some at fewer layers; the capability page wins.
 [[rules.stackup.board_thickness]]
 id = "jlc.stackup.board_thickness"
 cases = [

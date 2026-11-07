@@ -625,8 +625,7 @@ limit = { minimum = "0.15 mm" }"#,
                 .collect::<Vec<_>>()
         };
         let (error, warning) = (Severity::Error, Severity::Warning);
-        // Functional, its two islands touch no net, so each is its own
-        // conductor and the gap between them is measured.
+        // Each functional island is its own conductor.
         let functional = (found(&[("gap", error), ("width", error)]), Vec::new());
         let text = (
             found(&[("gap.text", warning), ("width.text", warning)]),
@@ -1157,8 +1156,7 @@ limit = { minimum = "0.15 mm", preferred = "0.25 mm" }"#;
             antenna_check(&xml, "standard").unwrap();
         }
         // Source-local Set indices repeat across LayerFeature blocks. A NetShort
-        // on one Set must not authorize unrelated copper with the same refdes,
-        // here a netless copy over the tied graphic that touches both nets.
+        // on one Set must not authorize unrelated copper with the same refdes.
         let xml = annotated.replace(
             "</Step>",
             r#"<LayerFeature layerRef="F.Cu">
@@ -1651,9 +1649,8 @@ limit = { minimum = "0.15 mm" }
         );
         let tie = r#"<Set><NetShort><NetRef name="N4"/><NetRef name="N5"/>
           <Location x="8.75" y="0.5"/><LayerRef name="TOP"/></NetShort></Set>"#;
-        // Both rectangles bridge the 50 µm N2/N3 gap. Their areas straddle
-        // the normal 1 µm² significance threshold, despite both having a
-        // long edge; above it, copper touching two nets has no one owner.
+        // Both rectangles bridge N2 and N3. Their areas straddle the normal
+        // 1 µm² significance threshold, despite both having a long edge.
         for (height, status) in [
             (0.00001, RuleStatus::Fail),
             (0.00004, RuleStatus::Incomplete),
@@ -1687,8 +1684,7 @@ limit = { minimum = "0.15 mm" }
                     );
                 } else {
                     // The N2/N3 gap remains; the N4/N5 short is exempt only
-                    // when declared. The insignificant sliver contributes
-                    // neither.
+                    // when declared. The sliver contributes neither.
                     assert_eq!(
                         report.findings.len(),
                         if declaration.is_empty() { 2 } else { 1 }
@@ -1774,7 +1770,6 @@ limit = { minimum = "0.15 mm" }
                 ),
             ))
         };
-        // Each finding's subjects, by net or else kind, and its µm distance.
         let pairs = |results: &checks::Results| {
             let mut pairs = results
                 .findings
@@ -1797,16 +1792,14 @@ limit = { minimum = "0.15 mm" }
             |first: &str, second: &str, mm: f64| (vec![first.to_owned(), second.to_owned()], mm);
         let base = [pair("N2", "N3", 0.05), pair("N4", "N5", 0.0)];
 
-        // Copper touching only N2 is N2's: it does not meet N2 at zero, and
-        // its 0.1 mm gap to N1 is N2's gap.
+        // Copper touching only N2 is N2's.
         let joined = with(rect(2.1, 0.0, 4.0, 1.0));
         assert_eq!(joined.rules[0].status, RuleStatus::Fail);
         assert_eq!(
             pairs(&joined),
             [pair("N1", "N2", 0.1), base[0].clone(), base[1].clone()]
         );
-        // A drill through it may connect it to other layers, so it joins no
-        // net, even for a PDK with no hole rules.
+        // Unless a drill crosses it, even with no hole rules.
         let drilled = run(&BOARD
             .replace(
                 r#"<Layer name="TOP""#,
@@ -1833,8 +1826,7 @@ limit = { minimum = "0.15 mm" }
                 base[1].clone()
             ]
         );
-        // Copper bridging N2 and N3 shorts them: it belongs to neither, and
-        // the rule cannot certify the layer.
+        // Copper bridging N2 and N3 belongs to neither.
         let bridge = with(rect(4.5, 0.25, 5.5, 0.75));
         let rule = &bridge.rules[0];
         assert_eq!(rule.status, RuleStatus::Incomplete);

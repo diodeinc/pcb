@@ -1374,11 +1374,10 @@ pub(super) enum ConductorId {
         instance: Option<u32>,
         source_set_index: u32,
     },
-    /// An island of netless copper (see [`netless_islands`]): declared text
-    /// or artwork if `text`, functional copper otherwise. `occurrence` is its
-    /// first source feature, which other islands of the layer may share;
-    /// `island` tells them apart. `net` is the one net whose copper the
-    /// island touches, if any.
+    /// An island of netless copper (see [`netless_islands`]), text or
+    /// functional. `occurrence` is its first source feature, which other
+    /// islands may share; `island` tells them apart. `net` is the one net
+    /// it touches, if any.
     Island {
         step: Option<Symbol>,
         instance: Option<u32>,
@@ -2415,8 +2414,7 @@ fn declared_text(
             .is_some_and(|part| artwork.contains(&(feature.source_step_ref, part)))
 }
 
-/// Join the Step's own declared text into text islands, then its remaining
-/// functional copper without a net into functional ones.
+/// Text islands first, then functional ones from the remaining netless copper.
 fn copper_islands(
     source: Source<'_>,
     conductors: Vec<CopperConductor>,
@@ -2436,11 +2434,8 @@ fn copper_islands(
 }
 
 /// Make each island of the Step's own netless copper that `select` picks,
-/// touching no drill and the copper of at most one net, one
-/// [`ConductorId::Island`] conductor.
-/// Touching a net, the island is that net's copper, as the fab etches it;
-/// touching none, it is its own conductor. Copper that touches two nets
-/// keeps its own identity, so it can never pass as either net's.
+/// touching no drill and at most one net, one [`ConductorId::Island`]
+/// conductor, which joins the net it touches.
 fn netless_islands(
     source: Source<'_>,
     conductors: Vec<CopperConductor>,
