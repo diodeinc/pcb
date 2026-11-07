@@ -8,6 +8,8 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+## [0.4.98] - 2026-11-07
+
 ### Fixed
 
 - `json.encode` and `Board()` configs nested more than 32 levels deep now fail with an error instead of crashing.
@@ -2570,7 +2572,8 @@ Tvs(package="DO-214AA", direction="Unidirectional", reverse_standoff_voltage="24
 - Error on invalid type passed to `io()`
 - Format the auto-generated component .zen files
 
-[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.4.97...HEAD
+[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.4.98...HEAD
+[0.4.98]: https://github.com/diodeinc/pcb/compare/v0.4.97...v0.4.98
 [0.4.97]: https://github.com/diodeinc/pcb/compare/v0.4.96...v0.4.97
 [0.4.96]: https://github.com/diodeinc/pcb/compare/v0.4.95...v0.4.96
 [0.4.95]: https://github.com/diodeinc/pcb/compare/v0.4.94...v0.4.95
