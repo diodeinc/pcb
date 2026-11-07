@@ -67,7 +67,7 @@ pub(super) fn copper_feature_width(
             && !layer
                 .conductors
                 .iter()
-                .any(|c| matches!(c.id, ConductorId::Text { .. }))
+                .any(|c| matches!(c.id, ConductorId::Island { text: true, .. }))
         {
             continue;
         }
@@ -99,7 +99,9 @@ pub(super) fn copper_feature_width(
                     )?)?;
                 }
                 let owner = unique_copper_owner(&construction, &layer.conductors, near)?;
-                let text = owner.is_some_and(|owner| matches!(owner.id, ConductorId::Text { .. }));
+                let text = owner.is_some_and(|owner| {
+                    matches!(owner.id, ConductorId::Island { text: true, .. })
+                });
                 if text != (copper == CopperUse::Text) {
                     return Ok(None);
                 }

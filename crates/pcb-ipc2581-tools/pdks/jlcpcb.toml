@@ -32,7 +32,7 @@ note = "The [[stackup_builds]] at the end of this file; regenerate them with upd
 [sources.jlc-capabilities]
 title = "JLCPCB PCB Capabilities"
 url = "https://jlcpcb.com/capabilities/pcb-capabilities"
-accessed = "2026-10-30"
+accessed = "2026-11-07"
 note = "Public capability table. Rules use standard service values and exclude special local BGA exceptions. Its drilling table recommends an NPTH pad annular ring of 0.45 mm or more, so 0.2 mm of copper can be removed around the hole for the sealing film."
 
 [sources.diode-mask-guidance]
@@ -257,8 +257,8 @@ limit = { preferred = "0.20 mm" }
 source = "jlc-capabilities"
 
 # IPC overallThickness includes foil and soldermask, as the finished board does.
-# JLC lists 0.4-2.0 mm FR-4 and reserves 2.5 mm and above for 12+ layers; the
-# thicker nominals are those its stackup templates offer for 12-32 layers.
+# jlc-capabilities: "2.5 mm and above are for 12+ layer PCBs only". The
+# stackup templates also list some at fewer layers; the capability page wins.
 [[rules.stackup.board_thickness]]
 id = "jlc.stackup.board_thickness"
 cases = [

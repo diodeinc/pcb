@@ -8,6 +8,11 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Fixed
+
+- DFM dielectric gaps apply only to `SPECIFIED` stackups.
+- DFM measures netless copper touching one net as that net's copper.
+
 ## [0.4.98] - 2026-11-07
 
 ### Fixed

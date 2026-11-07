@@ -37,7 +37,7 @@ pub(super) fn evaluate(
     design: &Design,
 ) -> anyhow::Result<Evaluation> {
     // The text rule judges pairs of text islands; the functional rule the rest.
-    let text = |id: ConductorId| matches!(id, ConductorId::Text { .. });
+    let text = |id: ConductorId| matches!(id, ConductorId::Island { text: true, .. });
     let measure = |layer: &CopperLayer| {
         let conductors = &layer.conductors;
         if copper == CopperUse::Text
@@ -412,15 +412,24 @@ pub(super) fn conductor_subject(
             Some(source_set_index),
             None,
         ),
-        ConductorId::Text { occurrence, .. } => {
+        ConductorId::Island {
+            occurrence, text, ..
+        } => {
             let source = design
                 .imported
                 .feature_definition(occurrence.feature)
-                .expect("text must reference its imported definition")
+                .expect("an island must reference its imported definition")
                 .source;
+            let (role, kind) = match text {
+                true => ("copper_text", "netless text"),
+                false => (
+                    "unattributed_copper",
+                    "functional copper without net attribution",
+                ),
+            };
             (
-                "copper_text",
-                Some("netless text".to_owned()),
+                role,
+                Some(kind.to_owned()),
                 Some(source.set_index),
                 Some(source.feature_index),
             )
@@ -616,10 +625,8 @@ limit = { minimum = "0.15 mm" }"#,
                 .collect::<Vec<_>>()
         };
         let (error, warning) = (Severity::Error, Severity::Warning);
-        let functional = (
-            found(&[("width", error)]),
-            vec!["gap".to_owned(), "gap.text".to_owned()],
-        );
+        // Each functional island is its own conductor.
+        let functional = (found(&[("gap", error), ("width", error)]), Vec::new());
         let text = (
             found(&[("gap.text", warning), ("width.text", warning)]),
             Vec::new(),
@@ -1153,7 +1160,7 @@ limit = { minimum = "0.15 mm", preferred = "0.25 mm" }"#;
         let xml = annotated.replace(
             "</Step>",
             r#"<LayerFeature layerRef="F.Cu">
-          <Set geometryUsage="GRAPHIC" componentRef="E1"><Features><Location x="150" y="-100"/>
+          <Set geometryUsage="GRAPHIC" componentRef="E1"><Features><Location x="168.90" y="-100.439392"/>
             <UserPrimitiveRef id="UPOLY_1"/></Features></Set></LayerFeature></Step>"#,
         );
         assert!(
@@ -1164,8 +1171,8 @@ limit = { minimum = "0.15 mm", preferred = "0.25 mm" }"#;
                 .contains("final functional copper without net attribution")
         );
         let xml = xml.replace(
-            r#"componentRef="E1"><Features><Location x="150""#,
-            r#"componentRef="E2"><Features><Location x="150""#,
+            r#"componentRef="E1"><Features><Location x="168.90""#,
+            r#"componentRef="E2"><Features><Location x="168.90""#,
         );
         let error = antenna_check(&xml, "standard").err().unwrap().to_string();
         assert!(error.contains("component 'E2'"), "{error}");
@@ -1642,19 +1649,19 @@ limit = { minimum = "0.15 mm" }
         );
         let tie = r#"<Set><NetShort><NetRef name="N4"/><NetRef name="N5"/>
           <Location x="8.75" y="0.5"/><LayerRef name="TOP"/></NetShort></Set>"#;
-        // Both rectangles are 10 µm wide. Their areas straddle the normal
+        // Both rectangles bridge N2 and N3. Their areas straddle the normal
         // 1 µm² significance threshold, despite both having a long edge.
         for (height, status) in [
-            (0.00005, RuleStatus::Fail),
-            (0.0002, RuleStatus::Incomplete),
+            (0.00001, RuleStatus::Fail),
+            (0.00004, RuleStatus::Incomplete),
         ] {
             for declaration in ["", tie] {
                 let xml = BOARD.replace("</Step>", &format!(r#"
                   <LayerFeature layerRef="TOP">
-                    <Set geometryUsage="GRAPHIC"><Features><Location x="20" y="0"/>
+                    <Set geometryUsage="GRAPHIC"><Features><Location x="5" y="0.5"/>
                       <UserSpecial><Contour><Polygon>
-                        <PolyBegin x="0" y="0"/><PolyStepSegment x="0.01" y="0"/>
-                        <PolyStepSegment x="0.01" y="{height}"/><PolyStepSegment x="0" y="{height}"/>
+                        <PolyBegin x="0" y="0"/><PolyStepSegment x="0.05" y="0"/>
+                        <PolyStepSegment x="0.05" y="{height}"/><PolyStepSegment x="0" y="{height}"/>
                         <PolyStepSegment x="0" y="0"/>
                       </Polygon></Contour></UserSpecial>
                     </Features></Set>{declaration}
@@ -1677,7 +1684,7 @@ limit = { minimum = "0.15 mm" }
                     );
                 } else {
                     // The N2/N3 gap remains; the N4/N5 short is exempt only
-                    // when declared. The remote sliver contributes neither.
+                    // when declared. The sliver contributes neither.
                     assert_eq!(
                         report.findings.len(),
                         if declaration.is_empty() { 2 } else { 1 }
@@ -1754,24 +1761,82 @@ limit = { minimum = "0.15 mm" }
     }
 
     #[test]
-    fn surviving_functional_copper_without_net_ownership_leaves_the_rule_incomplete() {
-        let results = run(&BOARD.replace("<Set net=\"N2\">", "<Set>"));
-        let rule = &results.rules[0];
-        assert!(matches!(
-            rule.status,
-            crate::commands::dfm::report::RuleStatus::Incomplete
-        ));
-        assert!(
-            rule.blocks_verdict(),
-            "unattributed copper must fail closed"
+    fn netless_functional_copper_belongs_to_the_one_net_it_touches() {
+        let with = |shape: String| {
+            run(&BOARD.replace(
+                "</LayerFeature>",
+                &format!(
+                    r#"<Set geometryUsage="GRAPHIC"><Features>{shape}</Features></Set></LayerFeature>"#
+                ),
+            ))
+        };
+        let pairs = |results: &checks::Results| {
+            let mut pairs = results
+                .findings
+                .iter()
+                .map(|finding| {
+                    let mut pair = finding
+                        .subjects
+                        .iter()
+                        .map(|subject| subject.net.clone().unwrap_or(subject.kind.to_owned()))
+                        .collect::<Vec<_>>();
+                    pair.sort();
+                    let mm = finding.measurement.actual_mm().unwrap();
+                    (pair, (mm * 1000.0).round() / 1000.0)
+                })
+                .collect::<Vec<_>>();
+            pairs.sort_by(|left, right| left.partial_cmp(right).unwrap());
+            pairs
+        };
+        let pair =
+            |first: &str, second: &str, mm: f64| (vec![first.to_owned(), second.to_owned()], mm);
+        let base = [pair("N2", "N3", 0.05), pair("N4", "N5", 0.0)];
+
+        // Copper touching only N2 is N2's.
+        let joined = with(rect(2.1, 0.0, 4.0, 1.0));
+        assert_eq!(joined.rules[0].status, RuleStatus::Fail);
+        assert_eq!(
+            pairs(&joined),
+            [pair("N1", "N2", 0.1), base[0].clone(), base[1].clone()]
         );
+        // Unless a drill crosses it, even with no hole rules.
+        let drilled = run(&BOARD
+            .replace(
+                r#"<Layer name="TOP""#,
+                r#"<Layer name="DRILL" layerFunction="DRILL" side="ALL" polarity="POSITIVE"/><Layer name="TOP""#,
+            )
+            .replace(
+                "</LayerFeature>",
+                &format!(
+                    r#"<Set geometryUsage="GRAPHIC"><Features>{}</Features></Set></LayerFeature>
+                    <LayerFeature layerRef="DRILL"><Set><Hole name="V1" diameter="0.3" platingStatus="VIA" plusTol="0" minusTol="0" x="3" y="0.5"/></Set></LayerFeature>"#,
+                    rect(2.1, 0.0, 4.0, 1.0)
+                ),
+            ));
+        assert_eq!(drilled.rules[0].status, RuleStatus::Incomplete);
+        // Copper touching nothing is its own conductor.
+        let alone = with(rect(6.1, 0.0, 7.0, 1.0));
+        assert_eq!(alone.rules[0].status, RuleStatus::Fail);
+        let unattributed = "unattributed_copper";
+        assert_eq!(
+            pairs(&alone),
+            [
+                base[0].clone(),
+                pair("N3", unattributed, 0.05),
+                base[1].clone()
+            ]
+        );
+        // Copper bridging N2 and N3 belongs to neither.
+        let bridge = with(rect(4.5, 0.25, 5.5, 0.75));
+        let rule = &bridge.rules[0];
+        assert_eq!(rule.status, RuleStatus::Incomplete);
+        assert!(rule.blocks_verdict());
         assert!(
             rule.skip_reason
                 .as_deref()
                 .unwrap()
                 .contains("final functional copper without net attribution")
         );
-        assert!(results.findings.is_empty());
     }
 
     #[test]

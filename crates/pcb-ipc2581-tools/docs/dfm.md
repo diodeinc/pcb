@@ -378,9 +378,10 @@ Each Step's findings apply at its placements; the report lists these in
   Copper-clearance rules measure the shortest
   boundary distance between distinct final conductor images. Same-net
   notches and same-net islands are not clearance subjects; touching or
-  overlapping distinct conductors have zero clearance. Functional copper
-  without a net leaves this rule `incomplete` instead of being guessed into an
-  electrical domain; rules that measure the composed image are unaffected. Fiducials, copper-balance
+  overlapping distinct conductors have zero clearance. Netless functional
+  copper forms islands as text does (below); one touching two nets, a drill
+  or other netless conductors leaves this rule `incomplete`. Rules that
+  measure the composed image are unaffected. Fiducials, copper-balance
   support, and netless pads remain explicit auxiliary conductors.
 - Netless `geometryUsage="TEXT"` copper, and the netless copper of an
   unpopulated part none of whose copper has a net, forms text islands where it touches no drill and the
@@ -427,8 +428,8 @@ Each Step's findings apply at its placements; the report lists these in
     nearest its finished thickness, and its outer and inner copper weights;
     it conforms when a template for that build has every gap within
     `tolerance`. A build with no template is `incomplete`. A mismatch fails
-    only a `stackupStatus="SPECIFIED"` stackup; otherwise it is `incomplete`,
-    since nothing permits the fab to substitute its template. A layer count with no build
+    only a `stackupStatus="SPECIFIED"` stackup; otherwise it is
+    `not_applicable`. A layer count with no build
     is `not_applicable`; missing thicknesses or weights leave the rule
     `incomplete`.
   - Surface finish reads the `SurfaceFinish` spec of each coating layer in

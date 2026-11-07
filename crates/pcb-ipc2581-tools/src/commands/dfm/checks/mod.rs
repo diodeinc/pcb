@@ -1096,7 +1096,7 @@ impl<'a> Ownership<'a> {
                 self.lands.iter().any(|land| land.0 == occurrence)
             }
             ConductorId::Auxiliary { .. }
-            | ConductorId::Text { .. }
+            | ConductorId::Island { .. }
             | ConductorId::Unattributed { .. } => false,
         }
     }

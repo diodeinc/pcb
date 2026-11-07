@@ -2114,9 +2114,12 @@ templates = [
         for status in ["PROPOSED", "APPROVED"] {
             assert_eq!(
                 judge("0.035", &["0.1", "1.265", "0.15"], status),
-                incomplete(&format!(
-                    "{mismatch}; the stackup is a reference, not a requirement (its IPC-2581 stackupStatus is not SPECIFIED), and nothing states that the fab may substitute a template"
-                ))
+                (
+                    "NotApplicable".to_owned(),
+                    Some(format!(
+                        "{mismatch}; the stackup is a reference, not a requirement (its IPC-2581 stackupStatus is not SPECIFIED), so the fab builds it on a template for the build"
+                    ))
+                )
             );
             assert_eq!(judge("0.035", &["0.1", "1.265", "0.144"], status).0, "Pass");
         }
@@ -2166,7 +2169,7 @@ templates = [
             check(&f9wry, "SPECIFIED"),
             ("Fail".to_owned(), Some(mismatch.to_owned()))
         );
-        assert_eq!(check(&f9wry, "PROPOSED").0, "Incomplete");
+        assert_eq!(check(&f9wry, "PROPOSED").0, "NotApplicable");
     }
 
     /// A 4-layer board with one via drilled from `from` to `to`.

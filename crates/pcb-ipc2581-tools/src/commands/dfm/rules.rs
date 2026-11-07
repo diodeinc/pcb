@@ -626,7 +626,12 @@ impl RuleKind {
                 .to_owned(),
                 quantity_label: "copper-to-copper clearance".to_owned(),
                 witness_roles: Some(["first_conductor", "second_conductor"]),
-                pools: Pools::COPPER | Pools::CONDUCTOR_OWNERSHIP | Pools::NET_SHORTS,
+                // Islands touching a drill join no net.
+                pools: Pools::COPPER
+                    | Pools::CONDUCTOR_OWNERSHIP
+                    | Pools::NET_SHORTS
+                    | Pools::HOLES
+                    | Pools::SLOTS,
             },
             Self::SoldermaskWeb => Semantics {
                 subject: "soldermask_layer",
