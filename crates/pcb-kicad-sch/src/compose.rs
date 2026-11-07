@@ -91,13 +91,16 @@ pub(crate) fn reconcile_document(
         .into_iter()
         .collect::<BTreeMap<_, _>>();
     let expected_slots = definitions.keys().cloned().collect::<BTreeSet<_>>();
+    // Full reconciliation keeps unused units off the schematic, as KiCad does.
+    let required_slots =
+        &expected_slots - &component_slots::optional_unplaced_slots(&document, netlist)?;
     let RepairTargets {
         missing_sheets,
         project_slots,
         remove_slots,
         remove_locations,
         connectivity: selected_connectivity,
-    } = repair_targets(issue_selection, inspection_before, &expected_slots)?;
+    } = repair_targets(issue_selection, inspection_before, &required_slots)?;
     let restores_missing_sheets = !missing_sheets.is_empty();
     for (page_id, sheet_id) in missing_sheets {
         let sheet = document
