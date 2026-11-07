@@ -258,7 +258,7 @@ pub(super) enum RuleKind {
 }
 
 /// What a copper width or clearance rule measures: functional copper, or
-/// isolated declared text, which changes how the board reads, not what it
+/// declared text and artwork, which change how the board reads, not what it
 /// conducts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum CopperUse {
