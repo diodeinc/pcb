@@ -272,13 +272,16 @@ fn dielectric_gaps(
         )));
     };
     let message = mismatch(build, &gaps, tolerance);
-    // Only a required stackup violates a template it does not match; a
-    // proposed or approved one neither violates it nor permits substitution.
+    // Only a required stackup violates a template it does not match; the fab
+    // builds a proposed or approved one on its template for the build.
     let message = match message {
         Some(message) if !stackup.required => {
-            return Err(incomplete(format!(
-                "{message}; the stackup is a reference, not a requirement (its IPC-2581 stackupStatus is not SPECIFIED), and nothing states that the fab may substitute a template"
-            )));
+            return Err((
+                RuleStatus::NotApplicable,
+                format!(
+                    "{message}; the stackup is a reference, not a requirement (its IPC-2581 stackupStatus is not SPECIFIED), so the fab builds it on a template for the build"
+                ),
+            ));
         }
         message => message,
     };

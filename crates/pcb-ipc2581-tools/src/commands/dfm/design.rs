@@ -1374,16 +1374,18 @@ pub(super) enum ConductorId {
         instance: Option<u32>,
         source_set_index: u32,
     },
-    /// An island of declared text or artwork (see [`text_islands`]).
-    /// `occurrence` is its first source feature, which other islands of the
-    /// layer may share; `island` tells them apart. `net` is the one net whose
-    /// copper the island touches, if any.
-    Text {
+    /// An island of netless copper (see [`netless_islands`]): declared text
+    /// or artwork if `text`, functional copper otherwise. `occurrence` is its
+    /// first source feature, which other islands of the layer may share;
+    /// `island` tells them apart. `net` is the one net whose copper the
+    /// island touches, if any.
+    Island {
         step: Option<Symbol>,
         instance: Option<u32>,
         occurrence: FeatureOccurrenceId,
         island: u32,
         net: Option<Symbol>,
+        text: bool,
     },
     Unattributed {
         step: Option<Symbol>,
@@ -1400,7 +1402,7 @@ impl ConductorId {
             Self::Net { step, .. }
             | Self::Isolated { step, .. }
             | Self::Auxiliary { step, .. }
-            | Self::Text { step, .. }
+            | Self::Island { step, .. }
             | Self::Unattributed { step, .. } => step,
         }
     }
@@ -1410,7 +1412,7 @@ impl ConductorId {
             Self::Net { instance, .. }
             | Self::Isolated { instance, .. }
             | Self::Auxiliary { instance, .. }
-            | Self::Text { instance, .. }
+            | Self::Island { instance, .. }
             | Self::Unattributed { instance, .. } => instance,
         }
     }
@@ -1418,7 +1420,7 @@ impl ConductorId {
     pub fn net(self) -> Option<Symbol> {
         match self {
             Self::Net { net, .. } => Some(net),
-            Self::Text { net, .. } => net,
+            Self::Island { net, .. } => net,
             Self::Isolated { .. } | Self::Auxiliary { .. } | Self::Unattributed { .. } => None,
         }
     }
@@ -1435,7 +1437,7 @@ impl ConductorId {
                 net,
                 ..
             }
-            | Self::Text {
+            | Self::Island {
                 step,
                 instance,
                 net: Some(net),
@@ -2167,10 +2169,10 @@ fn conductor_order(
         ConductorId::Auxiliary {
             source_set_index, ..
         } => (2, "", source_set_index, 0, None),
-        ConductorId::Text { occurrence, .. } => {
+        ConductorId::Island { occurrence, .. } => {
             let source = imported
                 .feature_definition(occurrence.feature)
-                .expect("text must reference its imported definition")
+                .expect("an island must reference its imported definition")
                 .source;
             (
                 3,
@@ -2320,7 +2322,7 @@ fn collect_copper_layers(
                     .filter(|c| c.id.instance().is_none())
                     .map(|c| (&c.image, c.boundary())),
             )?;
-            let mut conductors = text_islands(source, conductors, drilled)?;
+            let mut conductors = copper_islands(source, conductors, drilled)?;
             conductors.sort_by_key(|conductor| conductor_order(imported, conductor.id));
             // The file's side attribute is authoritative; the stackup
             // position is the fallback for files that omit it.
@@ -2413,23 +2415,47 @@ fn declared_text(
             .is_some_and(|part| artwork.contains(&(feature.source_step_ref, part)))
 }
 
-/// Make each island of the Step's own declared text that touches no drill
-/// and the copper of at most one net one [`ConductorId::Text`] conductor.
-/// Touching a net, the island is that net's copper, as the fab etches it.
-fn text_islands(
+/// Join the Step's own declared text into text islands, then its remaining
+/// functional copper without a net into functional ones.
+fn copper_islands(
     source: Source<'_>,
     conductors: Vec<CopperConductor>,
     drilled: &[(BBox, Option<u32>)],
 ) -> Result<Vec<CopperConductor>> {
     let artwork = artwork_parts(source.imported);
-    let (text, mut others): (Vec<_>, Vec<_>) = conductors.into_iter().partition(|conductor| {
-        conductor.id.instance().is_none() && declared_text(source.imported, &artwork, conductor.id)
-    });
-    if text.is_empty() {
+    let conductors = netless_islands(source, conductors, drilled, true, |id| {
+        declared_text(source.imported, &artwork, id)
+    })?;
+    netless_islands(
+        source,
+        conductors,
+        drilled,
+        false,
+        ConductorId::is_unattributed,
+    )
+}
+
+/// Make each island of the Step's own netless copper that `select` picks,
+/// touching no drill and the copper of at most one net, one
+/// [`ConductorId::Island`] conductor.
+/// Touching a net, the island is that net's copper, as the fab etches it;
+/// touching none, it is its own conductor. Copper that touches two nets
+/// keeps its own identity, so it can never pass as either net's.
+fn netless_islands(
+    source: Source<'_>,
+    conductors: Vec<CopperConductor>,
+    drilled: &[(BBox, Option<u32>)],
+    text: bool,
+    select: impl Fn(ConductorId) -> bool,
+) -> Result<Vec<CopperConductor>> {
+    let (netless, mut others): (Vec<_>, Vec<_>) = conductors
+        .into_iter()
+        .partition(|conductor| conductor.id.instance().is_none() && select(conductor.id));
+    if netless.is_empty() {
         return Ok(others);
     }
     let mut union = PaintComposer::new(source.resolution);
-    for conductor in &text {
+    for conductor in &netless {
         union.push(Polarity::Dark, conductor.image.clone());
     }
     let union = union.finish()?;
@@ -2458,7 +2484,7 @@ fn text_islands(
             }
         }
         let mut owned = Vec::new();
-        for (index, conductor) in text.iter().enumerate() {
+        for (index, conductor) in netless.iter().enumerate() {
             if conductor.image.bbox.intersects(island.bbox)
                 && !island.intersection(&conductor.image)?.is_empty()
             {
@@ -2466,7 +2492,7 @@ fn text_islands(
             }
         }
         // The net the island joins: `Some(None)` for none, `None` when it
-        // cannot be text.
+        // cannot be an island.
         let net = match (drilled, &touched[..]) {
             (false, []) => Some(None),
             (
@@ -2483,13 +2509,13 @@ fn text_islands(
         };
         members.push((net, owned));
     }
-    // A feature is text only if every island it shares, transitively, is
-    // one.
+    // A feature joins islands only if every island it shares, transitively,
+    // is one.
     let mut blocked = members
         .iter()
         .map(|(net, _)| net.is_none())
         .collect::<Vec<_>>();
-    let mut tainted = vec![false; text.len()];
+    let mut tainted = vec![false; netless.len()];
     loop {
         let mut changed = false;
         for ((_, owned), blocked) in members.iter().zip(&mut blocked) {
@@ -2506,7 +2532,7 @@ fn text_islands(
             break;
         }
     }
-    let mut claimed = vec![false; text.len()];
+    let mut claimed = vec![false; netless.len()];
     let mut merged = Vec::new();
     for (((net, owned), island), blocked) in members.into_iter().zip(islands).zip(blocked) {
         let Some(net) = net.filter(|_| !blocked && !owned.is_empty()) else {
@@ -2514,23 +2540,24 @@ fn text_islands(
         };
         let occurrence = owned
             .iter()
-            .filter_map(|&index| match text[index].id {
+            .filter_map(|&index| match netless[index].id {
                 ConductorId::Unattributed { occurrence, .. }
                 | ConductorId::Isolated { occurrence, .. } => Some(occurrence),
                 _ => None,
             })
             .min()
-            .expect("text is unattributed or isolated copper");
+            .expect("netless copper is unattributed or isolated");
         for &index in &owned {
             claimed[index] = true;
         }
         merged.push(CopperConductor {
-            id: ConductorId::Text {
-                step: text[owned[0]].id.step(),
+            id: ConductorId::Island {
+                step: netless[owned[0]].id.step(),
                 instance: None,
                 occurrence,
                 island: merged.len() as u32,
                 net,
+                text,
             },
             branch: None,
             image: island,
@@ -2538,7 +2565,8 @@ fn text_islands(
         });
     }
     others.extend(
-        text.into_iter()
+        netless
+            .into_iter()
             .zip(claimed)
             .filter(|(_, claimed)| !claimed)
             .map(|(conductor, _)| conductor),
