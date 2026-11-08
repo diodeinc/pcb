@@ -1586,52 +1586,61 @@ fn build_board_properties_patchset(
         ));
     }
 
+    // KiCad keeps board properties in a map and writes them sorted by name, so
+    // each one goes where KiCad's next save would put it.
+    let properties = root_items
+        .iter()
+        .filter_map(|item| {
+            let items = item.as_list()?;
+            (items.first()?.as_sym()? == "property").then_some(())?;
+            Some((items.get(1)?.as_str()?, item))
+        })
+        .collect::<Vec<_>>();
+    let after_header = root_items
+        .iter()
+        .rev()
+        .find_map(|item| {
+            let items = item.as_list()?;
+            match items.first().and_then(|item| item.as_sym()) {
+                Some("setup" | "layers" | "general") => Some(item.span.end),
+                _ => None,
+            }
+        })
+        .unwrap_or_else(|| board.span.end.saturating_sub(1));
+
     let mut patches = pcb_sexpr::PatchSet::new();
-    let mut inserted = Vec::new();
+    let mut inserted = BTreeMap::<usize, String>::new();
     for (name, value) in [
+        ("PCB_GIT_HASH", PCB_GIT_HASH_PLACEHOLDER),
         ("PCB_NAME", layout_name),
         ("PCB_VERSION", PCB_VERSION_PLACEHOLDER),
-        ("PCB_GIT_HASH", PCB_GIT_HASH_PLACEHOLDER),
     ] {
-        let property = root_items.iter().find_map(|item| {
-            let items = item.as_list()?;
-            (items.first().and_then(|item| item.as_sym()) == Some("property")
-                && items.get(1).and_then(|item| item.as_str()) == Some(name))
-            .then_some(items)
-        });
-
-        if let Some(value_node) = property.and_then(|items| items.get(2)) {
-            patches.replace_string(value_node.span, value);
-        } else {
-            inserted.push((name, value));
+        if let Some((_, item)) = properties.iter().find(|(existing, _)| *existing == name) {
+            if let Some(value_node) = item.as_list().and_then(|items| items.get(2)) {
+                patches.replace_string(value_node.span, value);
+            }
+            continue;
         }
+
+        let property = pcb_sexpr::Sexpr::list(vec![
+            pcb_sexpr::Sexpr::symbol("property"),
+            pcb_sexpr::Sexpr::string(name),
+            pcb_sexpr::Sexpr::string(value),
+        ]);
+        let (at, text) = match properties.iter().find(|(existing, _)| *existing > name) {
+            Some((_, next)) => (next.span.start, format!("{property}\n")),
+            None => (
+                properties
+                    .last()
+                    .map_or(after_header, |(_, last)| last.span.end),
+                format!("\n{property}"),
+            ),
+        };
+        inserted.entry(at).or_default().push_str(&text);
     }
 
-    if !inserted.is_empty() {
-        let insert_at = root_items
-            .iter()
-            .rev()
-            .find_map(|item| {
-                let items = item.as_list()?;
-                match items.first().and_then(|item| item.as_sym()) {
-                    Some("setup" | "layers" | "general") => Some(item.span.end),
-                    _ => None,
-                }
-            })
-            .unwrap_or_else(|| board.span.end.saturating_sub(1));
-        let text = inserted
-            .into_iter()
-            .map(|(name, value)| {
-                pcb_sexpr::Sexpr::list(vec![
-                    pcb_sexpr::Sexpr::symbol("property"),
-                    pcb_sexpr::Sexpr::string(name),
-                    pcb_sexpr::Sexpr::string(value),
-                ])
-                .to_string()
-            })
-            .map(|property| format!("\n{property}"))
-            .collect::<String>();
-        patches.replace_raw(pcb_sexpr::Span::new(insert_at, insert_at), text);
+    for (at, text) in inserted {
+        patches.replace_raw(pcb_sexpr::Span::new(at, at), text);
     }
 
     Ok(patches)
@@ -1672,12 +1681,23 @@ fn build_title_block_patchset(
             LayoutError::StackupPatchingError("title_block section is not a list".to_string())
         })?;
 
+        // KiCad writes title, date and rev first, in that order.
+        let mut at = 1;
         for (name, expr) in [
             ("title", title_expr.clone()),
             ("date", date_expr.clone()),
             ("rev", rev_expr.clone()),
         ] {
-            pcb_sexpr::set_or_insert_named_list(title_block_items, name, expr, None);
+            match pcb_sexpr::find_named_list_index(title_block_items, name) {
+                Some(index) => {
+                    title_block_items[index] = expr;
+                    at = index + 1;
+                }
+                None => {
+                    title_block_items.insert(at, expr);
+                    at += 1;
+                }
+            }
         }
 
         patches.replace_raw(title_block_node.span, updated_title_block.to_string());
@@ -1795,7 +1815,8 @@ fn build_stackup_patchset(
         let setup_items = new_setup.as_list_mut().ok_or_else(|| {
             LayoutError::StackupPatchingError("setup section is not a list".to_string())
         })?;
-        pcb_sexpr::set_or_insert_named_list(setup_items, "stackup", stackup.clone(), None);
+        // KiCad writes the stackup first in the setup section.
+        setup_items.insert(1, stackup.clone());
         patches.replace_raw(setup_node.span, new_setup.to_string());
     }
 
@@ -2248,8 +2269,6 @@ mod tests {
 	(paper "A4")
 	(title_block
 		(title "Old")
-		(date "2020-01-01")
-		(rev "A")
 		(company "Acme Corp")
 	)
 	(layers (0 "F.Cu" signal) (2 "B.Cu" signal))
@@ -2262,10 +2281,23 @@ mod tests {
         patches.write_to(input, &mut out).unwrap();
         let out = String::from_utf8(out).unwrap();
 
-        assert!(out.contains(r#"(title "${PCB_NAME}")"#));
-        assert!(out.contains(r#"(date "${CURRENT_DATE}")"#));
-        assert!(out.contains(r#"(rev "${PCB_VERSION}")"#));
-        assert!(out.contains(r#"(company "Acme Corp")"#));
+        // In the order KiCad writes them, so its next save leaves them alone.
+        let title_block = pcb_sexpr::parse(&out).unwrap();
+        let title_block = pcb_sexpr::find_child_list(title_block.as_list().unwrap(), "title_block")
+            .unwrap()
+            .iter()
+            .skip(1)
+            .map(ToString::to_string)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            title_block,
+            [
+                r#"(title "${PCB_NAME}")"#,
+                r#"(date "${CURRENT_DATE}")"#,
+                r#"(rev "${PCB_VERSION}")"#,
+                r#"(company "Acme Corp")"#,
+            ]
+        );
     }
 
     #[test]

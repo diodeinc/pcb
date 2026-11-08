@@ -148,3 +148,36 @@ layout_test!(
     "not_connected_single_pin_multi_pad",
     "Board"
 );
+
+/// One sync reaches a fixed point: KiCad's next load and save of the board
+/// changes nothing, so a second sync writes the same bytes.
+#[test]
+fn test_second_sync_leaves_layout_unchanged() -> Result<()> {
+    let temp = TempDir::new()?;
+    temp.copy_from(
+        get_resource_path("netclass_assignment"),
+        &["**/*", "!.pcb/cache/**/*"],
+    )?;
+    let zen_file = temp.path().join("netclass.zen");
+    let sync = || -> Result<String> {
+        let workspace_info = pcb_zen::get_workspace_info(&DefaultFileProvider::new(), temp.path())?;
+        let res = pcb_zen::resolve_workspace_dependencies(workspace_info, temp.path(), false)?;
+        let schematic = pcb_zen::run(&zen_file, res, Default::default())
+            .unpack()
+            .0
+            .expect("Zen evaluation should produce a schematic");
+        let result = process_layout(
+            &schematic,
+            LayoutOptions::default(),
+            &mut Diagnostics::default(),
+        )?
+        .unwrap();
+        Ok(std::fs::read_to_string(result.pcb_file)?)
+    };
+
+    let first = sync()?;
+    assert!(first.contains("(stackup"));
+    let second = sync()?;
+    assert!(first == second, "second sync changed the layout");
+    Ok(())
+}
