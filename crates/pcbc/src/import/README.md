@@ -175,6 +175,11 @@ local geometry, converting back-side geometry and layers, and making zones and p
   Instances share a generated part only when these display properties also agree.
   Differing display properties across units of one component are rejected explicitly;
   generated components do not yet represent per-unit display overrides.
+- Generated `.kicad_sym` files take sourcing, designator prefix, and BOM membership
+  from the placed instances, not the library defaults: the source MPN and manufacturer
+  fields become `Manufacturer_Part_Number` and `Manufacturer_Name`, `Reference` is the
+  instance prefix (`C` for `C135`, so layout sync keeps `C135`), and `in_bom` follows
+  the instances' `in_bom`.
 - Wires, graphics, sheet relationships, native no-connects, and symbol geometry
   remain native; symbols are not substituted and no `pcb:sch` comments are written.
 - Power symbols (library `(power)` or `power:` symbols) never become components,

@@ -978,6 +978,84 @@ fn missing_footprint_assignment_preserves_unset_marker_and_still_imports() {
     assert!(generated_component.contains("footprint=\"~\""));
 }
 
+/// Sourcing fields, designators, and BOM membership live on the placed instances. The library
+/// symbol's generic `U` prefix and `(in_bom no)` default must not replace them.
+#[test]
+fn import_keeps_instance_sourcing_designators_and_bom_membership() {
+    let mut sandbox = sandbox();
+    let hidden = "(at 0 0 0) (effects (font (size 1.27 1.27)) (hide yes))";
+    let schematic = STANDALONE_FIXTURE
+        .replace("(in_bom no)", "(in_bom yes)")
+        .replacen("(in_bom yes)", "(in_bom no)", 1)
+        .replace("\"Reference\" \"R\"\n", "\"Reference\" \"U\"\n")
+        .replace(
+            "\n\t\t(property \"Datasheet\"",
+            &format!(
+                "\n\t\t(property \"MPN\" \"ERJ-2RKF1003X\" {hidden})\n\t\t(property \"MFR\" \"Panasonic\" {hidden})\n\t\t(property \"Datasheet\""
+            ),
+        );
+    assert_eq!(schematic.matches("\"Panasonic\"").count(), 3);
+    assert!(schematic.contains("\"Reference\" \"U\"\n"));
+    sandbox.write("layout.kicad_sch", &schematic);
+
+    let import = sandbox
+        .run("pcbc", ["import", "layout.kicad_sch", "out"])
+        .stdout_capture()
+        .stderr_capture()
+        .unchecked()
+        .run()
+        .expect("run pcbc import");
+    assert!(
+        import.status.success(),
+        "import failed:\n{}",
+        String::from_utf8_lossy(&import.stderr)
+    );
+
+    // No `-S bom`: every part must carry its sourcing into the build.
+    let build = sandbox
+        .run("pcbc", ["build", "out/layout.zen", "--offline"])
+        .stdout_capture()
+        .stderr_capture()
+        .unchecked()
+        .run()
+        .unwrap();
+    let build_stderr = String::from_utf8_lossy(&build.stderr);
+    assert!(build.status.success(), "build failed:\n{build_stderr}");
+    assert!(!build_stderr.contains("bom."), "{build_stderr}");
+
+    let bom = sandbox
+        .run("pcbc", ["bom", "out/layout.zen", "--offline", "-f", "json"])
+        .stdout_capture()
+        .stderr_capture()
+        .unchecked()
+        .run()
+        .unwrap();
+    assert!(
+        bom.status.success(),
+        "{}",
+        String::from_utf8_lossy(&bom.stderr)
+    );
+    let bom: serde_json::Value = serde_json::from_slice(&bom.stdout).unwrap();
+    let members = bom
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|line| line["members"].as_array().unwrap())
+        .map(|member| {
+            (
+                member["designator"].as_str().unwrap(),
+                member["mpn"].as_str().unwrap(),
+                member["manufacturer"].as_str().unwrap(),
+            )
+        })
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        members,
+        BTreeSet::from(["R1", "R2", "R3"].map(|r| (r, "ERJ-2RKF1003X", "Panasonic"))),
+        "{bom:#}"
+    );
+}
+
 #[test]
 fn unavailable_footprints_emit_a_short_warning_and_stay_in_the_report() {
     let mut sandbox = sandbox();
