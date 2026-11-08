@@ -13,6 +13,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - DFM dielectric gaps apply only to `SPECIFIED` stackups.
 - DFM measures netless copper touching one net as that net's copper.
 - `pcb layout` reaches a fixed point in one sync: a second sync no longer adds text thickness to new footprint fields or reorders board properties, the stackup, or the title block.
+- `pcb import` keeps the source's predefined track and via sizes, even when it has none, instead of adding the stdlib defaults.
 
 ## [0.4.98] - 2026-11-07
 

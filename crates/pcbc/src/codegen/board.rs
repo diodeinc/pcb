@@ -298,15 +298,17 @@ fn render_design_rules_expr(design_rules: &zen_stackup::DesignRules, base_indent
         out.push_str(&format!("{indent1}constraints = {constraints},\n"));
     }
 
-    if let Some(predefined_sizes) = design_rules
+    // Always emit both lists, even when empty: an omitted field would be
+    // filled from stdlib's base presets, which can violate imported rules.
+    let predefined_sizes = design_rules
         .predefined_sizes
         .as_ref()
-        .and_then(render_predefined_sizes_expr)
-    {
-        out.push_str(&format!(
-            "{indent1}predefined_sizes = {predefined_sizes},\n"
-        ));
-    }
+        .and_then(deserialize_json::<PredefinedSizesView>)
+        .unwrap_or_default()
+        .render_expr();
+    out.push_str(&format!(
+        "{indent1}predefined_sizes = {predefined_sizes},\n"
+    ));
 
     if !design_rules.netclasses.is_empty() {
         out.push_str(&format!("{indent1}netclasses = [\n"));
@@ -322,10 +324,6 @@ fn render_design_rules_expr(design_rules: &zen_stackup::DesignRules, base_indent
 
 fn render_constraints_expr(constraints: &JsonValue) -> Option<String> {
     deserialize_json::<ConstraintsView>(constraints)?.render_expr()
-}
-
-fn render_predefined_sizes_expr(predefined_sizes: &JsonValue) -> Option<String> {
-    deserialize_json::<PredefinedSizesView>(predefined_sizes)?.render_expr()
 }
 
 fn render_netclass_expr(netclass: &zen_stackup::NetClass) -> String {
@@ -575,7 +573,7 @@ impl ZonesConstraintsView {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 struct PredefinedSizesView {
     #[serde(default)]
     track_widths: Vec<f64>,
@@ -584,27 +582,22 @@ struct PredefinedSizesView {
 }
 
 impl PredefinedSizesView {
-    fn render_expr(&self) -> Option<String> {
-        let mut parts: Vec<String> = Vec::new();
-        if !self.track_widths.is_empty() {
-            let widths = self
-                .track_widths
-                .iter()
-                .map(|value| starlark::float(*value))
-                .collect::<Vec<_>>();
-            parts.push(format!("track_widths = [{}]", widths.join(", ")));
-        }
-
+    fn render_expr(&self) -> String {
+        let widths = self
+            .track_widths
+            .iter()
+            .map(|value| starlark::float(*value))
+            .collect::<Vec<_>>();
         let vias = self
             .via_dimensions
             .iter()
             .filter_map(ViaDimensionView::render_expr)
             .collect::<Vec<_>>();
-        if !vias.is_empty() {
-            parts.push(format!("via_dimensions = [{}]", vias.join(", ")));
-        }
-
-        (!parts.is_empty()).then(|| format!("PredefinedSizes({})", parts.join(", ")))
+        format!(
+            "PredefinedSizes(track_widths = [{}], via_dimensions = [{}])",
+            widths.join(", "),
+            vias.join(", ")
+        )
     }
 }
 
@@ -856,7 +849,28 @@ mod tests {
         assert!(out.contains("solder_mask = SolderMask("));
         assert!(out.contains("to_copper_clearance = 0.01"));
         assert!(out.contains("zones = Zones("));
-        assert!(out.contains("predefined_sizes = PredefinedSizes("));
+        assert!(out.contains(
+            "predefined_sizes = PredefinedSizes(track_widths = [0.15, 0.2], via_dimensions = [ViaDimension(diameter = 0.5, drill = 0.3)])"
+        ));
         assert!(out.contains("netclasses = ["));
+
+        // Without source presets, explicit empty lists keep the stdlib base
+        // presets from being merged in under the imported rules.
+        let design_rules = zen_stackup::DesignRules {
+            predefined_sizes: None,
+            ..design_rules
+        };
+        let out = render_imported_board(RenderImportedBoardArgs {
+            board_name: "Demo",
+            copper_layers: 4,
+            design_rules: Some(&design_rules),
+            stackup: None,
+            net_decls: &[],
+            module_decls: &[],
+            instance_calls: &[],
+        });
+        assert!(out.contains(
+            "predefined_sizes = PredefinedSizes(track_widths = [], via_dimensions = [])"
+        ));
     }
 }
