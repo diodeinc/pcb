@@ -1835,11 +1835,14 @@ fn derive_part_key(
 
     let mpn = explicit_mpn(component).map(str::to_string);
     let manufacturer = explicit_manufacturer(component).map(str::to_string);
+    // Zener reads a designator's prefix as the text before its first digit, as `pcb_sch` does.
     let designator_prefix = component
         .netlist
         .refdes
         .as_str()
-        .trim_end_matches(|c: char| c.is_ascii_digit())
+        .split(|c: char| c.is_ascii_digit())
+        .next()
+        .unwrap_or_default()
         .to_string();
 
     let footprint = component
