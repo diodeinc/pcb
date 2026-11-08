@@ -830,7 +830,7 @@ def apply_changeset(
         fp = materialized_footprints[entity_id]
         # Source text/metadata wins over inherited board fields, but does not
         # change their presentation or remove board-only fields.
-        _apply_view_to_footprint(fp, fp_view, package_roots, layout_dir)
+        _apply_view_to_footprint(fp, fp_view, pcbnew, package_roots, layout_dir)
         kicad_board.Add(fp)
         fps_by_entity_id[entity_id] = fp
 
@@ -1562,10 +1562,17 @@ def _resolve_field_value(
 def _apply_view_to_footprint(
     fp: Any,
     view: FootprintView,
+    pcbnew: Any,
     package_roots: dict[str, str],
     layout_dir: Path | None,
 ) -> None:
-    """Apply view properties to a footprint. Hides newly-created custom fields."""
+    """Apply view properties to a footprint. Hides newly-created custom fields.
+
+    SetField creates a field with no stroke width, which KiCad does not write,
+    and KiCad's loader gives such a field the board's Fab text thickness. The
+    new field gets that thickness here, so the board saved now is the board
+    the next sync loads.
+    """
     fp.SetReference(view.reference)
     fp.SetValue(view.value)
     fp.SetDNP(view.dnp)
@@ -1580,6 +1587,9 @@ def _apply_view_to_footprint(
             field = get_footprint_field(fp, name)
             if field:
                 field.SetVisible(False)
+                field.SetTextThickness(
+                    fp.GetBoard().GetDesignSettings().GetTextThickness(pcbnew.F_Fab)
+                )
 
 
 def _create_footprint(
@@ -1613,7 +1623,7 @@ def _create_footprint(
 
     fp.SetParent(board)
     fp.SetFPIDAsString(view.fpid)
-    _apply_view_to_footprint(fp, view, package_roots, layout_dir)
+    _apply_view_to_footprint(fp, view, pcbnew, package_roots, layout_dir)
 
     # Hide Value field (Value text is on Fab layer, not meant to be visible)
     value_field = get_footprint_field(fp, "Value")
@@ -1637,7 +1647,7 @@ def _update_footprint_view(
     layout_dir: Path | None,
 ) -> None:
     """Update footprint view properties from SOURCE."""
-    _apply_view_to_footprint(fp, view, package_roots, layout_dir)
+    _apply_view_to_footprint(fp, view, pcbnew, package_roots, layout_dir)
 
 
 def load_layout_fragment_with_footprints(
