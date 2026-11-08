@@ -7,7 +7,7 @@ pcb import <design.kicad_sch|project.kicad_pro|project-directory> <output-direct
 ```
 
 A directory input imports the one `.kicad_pro` under it; hidden, `__MACOSX`, and
-`*-backups` directories hold older copies of the project and are skipped. Zero or
+`*-backups` directories, and `._*` and `_autosave-*` files, are skipped. Zero or
 several projects fail with the candidates listed.
 
 ## Pipeline

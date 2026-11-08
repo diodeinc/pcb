@@ -21,8 +21,9 @@ pub(super) fn resolve_paths(args: &ImportArgs) -> Result<ImportPaths> {
 }
 
 /// The input itself, or the one `.kicad_pro` in a directory, such as an extracted project
-/// archive. Hidden directories (KiCad's `.history`, macOS `__MACOSX` metadata) and KiCad's
-/// `*-backups` directories hold older copies of the project and are skipped.
+/// archive. Hidden directories (KiCad's `.history`, macOS `__MACOSX` metadata), KiCad's
+/// `*-backups` directories, AppleDouble `._*` files and KiCad `_autosave-*` files are not
+/// the project and are skipped.
 fn find_kicad_project(input: &Path) -> Result<PathBuf> {
     if !input.is_dir() {
         return Ok(input.to_path_buf());
@@ -41,7 +42,11 @@ fn find_kicad_project(input: &Path) -> Result<PathBuf> {
                 if !(name.starts_with('.') || name == "__MACOSX" || name.ends_with("-backups")) {
                     walk(&path, found)?;
                 }
-            } else if file_type.is_file() && path.extension() == Some(OsStr::new("kicad_pro")) {
+            } else if file_type.is_file()
+                && path.extension() == Some(OsStr::new("kicad_pro"))
+                // macOS AppleDouble metadata and KiCad autosaves sit beside the project.
+                && !(name.starts_with("._") || name.starts_with("_autosave-"))
+            {
                 found.push(path);
             }
         }

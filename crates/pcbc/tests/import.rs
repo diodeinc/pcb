@@ -865,6 +865,8 @@ fn project_directory_import_replaces_an_existing_repositorys_board() {
         PROJECT_FIXTURE,
     );
     sandbox.write("project/board/.history/layout.kicad_pro", PROJECT_FIXTURE);
+    sandbox.write("project/board/._layout.kicad_pro", "metadata");
+    sandbox.write("project/board/_autosave-layout.kicad_pro", PROJECT_FIXTURE);
     sandbox.write("project/other/other.kicad_pro", PROJECT_FIXTURE);
     let import = |sandbox: &mut Sandbox| {
         sandbox

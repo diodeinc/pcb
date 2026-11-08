@@ -10,7 +10,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Added
 
-- `pcb import` accepts a directory, such as an extracted project archive, and imports the one KiCad project in it. It skips hidden, `__MACOSX` and `*-backups` directories.
+- `pcb import` accepts a directory, such as an extracted project archive, and imports the one KiCad project in it. It skips hidden, `__MACOSX` and `*-backups` directories and `._*` and `_autosave-*` files.
 
 ### Changed
 
