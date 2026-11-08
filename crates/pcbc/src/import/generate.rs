@@ -1383,6 +1383,9 @@ fn sanitize_screaming_snake_fragment(raw: &str) -> String {
 struct ImportPartKey {
     mpn: Option<String>,
     manufacturer: Option<String>,
+    /// The placed instances' designator prefix (`C` for `C135`), which the library symbol's
+    /// default `Reference` (`U`, or a full `U2`) does not reliably match.
+    designator_prefix: String,
     footprint: Option<String>,
     lib_id: Option<KiCadLibId>,
     symbol_definition: String,
@@ -1628,13 +1631,18 @@ fn generate_imported_components(
         let footprint = render_component_footprint(component)
             .with_context(|| format!("Failed to render footprint for {}", out_dir.display()))?;
 
+        // Component() reads sourcing, the designator prefix, and the BOM default from the
+        // symbol, so give it the placed instances' values rather than the library's defaults.
         // File-backed and board-instance geometry uses a colocated footprint stem;
         // bundled stdlib geometry keeps its resolvable KiCad `<lib>:<footprint>` ID.
-        symbol.library_text =
-            patch_symbol_footprint_property(&symbol.library_text, &footprint.symbol_property)
-                .with_context(|| {
-                    format!("Failed to patch symbol Footprint for {}", out_dir.display())
-                })?;
+        let fields = [
+            ("Footprint", Some(footprint.symbol_property.as_str())),
+            ("Reference", Some(part_key.designator_prefix.as_str())),
+            ("Manufacturer_Part_Number", part_key.mpn.as_deref()),
+            ("Manufacturer_Name", part_key.manufacturer.as_deref()),
+        ];
+        symbol.library_text = patch_symbol(&symbol.library_text, &fields, !flags.all_skip_bom)
+            .with_context(|| format!("Failed to patch symbol for {}", out_dir.display()))?;
 
         let pin_plan = build_physical_pin_plan(
             &symbol.symbol,
@@ -1827,6 +1835,15 @@ fn derive_part_key(
 
     let mpn = explicit_mpn(component).map(str::to_string);
     let manufacturer = explicit_manufacturer(component).map(str::to_string);
+    // Zener reads a designator's prefix as the text before its first digit, as `pcb_sch` does.
+    let designator_prefix = component
+        .netlist
+        .refdes
+        .as_str()
+        .split(|c: char| c.is_ascii_digit())
+        .next()
+        .unwrap_or_default()
+        .to_string();
 
     let footprint = component
         .netlist
@@ -1864,6 +1881,7 @@ fn derive_part_key(
     Ok(ImportPartKey {
         mpn,
         manufacturer,
+        designator_prefix,
         footprint,
         lib_id,
         symbol_definition,
@@ -2042,7 +2060,11 @@ fn render_component_symbol(component_name: &str, sym: &str) -> Result<RenderedCo
     })
 }
 
-fn patch_symbol_footprint_property(library_text: &str, footprint_stem: &str) -> Result<String> {
+fn patch_symbol(
+    library_text: &str,
+    fields: &[(&str, Option<&str>)],
+    in_bom: bool,
+) -> Result<String> {
     let mut parsed = pcb_sexpr::parse(library_text).map_err(|e| anyhow::anyhow!(e))?;
     let root = kicad_symbol_lib_items_mut(&mut parsed).context("Not a KiCad symbol library")?;
     let names = symbol_names(root);
@@ -2053,8 +2075,23 @@ fn patch_symbol_footprint_property(library_text: &str, footprint_stem: &str) -> 
         .as_list_mut()
         .context("Invalid symbol structure")?;
     let mut props = symbol_properties(symbol_items);
-    props.insert("Footprint".to_string(), footprint_stem.to_string());
+    for &(name, value) in fields {
+        if let Some(value) = value {
+            props.insert(name.to_string(), value.to_string());
+        }
+    }
     rewrite_symbol_properties(symbol_items, &props);
+    let in_bom = Sexpr::list(vec![
+        Sexpr::symbol("in_bom"),
+        Sexpr::symbol(if in_bom { "yes" } else { "no" }),
+    ]);
+    match symbol_items
+        .iter_mut()
+        .find(|item| item.as_list().and_then(|l| l.first()?.as_sym()) == Some("in_bom"))
+    {
+        Some(item) => *item = in_bom,
+        None => symbol_items.insert(2, in_bom),
+    }
     Ok(format_tree(&parsed, FormatMode::Normal))
 }
 
