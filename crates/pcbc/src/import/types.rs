@@ -96,7 +96,8 @@ impl From<String> for KiCadLibId {
 #[derive(Args, Debug, Clone)]
 #[command(about = "Import KiCad schematics or projects into a Zener board repository")]
 pub struct ImportArgs {
-    /// Path to a KiCad schematic (.kicad_sch) or project (.kicad_pro)
+    /// Path to a KiCad schematic (.kicad_sch) or project (.kicad_pro), or a directory holding
+    /// exactly one project
     #[arg(value_name = "KICAD_INPUT", value_hint = clap::ValueHint::AnyPath)]
     pub kicad_input: PathBuf,
 
@@ -118,6 +119,8 @@ pub(super) struct ImportPaths {
     pub(super) workspace_root: PathBuf,
     pub(super) kicad_project_root: PathBuf,
     pub(super) kicad_input_abs: PathBuf,
+    /// The `[board] path` of an existing board repository, which import replaces.
+    pub(super) manifest_board_zen: Option<PathBuf>,
 }
 
 impl ImportPaths {
@@ -125,6 +128,13 @@ impl ImportPaths {
     pub(super) fn project_dir(&self) -> PathBuf {
         self.workspace_root
             .join(crate::codegen::board::BOARD_PROJECT_DIR)
+    }
+
+    /// The generated board: the repository's own board, or one named after the KiCad project.
+    pub(super) fn board_zen(&self, board_name: &str) -> PathBuf {
+        self.manifest_board_zen
+            .clone()
+            .unwrap_or_else(|| self.workspace_root.join(format!("{board_name}.zen")))
     }
 }
 

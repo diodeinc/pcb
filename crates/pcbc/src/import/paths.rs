@@ -5,18 +5,68 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 pub(super) fn resolve_paths(args: &ImportArgs) -> Result<ImportPaths> {
-    let kicad_input_abs = require_kicad_input_file(&args.kicad_input)?;
+    let kicad_input_abs = require_kicad_input_file(&find_kicad_project(&args.kicad_input)?)?;
     let kicad_project_root = kicad_input_abs
         .parent()
         .context("A KiCad input path must have a parent directory")?
         .to_path_buf();
 
-    let workspace_root = ensure_board_repo_root(&args.output_dir)?;
+    let (workspace_root, manifest_board_zen) = ensure_board_repo_root(&args.output_dir)?;
     Ok(ImportPaths {
         workspace_root,
         kicad_project_root,
         kicad_input_abs,
+        manifest_board_zen,
     })
+}
+
+/// The input itself, or the one `.kicad_pro` in a directory, such as an extracted project
+/// archive. Hidden directories (KiCad's `.history`, macOS `__MACOSX` metadata) and KiCad's
+/// `*-backups` directories hold older copies of the project and are skipped.
+fn find_kicad_project(input: &Path) -> Result<PathBuf> {
+    if !input.is_dir() {
+        return Ok(input.to_path_buf());
+    }
+    fn walk(dir: &Path, found: &mut Vec<PathBuf>) -> Result<()> {
+        for entry in
+            fs::read_dir(dir).with_context(|| format!("Failed to read {}", dir.display()))?
+        {
+            let entry = entry?;
+            let path = entry.path();
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            // Symlinks are not followed, so a link cannot loop or leave the directory.
+            let file_type = entry.file_type()?;
+            if file_type.is_dir() {
+                if !(name.starts_with('.') || name == "__MACOSX" || name.ends_with("-backups")) {
+                    walk(&path, found)?;
+                }
+            } else if file_type.is_file() && path.extension() == Some(OsStr::new("kicad_pro")) {
+                found.push(path);
+            }
+        }
+        Ok(())
+    }
+    let mut found = Vec::new();
+    walk(input, &mut found)?;
+    found.sort();
+    match found.as_slice() {
+        [project] => Ok(project.clone()),
+        [] => anyhow::bail!(
+            "No KiCad project (.kicad_pro) found in {}; pass a .kicad_sch to import a schematic",
+            input.display()
+        ),
+        projects => anyhow::bail!(
+            "Found {} KiCad projects in {}; pass the one to import:\n{}",
+            projects.len(),
+            input.display(),
+            projects
+                .iter()
+                .map(|path| format!("  {}", path.display()))
+                .collect::<Vec<_>>()
+                .join("\n")
+        ),
+    }
 }
 
 fn require_kicad_input_file(path: &Path) -> Result<PathBuf> {
@@ -43,7 +93,8 @@ fn require_kicad_input_file(path: &Path) -> Result<PathBuf> {
     Ok(fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf()))
 }
 
-fn ensure_board_repo_root(path: &Path) -> Result<PathBuf> {
+/// The board repository root, and the `[board] path` of a repository that already exists.
+fn ensure_board_repo_root(path: &Path) -> Result<(PathBuf, Option<PathBuf>)> {
     if path.exists() && !path.is_dir() {
         anyhow::bail!("Output directory is not a directory: {}", path.display());
     }
@@ -68,7 +119,22 @@ fn ensure_board_repo_root(path: &Path) -> Result<PathBuf> {
                 pcb_toml.display()
             );
         }
-        return Ok(workspace_root);
+        // Generated sources refer to modules, components, and the KiCad project from the root.
+        let board_zen = config
+            .board
+            .and_then(|board| board.path)
+            .map(|board_path| {
+                let relative = Path::new(&board_path);
+                anyhow::ensure!(
+                    relative.components().count() == 1
+                        && relative.extension() == Some(OsStr::new("zen")),
+                    "{} sets [board] path = {board_path:?}; import writes the board as a .zen file at the repository root",
+                    pcb_toml.display()
+                );
+                Ok(workspace_root.join(relative))
+            })
+            .transpose()?;
+        return Ok((workspace_root, board_zen));
     }
 
     let mut entries = fs::read_dir(&workspace_root)
@@ -87,7 +153,7 @@ fn ensure_board_repo_root(path: &Path) -> Result<PathBuf> {
         );
     }
 
-    Ok(workspace_root)
+    Ok((workspace_root, None))
 }
 
 fn read_pcb_toml(pcb_toml: &Path) -> Result<pcb_zen_core::config::PcbToml> {

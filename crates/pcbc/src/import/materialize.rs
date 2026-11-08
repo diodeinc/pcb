@@ -12,7 +12,7 @@ pub(super) fn materialize_board(
     staged_root: &Path,
 ) -> Result<MaterializedBoard> {
     let board_dir = paths.workspace_root.clone();
-    let board_zen = board_dir.join(format!("{}.zen", selection.board_name));
+    let board_zen = paths.board_zen(&selection.board_name);
     let import_extraction_json = board_dir.join(report::IMPORT_EXTRACTION_REPORT_NAME);
     let selected = &selection.selected;
     let portable_kicad_project_zip = selected

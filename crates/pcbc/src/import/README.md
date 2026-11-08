@@ -3,8 +3,12 @@
 This module converts a KiCad project or standalone schematic into a Zener board repository.
 
 ```bash
-pcb import <design.kicad_sch|project.kicad_pro> <output-directory>
+pcb import <design.kicad_sch|project.kicad_pro|project-directory> <output-directory>
 ```
+
+A directory input imports the one `.kicad_pro` under it; hidden, `__MACOSX`, and
+`*-backups` directories hold older copies of the project and are skipped. Zero or
+several projects fail with the candidates listed.
 
 ## Pipeline
 
@@ -35,6 +39,9 @@ A new output directory receives a Git repository, README, manifest, and
 standard-library setup. Import refuses an existing board repository unless
 `--force` is supplied. That flag removes generated board, module, component,
 report, and archive files before regeneration, and replaces project layout output.
+An existing repository keeps its board: import writes the `[board] path` of its
+`pcb.toml`, which must be a `.zen` file at the repository root, and a new
+repository's board is `<board>.zen`.
 A failed import restores the output directory: a directory it created is removed, and an
 existing one gets its previous contents back, apart from `.git` and the `.pcb` cache.
 

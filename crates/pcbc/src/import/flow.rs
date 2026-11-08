@@ -280,7 +280,7 @@ fn remove_generated_output(
 ) -> Result<()> {
     let board_dir = &import_paths.workspace_root;
     let mut paths = vec![
-        board_dir.join(format!("{board_name}.zen")),
+        import_paths.board_zen(board_name),
         board_dir.join("modules"),
         board_dir.join("components"),
         board_dir.join(".kicad.import.extraction.json"),
@@ -460,6 +460,7 @@ mod tests {
             workspace_root: board_dir.to_path_buf(),
             kicad_project_root: board_dir.to_path_buf(),
             kicad_input_abs: board_dir.join("board.kicad_sch"),
+            manifest_board_zen: None,
         }
     }
 

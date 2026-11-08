@@ -8,6 +8,14 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added
+
+- `pcb import` accepts a directory, such as an extracted project archive, and imports the one KiCad project in it. It skips hidden, `__MACOSX` and `*-backups` directories.
+
+### Changed
+
+- `pcb import` into an existing board repository writes the board's `[board] path`, such as the starter `pcb new board` creates, instead of a second `<project>.zen` beside it.
+
 ### Fixed
 
 - `pcb import` rejects layout-only KiCad projects (a board but no schematic) with an error that says so, instead of reporting a missing top-level schematic.
