@@ -120,9 +120,10 @@ fn ensure_board_repo_root(path: &Path) -> Result<(PathBuf, Option<PathBuf>)> {
             );
         }
         // Generated sources refer to modules, components, and the KiCad project from the root.
+        // Without a path, the board is the only root `.zen`, as workspace discovery finds it.
         let board_zen = config
             .board
-            .and_then(|board| board.path)
+            .and_then(|board| board.path.or_else(|| single_root_zen(&workspace_root)))
             .map(|board_path| {
                 let relative = Path::new(&board_path);
                 anyhow::ensure!(
@@ -154,6 +155,16 @@ fn ensure_board_repo_root(path: &Path) -> Result<(PathBuf, Option<PathBuf>)> {
     }
 
     Ok((workspace_root, None))
+}
+
+fn single_root_zen(root: &Path) -> Option<String> {
+    let mut zen_files = fs::read_dir(root).ok()?.filter_map(|entry| {
+        let entry = entry.ok()?;
+        (entry.file_type().ok()?.is_file() && entry.path().extension() == Some(OsStr::new("zen")))
+            .then(|| entry.file_name().to_string_lossy().into_owned())
+    });
+    let only = zen_files.next()?;
+    zen_files.next().is_none().then_some(only)
 }
 
 fn read_pcb_toml(pcb_toml: &Path) -> Result<pcb_zen_core::config::PcbToml> {

@@ -907,6 +907,27 @@ fn project_directory_import_replaces_an_existing_repositorys_board() {
     );
     assert!(output.join("eda/layout.kicad_pcb").is_file());
     assert!(!output.join("eda/eda.kicad_pro").exists());
+
+    // Without a [board] path, the board is the repository's only root .zen.
+    let pathless = manifest
+        .lines()
+        .filter(|line| !line.starts_with("path = "))
+        .collect::<Vec<_>>()
+        .join("\n");
+    fs::write(output.join("pcb.toml"), &pathless).unwrap();
+    fs::rename(&starter_zen, output.join("board.zen")).unwrap();
+    let reimported = import(&mut sandbox);
+    assert!(
+        reimported.status.success(),
+        "{}",
+        String::from_utf8_lossy(&reimported.stderr)
+    );
+    assert!(
+        fs::read_to_string(output.join("board.zen"))
+            .unwrap()
+            .contains("components/")
+    );
+    assert!(!output.join("layout.zen").exists());
 }
 
 #[test]

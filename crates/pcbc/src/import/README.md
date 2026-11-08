@@ -40,8 +40,8 @@ standard-library setup. Import refuses an existing board repository unless
 `--force` is supplied. That flag removes generated board, module, component,
 report, and archive files before regeneration, and replaces project layout output.
 An existing repository keeps its board: import writes the `[board] path` of its
-`pcb.toml`, which must be a `.zen` file at the repository root, and a new
-repository's board is `<board>.zen`.
+`pcb.toml`, or without one the repository's only root `.zen`, which must be a
+`.zen` file at the repository root. A new repository's board is `<board>.zen`.
 A failed import restores the output directory: a directory it created is removed, and an
 existing one gets its previous contents back, apart from `.git` and the `.pcb` cache.
 
