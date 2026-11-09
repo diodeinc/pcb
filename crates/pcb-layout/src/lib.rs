@@ -389,8 +389,8 @@ fn footprint_model_checksums(items: &[pcb_sexpr::Sexpr]) -> BTreeMap<String, Str
 ///
 /// KiCad stores embedded files once per board, keyed by filename, and keeps the existing entry,
 /// so a replaced footprint would otherwise keep the old model. A payload change under a filename
-/// that a kept footprint also uses is refused, since it would leave that footprint half one
-/// version.
+/// that any footprint staying on the board also uses (including footprints the sync does not
+/// manage) is refused, since it would leave that footprint half one version.
 fn refresh_board_embedded_models(
     pcb_path: &Path,
     schematic: &Schematic,
@@ -424,7 +424,8 @@ fn refresh_board_embedded_models(
     let mut source_models: HashMap<PathBuf, BTreeMap<String, SourceEmbeddedModel>> = HashMap::new();
     // Models the replaced footprints bring, by filename, with the footprint that brings each.
     let mut refreshed: BTreeMap<String, (SourceEmbeddedModel, String)> = BTreeMap::new();
-    let mut kept = Vec::new();
+    // Managed footprints that keep their board copy, by span start.
+    let mut kept: HashMap<usize, (String, PathBuf)> = HashMap::new();
     for (path, instance) in &components {
         let Some(AttributeValue::String(footprint)) = instance.attributes.get("footprint") else {
             continue;
@@ -442,7 +443,7 @@ fn refresh_board_embedded_models(
         let (fpid, _) = schematic.kicad_footprint(instance)?;
         match board_footprints.get(path) {
             Some(fp) if !sync_footprints && fp.fpid.as_deref() == Some(fpid.as_str()) => {
-                kept.push((label, *fp, source_path))
+                kept.insert(fp.span.start, (label, source_path));
             }
             _ => {
                 for (name, model) in &source_models[&source_path] {
@@ -471,13 +472,24 @@ fn refresh_board_embedded_models(
             .map(|file| (file.name.clone(), file))
             .collect();
 
-    for (label, fp, source_path) in kept {
-        let Some(items) = board_items
-            .iter()
-            .find(|node| node.span == fp.span)
-            .and_then(pcb_sexpr::Sexpr::as_list)
-        else {
+    let managed: HashSet<usize> = board_footprints.values().map(|fp| fp.span.start).collect();
+    for node in board_items {
+        let Some(items) = node.as_list() else {
             continue;
+        };
+        if items.first().and_then(pcb_sexpr::Sexpr::as_sym) != Some("footprint") {
+            continue;
+        }
+        // Managed footprints the sync replaces or removes leave the board; all others stay.
+        let kept_source = kept.get(&node.span.start);
+        if managed.contains(&node.span.start) && kept_source.is_none() {
+            continue;
+        }
+        let label = match kept_source {
+            Some((label, _)) => label.clone(),
+            None => pcb_sexpr::kicad::schematic::schematic_properties(items)
+                .remove("Reference")
+                .unwrap_or_else(|| "an unmanaged footprint".to_string()),
         };
         let stubs = footprint_model_checksums(items);
         for name in stubs.keys() {
@@ -491,8 +503,11 @@ fn refresh_board_embedded_models(
                 );
             }
         }
+        let Some((_, source_path)) = kept_source else {
+            continue;
+        };
         if let Some((name, _)) = stubs.iter().find(|(name, checksum)| {
-            source_models[&source_path]
+            source_models[source_path]
                 .get(*name)
                 .is_some_and(|model| model.checksum != **checksum)
         }) {

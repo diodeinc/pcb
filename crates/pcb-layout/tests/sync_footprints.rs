@@ -360,3 +360,67 @@ fn fpid_change_refuses_model_shared_with_kept_footprint() -> Result<()> {
     assert_eq!(std::fs::read_to_string(&initial.pcb_file)?, before);
     Ok(())
 }
+
+#[test]
+fn fpid_change_refuses_model_shared_with_unmanaged_footprint() -> Result<()> {
+    let (temp, resolution) = prepare_simple_workspace()?;
+    let zen_file = temp.path().join("MyBoard.zen");
+    write_footprint_versions(&temp)?;
+
+    let schematic = evaluate_board(&zen_file, resolution.clone())?;
+    let mut diagnostics = Diagnostics::default();
+    let initial = process_layout(&schematic, LayoutOptions::default(), &mut diagnostics)?
+        .context("initial layout was not generated")?;
+
+    // Add a copy of IC1 that sync does not manage: no Path property and no KIID path.
+    let board = std::fs::read_to_string(&initial.pcb_file)?;
+    let root = pcb_sexpr::parse(&board)?;
+    let ic1 = root
+        .as_list()
+        .context("board is not a list")?
+        .iter()
+        .find(|node| {
+            node.as_list().is_some_and(|items| {
+                items.first().and_then(pcb_sexpr::Sexpr::as_sym) == Some("footprint")
+                    && board[node.span.start..node.span.end].contains("\"IC1\"")
+            })
+        })
+        .context("IC1 not found")?;
+    let items = ic1.as_list().context("IC1 is not a list")?;
+    let mut patches = pcb_sexpr::PatchSet::default();
+    for item in items {
+        let Some(list) = item.as_list() else { continue };
+        let is_path = list.first().and_then(pcb_sexpr::Sexpr::as_sym) == Some("path");
+        let is_path_property = list.first().and_then(pcb_sexpr::Sexpr::as_sym) == Some("property")
+            && list.get(1).and_then(pcb_sexpr::Sexpr::as_atom) == Some("Path");
+        if is_path || is_path_property {
+            patches.replace_raw(
+                pcb_sexpr::Span::new(
+                    item.span.start - ic1.span.start,
+                    item.span.end - ic1.span.start,
+                ),
+                String::new(),
+            );
+        }
+    }
+    let mut unmanaged = Vec::new();
+    patches.write_to(&board[ic1.span.start..ic1.span.end], &mut unmanaged)?;
+    let unmanaged = String::from_utf8(unmanaged)?.replace("\"IC1\"", "\"J1\"");
+    let end = board
+        .rfind(')')
+        .context("missing board closing parenthesis")?;
+    let mut board = board;
+    board.insert_str(end, &format!("\t{unmanaged}\n"));
+    std::fs::write(&initial.pcb_file, &board)?;
+
+    use_new_footprint_version(&temp.path().join("BMI270.zen"))?;
+    let schematic = evaluate_board(&zen_file, resolution)?;
+    let mut diagnostics = Diagnostics::default();
+    let error = process_layout(&schematic, LayoutOptions::default(), &mut diagnostics)
+        .expect_err("layout sync should refuse the shared model change")
+        .to_string();
+    assert!(error.contains("Embedded model conflict"), "{error}");
+    assert!(error.contains("IC1") && error.contains("J1"), "{error}");
+    assert_eq!(std::fs::read_to_string(&initial.pcb_file)?, board);
+    Ok(())
+}
