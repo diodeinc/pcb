@@ -12,10 +12,13 @@ use crate::WorkspaceContext;
 
 const BOM_MATCH_TIMEOUT_SECS: u64 = 120;
 
+/// Integer millionths of the currency's major unit (1 USD = 1_000_000).
+const MICROS_PER_UNIT: f64 = 1_000_000.0;
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct Money {
-    amount_minor: f64,
+    amount_micros: i64,
     currency: String,
 }
 
@@ -71,7 +74,12 @@ impl ComponentOffer {
         self.price_breaks
             .iter()
             .filter(|pb| pb.unit_price.currency == "USD")
-            .map(|pb| (pb.quantity, pb.unit_price.amount_minor / 100.0))
+            .map(|pb| {
+                (
+                    pb.quantity,
+                    pb.unit_price.amount_micros as f64 / MICROS_PER_UNIT,
+                )
+            })
             .collect()
     }
 
@@ -333,8 +341,9 @@ mod tests {
                     "mpn": format!("{id}-MPN"),
                     "manufacturer": "API Manufacturer",
                     "priceBreaks": [
-                        {"quantity": 1, "unitPrice": {"amountMinor": 25, "currency": "USD"}},
-                        {"quantity": 1, "unitPrice": {"amountMinor": 1, "currency": "EUR"}}
+                        {"quantity": 1, "unitPrice": {"amountMicros": 250_000, "currency": "USD"}},
+                        {"quantity": 10, "unitPrice": {"amountMicros": 12_345, "currency": "USD"}},
+                        {"quantity": 1, "unitPrice": {"amountMicros": 1, "currency": "EUR"}}
                     ],
                     "marketStock": 100,
                     "datasheetUrl": format!("https://example.com/{id}.pdf"),
@@ -417,7 +426,7 @@ mod tests {
         );
         let us = availability.us.as_ref().unwrap();
         assert_eq!(us.price, Some(0.25));
-        assert_eq!(us.price_breaks, Some(vec![(1, 0.25)]));
+        assert_eq!(us.price_breaks, Some(vec![(1, 0.25), (10, 0.012345)]));
         assert_eq!(us.alt_stock, 100);
     }
 

@@ -11,6 +11,8 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ### Fixed
 
 - `pcb layout` takes the new embedded 3D model when a footprint's FPID (version) changes, even when the model keeps its STEP filename, instead of keeping the old model on the new footprint. A sync that would give a footprint keeping its board copy a different model under the same filename now fails and names both footprints, and a footprint that keeps its board copy while its library model changed gets a warning.
+- `pcb bom` and `pcb ipc2581 bom` read supplier prices as `amountMicros`, the API's current money format, so BOMs get offers, stock, and prices again.
+- `pcb bom` and `pcb ipc2581 bom` fail with an error when availability cannot be fetched, instead of printing a BOM without sourcing data and exiting 0. Pass `--offline` for a BOM without sourcing data.
 
 ## [0.4.99] - 2026-11-09
 
