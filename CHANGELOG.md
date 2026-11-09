@@ -8,6 +8,8 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+## [0.4.100] - 2026-11-09
+
 ### Fixed
 
 - `pcb layout` takes the new embedded 3D model when a footprint's FPID (version) changes, even when the model keeps its STEP filename, instead of keeping the old model on the new footprint. A sync that would give a footprint keeping its board copy a different model under the same filename now fails and names both footprints, and a footprint that keeps its board copy while its library model changed gets a warning.
@@ -2594,7 +2596,8 @@ Tvs(package="DO-214AA", direction="Unidirectional", reverse_standoff_voltage="24
 - Error on invalid type passed to `io()`
 - Format the auto-generated component .zen files
 
-[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.4.99...HEAD
+[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.4.100...HEAD
+[0.4.100]: https://github.com/diodeinc/pcb/compare/v0.4.99...v0.4.100
 [0.4.99]: https://github.com/diodeinc/pcb/compare/v0.4.98...v0.4.99
 [0.4.98]: https://github.com/diodeinc/pcb/compare/v0.4.97...v0.4.98
 [0.4.97]: https://github.com/diodeinc/pcb/compare/v0.4.96...v0.4.97
