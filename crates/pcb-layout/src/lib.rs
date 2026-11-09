@@ -413,13 +413,20 @@ fn refresh_board_embedded_models(
         .map(|(instance_ref, instance)| (instance_ref.instance_path.join("."), instance))
         .collect();
     let keyed = extract_keyed_footprints(&board).map_err(anyhow::Error::msg)?;
-    let board_footprints: BTreeMap<String, &FootprintInfo> =
-        match_board_footprints(&keyed, components.keys())
-            .filter_map(|(fp, path)| match path {
-                BoardFootprintPath::Managed(path) => Some((path, fp)),
-                _ => None,
-            })
-            .collect();
+    let mut board_footprints: BTreeMap<String, &FootprintInfo> = BTreeMap::new();
+    // Footprints the sync owns: managed ones, and ones with a `Path` but the wrong KIID path,
+    // which it deletes. Only the managed ones it keeps stay on the board.
+    let mut synced = HashSet::new();
+    for (fp, path) in match_board_footprints(&keyed, components.keys()) {
+        match path {
+            BoardFootprintPath::Managed(path) => {
+                board_footprints.insert(path, fp);
+            }
+            BoardFootprintPath::Unmanaged { .. } => {}
+            BoardFootprintPath::Unknown => continue,
+        }
+        synced.insert(fp.span.start);
+    }
 
     let mut source_models: HashMap<PathBuf, BTreeMap<String, SourceEmbeddedModel>> = HashMap::new();
     // Models the replaced footprints bring, by filename, with the footprint that brings each.
@@ -472,7 +479,6 @@ fn refresh_board_embedded_models(
             .map(|file| (file.name.clone(), file))
             .collect();
 
-    let managed: HashSet<usize> = board_footprints.values().map(|fp| fp.span.start).collect();
     for node in board_items {
         let Some(items) = node.as_list() else {
             continue;
@@ -480,9 +486,8 @@ fn refresh_board_embedded_models(
         if items.first().and_then(pcb_sexpr::Sexpr::as_sym) != Some("footprint") {
             continue;
         }
-        // Managed footprints the sync replaces or removes leave the board; all others stay.
         let kept_source = kept.get(&node.span.start);
-        if managed.contains(&node.span.start) && kept_source.is_none() {
+        if synced.contains(&node.span.start) && kept_source.is_none() {
             continue;
         }
         let label = match kept_source {
