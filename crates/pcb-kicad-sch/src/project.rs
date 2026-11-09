@@ -50,24 +50,24 @@ pub fn load_project(
     project_file: &str,
     read: impl FnMut(&str) -> Result<Option<String>>,
 ) -> Result<LoadedProject> {
-    let (project, missing) = load_available_project(project_file, read)?;
-    if let Some(missing) = missing.first() {
-        bail!(
-            "sheet {} references missing schematic {}",
-            missing.sheet_id,
-            missing.file
-        );
-    }
-    Ok(project)
+    Ok(load(project_file, read, true)?.0)
 }
 
-/// Like [`load_project`], but a placed sheet whose schematic is missing keeps
-/// its sheet and loads without a child page, and is reported instead of
-/// failing the whole project. For viewers that show what exists; anything that
-/// writes the project must use [`load_project`].
+/// Like [`load_project`], but a placed sheet whose schematic is missing is
+/// dropped from its parent and reported instead of failing the whole project,
+/// so the rest stays a consistent, analyzable document. For viewers that show
+/// what exists; anything that writes the project must use [`load_project`].
 pub fn load_available_project(
     project_file: &str,
+    read: impl FnMut(&str) -> Result<Option<String>>,
+) -> Result<(LoadedProject, Vec<MissingSchematic>)> {
+    load(project_file, read, false)
+}
+
+fn load(
+    project_file: &str,
     mut read: impl FnMut(&str) -> Result<Option<String>>,
+    strict: bool,
 ) -> Result<(LoadedProject, Vec<MissingSchematic>)> {
     let project: Value = serde_json::from_str(&read(project_file)?.unwrap_or_else(|| "{}".into()))
         .with_context(|| format!("failed to parse {project_file}"))?;
@@ -121,10 +121,16 @@ pub fn load_available_project(
                 None if !sheet.placed => {
                     removed_sheets.insert(sheet.id.clone());
                 }
-                None => missing.push(MissingSchematic {
-                    sheet_id: sheet.id.to_string(),
-                    file: child,
-                }),
+                None if strict => {
+                    bail!("sheet {} references missing schematic {child}", sheet.id)
+                }
+                None => {
+                    removed_sheets.insert(sheet.id.clone());
+                    missing.push(MissingSchematic {
+                        sheet_id: sheet.id.to_string(),
+                        file: child,
+                    });
+                }
             }
         }
         page.items.retain(
@@ -316,8 +322,19 @@ mod tests {
                 file: "leaf.kicad_sch".into(),
             }]
         );
-        // The sheet box stays on its parent page.
-        assert_eq!(available.document.pages[1].items.len(), 2);
+        // The sheet is dropped from its parent, so the rest stays analyzable.
+        assert_eq!(available.document.pages[1].items.len(), 1);
+        ConnectivityGraph::from_kicad(&available.document).unwrap();
+
+        // Strict loading stops at the missing sheet before parsing later pages.
+        partial.insert("other.kicad_sch", "(".to_string());
+        let error = load_project("demo.kicad_pro", |path| Ok(partial.get(path).cloned()))
+            .unwrap_err()
+            .to_string();
+        assert_eq!(
+            error,
+            "sheet s-child-0 references missing schematic leaf.kicad_sch"
+        );
         assert!(sheet_file("demo.kicad_sch", r"C:\other\x.kicad_sch").is_err());
         assert_eq!(
             sheet_file("demo.kicad_sch", "rev:/x.kicad_sch").unwrap(),
