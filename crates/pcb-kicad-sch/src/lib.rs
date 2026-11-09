@@ -43,7 +43,10 @@ pub use model::{
     SymbolField, SymbolInstance, SymbolLibrary, TextEffects, TextSize, Wire,
 };
 pub use placement::off_page_warnings;
-pub use project::{LoadedProject, load_project, project_root_schematics, sheet_file};
+pub use project::{
+    LoadedProject, MissingSchematic, load_available_project, load_project, project_root_schematics,
+    sheet_file,
+};
 pub use repair::{
     ConnectivityRepairIntent, NetDriverKind, plan_connectivity_repair, verify_connectivity_repair,
 };
