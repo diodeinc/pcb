@@ -871,7 +871,7 @@ def main():
     parser.add_argument(
         "--sync-footprints",
         action="store_true",
-        help="""Reload managed footprint definitions from source; preserve placement and routing.""",
+        help="""Footprints keep their board copy until their FPID (version) changes; then the whole definition, including embedded models, comes from the library. --sync-footprints does this for every footprint. Placement and routing are always kept.""",
     )
     args = parser.parse_args()
 
