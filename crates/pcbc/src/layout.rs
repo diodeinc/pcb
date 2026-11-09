@@ -42,7 +42,9 @@ pub struct LayoutArgs {
     #[arg(long = "no-sync", conflicts_with = "check")]
     pub no_sync: bool,
 
-    /// Reload managed footprint definitions from source; preserve placement and routing
+    /// Footprints keep their board copy until their FPID (version) changes; then the whole
+    /// definition, including embedded models, comes from the library. `--sync-footprints` does
+    /// this for every footprint. Placement and routing are always kept.
     #[arg(long, conflicts_with_all = ["check", "no_sync"])]
     pub sync_footprints: bool,
 

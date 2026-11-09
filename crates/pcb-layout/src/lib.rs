@@ -17,13 +17,15 @@ use thiserror::Error;
 use include_dir::{Dir, include_dir};
 use pcb_kicad::{PythonScriptBuilder, ensure_board_compatible_with_installed_kicad};
 use pcb_sch::kicad_netlist::write_fp_lib_table;
+use pcb_sexpr::board::{FootprintInfo, extract_keyed_footprints};
 
 mod effective_netlist;
 mod kicad_project_patch;
 mod moved;
 mod repair_nets;
 use effective_netlist::{
-    DiffSeverity, diff_effective_netlists, layout_effective_netlist, source_effective_netlist,
+    BoardFootprintPath, DiffSeverity, diff_effective_netlists, layout_effective_netlist,
+    match_board_footprints, source_effective_netlist,
 };
 pub use moved::compute_moved_paths_patches;
 pub use moved::compute_net_renames_patches;
@@ -57,7 +59,9 @@ pub struct LayoutResult {
 pub struct LayoutOptions {
     /// Check the existing layout without modifying it.
     pub check: bool,
-    /// Reload managed footprint definitions even when their FPIDs are unchanged.
+    /// Footprints keep their board copy until their FPID (version) changes; then the whole
+    /// definition, including embedded models, comes from the library. This flag does that for
+    /// every footprint. Placement and routing are always kept.
     pub sync_footprints: bool,
 }
 
@@ -320,88 +324,80 @@ fn source_footprint_path(
     }
 }
 
-fn source_embedded_models(
-    schematic: &Schematic,
-) -> anyhow::Result<BTreeMap<String, SourceEmbeddedModel>> {
-    let mut models: BTreeMap<String, SourceEmbeddedModel> = BTreeMap::new();
-    let mut visited_sources = HashSet::new();
+/// The embedded models a source footprint file carries, by filename.
+fn read_source_models(source_path: &Path) -> anyhow::Result<BTreeMap<String, SourceEmbeddedModel>> {
+    let source = fs::read_to_string(source_path)
+        .with_context(|| format!("Failed to read source footprint {}", source_path.display()))?;
+    pcb_sexpr::kicad::footprint::validate_footprint_source(&source)
+        .with_context(|| format!("Invalid source footprint {}", source_path.display()))?;
+    let root = pcb_sexpr::parse(&source)
+        .with_context(|| format!("Failed to parse source footprint {}", source_path.display()))?;
+    let root_items = root
+        .as_list()
+        .with_context(|| format!("Source footprint {} is not a list", source_path.display()))?;
 
-    for instance in schematic.instances.values() {
-        if instance.kind != InstanceKind::Component {
+    let mut models = BTreeMap::new();
+    for file in embedded_file_payloads(root_items)? {
+        if file.file_type != "model" {
             continue;
         }
-
-        let Some(AttributeValue::String(footprint)) = instance.attributes.get("footprint") else {
-            continue;
-        };
-        let source_path = source_footprint_path(footprint, &schematic.package_roots)
-            .with_context(|| format!("Failed to resolve footprint path `{footprint}`"))?;
-        if !visited_sources.insert(source_path.clone()) {
-            continue;
-        }
-        let source = fs::read_to_string(&source_path).with_context(|| {
-            format!("Failed to read source footprint {}", source_path.display())
-        })?;
-        pcb_sexpr::kicad::footprint::validate_footprint_source(&source)
-            .with_context(|| format!("Invalid source footprint {}", source_path.display()))?;
-        let root = pcb_sexpr::parse(&source).with_context(|| {
-            format!("Failed to parse source footprint {}", source_path.display())
-        })?;
-        let root_items = root
-            .as_list()
-            .with_context(|| format!("Source footprint {} is not a list", source_path.display()))?;
-
-        for file in embedded_file_payloads(root_items)? {
-            if file.file_type != "model" {
-                continue;
-            }
-
-            let file_text = source
-                .get(file.span.start..file.span.end)
-                .with_context(|| {
-                    format!(
-                        "Embedded model `{}` has an invalid source span in {}",
-                        file.name,
-                        source_path.display()
-                    )
-                })?
-                .to_string();
-            let candidate = SourceEmbeddedModel {
+        let file_text = source
+            .get(file.span.start..file.span.end)
+            .with_context(|| {
+                format!(
+                    "Embedded model `{}` has an invalid source span in {}",
+                    file.name,
+                    source_path.display()
+                )
+            })?
+            .to_string();
+        models.insert(
+            file.name,
+            SourceEmbeddedModel {
                 checksum: file.checksum,
                 file_text,
-                source_path: source_path.clone(),
-            };
-
-            if let Some(existing) = models.get(&file.name)
-                && existing.checksum != candidate.checksum
-            {
-                anyhow::bail!(
-                    "Cannot synchronize embedded model `{}`: source footprints {} and {} contain different payloads ({} and {})",
-                    file.name,
-                    existing.source_path.display(),
-                    candidate.source_path.display(),
-                    existing.checksum,
-                    candidate.checksum
-                );
-            }
-
-            models.entry(file.name).or_insert(candidate);
-        }
+                source_path: source_path.to_path_buf(),
+            },
+        );
     }
-
     Ok(models)
 }
 
-/// Replace stale board-level model payloads before KiCad loads the board.
-///
-/// KiCad consolidates footprint payloads by filename and otherwise keeps the existing board entry,
-/// so `--sync-footprints` makes each source model authoritative for its filename.
-fn refresh_board_embedded_models(pcb_path: &Path, schematic: &Schematic) -> anyhow::Result<()> {
-    let source_models = source_embedded_models(schematic)?;
-    if source_models.is_empty() {
-        return Ok(());
-    }
+/// Checksums of the model stubs in a board footprint's own `(embedded_files ...)`, by filename.
+/// KiCad keeps the payload at board level, so these stubs carry no data.
+fn footprint_model_checksums(items: &[pcb_sexpr::Sexpr]) -> BTreeMap<String, String> {
+    let Some(embedded_files) = pcb_sexpr::find_child_list(items, "embedded_files") else {
+        return BTreeMap::new();
+    };
+    embedded_files
+        .iter()
+        .skip(1)
+        .filter_map(pcb_sexpr::Sexpr::as_list)
+        .filter(|file| file.first().and_then(pcb_sexpr::Sexpr::as_sym) == Some("file"))
+        .filter(|file| child_atom(file, "type") == Some("model"))
+        .filter_map(|file| {
+            Some((
+                child_atom(file, "name")?.to_string(),
+                child_atom(file, "checksum")?.to_ascii_uppercase(),
+            ))
+        })
+        .collect()
+}
 
+/// Make board-level model payloads match the footprints the sync will replace, before KiCad
+/// loads the board.
+///
+/// KiCad stores embedded files once per board, keyed by filename, and keeps the existing entry,
+/// so a replaced footprint would otherwise keep the old model. A payload change under a filename
+/// that any footprint staying on the board also uses (including footprints the sync does not
+/// manage) is refused, since it would leave that footprint half one version.
+fn refresh_board_embedded_models(
+    pcb_path: &Path,
+    schematic: &Schematic,
+    sync_footprints: bool,
+    diagnostics_pcb_path: &str,
+    diagnostics: &mut pcb_zen_core::Diagnostics,
+) -> anyhow::Result<()> {
     let board_source = fs::read_to_string(pcb_path)
         .with_context(|| format!("Failed to read PCB file: {}", pcb_path.display()))?;
     let board = pcb_sexpr::parse(&board_source)
@@ -410,17 +406,138 @@ fn refresh_board_embedded_models(pcb_path: &Path, schematic: &Schematic) -> anyh
         .as_list()
         .with_context(|| format!("PCB file {} is not a list", pcb_path.display()))?;
 
-    let mut patches = pcb_sexpr::PatchSet::new();
-    for board_file in embedded_file_payloads(board_items)? {
-        let Some(source_model) = source_models.get(&board_file.name) else {
+    let components: BTreeMap<String, &pcb_sch::Instance> = schematic
+        .instances
+        .iter()
+        .filter(|(_, instance)| instance.kind == InstanceKind::Component)
+        .map(|(instance_ref, instance)| (instance_ref.instance_path.join("."), instance))
+        .collect();
+    let keyed = extract_keyed_footprints(&board).map_err(anyhow::Error::msg)?;
+    let mut board_footprints: BTreeMap<String, &FootprintInfo> = BTreeMap::new();
+    // Footprints the sync owns: managed ones, and ones with a `Path` but the wrong KIID path,
+    // which it deletes. Only the managed ones it keeps stay on the board.
+    let mut synced = HashSet::new();
+    for (fp, path) in match_board_footprints(&keyed, components.keys()) {
+        match path {
+            BoardFootprintPath::Managed(path) => {
+                board_footprints.insert(path, fp);
+            }
+            BoardFootprintPath::Unmanaged { .. } => {}
+            BoardFootprintPath::Unknown => continue,
+        }
+        synced.insert(fp.span.start);
+    }
+
+    let mut source_models: HashMap<PathBuf, BTreeMap<String, SourceEmbeddedModel>> = HashMap::new();
+    // Models the replaced footprints bring, by filename, with the footprint that brings each.
+    let mut refreshed: BTreeMap<String, (SourceEmbeddedModel, String)> = BTreeMap::new();
+    // Managed footprints that keep their board copy, by span start.
+    let mut kept: HashMap<usize, (String, PathBuf)> = HashMap::new();
+    for (path, instance) in &components {
+        let Some(AttributeValue::String(footprint)) = instance.attributes.get("footprint") else {
             continue;
         };
-        if board_file.checksum != source_model.checksum {
+        let source_path = source_footprint_path(footprint, &schematic.package_roots)
+            .with_context(|| format!("Failed to resolve footprint path `{footprint}`"))?;
+        if !source_models.contains_key(&source_path) {
+            let models = read_source_models(&source_path)?;
+            source_models.insert(source_path.clone(), models);
+        }
+        let label = instance
+            .reference_designator
+            .clone()
+            .unwrap_or_else(|| path.clone());
+        let (fpid, _) = schematic.kicad_footprint(instance)?;
+        match board_footprints.get(path) {
+            Some(fp) if !sync_footprints && fp.fpid.as_deref() == Some(fpid.as_str()) => {
+                kept.insert(fp.span.start, (label, source_path));
+            }
+            _ => {
+                for (name, model) in &source_models[&source_path] {
+                    if let Some((existing, _)) = refreshed.get(name)
+                        && existing.checksum != model.checksum
+                    {
+                        anyhow::bail!(
+                            "Cannot synchronize embedded model `{name}`: source footprints {} and {} contain different payloads ({} and {})",
+                            existing.source_path.display(),
+                            model.source_path.display(),
+                            existing.checksum,
+                            model.checksum
+                        );
+                    }
+                    refreshed
+                        .entry(name.clone())
+                        .or_insert_with(|| (model.clone(), label.clone()));
+                }
+            }
+        }
+    }
+
+    let board_payloads: BTreeMap<String, EmbeddedFilePayload> =
+        embedded_file_payloads(board_items)?
+            .into_iter()
+            .map(|file| (file.name.clone(), file))
+            .collect();
+
+    for node in board_items {
+        let Some(items) = node.as_list() else {
+            continue;
+        };
+        if items.first().and_then(pcb_sexpr::Sexpr::as_sym) != Some("footprint") {
+            continue;
+        }
+        let kept_source = kept.get(&node.span.start);
+        if synced.contains(&node.span.start) && kept_source.is_none() {
+            continue;
+        }
+        let label = match kept_source {
+            Some((label, _)) => label.clone(),
+            None => pcb_sexpr::kicad::schematic::schematic_properties(items)
+                .remove("Reference")
+                .unwrap_or_else(|| "an unmanaged footprint".to_string()),
+        };
+        let stubs = footprint_model_checksums(items);
+        for name in stubs.keys() {
+            if let Some((model, replacer)) = refreshed.get(name)
+                && board_payloads
+                    .get(name)
+                    .is_some_and(|board_file| board_file.checksum != model.checksum)
+            {
+                anyhow::bail!(
+                    "Embedded model conflict: {replacer} takes its new footprint definition from the library, which changes embedded model `{name}`, but {label} keeps its board copy and uses the same model file. KiCad stores one model per filename, so {label} would end up with the new model on its old footprint. Move both footprints to one footprint version, or use a different STEP filename in the new version."
+                );
+            }
+        }
+        let Some((_, source_path)) = kept_source else {
+            continue;
+        };
+        if let Some((name, _)) = stubs.iter().find(|(name, checksum)| {
+            source_models[source_path]
+                .get(*name)
+                .is_some_and(|model| model.checksum != **checksum)
+        }) {
+            diagnostics.diagnostics.push(Diagnostic::categorized(
+                diagnostics_pcb_path,
+                &format!(
+                    "{label} keeps its board copy; the library model `{name}` changed (use --sync-footprints to replace)"
+                ),
+                "layout.sync.stale_footprint",
+                EvalSeverity::Warning,
+            ));
+        }
+    }
+
+    let mut patches = pcb_sexpr::PatchSet::new();
+    for (name, board_file) in &board_payloads {
+        let Some((model, _)) = refreshed.get(name) else {
+            continue;
+        };
+        if board_file.checksum != model.checksum {
             info!(
-                "Refreshing embedded model {}: {} -> {}",
-                board_file.name, board_file.checksum, source_model.checksum
+                "Refreshing embedded model {name}: {} -> {}",
+                board_file.checksum, model.checksum
             );
-            patches.replace_raw(board_file.span, source_model.file_text.clone());
+            patches.replace_raw(board_file.span, model.file_text.clone());
         }
     }
 
@@ -828,10 +945,6 @@ pub fn generate_layout_in(
 
     ensure_board_compatible_with_installed_kicad(&paths.pcb)?;
 
-    if pcb_exists && sync_footprints {
-        refresh_board_embedded_models(&paths.pcb, schematic)?;
-    }
-
     // Check for moved() paths that can't be applied to submodule layouts (always warn)
     for warning in check_submodule_moved_paths(schematic) {
         diagnostics.diagnostics.push(Diagnostic::categorized(
@@ -848,6 +961,14 @@ pub fn generate_layout_in(
         embed_board_fonts(&paths.pcb)?;
         apply_moved_paths(&paths.pcb, schematic, &diagnostics_pcb_path, diagnostics)?;
         repair_net_names(&paths.pcb, schematic, &diagnostics_pcb_path, diagnostics)?;
+        // After moved() renames, so footprints match their source paths.
+        refresh_board_embedded_models(
+            &paths.pcb,
+            schematic,
+            sync_footprints,
+            &diagnostics_pcb_path,
+            diagnostics,
+        )?;
     }
 
     // Extract lens module to temp directory for Python imports

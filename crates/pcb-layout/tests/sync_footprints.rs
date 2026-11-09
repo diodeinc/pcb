@@ -252,3 +252,199 @@ fn sync_footprints_reloads_same_fpid_models_and_preserves_board_state() -> Resul
 
     Ok(())
 }
+
+const OLD_STEP: &[u8] = b"ISO-10303-21;\nHEADER;\nFILE_DESCRIPTION(('old model'),'2;1');\nENDSEC;\nDATA;\nENDSEC;\nEND-ISO-10303-21;\n";
+const NEW_STEP: &[u8] = b"ISO-10303-21;\nHEADER;\nFILE_DESCRIPTION(('new model'),'2;1');\nENDSEC;\nDATA;\nENDSEC;\nEND-ISO-10303-21;\n";
+
+/// Embed the old model in the fixture footprint, and write a new version of it under another
+/// FPID that carries different model data under the same STEP filename.
+fn write_footprint_versions(temp: &TempDir) -> Result<()> {
+    let footprint_file = temp.path().join("eda/BMI270.kicad_mod");
+    let source = std::fs::read_to_string(&footprint_file)?;
+    std::fs::write(
+        &footprint_file,
+        embed_step_in_footprint(&source, OLD_STEP, "BMI270.step")?,
+    )?;
+    let new_source = source.replace("(xyz -90 0 0)", "(xyz -45 0 0)");
+    assert_ne!(
+        source, new_source,
+        "test fixture model transform was not found"
+    );
+    std::fs::write(
+        temp.path().join("eda/BMI270_v2.kicad_mod"),
+        embed_step_in_footprint(&new_source, NEW_STEP, "BMI270.step")?,
+    )?;
+    Ok(())
+}
+
+fn use_new_footprint_version(module_file: &std::path::Path) -> Result<()> {
+    let source = std::fs::read_to_string(module_file)?;
+    let updated = source.replace("eda/BMI270.kicad_mod", "eda/BMI270_v2.kicad_mod");
+    assert_ne!(source, updated, "footprint reference was not found");
+    std::fs::write(module_file, updated)?;
+    Ok(())
+}
+
+#[test]
+fn fpid_change_takes_new_embedded_model_without_flag() -> Result<()> {
+    let (temp, resolution) = prepare_simple_workspace()?;
+    let zen_file = temp.path().join("MyBoard.zen");
+    write_footprint_versions(&temp)?;
+    let old_checksum = embedded_file_checksum(OLD_STEP);
+    let new_checksum = embedded_file_checksum(NEW_STEP);
+
+    let schematic = evaluate_board(&zen_file, resolution.clone())?;
+    let mut diagnostics = Diagnostics::default();
+    let initial = process_layout(&schematic, LayoutOptions::default(), &mut diagnostics)?
+        .context("initial layout was not generated")?;
+    assert!(std::fs::read_to_string(&initial.pcb_file)?.contains(&old_checksum));
+    add_test_track(&initial.pcb_file)?;
+    process_layout(&schematic, LayoutOptions::default(), &mut diagnostics)?;
+    let before_snapshot: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&initial.snapshot_file)?)?;
+    let before_ic1 = footprint_snapshot(&before_snapshot, "IC1")?;
+    assert_eq!(before_snapshot["tracks"].as_array().map(Vec::len), Some(1));
+
+    use_new_footprint_version(&temp.path().join("BMI270.zen"))?;
+    let schematic = evaluate_board(&zen_file, resolution)?;
+    let mut diagnostics = Diagnostics::default();
+    let updated = process_layout(&schematic, LayoutOptions::default(), &mut diagnostics)?
+        .context("updated layout was not generated")?;
+
+    let board = std::fs::read_to_string(&updated.pcb_file)?;
+    assert!(board.contains("BMI270_v2"));
+    assert!(board.contains("(xyz -45 0 0)"));
+    assert!(!board.contains("(xyz -90 0 0)"));
+    assert!(board.contains(&new_checksum));
+    assert!(!board.contains(&old_checksum));
+    let snapshot: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&updated.snapshot_file)?)?;
+    let ic1 = footprint_snapshot(&snapshot, "IC1")?;
+    assert_eq!(placement_state(ic1), placement_state(before_ic1));
+    assert_eq!(snapshot["tracks"], before_snapshot["tracks"]);
+    Ok(())
+}
+
+#[test]
+fn fpid_change_refuses_model_shared_with_kept_footprint() -> Result<()> {
+    let (temp, resolution) = prepare_simple_workspace()?;
+    let zen_file = temp.path().join("MyBoard.zen");
+    write_footprint_versions(&temp)?;
+    // A second sensor on the same footprint, in its own module so it can change version alone.
+    std::fs::copy(
+        temp.path().join("BMI270.zen"),
+        temp.path().join("BMI270B.zen"),
+    )?;
+    let board_source = std::fs::read_to_string(&zen_file)?.replace(
+        "Layout(",
+        "BMI270B = Module(\"BMI270B.zen\")\n\nBMI270B(\n    name=\"BMI270B\",\n    POWER=power,\n    GND=gnd,\n    I2C=i2c,\n)\n\nLayout(",
+    );
+    std::fs::write(&zen_file, board_source)?;
+
+    let schematic = evaluate_board(&zen_file, resolution.clone())?;
+    let mut diagnostics = Diagnostics::default();
+    let initial = process_layout(&schematic, LayoutOptions::default(), &mut diagnostics)?
+        .context("initial layout was not generated")?;
+    let before = std::fs::read_to_string(&initial.pcb_file)?;
+
+    use_new_footprint_version(&temp.path().join("BMI270B.zen"))?;
+    let schematic = evaluate_board(&zen_file, resolution)?;
+    let mut diagnostics = Diagnostics::default();
+    let error = process_layout(&schematic, LayoutOptions::default(), &mut diagnostics)
+        .expect_err("layout sync should refuse the shared model change")
+        .to_string();
+    assert!(error.contains("Embedded model conflict"), "{error}");
+    assert!(error.contains("BMI270.step"), "{error}");
+    assert!(error.contains("IC1") && error.contains("IC2"), "{error}");
+    assert!(error.contains("different STEP filename"), "{error}");
+    assert_eq!(std::fs::read_to_string(&initial.pcb_file)?, before);
+    Ok(())
+}
+
+/// Add J1, a copy of IC1 that sync does not manage. Without its Path property and KIID path it
+/// stays on the board; with its Path property and a different KIID path, sync deletes it.
+fn add_unmanaged_copy_of_ic1(
+    pcb_file: &std::path::Path,
+    keep_path_property: bool,
+) -> Result<String> {
+    let board = std::fs::read_to_string(pcb_file)?;
+    let root = pcb_sexpr::parse(&board)?;
+    let ic1 = root
+        .as_list()
+        .context("board is not a list")?
+        .iter()
+        .find(|node| {
+            node.as_list().is_some_and(|items| {
+                items.first().and_then(pcb_sexpr::Sexpr::as_sym) == Some("footprint")
+                    && board[node.span.start..node.span.end].contains("\"IC1\"")
+            })
+        })
+        .context("IC1 not found")?;
+    let mut patches = pcb_sexpr::PatchSet::default();
+    for item in ic1.as_list().context("IC1 is not a list")? {
+        let Some(list) = item.as_list() else { continue };
+        let tag = list.first().and_then(pcb_sexpr::Sexpr::as_sym);
+        let span = pcb_sexpr::Span::new(
+            item.span.start - ic1.span.start,
+            item.span.end - ic1.span.start,
+        );
+        if tag == Some("path") {
+            let replacement = if keep_path_property {
+                "(path \"/00000000-0000-0000-0000-000000000001\")"
+            } else {
+                ""
+            };
+            patches.replace_raw(span, replacement.to_string());
+        } else if !keep_path_property
+            && tag == Some("property")
+            && list.get(1).and_then(pcb_sexpr::Sexpr::as_atom) == Some("Path")
+        {
+            patches.replace_raw(span, String::new());
+        }
+    }
+    let mut copy = Vec::new();
+    patches.write_to(&board[ic1.span.start..ic1.span.end], &mut copy)?;
+    let copy = String::from_utf8(copy)?.replace("\"IC1\"", "\"J1\"");
+    let end = board
+        .rfind(')')
+        .context("missing board closing parenthesis")?;
+    let mut board = board;
+    board.insert_str(end, &format!("\t{copy}\n"));
+    std::fs::write(pcb_file, &board)?;
+    Ok(board)
+}
+
+#[test]
+fn fpid_change_checks_models_of_unmanaged_footprints_that_stay() -> Result<()> {
+    for keep_path_property in [false, true] {
+        let (temp, resolution) = prepare_simple_workspace()?;
+        let zen_file = temp.path().join("MyBoard.zen");
+        write_footprint_versions(&temp)?;
+
+        let schematic = evaluate_board(&zen_file, resolution.clone())?;
+        let mut diagnostics = Diagnostics::default();
+        let initial = process_layout(&schematic, LayoutOptions::default(), &mut diagnostics)?
+            .context("initial layout was not generated")?;
+        let board = add_unmanaged_copy_of_ic1(&initial.pcb_file, keep_path_property)?;
+
+        use_new_footprint_version(&temp.path().join("BMI270.zen"))?;
+        let schematic = evaluate_board(&zen_file, resolution)?;
+        let mut diagnostics = Diagnostics::default();
+        let result = process_layout(&schematic, LayoutOptions::default(), &mut diagnostics);
+        if keep_path_property {
+            // Sync deletes the copy, so nothing keeps the old model.
+            result?;
+            let synced = std::fs::read_to_string(&initial.pcb_file)?;
+            assert!(!synced.contains("\"J1\""));
+            assert!(synced.contains(&embedded_file_checksum(NEW_STEP)));
+        } else {
+            let error = result
+                .expect_err("layout sync should refuse the shared model change")
+                .to_string();
+            assert!(error.contains("Embedded model conflict"), "{error}");
+            assert!(error.contains("IC1") && error.contains("J1"), "{error}");
+            assert_eq!(std::fs::read_to_string(&initial.pcb_file)?, board);
+        }
+    }
+    Ok(())
+}

@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Fixed
+
+- `pcb layout` takes the new embedded 3D model when a footprint's FPID (version) changes, even when the model keeps its STEP filename, instead of keeping the old model on the new footprint. A sync that would give a footprint keeping its board copy a different model under the same filename now fails and names both footprints, and a footprint that keeps its board copy while its library model changed gets a warning.
+
 ## [0.4.99] - 2026-11-09
 
 ### Changed

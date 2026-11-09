@@ -2,7 +2,7 @@ use anyhow::{Context, Result, bail};
 use pcb_sch::kicad_identity::{footprint_kiid_path, uuid_for_path};
 use pcb_sch::{AttributeValue, Instance, InstanceKind, Schematic};
 use pcb_sexpr::Sexpr;
-use pcb_sexpr::board::{extract_keyed_footprints, footprint_name_from_fpid};
+use pcb_sexpr::board::{FootprintInfo, extract_keyed_footprints, footprint_name_from_fpid};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
@@ -174,6 +174,52 @@ fn footprint_file(schematic: &Schematic, instance: &Instance) -> Option<PathBuf>
     }
 }
 
+/// Which source component a keyed board footprint belongs to.
+pub(crate) enum BoardFootprintPath {
+    /// The footprint is managed by sync for this component path.
+    Managed(String),
+    /// The footprint names a component path but its KIID path does not match it.
+    Unmanaged { path: String, expected_kiid: String },
+    /// The footprint matches no source component.
+    Unknown,
+}
+
+/// Match keyed board footprints to source component paths: by their `Path` property when set,
+/// otherwise by the trailing UUID of their KIID path.
+pub(crate) fn match_board_footprints<'a, 'p>(
+    keyed: &'a [FootprintInfo],
+    source_paths: impl IntoIterator<Item = &'p String>,
+) -> impl Iterator<Item = (&'a FootprintInfo, BoardFootprintPath)> {
+    let kiid_to_path: BTreeMap<String, String> = source_paths
+        .into_iter()
+        .map(|path| (uuid_for_path(path), path.clone()))
+        .collect();
+
+    keyed.iter().map(move |fp| {
+        let board_path = match fp.properties.get("Path").filter(|s| !s.is_empty()) {
+            Some(path) => {
+                let expected_kiid = expected_kiid_path(path);
+                if fp.path == expected_kiid {
+                    BoardFootprintPath::Managed(path.clone())
+                } else {
+                    BoardFootprintPath::Unmanaged {
+                        path: path.clone(),
+                        expected_kiid,
+                    }
+                }
+            }
+            None => {
+                let uuid = fp.path.trim_matches('/').rsplit('/').next().unwrap_or("");
+                kiid_to_path
+                    .get(uuid)
+                    .cloned()
+                    .map_or(BoardFootprintPath::Unknown, BoardFootprintPath::Managed)
+            }
+        };
+        (fp, board_path)
+    })
+}
+
 pub fn layout_effective_netlist(
     board: &Sexpr,
     expected: &EffectiveNetlist,
@@ -182,16 +228,13 @@ pub fn layout_effective_netlist(
     let mut diagnostics = Vec::new();
     let keyed = extract_keyed_footprints(board).map_err(anyhow::Error::msg)?;
 
-    let mut kiid_to_path: BTreeMap<String, String> = BTreeMap::new();
-    for path in expected.footprints.keys() {
-        kiid_to_path.insert(uuid_for_path(path), path.clone());
-    }
-
-    for fp in keyed {
-        let property_path = fp.properties.get("Path").filter(|s| !s.is_empty()).cloned();
-        let component_path = if let Some(path) = property_path.clone() {
-            let expected_kiid = expected_kiid_path(&path);
-            if fp.path != expected_kiid {
+    for (fp, board_path) in match_board_footprints(&keyed, expected.footprints.keys()) {
+        let component_path = match board_path {
+            BoardFootprintPath::Managed(path) => path,
+            BoardFootprintPath::Unmanaged {
+                path,
+                expected_kiid,
+            } => {
                 diagnostics.push(SemanticDiff::warning(
                     "layout.sync.unmanaged_footprint",
                     format!(
@@ -207,13 +250,7 @@ pub fn layout_effective_netlist(
                 ));
                 continue;
             }
-            path
-        } else {
-            let uuid = fp.path.trim_matches('/').rsplit('/').next().unwrap_or("");
-            let Some(path) = kiid_to_path.get(uuid).cloned() else {
-                continue;
-            };
-            path
+            BoardFootprintPath::Unknown => continue,
         };
 
         let mut pads = BTreeSet::new();
@@ -252,7 +289,7 @@ pub fn layout_effective_netlist(
         effective.footprints.insert(
             component_path,
             EffectiveFootprint {
-                fpid: fp.fpid.unwrap_or_default(),
+                fpid: fp.fpid.clone().unwrap_or_default(),
                 reference: fp.properties.get("Reference").cloned(),
                 pads,
             },
