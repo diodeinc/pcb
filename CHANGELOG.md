@@ -8,6 +8,8 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+## [0.4.99] - 2026-11-09
+
 ### Changed
 
 - `pcb import` accepts a project directory, such as an extracted zip, and writes into an existing board repository's own board instead of beside it.
@@ -2586,7 +2588,8 @@ Tvs(package="DO-214AA", direction="Unidirectional", reverse_standoff_voltage="24
 - Error on invalid type passed to `io()`
 - Format the auto-generated component .zen files
 
-[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.4.98...HEAD
+[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.4.99...HEAD
+[0.4.99]: https://github.com/diodeinc/pcb/compare/v0.4.98...v0.4.99
 [0.4.98]: https://github.com/diodeinc/pcb/compare/v0.4.97...v0.4.98
 [0.4.97]: https://github.com/diodeinc/pcb/compare/v0.4.96...v0.4.97
 [0.4.96]: https://github.com/diodeinc/pcb/compare/v0.4.95...v0.4.96
