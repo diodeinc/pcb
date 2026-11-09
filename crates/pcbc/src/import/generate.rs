@@ -1,4 +1,5 @@
 use super::*;
+use anstream::eprintln;
 use anyhow::{Context, Result};
 use pcb_component_gen as component_gen;
 use pcb_sexpr::Sexpr;
