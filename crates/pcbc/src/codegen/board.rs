@@ -32,16 +32,23 @@ pub struct ImportedIoNetDecl {
     pub kind: ImportedNetKind,
 }
 
+/// The config of a sheet module shared by several sheet instances: the instance's names for the
+/// components the module names after its first instance, and the same for nested sheet modules.
+pub const REFDES_CONFIG: &str = "refdes";
+
 #[derive(Debug, Clone)]
 pub struct ImportedInstanceCall {
     pub module_ident: String,
+    /// The instance name, which carries its reference designator.
     pub refdes: String,
+    /// Look the name up in the shared module's `refdes` config, defaulting to `refdes`.
+    pub refdes_from_config: bool,
     pub dnp: bool,
     pub skip_bom: Option<bool>,
     pub skip_pos: Option<bool>,
-    /// Config kwarg name -> raw string value.
+    /// Config kwarg name -> Starlark expression.
     ///
-    /// Rendered as `key = "value",` before IO net plumbing.
+    /// Rendered as `key = value,` before IO net plumbing.
     pub config_args: BTreeMap<String, String>,
     /// IO name -> board net identifier
     pub io_nets: BTreeMap<String, String>,
@@ -111,6 +118,7 @@ pub fn render_imported_board(args: RenderImportedBoardArgs<'_>) -> String {
 
 pub fn render_imported_sheet_module(
     module_doc: &str,
+    shared: bool,
     io_nets: &[ImportedIoNetDecl],
     internal_net_decls: &[ImportedNetDecl],
     module_decls: &[(String, String)],
@@ -121,6 +129,11 @@ pub fn render_imported_sheet_module(
     out.push_str("\"\"\"\n");
     out.push_str(module_doc);
     out.push_str("\n\"\"\"\n\n");
+    if shared {
+        out.push_str(&format!(
+            "{REFDES_CONFIG} = config(dict, default = {{}})\n\n"
+        ));
+    }
 
     out.push_str(&render_imported_module_body(
         io_nets,
@@ -204,7 +217,12 @@ fn render_imported_module_body(
     if !instance_calls.is_empty() {
         for call in instance_calls {
             let mut args: Vec<String> = Vec::new();
-            args.push(format!("name = {}", starlark::string(&call.refdes)));
+            let name = starlark::string(&call.refdes);
+            args.push(if call.refdes_from_config {
+                format!("name = {REFDES_CONFIG}.get({name}, {name})")
+            } else {
+                format!("name = {name}")
+            });
             if call.dnp {
                 args.push("dnp = True".to_string());
             }
@@ -215,7 +233,7 @@ fn render_imported_module_body(
                 args.push(format!("skip_pos = {}", starlark::bool(skip_pos)));
             }
             for (k, v) in &call.config_args {
-                args.push(format!("{k} = {}", starlark::string(v)));
+                args.push(format!("{k} = {v}"));
             }
             for (io, net_ident) in &call.io_nets {
                 args.push(format!("{io} = {net_ident}"));
@@ -737,12 +755,14 @@ mod tests {
 
         let out = render_imported_sheet_module(
             "TestModule",
+            false,
             &[],
             &[],
             &[],
             &[ImportedInstanceCall {
                 module_ident: "Foo".to_string(),
                 refdes: "H1".to_string(),
+                refdes_from_config: false,
                 dnp: false,
                 skip_bom: None,
                 skip_pos: None,
@@ -758,20 +778,22 @@ mod tests {
     #[test]
     fn module_invocation_is_multiline_for_larger_arg_counts() {
         let mut config_args = BTreeMap::new();
-        config_args.insert("foo".to_string(), "bar".to_string());
-        config_args.insert("baz".to_string(), "qux".to_string());
+        config_args.insert("foo".to_string(), "\"bar\"".to_string());
+        config_args.insert("baz".to_string(), "\"qux\"".to_string());
 
         let mut io_nets = BTreeMap::new();
         io_nets.insert("P1".to_string(), "GND".to_string());
 
         let out = render_imported_sheet_module(
             "TestModule",
+            false,
             &[],
             &[],
             &[],
             &[ImportedInstanceCall {
                 module_ident: "Foo".to_string(),
                 refdes: "H1".to_string(),
+                refdes_from_config: false,
                 dnp: false,
                 skip_bom: None,
                 skip_pos: None,

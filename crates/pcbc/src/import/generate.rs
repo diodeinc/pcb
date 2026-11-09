@@ -103,6 +103,7 @@ pub(super) fn generate(
         net_decls: &net_decls,
         components: &component_modules,
         not_connected_nets: &not_connected_nets,
+        schematic: &project.document,
     })?;
 
     write_imported_board_zen(ImportedBoardZenArgs {
@@ -217,9 +218,7 @@ fn write_imported_board_zen(args: ImportedBoardZenArgs<'_>) -> Result<()> {
     let (root_sheet_module_decls, root_sheet_module_calls) = build_root_sheet_module_calls(
         args.schematic_sheet_tree,
         args.sheet_modules,
-        args.hierarchy_plan,
-        args.net_decls,
-        &root_net_set,
+        &root_net_idents,
         &root_component_calls,
     );
 
@@ -820,6 +819,7 @@ struct GenerateSheetModulesArgs<'a> {
     net_decls: &'a ImportedNetDecls,
     components: &'a GeneratedComponents,
     not_connected_nets: &'a BTreeSet<KiCadNetName>,
+    schematic: &'a pcb_kicad_sch::SchDocument,
 }
 
 fn generate_sheet_modules(args: GenerateSheetModulesArgs<'_>) -> Result<GeneratedSheetModules> {
@@ -832,6 +832,7 @@ fn generate_sheet_modules(args: GenerateSheetModulesArgs<'_>) -> Result<Generate
     let components = args.components;
     let not_connected_nets = args.not_connected_nets;
     let modules_root = board_dir.join("modules");
+    let tree = &ir.schematic_sheet_tree;
 
     let mut anchors_by_sheet: BTreeMap<KiCadSheetPath, Vec<KiCadUuidPathKey>> = BTreeMap::new();
     for (anchor, component) in &ir.components {
@@ -845,15 +846,29 @@ fn generate_sheet_modules(args: GenerateSheetModulesArgs<'_>) -> Result<Generate
             .push(anchor.clone());
     }
 
-    let subtree_has_components =
-        compute_subtree_has_components(&ir.schematic_sheet_tree, &anchors_by_sheet);
+    let subtree_has_components = compute_subtree_has_components(tree, &anchors_by_sheet);
+    let instance_name_by_sheet = assign_sheet_instance_names(tree, &subtree_has_components);
+    let entity_prefix_by_sheet = build_sheet_entity_prefixes(tree, &instance_name_by_sheet);
+    let shared = shared_sheets(SharedSheetsArgs {
+        ir,
+        port_to_net,
+        components,
+        not_connected_nets,
+        subtree_has_components: &subtree_has_components,
+        entity_prefix_by_sheet: &entity_prefix_by_sheet,
+    });
+    let template_of = |sheet: &KiCadSheetPath| {
+        shared
+            .get(sheet)
+            .map_or(sheet.clone(), |shared| shared.template.clone())
+    };
 
     // Track allocated module directory names in a case-insensitive way to avoid
     // collisions on case-insensitive filesystems (e.g. macOS default).
     let mut used_module_dirs_ci: BTreeSet<String> = BTreeSet::new();
     let mut module_dir_by_sheet: BTreeMap<KiCadSheetPath, String> = BTreeMap::new();
-    for (sheet_path, node) in &ir.schematic_sheet_tree.nodes {
-        if sheet_path.as_str() == "/" {
+    for (sheet_path, node) in &tree.nodes {
+        if sheet_path.as_str() == "/" || template_of(sheet_path) != *sheet_path {
             continue;
         }
         if !subtree_has_components
@@ -864,9 +879,13 @@ fn generate_sheet_modules(args: GenerateSheetModulesArgs<'_>) -> Result<Generate
             continue;
         }
 
+        // A shared module is named after its sheet file, not one of its instances.
         let sheet_name = node
-            .sheet_name
-            .clone()
+            .schematic_file
+            .as_deref()
+            .filter(|_| shared.contains_key(sheet_path))
+            .and_then(|file| file.file_stem()?.to_str().map(str::to_string))
+            .or_else(|| node.sheet_name.clone())
             .or_else(|| sheet_path.last_uuid().map(|u| u.to_string()))
             .unwrap_or_else(|| "sheet".to_string());
 
@@ -877,11 +896,10 @@ fn generate_sheet_modules(args: GenerateSheetModulesArgs<'_>) -> Result<Generate
         let dir = alloc_unique_fs_segment(&base, &mut used_module_dirs_ci);
         module_dir_by_sheet.insert(sheet_path.clone(), dir);
     }
-
-    let instance_name_by_sheet =
-        assign_sheet_instance_names(&ir.schematic_sheet_tree, &subtree_has_components);
-    let entity_prefix_by_sheet =
-        build_sheet_entity_prefixes(&ir.schematic_sheet_tree, &instance_name_by_sheet);
+    for (sheet_path, sheet) in &shared {
+        let dir = module_dir_by_sheet[&sheet.template].clone();
+        module_dir_by_sheet.insert(sheet_path.clone(), dir);
+    }
 
     let mut anchor_to_entity_prefix: BTreeMap<KiCadUuidPathKey, String> = BTreeMap::new();
     for (anchor, component) in &ir.components {
@@ -896,18 +914,152 @@ fn generate_sheet_modules(args: GenerateSheetModulesArgs<'_>) -> Result<Generate
         anchor_to_entity_prefix.insert(anchor.clone(), prefix);
     }
 
-    let mut module_paths: BTreeSet<(std::cmp::Reverse<usize>, KiCadSheetPath)> = BTreeSet::new();
+    let module_nets = |sheet: &KiCadSheetPath| {
+        let plan = ir
+            .hierarchy_plan
+            .modules
+            .get(sheet)
+            .cloned()
+            .unwrap_or_default();
+        let mut nets = plan.nets_defined_here;
+        nets.extend(plan.nets_io_here);
+        nets
+    };
+    // A shared module names each net after its hierarchical label in the sheet, else as KiCad
+    // names it inside the sheet (`/CH_A/MID` is `MID`) when all instances agree, else after its
+    // first instance's net.
+    let hierarchical_labels = if shared.is_empty() {
+        BTreeMap::new()
+    } else {
+        hierarchical_labels_by_pin(args.schematic)?
+    };
+    let sheet_name_path = |sheet: &KiCadSheetPath| {
+        let mut names = Vec::new();
+        let mut current = Some(sheet.clone()).filter(|sheet| sheet.as_str() != "/");
+        while let Some(sheet) = current {
+            names.push(tree.nodes[&sheet].sheet_name.clone().unwrap_or_default());
+            current = sheet.parent().filter(|sheet| sheet.as_str() != "/");
+        }
+        names.reverse();
+        format!("/{}/", names.join("/"))
+    };
+    let mut shared_net_names: BTreeMap<KiCadSheetPath, BTreeMap<KiCadNetName, (String, String)>> =
+        BTreeMap::new();
+    for (template, _) in shared.iter().filter(|(sheet, s)| **sheet == s.template) {
+        let instances = shared
+            .iter()
+            .filter(|(_, s)| s.template == *template)
+            .map(|(sheet, s)| (sheet_name_path(sheet), &s.nets))
+            .collect::<Vec<_>>();
+        let mut idents: BTreeSet<String> = components
+            .module_decls
+            .iter()
+            .map(|(ident, _)| ident.clone())
+            .collect();
+        let mut names = BTreeSet::new();
+        let mut out = BTreeMap::new();
+        let file = tree.nodes[template].schematic_file.as_deref();
+        // Like `build_net_decls`, marked no-connect nets become `NotConnected()` and get no name.
+        for net in module_nets(template) {
+            if not_connected_nets.contains(&net) {
+                continue;
+            }
+            let label = ir.nets[&net]
+                .ports
+                .iter()
+                .filter(|port| port.component.sheetpath_tstamps == template.as_str())
+                .filter_map(|port| {
+                    let uuid = port.component.symbol_uuid.clone();
+                    let pin = (file?, uuid, port.pin.as_str().to_string());
+                    hierarchical_labels.get(&pin)
+                })
+                .flatten()
+                .collect::<BTreeSet<_>>();
+            let local = instances
+                .iter()
+                .map(|(prefix, nets)| nets.get(&net)?.as_str().strip_prefix(prefix.as_str()))
+                .collect::<Option<BTreeSet<_>>>();
+            let local = [Some(label.into_iter().map(String::as_str).collect()), local]
+                .into_iter()
+                .flatten()
+                .find(|names: &BTreeSet<&str>| names.len() == 1)
+                .and_then(|names| names.first().copied())
+                .unwrap_or(net.as_str());
+            let ident = sanitize_screaming_snake_identifier(local, "NET");
+            let ident = alloc_unique_ident(&ident, "_", &mut idents);
+            let name = sanitize_kicad_name_for_zener(local, "NET");
+            let name = alloc_unique_ident(&name, "_", &mut names);
+            out.insert(net, (ident, name));
+        }
+        shared_net_names.insert(template.clone(), out);
+    }
+    let net_idents = |sheet: &KiCadSheetPath| match shared_net_names.get(sheet) {
+        Some(names) => names
+            .iter()
+            .map(|(net, (ident, _))| (net.clone(), ident.clone()))
+            .collect(),
+        None => net_decls.ident_map_for_set(&module_nets(sheet)),
+    };
+
+    let mut io_by_sheet = BTreeMap::new();
+    let mut refdes_by_sheet = BTreeMap::new();
     for sheet_path in module_dir_by_sheet.keys() {
-        module_paths.insert((std::cmp::Reverse(sheet_path.depth()), sheet_path.clone()));
+        let template = template_of(sheet_path);
+        let template_idents = net_idents(&template);
+        let plan = ir
+            .hierarchy_plan
+            .modules
+            .get(&template)
+            .cloned()
+            .unwrap_or_default();
+        let io = plan
+            .nets_io_here
+            .iter()
+            .filter_map(|net| {
+                let instance_net = match shared.get(sheet_path) {
+                    Some(shared) => shared.nets.get(net)?,
+                    None => net,
+                };
+                Some((template_idents.get(net)?.clone(), instance_net.clone()))
+            })
+            .collect::<BTreeMap<_, _>>();
+        io_by_sheet.insert(sheet_path.clone(), io);
+        let refdes = RefdesConfig {
+            ir,
+            shared: &shared,
+            anchors_by_sheet: &anchors_by_sheet,
+            refdes_instance_names,
+            instance_name_by_sheet: &instance_name_by_sheet,
+        };
+        if let Some(config) = refdes.config(sheet_path) {
+            refdes_by_sheet.insert(sheet_path.clone(), config);
+        }
+    }
+
+    let sheet_modules = GeneratedSheetModules {
+        module_dir_by_sheet,
+        instance_name_by_sheet,
+        anchor_to_entity_prefix,
+        subtree_has_components,
+        io_by_sheet,
+        refdes_by_sheet,
+    };
+
+    let mut module_paths: BTreeSet<(std::cmp::Reverse<usize>, KiCadSheetPath)> = BTreeSet::new();
+    for sheet_path in sheet_modules.module_dir_by_sheet.keys() {
+        if template_of(sheet_path) == *sheet_path {
+            module_paths.insert((std::cmp::Reverse(sheet_path.depth()), sheet_path.clone()));
+        }
     }
 
     for (_, sheet_path) in module_paths {
-        let Some(node) = ir.schematic_sheet_tree.nodes.get(&sheet_path) else {
+        let Some(node) = tree.nodes.get(&sheet_path) else {
             continue;
         };
-        let Some(module_dir) = module_dir_by_sheet.get(&sheet_path).cloned() else {
+        let Some(module_dir) = sheet_modules.module_dir_by_sheet.get(&sheet_path).cloned() else {
             continue;
         };
+        let is_shared = shared.contains_key(&sheet_path);
 
         let sheet_name = node
             .sheet_name
@@ -922,11 +1074,7 @@ fn generate_sheet_modules(args: GenerateSheetModulesArgs<'_>) -> Result<Generate
             .cloned()
             .unwrap_or_default();
 
-        let mut module_net_set: BTreeSet<KiCadNetName> = BTreeSet::new();
-        module_net_set.extend(module_plan.nets_defined_here.iter().cloned());
-        module_net_set.extend(module_plan.nets_io_here.iter().cloned());
-
-        let module_net_ident_by_kicad = net_decls.ident_map_for_set(&module_net_set);
+        let module_net_ident_by_kicad = net_idents(&sheet_path);
 
         let io_nets: Vec<crate::codegen::board::ImportedIoNetDecl> = module_plan
             .nets_io_here
@@ -956,7 +1104,11 @@ fn generate_sheet_modules(args: GenerateSheetModulesArgs<'_>) -> Result<Generate
             let Some(ident) = module_net_ident_by_kicad.get(net_name).cloned() else {
                 continue;
             };
-            let Some(name) = net_decls.zener_name_by_kicad_name.get(net_name).cloned() else {
+            let name = match shared_net_names.get(&sheet_path) {
+                Some(names) => names.get(net_name).map(|(_, name)| name.clone()),
+                None => net_decls.zener_name_by_kicad_name.get(net_name).cloned(),
+            };
+            let Some(name) = name else {
                 continue;
             };
             let kind = ir
@@ -986,7 +1138,7 @@ fn generate_sheet_modules(args: GenerateSheetModulesArgs<'_>) -> Result<Generate
             .filter_map(|a| ir.components.get_key_value(a))
             .collect();
 
-        let component_instance_calls = build_imported_instance_calls_for_instances(
+        let mut component_instance_calls = build_imported_instance_calls_for_instances(
             sheet_instances,
             port_to_net,
             refdes_instance_names,
@@ -994,6 +1146,9 @@ fn generate_sheet_modules(args: GenerateSheetModulesArgs<'_>) -> Result<Generate
             components,
             not_connected_nets,
         )?;
+        for call in &mut component_instance_calls {
+            call.refdes_from_config = is_shared;
+        }
 
         let used_component_modules: BTreeSet<String> = component_instance_calls
             .iter()
@@ -1022,61 +1177,71 @@ fn generate_sheet_modules(args: GenerateSheetModulesArgs<'_>) -> Result<Generate
             BTreeMap::new();
 
         for child in &node.children {
-            if !subtree_has_components.get(child).copied().unwrap_or(false) {
+            if !sheet_modules
+                .subtree_has_components
+                .get(child)
+                .copied()
+                .unwrap_or(false)
+            {
                 continue;
             }
-            let Some(child_dir) = module_dir_by_sheet.get(child).cloned() else {
+            let Some(child_dir) = sheet_modules.module_dir_by_sheet.get(child).cloned() else {
                 continue;
             };
 
             let module_path = format!("../{child_dir}/{child_dir}.zen");
-            let module_ident_base = module_ident_from_component_dir(&child_dir);
-            let module_ident = alloc_unique_ident(&module_ident_base, "_", &mut used_idents);
-            child_module_decls.insert(module_ident.clone(), module_path);
-
-            let child_plan = ir
-                .hierarchy_plan
-                .modules
-                .get(child)
-                .cloned()
-                .unwrap_or_default();
-
-            let mut io_nets: BTreeMap<String, String> = BTreeMap::new();
-            for net in &child_plan.nets_io_here {
-                let Some(ident) = net_decls.var_ident_by_kicad_name.get(net).cloned() else {
-                    continue;
-                };
-                io_nets.insert(ident.clone(), ident);
-            }
-
-            let instance_name = instance_name_by_sheet
-                .get(child)
-                .cloned()
-                .unwrap_or_else(|| "sheet".to_string());
-
-            child_module_calls.insert(
-                instance_name.clone(),
-                crate::codegen::board::ImportedInstanceCall {
-                    module_ident,
-                    refdes: instance_name,
-                    dnp: false,
-                    skip_bom: None,
-                    skip_pos: None,
-                    config_args: BTreeMap::new(),
-                    io_nets,
-                },
+            let module_ident = match child_module_decls
+                .iter()
+                .find(|(_, path)| **path == module_path)
+            {
+                Some((ident, _)) => ident.clone(),
+                None => {
+                    let base = module_ident_from_component_dir(&child_dir);
+                    let ident = alloc_unique_ident(&base, "_", &mut used_idents);
+                    child_module_decls.insert(ident.clone(), module_path);
+                    ident
+                }
+            };
+            let call = sheet_modules.module_call(
+                child,
+                module_ident,
+                &module_net_ident_by_kicad,
+                is_shared,
             );
+            child_module_calls.insert(call.refdes.clone(), call);
         }
 
         let module_dir_abs = modules_root.join(&module_dir);
         let module_zen = module_dir_abs.join(format!("{module_dir}.zen"));
 
-        let module_doc = format!(
-            "{} sheet module: {} ({})",
-            board_name,
-            sheet_name,
-            sheet_path.as_str()
-        );
+        let module_doc = if is_shared {
+            // In the order `shared_sheets` picks the template, so it comes first.
+            let mut instances = shared
+                .iter()
+                .filter(|(_, s)| s.template == sheet_path)
+                .filter_map(|(sheet, _)| entity_prefix_by_sheet.get(sheet).cloned())
+                .collect::<Vec<_>>();
+            instances.sort();
+            format!(
+                "{board_name} sheet module: {} ({})\n\n\
+                 Shared by the sheet instances {}. Names follow {}; `refdes` gives each\n\
+                 instance's reference designators for them.",
+                node.schematic_file
+                    .as_deref()
+                    .map(|file| file.display().to_string())
+                    .unwrap_or(sheet_name),
+                sheet_path.as_str(),
+                instances.join(", "),
+                instances.first().map(String::as_str).unwrap_or_default(),
+            )
+        } else {
+            format!(
+                "{} sheet module: {} ({})",
+                board_name,
+                sheet_name,
+                sheet_path.as_str()
+            )
+        };
 
         let mut module_decls: BTreeMap<String, String> = BTreeMap::new();
         module_decls.extend(module_component_decls);
@@ -1089,6 +1254,7 @@ fn generate_sheet_modules(args: GenerateSheetModulesArgs<'_>) -> Result<Generate
 
         let module_zen_content = crate::codegen::board::render_imported_sheet_module(
             &module_doc,
+            is_shared,
             &io_nets,
             &internal_net_decls,
             &module_decls,
@@ -1097,12 +1263,324 @@ fn generate_sheet_modules(args: GenerateSheetModulesArgs<'_>) -> Result<Generate
         write_zen(&module_zen, &module_zen_content)?;
     }
 
-    Ok(GeneratedSheetModules {
-        module_dir_by_sheet,
-        instance_name_by_sheet,
-        anchor_to_entity_prefix,
-        subtree_has_components,
+    Ok(sheet_modules)
+}
+
+/// The hierarchical labels connected to each `(file, symbol, pin number)` on their page.
+type PinLabels<'a> = BTreeMap<(&'a Path, String, String), BTreeSet<String>>;
+
+fn hierarchical_labels_by_pin(document: &pcb_kicad_sch::SchDocument) -> Result<PinLabels<'_>> {
+    use pcb_kicad_sch::connectivity::{
+        ComponentIdentity, ConnectivityItemRef, PhysicalConnectivity, PinVisibility, Terminal,
+    };
+    let mut labels = BTreeMap::new();
+    let mut files = BTreeMap::new();
+    for page in &document.pages {
+        files.insert(page.id.as_str(), page.file_name.as_deref().map(Path::new));
+        for item in &page.items {
+            if let pcb_kicad_sch::SchItem::Label(label) = item
+                && matches!(label.kind, pcb_kicad_sch::LabelKind::Hierarchical { .. })
+            {
+                labels.insert((page.id.as_str(), label.id.as_str()), label.text.as_str());
+            }
+        }
+    }
+    let physical = PhysicalConnectivity::from_kicad(document, PinVisibility::IncludeHidden)?;
+    let mut out = BTreeMap::<_, BTreeSet<String>>::new();
+    for island in physical.islands.values() {
+        let names = island
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                ConnectivityItemRef::Label { page_id, id } => {
+                    labels.get(&(page_id.as_str(), id.as_str()))
+                }
+                _ => None,
+            })
+            .map(|name| name.to_string())
+            .collect::<BTreeSet<_>>();
+        if names.is_empty() {
+            continue;
+        }
+        for terminal in &island.terminals {
+            let Terminal::ComponentPin {
+                component: ComponentIdentity::KiCadSymbol(location),
+                pin_numbers,
+                ..
+            } = terminal
+            else {
+                continue;
+            };
+            let Some(Some(file)) = files.get(location.page_id.as_str()) else {
+                continue;
+            };
+            for number in pin_numbers {
+                out.entry((*file, location.symbol_id.clone(), number.clone()))
+                    .or_default()
+                    .extend(names.iter().cloned());
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// A sheet instance whose module is shared with other instances of its sheet file.
+struct SharedSheet {
+    /// The instance the shared module is generated from.
+    template: KiCadSheetPath,
+    /// The template's nets, as this instance's nets.
+    nets: BTreeMap<KiCadNetName, KiCadNetName>,
+}
+
+struct SharedSheetsArgs<'a> {
+    ir: &'a ImportIr,
+    port_to_net: &'a BTreeMap<ImportNetPort, KiCadNetName>,
+    components: &'a GeneratedComponents,
+    not_connected_nets: &'a BTreeSet<KiCadNetName>,
+    subtree_has_components: &'a BTreeMap<KiCadSheetPath, bool>,
+    entity_prefix_by_sheet: &'a BTreeMap<KiCadSheetPath, String>,
+}
+
+/// Instances of one sheet file share the module of the first instance, except an instance whose
+/// parts, flags, or connectivity differ from it, which keeps a module of its own.
+fn shared_sheets(args: SharedSheetsArgs<'_>) -> BTreeMap<KiCadSheetPath, SharedSheet> {
+    let tree = &args.ir.schematic_sheet_tree;
+    let mut by_file = BTreeMap::<&Path, Vec<&KiCadSheetPath>>::new();
+    for (sheet, node) in &tree.nodes {
+        if sheet.as_str() != "/"
+            && args.subtree_has_components.get(sheet) == Some(&true)
+            && let Some(file) = &node.schematic_file
+        {
+            by_file.entry(file).or_default().push(sheet);
+        }
+    }
+    let mut groups = by_file
+        .into_iter()
+        .filter(|(_, sheets)| sheets.len() > 1)
+        .collect::<Vec<_>>();
+    // Nested sheets first: an instance shares its parent's module only if it shares its children's.
+    groups.sort_by_key(|(_, sheets)| subtree_height(tree, sheets[0]));
+    let prefix = |sheet: &KiCadSheetPath| {
+        args.entity_prefix_by_sheet
+            .get(sheet)
+            .cloned()
+            .unwrap_or_default()
+    };
+    let mut shared = BTreeMap::new();
+    for (file, mut sheets) in groups {
+        sheets.sort_by_key(|sheet| prefix(sheet));
+        let template = sheets[0];
+        let mut instances = Vec::new();
+        for sheet in sheets {
+            match instance_nets(&args, &shared, template, sheet) {
+                Some(nets) => instances.push((sheet.clone(), nets)),
+                None => eprintln!(
+                    "Warning: sheet {} differs from {}, the first instance of {}, so it gets a module of its own.",
+                    prefix(sheet),
+                    prefix(template),
+                    file.display()
+                ),
+            }
+        }
+        if instances.len() > 1 {
+            for (sheet, nets) in instances {
+                let template = template.clone();
+                shared.insert(sheet, SharedSheet { template, nets });
+            }
+        }
+    }
+    shared
+}
+
+fn subtree_height(tree: &ImportSheetTree, sheet: &KiCadSheetPath) -> usize {
+    tree.nodes
+        .get(sheet)
+        .into_iter()
+        .flat_map(|node| &node.children)
+        .map(|child| 1 + subtree_height(tree, child))
+        .max()
+        .unwrap_or(0)
+}
+
+/// `sheet` inside `template`, moved to the same place inside `instance`.
+fn translate_sheet(
+    template: &KiCadSheetPath,
+    instance: &KiCadSheetPath,
+    sheet: &KiCadSheetPath,
+) -> Option<KiCadSheetPath> {
+    let rest = sheet.as_str().strip_prefix(template.as_str())?;
+    Some(KiCadSheetPath::from_sheetpath_tstamps(&format!(
+        "{}{rest}",
+        instance.as_str()
+    )))
+}
+
+fn translate_anchor(
+    template: &KiCadSheetPath,
+    instance: &KiCadSheetPath,
+    anchor: &KiCadUuidPathKey,
+) -> Option<KiCadUuidPathKey> {
+    let sheet = KiCadSheetPath::from_sheetpath_tstamps(&anchor.sheetpath_tstamps);
+    Some(KiCadUuidPathKey {
+        sheetpath_tstamps: translate_sheet(template, instance, &sheet)?
+            .as_str()
+            .to_string(),
+        symbol_uuid: anchor.symbol_uuid.clone(),
     })
+}
+
+/// The template's nets as `instance`'s nets, when `instance` places the same parts with the
+/// same flags and connectivity, so the template's module generates it exactly.
+fn instance_nets(
+    args: &SharedSheetsArgs<'_>,
+    shared: &BTreeMap<KiCadSheetPath, SharedSheet>,
+    template: &KiCadSheetPath,
+    instance: &KiCadSheetPath,
+) -> Option<BTreeMap<KiCadNetName, KiCadNetName>> {
+    let ir = args.ir;
+    let sheet_of = |anchor: &KiCadUuidPathKey| {
+        KiCadSheetPath::from_sheetpath_tstamps(&anchor.sheetpath_tstamps)
+    };
+    let placed = |root: &KiCadSheetPath| {
+        ir.components
+            .iter()
+            .filter(|(anchor, component)| {
+                component.layout.is_some() && root.is_ancestor_of(&sheet_of(anchor))
+            })
+            .collect::<Vec<_>>()
+    };
+    let template_components = placed(template);
+    if template_components.len() != placed(instance).len() {
+        return None;
+    }
+    for (anchor, component) in template_components {
+        let other = translate_anchor(template, instance, anchor)?;
+        let other_component = ir.components.get(&other)?;
+        let module = &args.components.anchor_to_module_ident;
+        if other_component.layout.is_none()
+            || module.get(anchor) != module.get(&other)
+            || derive_import_instance_flags(component)
+                != derive_import_instance_flags(other_component)
+        {
+            return None;
+        }
+    }
+
+    let mut nets = BTreeMap::new();
+    let mut reverse = BTreeMap::new();
+    let (mut template_ports, mut instance_ports) = (0, 0);
+    for (port, net) in args.port_to_net {
+        let sheet = sheet_of(&port.component);
+        instance_ports += usize::from(instance.is_ancestor_of(&sheet));
+        if !template.is_ancestor_of(&sheet) {
+            continue;
+        }
+        template_ports += 1;
+        let other = ImportNetPort {
+            component: translate_anchor(template, instance, &port.component)?,
+            pin: port.pin.clone(),
+        };
+        let other_net = args.port_to_net.get(&other)?;
+        if nets.entry(net.clone()).or_insert_with(|| other_net.clone()) != other_net
+            || reverse
+                .entry(other_net.clone())
+                .or_insert_with(|| net.clone())
+                != net
+        {
+            return None;
+        }
+    }
+    let kind = |net: &KiCadNetName| ir.semantic.net_kinds.by_net.get(net).map(|k| k.kind);
+    if template_ports != instance_ports
+        || nets.iter().any(|(net, other)| {
+            kind(net) != kind(other)
+                || args.not_connected_nets.contains(net) != args.not_connected_nets.contains(other)
+        })
+    {
+        return None;
+    }
+
+    let template_of = |sheet: &KiCadSheetPath| shared.get(sheet).map(|s| s.template.clone());
+    let mapped = |set: &BTreeSet<KiCadNetName>| {
+        set.iter()
+            .map(|net| nets.get(net).cloned())
+            .collect::<Option<BTreeSet<_>>>()
+    };
+    for sheet in ir.schematic_sheet_tree.nodes.keys() {
+        if !template.is_ancestor_of(sheet) || args.subtree_has_components.get(sheet) != Some(&true)
+        {
+            continue;
+        }
+        let other = translate_sheet(template, instance, sheet)?;
+        if sheet != template
+            && (template_of(sheet).is_none() || template_of(sheet) != template_of(&other))
+        {
+            return None;
+        }
+        let plan = ir
+            .hierarchy_plan
+            .modules
+            .get(sheet)
+            .cloned()
+            .unwrap_or_default();
+        let other_plan = ir
+            .hierarchy_plan
+            .modules
+            .get(&other)
+            .cloned()
+            .unwrap_or_default();
+        if mapped(&plan.nets_io_here)? != other_plan.nets_io_here
+            || mapped(&plan.nets_defined_here)? != other_plan.nets_defined_here
+        {
+            return None;
+        }
+    }
+    Some(nets)
+}
+
+/// Builds the `refdes` config of shared module instances.
+struct RefdesConfig<'a> {
+    ir: &'a ImportIr,
+    shared: &'a BTreeMap<KiCadSheetPath, SharedSheet>,
+    anchors_by_sheet: &'a BTreeMap<KiCadSheetPath, Vec<KiCadUuidPathKey>>,
+    refdes_instance_names: &'a BTreeMap<KiCadRefDes, String>,
+    instance_name_by_sheet: &'a BTreeMap<KiCadSheetPath, String>,
+}
+
+impl RefdesConfig<'_> {
+    /// `sheet`'s names for the components its shared module names after the template, and the
+    /// same for nested sheets by instance name, as a Starlark dict. `None` when all names match.
+    fn config(&self, sheet: &KiCadSheetPath) -> Option<String> {
+        let template = &self.shared.get(sheet)?.template;
+        let name = |anchor: &KiCadUuidPathKey| {
+            let refdes = &self.ir.components.get(anchor)?.netlist.refdes;
+            self.refdes_instance_names.get(refdes).cloned()
+        };
+        let mut entries = self
+            .anchors_by_sheet
+            .get(template)
+            .into_iter()
+            .flatten()
+            .filter_map(|anchor| {
+                let from = name(anchor)?;
+                let to = name(&translate_anchor(template, sheet, anchor)?)?;
+                (from != to).then(|| (from, crate::codegen::starlark::string(&to)))
+            })
+            .collect::<BTreeMap<_, _>>();
+        let children = self.ir.schematic_sheet_tree.nodes.get(sheet);
+        for child in children.into_iter().flat_map(|node| &node.children) {
+            if let Some(config) = self.config(child) {
+                entries.insert(self.instance_name_by_sheet.get(child)?.clone(), config);
+            }
+        }
+        (!entries.is_empty()).then(|| {
+            let entries = entries
+                .iter()
+                .map(|(key, value)| format!("{}: {value}", crate::codegen::starlark::string(key)))
+                .collect::<Vec<_>>();
+            format!("{{{}}}", entries.join(", "))
+        })
+    }
 }
 
 fn compute_subtree_has_components(
@@ -1209,9 +1687,7 @@ fn build_sheet_entity_prefixes(
 fn build_root_sheet_module_calls(
     tree: &ImportSheetTree,
     sheet_modules: &GeneratedSheetModules,
-    hierarchy_plan: &ImportHierarchyPlan,
-    net_decls: &ImportedNetDecls,
-    root_net_set: &BTreeSet<KiCadNetName>,
+    root_net_idents: &BTreeMap<KiCadNetName, String>,
     root_component_calls: &[crate::codegen::board::ImportedInstanceCall],
 ) -> (
     Vec<(String, String)>,
@@ -1222,12 +1698,7 @@ fn build_root_sheet_module_calls(
         return (Vec::new(), Vec::new());
     };
 
-    let mut used_idents: BTreeSet<String> = BTreeSet::new();
-    for net in root_net_set {
-        if let Some(ident) = net_decls.var_ident_by_kicad_name.get(net).cloned() {
-            used_idents.insert(ident);
-        }
-    }
+    let mut used_idents: BTreeSet<String> = root_net_idents.values().cloned().collect();
     for call in root_component_calls {
         used_idents.insert(call.module_ident.clone());
     }
@@ -1250,43 +1721,17 @@ fn build_root_sheet_module_calls(
             continue;
         };
         let module_path = format!("modules/{child_dir}/{child_dir}.zen");
-
-        let module_ident_base = module_ident_from_component_dir(&child_dir);
-        let module_ident = alloc_unique_ident(&module_ident_base, "_", &mut used_idents);
-        module_decls.insert(module_ident.clone(), module_path);
-
-        let child_plan = hierarchy_plan
-            .modules
-            .get(child)
-            .cloned()
-            .unwrap_or_default();
-
-        let mut io_nets: BTreeMap<String, String> = BTreeMap::new();
-        for net in &child_plan.nets_io_here {
-            let Some(ident) = net_decls.var_ident_by_kicad_name.get(net).cloned() else {
-                continue;
-            };
-            io_nets.insert(ident.clone(), ident);
-        }
-
-        let instance_name = sheet_modules
-            .instance_name_by_sheet
-            .get(child)
-            .cloned()
-            .unwrap_or_else(|| "SHEET".to_string());
-
-        module_calls.insert(
-            instance_name.clone(),
-            crate::codegen::board::ImportedInstanceCall {
-                module_ident,
-                refdes: instance_name,
-                dnp: false,
-                skip_bom: None,
-                skip_pos: None,
-                config_args: BTreeMap::new(),
-                io_nets,
-            },
-        );
+        let module_ident = match module_decls.iter().find(|(_, path)| **path == module_path) {
+            Some((ident, _)) => ident.clone(),
+            None => {
+                let base = module_ident_from_component_dir(&child_dir);
+                let ident = alloc_unique_ident(&base, "_", &mut used_idents);
+                module_decls.insert(ident.clone(), module_path);
+                ident
+            }
+        };
+        let call = sheet_modules.module_call(child, module_ident, root_net_idents, false);
+        module_calls.insert(call.refdes.clone(), call);
     }
 
     (
@@ -1304,10 +1749,62 @@ struct ImportedNetDecls {
 
 #[derive(Debug, Default)]
 struct GeneratedSheetModules {
+    /// Instances of a shared module have its directory.
     module_dir_by_sheet: BTreeMap<KiCadSheetPath, String>,
     instance_name_by_sheet: BTreeMap<KiCadSheetPath, String>,
     anchor_to_entity_prefix: BTreeMap<KiCadUuidPathKey, String>,
     subtree_has_components: BTreeMap<KiCadSheetPath, bool>,
+    /// Each sheet instance's module io names, and the instance's nets they connect to.
+    io_by_sheet: BTreeMap<KiCadSheetPath, BTreeMap<String, KiCadNetName>>,
+    /// The `refdes` config of shared module instances whose names differ from the template's.
+    refdes_by_sheet: BTreeMap<KiCadSheetPath, String>,
+}
+
+impl GeneratedSheetModules {
+    /// The call instantiating `sheet`'s module in its parent's module, whose net identifiers are
+    /// `parent_net_idents`. A shared parent passes on its own `refdes` for the sheet.
+    fn module_call(
+        &self,
+        sheet: &KiCadSheetPath,
+        module_ident: String,
+        parent_net_idents: &BTreeMap<KiCadNetName, String>,
+        parent_shared: bool,
+    ) -> crate::codegen::board::ImportedInstanceCall {
+        use crate::codegen::board::REFDES_CONFIG;
+        let instance_name = self
+            .instance_name_by_sheet
+            .get(sheet)
+            .cloned()
+            .unwrap_or_else(|| "SHEET".to_string());
+        let io_nets = self
+            .io_by_sheet
+            .get(sheet)
+            .into_iter()
+            .flatten()
+            .filter_map(|(io, net)| Some((io.clone(), parent_net_idents.get(net)?.clone())))
+            .collect();
+        let refdes = if parent_shared {
+            Some(format!(
+                "{REFDES_CONFIG}.get({}, {{}})",
+                crate::codegen::starlark::string(&instance_name)
+            ))
+        } else {
+            self.refdes_by_sheet.get(sheet).cloned()
+        };
+        crate::codegen::board::ImportedInstanceCall {
+            module_ident,
+            refdes: instance_name,
+            refdes_from_config: false,
+            dnp: false,
+            skip_bom: None,
+            skip_pos: None,
+            config_args: refdes
+                .map(|refdes| (REFDES_CONFIG.to_string(), refdes))
+                .into_iter()
+                .collect(),
+            io_nets,
+        }
+    }
 }
 
 fn sanitize_kicad_name_for_zener(raw: &str, fallback: &str) -> String {
@@ -2626,6 +3123,7 @@ fn build_imported_instance_calls_for_instances(
         instance_calls.push(crate::codegen::board::ImportedInstanceCall {
             module_ident: module_ident.clone(),
             refdes: instance_name,
+            refdes_from_config: false,
             dnp,
             skip_bom: skip_bom_override,
             skip_pos: skip_pos_override,
@@ -2769,7 +3267,7 @@ mod tests {
             module_decls: &[],
             instance_calls: &[],
         });
-        let sheet = render_imported_sheet_module("TestSheet", &[], &decls.decls, &[], &[]);
+        let sheet = render_imported_sheet_module("TestSheet", false, &[], &decls.decls, &[], &[]);
         for source in [board, sheet] {
             for expected in [
                 "SWITCH_INTERRUPT_N = Net()",

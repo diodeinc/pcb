@@ -1842,6 +1842,203 @@ fn cross_sheet_multi_unit_components_survive_import_and_apply() {
     assert_eq!(directory_contents(&sandbox.root_path().join("out")), before);
 }
 
+#[test]
+fn reused_sheet_file_imports_as_one_module_with_each_instances_references() {
+    let mut sandbox = sandbox();
+    let root_uuid = "00000000-0000-0000-0000-000000000001";
+    let font = "(effects (font (size 1.27 1.27)))";
+    let library = format!(
+        r#"(lib_symbols (symbol "Test:R" (in_bom no) (on_board yes)
+        (property "Reference" "R" (at 0 0 0) {font})
+        (property "Value" "R" (at 0 0 0) {font})
+        (property "Footprint" "Resistor_SMD:R_0402_1005Metric" (at 0 0 0) {font})
+        (symbol "R_1_1"
+            (pin passive line (at -2.54 0 0) (length 1.27) (name "~" {font}) (number "1" {font}))
+            (pin passive line (at 2.54 0 180) (length 1.27) (name "~" {font}) (number "2" {font})))))"#
+    );
+    // Instance B is annotated R7/R12/R13, so its references cannot be derived from A's.
+    let channels = [
+        ("A", "11", ["R1", "R2", "R3"]),
+        ("B", "12", ["R7", "R12", "R13"]),
+    ];
+    let mut root = format!(
+        r#"(kicad_sch (version 20250114) (generator "eeschema")
+        (uuid "{root_uuid}") (paper "A4") {library}"#
+    );
+    for (index, (name, sheet, _)) in channels.iter().enumerate() {
+        let y = 30.48 * (index + 1) as f64;
+        let pin_y = y + 5.08;
+        root.push_str(&format!(r#"
+            (sheet (at 40.64 {y}) (size 20.32 10.16)
+                (stroke (width 0) (type default)) (fill (color 0 0 0 0))
+                (uuid "00000000-0000-0000-0000-0000000000{sheet}")
+                (property "Sheetname" "CH_{name}" (at 40.64 {y} 0) {font})
+                (property "Sheetfile" "channel.kicad_sch" (at 40.64 {y} 0) {font})
+                (pin "IN" bidirectional (at 40.64 {pin_y} 180) (uuid "00000000-0000-0000-0000-0000000001{sheet}") {font})
+                (pin "OUT" bidirectional (at 60.96 {pin_y} 0) (uuid "00000000-0000-0000-0000-0000000002{sheet}") {font})
+                (instances (project "reuse" (path "/{root_uuid}" (page "{page}")))))
+            (wire (pts (xy 30.48 {pin_y}) (xy 40.64 {pin_y})) (uuid "00000000-0000-0000-0000-0000000003{sheet}"))
+            (global_label "VIN" (shape input) (at 30.48 {pin_y} 180) {font} (uuid "00000000-0000-0000-0000-0000000004{sheet}"))
+            (wire (pts (xy 60.96 {pin_y}) (xy 71.12 {pin_y})) (uuid "00000000-0000-0000-0000-0000000005{sheet}"))
+            (global_label "OUT_{name}" (shape output) (at 71.12 {pin_y} 0) {font} (uuid "00000000-0000-0000-0000-0000000006{sheet}"))"#,
+            page = index + 2));
+    }
+    root.push_str(r#" (sheet_instances (path "/" (page "1"))))"#);
+    // IN -[first]- MID -[second]- OUT, and MID -[third]- a no-connect marker.
+    let mut child = format!(
+        r#"(kicad_sch (version 20250114) (generator "eeschema")
+        (uuid "00000000-0000-0000-0000-000000000002") (paper "A4") {library}"#
+    );
+    for (index, labels) in [("IN", "MID"), ("MID", "OUT"), ("MID", "")]
+        .iter()
+        .enumerate()
+    {
+        let y = 50.8 + 12.7 * index as f64;
+        let instances = channels
+            .iter()
+            .map(|(_, sheet, references)| {
+                format!(
+                    r#"(path "/{root_uuid}/00000000-0000-0000-0000-0000000000{sheet}" (reference "{}") (unit 1))"#,
+                    references[index]
+                )
+            })
+            .collect::<String>();
+        child.push_str(&format!(
+            r#"
+            (symbol (lib_id "Test:R") (at 101.6 {y} 0) (unit 1) (in_bom no) (on_board yes) (dnp no)
+                (uuid "00000000-0000-0000-0000-00000000010{index}")
+                (property "Reference" "R?" (at 101.6 {y} 0) {font})
+                (property "Value" "R" (at 101.6 {y} 0) {font})
+                (property "Footprint" "Resistor_SMD:R_0402_1005Metric" (at 101.6 {y} 0) {font})
+                (pin "1" (uuid "00000000-0000-0000-0000-00000000020{index}"))
+                (pin "2" (uuid "00000000-0000-0000-0000-00000000030{index}"))
+                (instances (project "reuse" {instances})))"#
+        ));
+        for (side, label, x, angle) in [(0, labels.0, 99.06, 180), (1, labels.1, 104.14, 0)] {
+            if label.is_empty() {
+                child.push_str(&format!(
+                    r#" (no_connect (at {x} {y}) (uuid "00000000-0000-0000-0000-0000000004{index}{side}"))"#
+                ));
+                continue;
+            }
+            let kind = if label == "MID" {
+                "label"
+            } else {
+                "hierarchical_label"
+            };
+            let shape = if label == "MID" {
+                ""
+            } else {
+                "(shape bidirectional)"
+            };
+            child.push_str(&format!(
+                r#" ({kind} "{label}" {shape} (at {x} {y} {angle}) {font} (uuid "00000000-0000-0000-0000-0000000004{index}{side}"))"#
+            ));
+        }
+    }
+    child.push(')');
+    sandbox.write("source/reuse.kicad_sch", &root);
+    sandbox.write("source/channel.kicad_sch", &child);
+
+    let import = sandbox
+        .run("pcbc", ["import", "source/reuse.kicad_sch", "out"])
+        .stderr_capture()
+        .unchecked()
+        .run()
+        .unwrap();
+    assert!(
+        import.status.success(),
+        "{}",
+        String::from_utf8_lossy(&import.stderr)
+    );
+    let out = sandbox.root_path().join("out");
+    let modules = fs::read_dir(out.join("modules"))
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(modules, ["channel"]);
+
+    let build = sandbox
+        .run("pcbc", ["build", "out/reuse.zen", "--offline", "--netlist"])
+        .stdout_capture()
+        .run()
+        .unwrap();
+    let netlist: serde_json::Value = serde_json::from_slice(&build.stdout).unwrap();
+    let partitions = netlist["nets"]
+        .as_object()
+        .unwrap()
+        .values()
+        .map(|net| {
+            net["ports"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|port| {
+                    let port = port.as_str().unwrap();
+                    let component = &netlist["instances"][port.rsplit_once('.').unwrap().0];
+                    let pad = &netlist["instances"][port]["attributes"]["pads"]["Array"][0];
+                    format!(
+                        "{}:{}",
+                        component["reference_designator"].as_str().unwrap(),
+                        pad["String"].as_str().unwrap()
+                    )
+                })
+                .collect::<BTreeSet<_>>()
+        })
+        .collect::<BTreeSet<_>>();
+    // Marked no-connect pins stay open, and the shared module declares no empty net for them.
+    let expected = [
+        &["R1:1", "R7:1"][..],
+        &["R1:2", "R2:1", "R3:1"],
+        &["R7:2", "R12:1", "R13:1"],
+        &["R2:2"],
+        &["R12:2"],
+        &["R3:2"],
+        &["R13:2"],
+    ]
+    .map(|pins| {
+        pins.iter()
+            .map(|pin| pin.to_string())
+            .collect::<BTreeSet<_>>()
+    });
+    assert_eq!(partitions, BTreeSet::from(expected));
+
+    // Each instance has its own page in the persistent schematic, bound to its components.
+    let project = pcbc::kicad_schematic::KicadProject::load(out.join("eda")).unwrap();
+    let paths_by_page = project
+        .document
+        .pages
+        .iter()
+        .map(|page| {
+            let paths = page
+                .items
+                .iter()
+                .filter_map(|item| match item {
+                    pcb_kicad_sch::SchItem::Symbol(symbol) => symbol.field_value("Path"),
+                    _ => None,
+                })
+                .map(|path| path.split('.').take(2).collect::<Vec<_>>().join("."))
+                .collect::<BTreeSet<_>>();
+            (page.file_name.clone().unwrap(), paths)
+        })
+        .collect::<BTreeMap<_, _>>();
+    assert_eq!(
+        paths_by_page,
+        BTreeMap::from([
+            ("reuse.kicad_sch".to_string(), BTreeSet::new()),
+            (
+                "channel.kicad_sch".to_string(),
+                BTreeSet::from(["CH_A.R1", "CH_A.R2", "CH_A.R3"].map(String::from))
+            ),
+            (
+                "channel_2.kicad_sch".to_string(),
+                BTreeSet::from(["CH_B.R12", "CH_B.R13", "CH_B.R7"].map(String::from))
+            ),
+        ])
+    );
+    assert_repeated_schematic_apply(&mut sandbox, "out/reuse.zen", &[]);
+}
+
 /// Every file and symlink under `root` except Git metadata and the `.pcb` cache.
 fn directory_contents(root: &std::path::Path) -> BTreeMap<std::path::PathBuf, Vec<u8>> {
     let mut contents = BTreeMap::new();

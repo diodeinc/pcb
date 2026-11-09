@@ -193,9 +193,25 @@ local geometry, converting back-side geometry and layers, and making zones and p
   definitions generate distinct parts even when their library IDs match.
 
 The shared engine interprets native bus connectivity without reconstructing the
-buses. Unsupported constructs, such as managed components on reused sheet files,
-fail explicitly rather than silently reconstructing a different circuit. KiCad 9
-and 10 documents use the same parser/normalization as the persistent editor.
+buses. Unsupported constructs fail explicitly rather than silently reconstructing
+a different circuit. KiCad 9 and 10 documents use the same parser/normalization as
+the persistent editor.
+
+## Reused sheet files
+
+KiCad can place one sheet file several times, as for repeated channels. The instances
+share one module, `modules/<file stem>/`, generated from the instance whose name sorts
+first. Its components and nets take that instance's names; nets prefer the sheet's
+hierarchical label. Each instantiation passes `refdes`, mapping those component names to
+its own reference designators, and a nested dict per nested sheet; matching names are
+omitted. An instance whose parts, flags, or connectivity differ from the first gets its
+own module with a warning.
+
+The persistent schematic, like `pcb apply schematic` for repeated modules, keeps one page
+per instance. Binding therefore gives every further instance a copy of the sheet file,
+`<stem>_2.kicad_sch` and so on, with a new page UUID; each file keeps only its own
+instance's annotations. The source archive keeps the original single file. Reimporting
+from the generated project sees separate files and generates separate modules.
 
 ## Verification
 

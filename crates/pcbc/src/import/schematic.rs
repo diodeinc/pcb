@@ -38,6 +38,7 @@ pub(super) fn bind_imported_schematic(
             Ok((refdes, path))
         })
         .collect::<Result<BTreeMap<_, _>>>()?;
+    let sheet_tree = split_reused_sheet_files(&board.layout_dir, &ir.schematic_sheet_tree)?;
     let mut bindings = BTreeMap::new();
     let mut bound_slots = BTreeSet::new();
     for component in ir
@@ -59,9 +60,7 @@ pub(super) fn bind_imported_schematic(
             })?
             .units
         {
-            let file = ir
-                .schematic_sheet_tree
-                .unit_file(&component.netlist.refdes, key)?;
+            let file = sheet_tree.unit_file(&component.netlist.refdes, key)?;
             let slot = SymbolSlotKey::new(path.clone(), u32::try_from(unit.unit.unwrap_or(1))?)
                 .context("Imported symbol has an invalid unit")?;
             ensure!(
@@ -76,8 +75,9 @@ pub(super) fn bind_imported_schematic(
                 bindings
                     .insert((file.to_path_buf(), key.symbol_uuid.clone()), slot)
                     .is_none(),
-                "Persistent schematics do not support managed components on reused sheet files: {}",
-                file.display()
+                "{} places symbol {} more than once",
+                file.display(),
+                key.symbol_uuid
             );
         }
     }
@@ -312,6 +312,139 @@ fn bind_net_names(project_file: &Path, netlist: &Schematic) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// The persistent schematic keeps one page per module instance, so every further instance of a
+/// reused sheet file gets its own copy, as `pcb apply schematic` creates for repeated modules.
+/// Each file keeps only its own instance's annotations; copies get a new page UUID.
+/// Returns the sheet tree with each instance's file.
+fn split_reused_sheet_files(layout_dir: &Path, tree: &ImportSheetTree) -> Result<ImportSheetTree> {
+    let mut instances = BTreeMap::<&Path, Vec<&KiCadSheetPath>>::new();
+    for (sheet, node) in &tree.nodes {
+        if let Some(file) = &node.schematic_file {
+            instances.entry(file).or_default().push(sheet);
+        }
+    }
+    let mut split = tree.clone();
+    let mut used = instances
+        .keys()
+        .map(|file| file.to_path_buf())
+        .collect::<BTreeSet<_>>();
+    for (file, sheets) in &instances {
+        let stem = file
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .context("Schematic file name is not UTF-8")?;
+        for sheet in &sheets[1..] {
+            let copy = (2..)
+                .map(|n| file.with_file_name(format!("{stem}_{n}.kicad_sch")))
+                .find(|copy| !used.contains(copy) && !layout_dir.join(copy).exists())
+                .expect("unbounded candidates");
+            used.insert(copy.clone());
+            split.nodes.get_mut(*sheet).expect("sheet").schematic_file = Some(copy);
+        }
+    }
+    if used.len() == instances.len() {
+        return Ok(split);
+    }
+
+    let read = |file: &Path| {
+        fs::read_to_string(layout_dir.join(file))
+            .with_context(|| format!("Failed to read {}", file.display()))
+    };
+    let page_id = |source: &str| -> Result<String> {
+        let root = pcb_sexpr::parse(source)?;
+        find_child_list(root.as_list().context("Invalid schematic root")?, "uuid")
+            .and_then(|items| items.get(1)?.as_str())
+            .map(str::to_string)
+            .context("Schematic has no uuid")
+    };
+    let root_id = page_id(&read(&tree.root_schematic)?)?;
+    // KiCad instance paths start with the root page UUID: `/<root>/<sheet>/...`.
+    let instance_path =
+        |sheet: &KiCadSheetPath| format!("/{root_id}{}", sheet.as_str().trim_end_matches('/'));
+    let sources = instances
+        .keys()
+        .map(|file| Ok((*file, read(file)?)))
+        .collect::<Result<BTreeMap<_, _>>>()?;
+    for (sheet, node) in &tree.nodes {
+        let Some(source_file) = node.schematic_file.as_deref() else {
+            continue;
+        };
+        let file = split.nodes[sheet]
+            .schematic_file
+            .as_deref()
+            .expect("split keeps files");
+        let others = instances[source_file]
+            .iter()
+            .filter(|other| **other != sheet)
+            .map(|other| instance_path(other))
+            .collect::<BTreeSet<_>>();
+        let renamed = node
+            .children
+            .iter()
+            .filter(|child| split.nodes[*child].schematic_file != tree.nodes[*child].schematic_file)
+            .filter_map(|child| {
+                let copy = split.nodes[child].schematic_file.as_deref()?.file_name()?;
+                Some((tree.nodes[child].sheet_uuid.as_deref()?, copy.to_str()?))
+            })
+            .collect::<BTreeMap<_, _>>();
+        if others.is_empty() && renamed.is_empty() {
+            continue;
+        }
+        let source = &sources[source_file];
+        let root = pcb_sexpr::parse(source)?;
+        let items = root.as_list().context("Invalid schematic root")?;
+        let mut patches = PatchSet::new();
+        if file != source_file
+            && let Some(id) = find_child_list(items, "uuid").and_then(|items| items.get(1))
+        {
+            let key = format!("{root_id}/{}", file.display());
+            patches.replace_string(
+                id.span,
+                &uuid::Uuid::new_v5(&uuid::Uuid::NAMESPACE_URL, key.as_bytes()).to_string(),
+            );
+        }
+        for item in items.iter().filter_map(Sexpr::as_list) {
+            if !matches!(
+                item.first().and_then(Sexpr::as_sym),
+                Some("symbol" | "sheet")
+            ) {
+                continue;
+            }
+            let paths = find_child_list(item, "instances")
+                .into_iter()
+                .flatten()
+                .filter_map(Sexpr::as_list)
+                .flatten()
+                .filter(|path| {
+                    path.as_list().is_some_and(|path| {
+                        path.first().and_then(Sexpr::as_sym) == Some("path")
+                            && path
+                                .get(1)
+                                .and_then(Sexpr::as_str)
+                                .is_some_and(|path| others.contains(path))
+                    })
+                });
+            for path in paths {
+                patches.replace_raw(path.span, String::new());
+            }
+            let sheet_file = find_child_list(item, "uuid")
+                .and_then(|uuid| renamed.get(uuid.get(1)?.as_str()?))
+                .zip(property_value(item, "Sheetfile"));
+            if let Some((copy, value)) = sheet_file {
+                let reference = value.as_str().context("Invalid Sheetfile")?;
+                let directory = reference.rsplit_once('/').map(|(directory, _)| directory);
+                let reference = directory.map_or(copy.to_string(), |dir| format!("{dir}/{copy}"));
+                patches.replace_string(value.span, &reference);
+            }
+        }
+        let mut output = Vec::new();
+        patches.write_to(source, &mut output)?;
+        fs::write(layout_dir.join(file), output)
+            .with_context(|| format!("Failed to write {}", file.display()))?;
+    }
+    Ok(split)
 }
 
 /// The value node of a symbol's direct `(property "<name>" ...)`.
