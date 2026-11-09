@@ -10,6 +10,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Fixed
 
+- `pcb import` rejects layout-only KiCad projects (a board but no schematic) with an error that says so, instead of reporting a missing top-level schematic.
 - DFM dielectric gaps apply only to `SPECIFIED` stackups.
 - DFM measures netless copper touching one net as that net's copper.
 - `pcb layout` reaches a fixed point in one sync: a second sync no longer adds text thickness to new footprint fields or reorders board properties, the stackup, or the title block.

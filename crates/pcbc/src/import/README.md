@@ -41,6 +41,8 @@ existing one gets its previous contents back, apart from `.git` and the `.pcb` c
 As in KiCad, a `.kicad_sch` belongs to the same-name `.kicad_pro` beside it, and a
 project's board is its same-name `.kicad_pcb`, so `<board>.kicad_sch` and
 `<board>.kicad_pro` import the same design. Both are optional.
+A project with a board but no schematic, including one whose `.kicad_pro` names a
+missing top-level sheet, is rejected during discovery: import needs the schematic.
 
 For a board named `<board>`, an import without a source board produces:
 

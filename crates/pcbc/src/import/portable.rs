@@ -298,10 +298,21 @@ pub(super) fn discover_and_validate(kicad_input_abs: &Path) -> Result<PortableKi
     let variable_resolver = build_kicad_variable_resolver(project_dir, &kicad_pro_json);
     let kicad_refs = collect_kicad_refs_from_json(&kicad_pro_json);
 
-    let schematic =
-        pcb_kicad_sch::load_project(&format!("{project_name}.{KICAD_PRO_EXT}"), |relative| {
-            pcbc::kicad_schematic::read_project_file(project_dir, relative)
-        })?;
+    let project_file = format!("{project_name}.{KICAD_PRO_EXT}");
+    let roots = pcb_kicad_sch::project_root_schematics(&project_file, &kicad_pro_json)?;
+    if kicad_input_abs.with_extension(KICAD_PCB_EXT).is_file()
+        && roots.iter().all(|root| !project_dir.join(root).is_file())
+    {
+        bail!(
+            "{} has a board but no schematic ({} does not exist). Import needs the project's KiCad schematic; layout-only projects are not supported.",
+            kicad_input_abs.display(),
+            roots.join(", ")
+        );
+    }
+
+    let schematic = pcb_kicad_sch::load_project(&project_file, |relative| {
+        pcbc::kicad_schematic::read_project_file(project_dir, relative)
+    })?;
     let root_schematics = schematic.root_schematics().collect::<Vec<_>>();
     let [root_schematic] = root_schematics.as_slice() else {
         bail!(

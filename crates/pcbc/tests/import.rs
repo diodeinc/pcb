@@ -91,8 +91,18 @@ fn import_explains_how_to_upgrade_pre_kicad_9_projects() {
         "nightly-pcb/board.kicad_pcb",
         PCB_FIXTURE.replacen("(version 20241229)", "(version 20260701)", 1),
     );
+    // A layout-only project whose `.kicad_pro` names a top-level sheet that does not exist.
+    let mut layout_only: serde_json::Value = serde_json::from_str(PROJECT_FIXTURE).unwrap();
+    layout_only["schematic"]["top_level_sheets"] =
+        serde_json::json!([{ "filename": "board final.kicad_sch", "name": "board" }]);
+    sandbox.write("layout-only/board.kicad_pro", layout_only.to_string());
+    sandbox.write("layout-only/board.kicad_pcb", PCB_FIXTURE);
 
     for (input, expected) in [
+        (
+            "layout-only/board.kicad_pro",
+            "has a board but no schematic (board final.kicad_sch does not exist)",
+        ),
         (
             "source/board.kicad_sch",
             "failed to parse child.kicad_sch\n  KiCad schematic version 20231120 is older than KiCad 9; upgrade it with `kicad-cli sch upgrade <file>`",
