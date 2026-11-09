@@ -337,10 +337,9 @@ impl<Meta: Clone + Default> Composite<Meta> {
     }
 
     /// What a laser landing on `face` of the board alone meets, from the
-    /// layers [`Self::draw`] stacks. `open` is what the source's hole
-    /// semantics leave open; a hole the stack cuts that is not open is
-    /// covered. A side with no mask layer, or whose artwork has diagnostics,
-    /// is unknown but for its holes.
+    /// layers [`Self::draw`] stacks. Of the holes the stack cuts, those in
+    /// `open` are open and the rest covered. A side with no mask layer, or
+    /// whose artwork has diagnostics, is unknown but for its holes.
     pub fn surface_map(
         mut self,
         material: &Material<Meta>,
@@ -367,47 +366,32 @@ impl<Meta: Clone + Default> Composite<Meta> {
             diagnostics.push(Diagnostic::warning(format!("{side:?} has no mask layer")));
         }
 
-        let less = |region: &ContourSet, cutters: &[&ContourSet]| {
-            cutters
-                .iter()
-                .try_fold(region.clone(), |region, cutter| region.difference(cutter))
-        };
-        let open = open.intersection(board)?;
-        let covered = less(board, &[substrate, &open])?;
-        // Fail closed: what the artwork may have lost is unknown.
-        let empty = || ContourSet::empty(resolution);
-        let [over_laminate, over_copper, legend, finish, bare, unknown] = if diagnostics.is_empty()
-        {
-            [
-                less(mask, &[copper, legend, &open])?,
-                less(copper, &[legend, &open])?,
-                less(legend, &[&open])?,
-                less(finish, &[mask, &open])?,
-                less(substrate, &[finish, mask, &open])?,
-                empty(),
-            ]
+        let drilled = board.difference(substrate)?;
+        let mut regions = vec![
+            (Surface::Hole, open.intersection(&drilled)?),
+            (Surface::CoveredHole, drilled.difference(open)?),
+        ];
+        if diagnostics.is_empty() {
+            regions.extend([
+                (
+                    Surface::MaskOverLaminate,
+                    mask.difference(copper)?.difference(legend)?,
+                ),
+                (Surface::MaskOverCopper, copper.difference(legend)?),
+                (Surface::LegendOverLaminate, legend.difference(copper)?),
+                (Surface::LegendOverCopper, legend.intersection(copper)?),
+                (Surface::Finish, finish.difference(mask)?),
+                (
+                    Surface::BareLaminate,
+                    substrate.difference(finish)?.difference(mask)?,
+                ),
+            ]);
         } else {
-            [
-                empty(),
-                empty(),
-                empty(),
-                empty(),
-                empty(),
-                less(substrate, &[&open])?,
-            ]
-        };
+            regions.push((Surface::Unknown, substrate.clone()));
+        }
         Ok(SurfaceMap {
             side,
-            regions: vec![
-                (Surface::MaskOverLaminate, over_laminate),
-                (Surface::MaskOverCopper, over_copper),
-                (Surface::Legend, legend),
-                (Surface::Finish, finish),
-                (Surface::BareLaminate, bare),
-                (Surface::Hole, open),
-                (Surface::CoveredHole, covered),
-                (Surface::Unknown, unknown),
-            ],
+            regions,
             thickness,
             diagnostics,
         })
@@ -419,8 +403,9 @@ impl<Meta: Clone + Default> Composite<Meta> {
 pub enum Surface {
     MaskOverLaminate,
     MaskOverCopper,
-    /// Legend ink, which prints only on the mask.
-    Legend,
+    /// Legend ink, which prints only on the mask, over laminate or copper.
+    LegendOverLaminate,
+    LegendOverCopper,
     /// Copper a mask opening exposes, in the surface finish.
     Finish,
     /// Laminate a mask opening exposes.
@@ -441,7 +426,7 @@ pub struct Thickness {
 }
 
 impl Surface {
-    /// Nominal height above the laminate. The legend's is over laminate.
+    /// Nominal height above the laminate.
     pub fn height_mm(self, thickness: Thickness) -> Option<f64> {
         let Thickness {
             copper,
@@ -453,14 +438,15 @@ impl Surface {
             Self::Finish => copper,
             Self::MaskOverLaminate => mask,
             Self::MaskOverCopper => Some(copper? + mask?),
-            Self::Legend => Some(mask? + legend?),
+            Self::LegendOverLaminate => Some(mask? + legend?),
+            Self::LegendOverCopper => Some(copper? + mask? + legend?),
             Self::Hole | Self::CoveredHole | Self::Unknown => None,
         }
     }
 }
 
-/// One side of a board in disjoint regions, one per [`Surface`], together
-/// covering its profile less its cutouts, in the board's frame.
+/// One side of a board in the board's frame: disjoint regions that together
+/// cover its profile less its cutouts. A surface not listed has none.
 #[derive(Debug, Clone)]
 pub struct SurfaceMap {
     pub side: Side,
@@ -468,20 +454,6 @@ pub struct SurfaceMap {
     pub thickness: Thickness,
     /// Why the side is unknown, when it is.
     pub diagnostics: Vec<Diagnostic>,
-}
-
-impl SurfaceMap {
-    pub fn region(&self, surface: Surface) -> &ContourSet {
-        let mut regions = self.regions.iter();
-        &regions
-            .find(|(each, _)| *each == surface)
-            .expect("every surface")
-            .1
-    }
-
-    pub fn height_mm(&self, surface: Surface) -> Option<f64> {
-        surface.height_mm(self.thickness)
-    }
 }
 
 impl<Meta: Clone + Default> Default for Composite<Meta> {

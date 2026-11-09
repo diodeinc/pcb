@@ -372,6 +372,34 @@ impl ImportedDesign {
         )
     }
 
+    /// Whether a drilled or routed `span` opens onto the surface whose outer
+    /// copper is `surface`, given the top and bottom outer copper `outer`. An
+    /// end the span leaves out is the outer copper on its side, as the import
+    /// reads slot spans; `None` when the span is unknown or an end names no
+    /// copper layer, unless the other end is `surface`.
+    pub fn span_opens_onto(
+        &self,
+        span: FeatureSpan,
+        surface: Symbol,
+        outer: [Symbol; 2],
+    ) -> Option<bool> {
+        let copper = |name| {
+            self.layer_definitions
+                .iter()
+                .any(|layer| layer.name == name && is_copper(layer.layer_function))
+        };
+        let ends = match span {
+            FeatureSpan::ThroughBoard => return Some(true),
+            FeatureSpan::Unknown => return None,
+            FeatureSpan::Layer(layer) => [layer; 2],
+            FeatureSpan::FromTo { from, to } => [from.unwrap_or(outer[0]), to.unwrap_or(outer[1])],
+        };
+        match ends.contains(&surface) {
+            true => Some(true),
+            false => ends.into_iter().all(copper).then_some(false),
+        }
+    }
+
     /// Top/bottom surface openings after mask, caps and fill, given the outer
     /// copper layers in that order. Unknown drill depth remains open; unknown
     /// fill depth cannot establish protection at a surface.
@@ -398,7 +426,7 @@ impl ImportedDesign {
             }
         }
         let mut result = [ContourSet::empty(resolution), ContourSet::empty(resolution)];
-        for (index, (side, copper)) in [Side::Top, Side::Bottom]
+        for (index, (side, surface)) in [Side::Top, Side::Bottom]
             .into_iter()
             .zip(copper)
             .enumerate()
@@ -412,21 +440,9 @@ impl ImportedDesign {
             let known_mask = !mask.is_empty();
             let mask = ContourSet::union_all(resolution, mask)?;
             let mut openings = Vec::new();
-            let known_copper = |name| {
-                self.layer_definitions
-                    .iter()
-                    .any(|layer| layer.name == name && is_copper(layer.layer_function))
-            };
-            let reaches = |span, unknown| match span {
-                FeatureSpan::ThroughBoard => true,
-                FeatureSpan::Layer(layer) => layer == copper || (!known_copper(layer) && unknown),
-                FeatureSpan::FromTo { from, to } => {
-                    from == Some(copper)
-                        || to == Some(copper)
-                        || (unknown
-                            && (!from.is_some_and(known_copper) || !to.is_some_and(known_copper)))
-                }
-                FeatureSpan::Unknown => unknown,
+            let reaches = |span, unknown| {
+                self.span_opens_onto(span, surface, copper)
+                    .unwrap_or(unknown)
             };
             for hole in &view.holes {
                 if !reaches(hole.span, true) || hole.plating == PlatingKind::ViaCapped {
