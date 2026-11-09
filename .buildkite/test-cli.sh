@@ -48,7 +48,7 @@ git -C "$scratch/workspace" init -q
 git -C "$scratch/workspace" add .
 git -C "$scratch/workspace" -c user.name=CI -c user.email=ci@example.invalid commit -qm Fixture
 board="$scratch/workspace/boards/WorkspaceTestBoard.zen"
-pcb +local bom "$board"
+pcb +local bom "$board" --offline
 pcb +local layout "$board" --no-open
 pcb +local publish "$board" -S layout.drc.invalid_outline
 bundles=("$scratch/workspace"/.pcb/releases/*.zip)
