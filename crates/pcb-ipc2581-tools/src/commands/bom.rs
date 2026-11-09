@@ -77,9 +77,10 @@ pub fn execute(file: &Path, format: BomFormat, offline: bool) -> Result<()> {
         let token = pcb_diode_api::auth::get_api_token_with_context(&ctx)
             .context("Not authenticated. Run `pcb auth login` to authenticate.")?;
 
-        if let Err(e) = pcb_diode_api::match_bom_with_context(&ctx, token.as_deref(), &mut bom) {
-            log::warn!("Failed to fetch availability data: {}", e);
-        }
+        // A BOM without sourcing data must not pass for a successful lookup.
+        pcb_diode_api::match_bom_with_context(&ctx, token.as_deref(), &mut bom).context(
+            "Failed to fetch availability data (use --offline for a BOM without sourcing data)",
+        )?;
 
         spinner.finish();
     }

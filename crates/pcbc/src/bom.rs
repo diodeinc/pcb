@@ -73,9 +73,10 @@ pub fn execute(args: BomArgs) -> Result<()> {
     if !args.offline {
         spinner.set_message(format!("{file_name}: Fetching availability"));
         let ctx = pcb_diode_api::WorkspaceContext::from_path(&args.file);
-        if let Err(error) = pcb_diode_api::match_bom_with_context(&ctx, None, &mut bom) {
-            log::warn!("Failed to fetch availability data: {error:#}");
-        }
+        // A BOM without sourcing data must not pass for a successful lookup.
+        pcb_diode_api::match_bom_with_context(&ctx, None, &mut bom).context(
+            "Failed to fetch availability data (use --offline for a BOM without sourcing data)",
+        )?;
     }
     spinner.finish();
 

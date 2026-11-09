@@ -247,7 +247,10 @@ fn test_bom_json_format() {
         .write("modules/LedModule.zen", LED_MODULE_ZEN)
         .write("boards/TestBoard.zen", TEST_BOARD_ZEN)
         .sync()
-        .snapshot_run("pcbc", ["bom", "boards/TestBoard.zen", "-f", "json"]);
+        .snapshot_run(
+            "pcbc",
+            ["bom", "boards/TestBoard.zen", "--offline", "-f", "json"],
+        );
     assert_snapshot!("bom_json", output);
 }
 
@@ -280,8 +283,36 @@ fn test_bom_table_format() {
         .write("modules/LedModule.zen", LED_MODULE_ZEN)
         .write("boards/TestBoard.zen", TEST_BOARD_ZEN)
         .sync()
-        .snapshot_run("pcbc", ["bom", "boards/TestBoard.zen", "-f", "table"]);
+        .snapshot_run(
+            "pcbc",
+            ["bom", "boards/TestBoard.zen", "--offline", "-f", "table"],
+        );
     assert_snapshot!("bom_table", output);
+}
+
+#[test]
+fn bom_fails_when_availability_cannot_be_fetched() {
+    // The sandbox routes HTTP through a dead proxy, so the BOM match request fails.
+    let mut sandbox = Sandbox::new();
+    sandbox
+        .write("pcb.toml", WORKSPACE_TOML)
+        .write("boards/SimpleResistors.zen", SIMPLE_RESISTOR_BOARD_ZEN);
+    for format in ["json", "table"] {
+        let output = sandbox
+            .run("pcbc", ["bom", "boards/SimpleResistors.zen", "-f", format])
+            .stdout_capture()
+            .stderr_capture()
+            .unchecked()
+            .run()
+            .expect("BOM command should run");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(!output.status.success(), "{format}: expected failure");
+        assert!(output.stdout.is_empty(), "{format}: printed a BOM anyway");
+        assert!(
+            stderr.contains("Failed to fetch availability data") && stderr.contains("--offline"),
+            "{format}: {stderr}"
+        );
+    }
 }
 
 #[test]
@@ -290,7 +321,16 @@ fn test_bom_simple_resistors() {
         .write("pcb.toml", WORKSPACE_TOML)
         .write("boards/SimpleResistors.zen", SIMPLE_RESISTOR_BOARD_ZEN)
         .sync()
-        .snapshot_run("pcbc", ["bom", "boards/SimpleResistors.zen", "-f", "json"]);
+        .snapshot_run(
+            "pcbc",
+            [
+                "bom",
+                "boards/SimpleResistors.zen",
+                "--offline",
+                "-f",
+                "json",
+            ],
+        );
     assert_snapshot!("bom_simple_resistors_json", output);
 }
 
@@ -300,7 +340,10 @@ fn test_bom_capacitors_with_dielectric() {
         .write("pcb.toml", WORKSPACE_TOML)
         .write("boards/Capacitors.zen", CAPACITOR_BOARD_ZEN)
         .sync()
-        .snapshot_run("pcbc", ["bom", "boards/Capacitors.zen", "-f", "json"]);
+        .snapshot_run(
+            "pcbc",
+            ["bom", "boards/Capacitors.zen", "--offline", "-f", "json"],
+        );
     assert_snapshot!("bom_capacitors_json", output);
 }
 
@@ -311,7 +354,10 @@ fn test_bom_skip_bom_filtering() {
         .write("pcb.toml", WORKSPACE_TOML)
         .write("boards/SkipBom.zen", SKIP_BOM_BOARD_ZEN)
         .sync()
-        .snapshot_run("pcbc", ["bom", "boards/SkipBom.zen", "-f", "json"]);
+        .snapshot_run(
+            "pcbc",
+            ["bom", "boards/SkipBom.zen", "--offline", "-f", "json"],
+        );
     assert_snapshot!("bom_skip_bom_json", output);
 }
 
@@ -322,7 +368,10 @@ fn test_bom_dnp_components() {
         .write("pcb.toml", WORKSPACE_TOML)
         .write("boards/DnpBoard.zen", DNP_BOARD_ZEN)
         .sync()
-        .snapshot_run("pcbc", ["bom", "boards/DnpBoard.zen", "-f", "json"]);
+        .snapshot_run(
+            "pcbc",
+            ["bom", "boards/DnpBoard.zen", "--offline", "-f", "json"],
+        );
     assert_snapshot!("bom_dnp_json", output);
 }
 
@@ -333,7 +382,10 @@ fn test_bom_module_dnp_propagation() {
         .write("pcb.toml", WORKSPACE_TOML)
         .write("boards/ModuleDnp.zen", MODULE_DNP_BOARD_ZEN)
         .sync()
-        .snapshot_run("pcbc", ["bom", "boards/ModuleDnp.zen", "-f", "json"]);
+        .snapshot_run(
+            "pcbc",
+            ["bom", "boards/ModuleDnp.zen", "--offline", "-f", "json"],
+        );
     assert_snapshot!("bom_module_dnp_json", output);
 }
 
@@ -369,7 +421,7 @@ Component(
         .write("TCXO.zen", BOARD);
 
     let output = sandbox
-        .run("pcbc", ["bom", "TCXO.zen", "-f", "json"])
+        .run("pcbc", ["bom", "TCXO.zen", "--offline", "-f", "json"])
         .stdout_capture()
         .stderr_capture()
         .unchecked()
