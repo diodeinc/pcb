@@ -16,6 +16,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - `pcb layout` reaches a fixed point in one sync: a second sync no longer adds text thickness to new footprint fields or reorders board properties, the stackup, or the title block.
 - `pcb import` keeps the source's predefined track and via sizes, even when it has none, instead of adding the stdlib defaults.
 - `pcb import` keeps each part's source MPN, manufacturer, designator, and BOM membership, so imported boards build without `bom.unspecified` and layout sync no longer renumbers footprints.
+- `pcb import` accepts a sheet file used by several sheet instances. The instances share one module and keep their reference designators; the persistent schematic gives each instance its own copy of the sheet.
 
 ## [0.4.98] - 2026-11-07
 
