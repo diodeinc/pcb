@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Changed
+
+- `pcb import` accepts a project directory, such as an extracted zip, and writes into an existing board repository's own board instead of beside it.
+
 ### Fixed
 
 - `pcb import` rejects layout-only KiCad projects (a board but no schematic) with an error that says so, instead of reporting a missing top-level schematic.

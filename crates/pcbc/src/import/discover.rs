@@ -126,6 +126,7 @@ mod tests {
             workspace_root: root.clone(),
             kicad_project_root: root.clone(),
             kicad_input_abs: pro,
+            manifest_board_zen: None,
         };
         let selection = discover_and_select(&paths)?;
         assert_eq!(selection.board_name, "layout");
@@ -165,6 +166,7 @@ mod tests {
             workspace_root: root.clone(),
             kicad_project_root: root,
             kicad_input_abs: schematic,
+            manifest_board_zen: None,
         })
     }
 
@@ -209,6 +211,7 @@ mod tests {
             workspace_root: root.clone(),
             kicad_project_root: root.clone(),
             kicad_input_abs: root.join("layout.kicad_sch"),
+            manifest_board_zen: None,
         })?;
         assert!(matches!(
             selection.board_name_source,

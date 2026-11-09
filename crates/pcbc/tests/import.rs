@@ -833,6 +833,106 @@ fn force_reimports_from_its_own_project_directory() {
 }
 
 #[test]
+fn project_directory_import_replaces_an_existing_repositorys_board() {
+    let mut sandbox = sandbox();
+    let new = sandbox
+        .run(
+            "pcbc",
+            ["new", "board", "starter", "github.com/diodeinc/starter"],
+        )
+        .stderr_capture()
+        .unchecked()
+        .run()
+        .unwrap();
+    assert!(
+        new.status.success(),
+        "{}",
+        String::from_utf8_lossy(&new.stderr)
+    );
+    // Diode's board starter links an empty KiCad project of its own.
+    sandbox.write("starter/eda/eda.kicad_pro", "{}\n");
+    let starter_zen = sandbox.root_path().join("starter/starter.zen");
+    let starter_source = fs::read_to_string(&starter_zen).unwrap();
+    let manifest = fs::read_to_string(sandbox.root_path().join("starter/pcb.toml")).unwrap();
+
+    // An extracted project archive, with copies of the project that are not the project.
+    sandbox.write("project/board/layout.kicad_sch", STANDALONE_FIXTURE);
+    sandbox.write("project/board/layout.kicad_pro", PROJECT_FIXTURE);
+    sandbox.write("project/board/layout.kicad_pcb", PCB_FIXTURE);
+    sandbox.write("project/__MACOSX/board/._layout.kicad_pro", "metadata");
+    sandbox.write(
+        "project/board/layout-backups/old/layout.kicad_pro",
+        PROJECT_FIXTURE,
+    );
+    sandbox.write("project/board/.history/layout.kicad_pro", PROJECT_FIXTURE);
+    sandbox.write("project/board/._layout.kicad_pro", "metadata");
+    sandbox.write("project/board/_autosave-layout.kicad_pro", PROJECT_FIXTURE);
+    sandbox.write("project/other/other.kicad_pro", PROJECT_FIXTURE);
+    let import = |sandbox: &mut Sandbox| {
+        sandbox
+            .run(
+                "pcbc",
+                ["import", "project", "starter", "--force", "--skip-drc"],
+            )
+            .stderr_capture()
+            .unchecked()
+            .run()
+            .unwrap()
+    };
+
+    let ambiguous = import(&mut sandbox);
+    let stderr = String::from_utf8_lossy(&ambiguous.stderr);
+    assert!(!ambiguous.status.success());
+    assert!(
+        stderr.contains("Found 2 KiCad projects")
+            && stderr.contains("board/layout.kicad_pro")
+            && stderr.contains("other/other.kicad_pro"),
+        "unexpected stderr:\n{stderr}"
+    );
+    assert_eq!(fs::read_to_string(&starter_zen).unwrap(), starter_source);
+
+    fs::remove_dir_all(sandbox.root_path().join("project/other")).unwrap();
+    let imported = import(&mut sandbox);
+    assert!(
+        imported.status.success(),
+        "{}",
+        String::from_utf8_lossy(&imported.stderr)
+    );
+    let output = sandbox.root_path().join("starter");
+    // The repository's board is the imported design; no second board appears beside it.
+    let board = fs::read_to_string(&starter_zen).unwrap();
+    assert!(board.contains("components/"), "{board}");
+    assert!(!output.join("layout.zen").exists());
+    assert_eq!(
+        fs::read_to_string(output.join("pcb.toml")).unwrap(),
+        manifest
+    );
+    assert!(output.join("eda/layout.kicad_pcb").is_file());
+    assert!(!output.join("eda/eda.kicad_pro").exists());
+
+    // Without a [board] path, the board is the repository's only root .zen.
+    let pathless = manifest
+        .lines()
+        .filter(|line| !line.starts_with("path = "))
+        .collect::<Vec<_>>()
+        .join("\n");
+    fs::write(output.join("pcb.toml"), &pathless).unwrap();
+    fs::rename(&starter_zen, output.join("board.zen")).unwrap();
+    let reimported = import(&mut sandbox);
+    assert!(
+        reimported.status.success(),
+        "{}",
+        String::from_utf8_lossy(&reimported.stderr)
+    );
+    assert!(
+        fs::read_to_string(output.join("board.zen"))
+            .unwrap()
+            .contains("components/")
+    );
+    assert!(!output.join("layout.zen").exists());
+}
+
+#[test]
 fn power_flags_with_real_references_stay_schematic_only() {
     // A PWR_FLAG renamed from `#FLG` to `FLG1` reaches KiCad's netlist like a part, but it is a
     // footprintless power symbol and must not become a physical component.
