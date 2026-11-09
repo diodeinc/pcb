@@ -154,7 +154,7 @@ pub(super) fn incomplete_database(report: &serde_json::Value) -> Result<Vec<u8>>
 /// Fill a fresh in-memory database in one transaction. The same inserts in
 /// the same order lay out the same pages, so the file is reproducible.
 fn write(fill: impl FnOnce(&Connection) -> Result<()>) -> Result<Vec<u8>> {
-    let connection = Connection::open_in_memory()?;
+    let mut connection = Connection::open_in_memory()?;
     connection.pragma_update(None, "application_id", APPLICATION_ID)?;
     connection.pragma_update(None, "user_version", REPORT_SCHEMA_VERSION)?;
     connection.execute_batch(SCHEMA)?;
