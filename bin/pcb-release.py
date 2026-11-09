@@ -296,9 +296,14 @@ def prepare_nightly(dry_run: bool) -> bool:
 def prepare() -> bool:
     if os.environ.get("PCB_RELEASE_CHANNEL") == "nightly":
         return prepare_nightly(os.environ.get("PCB_RELEASE_DRY_RUN") == "true")
-    product = run("buildkite-agent", "meta-data", "get", "release-product")
-    version = run("buildkite-agent", "meta-data", "get", "release-version")
-    dry_run = run("buildkite-agent", "meta-data", "get", "release-dry-run")
+    if "PCB_RELEASE_VERSION" in os.environ:
+        product = os.environ.get("PCB_RELEASE_PRODUCT", "")
+        version = os.environ["PCB_RELEASE_VERSION"]
+        dry_run = os.environ.get("PCB_RELEASE_DRY_RUN", "true")
+    else:
+        product = run("buildkite-agent", "meta-data", "get", "release-product")
+        version = run("buildkite-agent", "meta-data", "get", "release-version")
+        dry_run = run("buildkite-agent", "meta-data", "get", "release-dry-run")
     if (
         product not in ("compiler", "shim")
         or not VERSION.fullmatch(version)

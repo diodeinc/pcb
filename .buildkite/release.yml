@@ -8,7 +8,7 @@ env:
 steps:
   - block: Release PCB
     key: release-input
-    if: build.env("PCB_RELEASE_CHANNEL") != "nightly"
+    if: build.env("PCB_RELEASE_CHANNEL") != "nightly" && build.env("PCB_RELEASE_VERSION") == null
     fields:
       - select: Product
         key: release-product
