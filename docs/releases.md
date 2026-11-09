@@ -9,6 +9,18 @@ commit, verifies and uploads immutable S3 artifacts, writes the completion
 marker/latest pointer, then pushes the tag. Compiler releases also publish a
 verified GitHub Release; shims stay S3-only.
 
+## Command line
+
+```sh
+buildkite build create -p pcb-release -b main -c HEAD \
+  -e PCB_RELEASE_PRODUCT=compiler \
+  -e PCB_RELEASE_VERSION=0.4.99 \
+  -e PCB_RELEASE_DRY_RUN=false
+```
+
+Use the next version without `v`; use `shim` for the launcher. Supplying a version
+skips the form. Omit `PCB_RELEASE_DRY_RUN=false` for a dry run.
+
 ## Nightly
 
 `PCB_RELEASE_CHANNEL=nightly` runs the same six-target pipeline from `main`,
