@@ -32,15 +32,43 @@ impl LoadedProject {
     }
 }
 
+/// A sheet placed in its parent whose schematic file does not exist.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MissingSchematic {
+    pub sheet_id: String,
+    /// Project-relative POSIX path of the missing file.
+    pub file: String,
+}
+
 /// Load a project through `read`, which returns `None` for a missing file.
 ///
 /// KiCad 10 flat projects list their roots in `schematic.top_level_sheets`;
 /// other projects use KiCad's legacy same-stem root file. Like KiCad, a missing
-/// project file is an empty project.
+/// project file is an empty project. A placed sheet whose schematic is missing
+/// is an error; see [`load_available_project`] to show the rest.
 pub fn load_project(
     project_file: &str,
-    mut read: impl FnMut(&str) -> Result<Option<String>>,
+    read: impl FnMut(&str) -> Result<Option<String>>,
 ) -> Result<LoadedProject> {
+    let (project, missing) = load_available_project(project_file, read)?;
+    if let Some(missing) = missing.first() {
+        bail!(
+            "sheet {} references missing schematic {}",
+            missing.sheet_id,
+            missing.file
+        );
+    }
+    Ok(project)
+}
+
+/// Like [`load_project`], but a placed sheet whose schematic is missing keeps
+/// its sheet and loads without a child page, and is reported instead of
+/// failing the whole project. For viewers that show what exists; anything that
+/// writes the project must use [`load_project`].
+pub fn load_available_project(
+    project_file: &str,
+    mut read: impl FnMut(&str) -> Result<Option<String>>,
+) -> Result<(LoadedProject, Vec<MissingSchematic>)> {
     let project: Value = serde_json::from_str(&read(project_file)?.unwrap_or_else(|| "{}".into()))
         .with_context(|| format!("failed to parse {project_file}"))?;
     let roots = project_roots(project_file, &project)?;
@@ -58,6 +86,7 @@ pub fn load_project(
 
     let mut pages = Vec::new();
     let mut root_page_ids = Vec::new();
+    let mut missing = Vec::new();
     let mut index = 0;
     while index < queue.len() {
         let path = queue[index].0.clone();
@@ -92,7 +121,10 @@ pub fn load_project(
                 None if !sheet.placed => {
                     removed_sheets.insert(sheet.id.clone());
                 }
-                None => bail!("sheet {} references missing schematic {child}", sheet.id),
+                None => missing.push(MissingSchematic {
+                    sheet_id: sheet.id.to_string(),
+                    file: child,
+                }),
             }
         }
         page.items.retain(
@@ -107,15 +139,18 @@ pub fn load_project(
         .transpose()
         .context("schematic.bus_aliases must map alias names to member lists")?
         .unwrap_or_default();
-    Ok(LoadedProject {
-        document: SchDocument {
-            pages,
-            root_page_ids,
-            bus_aliases,
-            project_name: file_stem(project_file),
+    Ok((
+        LoadedProject {
+            document: SchDocument {
+                pages,
+                root_page_ids,
+                bus_aliases,
+                project_name: file_stem(project_file),
+            },
+            project,
         },
-        project,
-    })
+        missing,
+    ))
 }
 
 pub(crate) fn file_stem(path: &str) -> String {
@@ -212,7 +247,7 @@ pub fn sheet_file(parent: &str, child: &str) -> Result<String> {
 mod tests {
     use std::collections::BTreeMap;
 
-    use super::{load_project, sheet_file};
+    use super::{MissingSchematic, load_available_project, load_project, sheet_file};
     use crate::connectivity::ConnectivityGraph;
 
     #[test]
@@ -256,6 +291,33 @@ mod tests {
             ]
         );
         ConnectivityGraph::from_kicad(&project.document).unwrap();
+
+        // One missing child fails a strict load but leaves the rest viewable.
+        let mut partial = files.clone();
+        partial.remove("leaf.kicad_sch");
+        let error = load_project("demo.kicad_pro", |path| Ok(partial.get(path).cloned()))
+            .unwrap_err()
+            .to_string();
+        assert_eq!(
+            error,
+            "sheet s-child-0 references missing schematic leaf.kicad_sch"
+        );
+        let (available, missing) =
+            load_available_project("demo.kicad_pro", |path| Ok(partial.get(path).cloned()))
+                .unwrap();
+        assert_eq!(
+            available.schematic_files().collect::<Vec<_>>(),
+            ["demo.kicad_sch", "sub/child.kicad_sch", "other.kicad_sch"]
+        );
+        assert_eq!(
+            missing,
+            [MissingSchematic {
+                sheet_id: "s-child-0".into(),
+                file: "leaf.kicad_sch".into(),
+            }]
+        );
+        // The sheet box stays on its parent page.
+        assert_eq!(available.document.pages[1].items.len(), 2);
         assert!(sheet_file("demo.kicad_sch", r"C:\other\x.kicad_sch").is_err());
         assert_eq!(
             sheet_file("demo.kicad_sch", "rev:/x.kicad_sch").unwrap(),
