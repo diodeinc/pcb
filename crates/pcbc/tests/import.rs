@@ -1873,7 +1873,7 @@ fn reused_sheet_file_imports_as_one_module_with_each_instances_references() {
                 (stroke (width 0) (type default)) (fill (color 0 0 0 0))
                 (uuid "00000000-0000-0000-0000-0000000000{sheet}")
                 (property "Sheetname" "CH_{name}" (at 40.64 {y} 0) {font})
-                (property "Sheetfile" "channel.kicad_sch" (at 40.64 {y} 0) {font})
+                (property "Sheetfile" "sub\\channel.kicad_sch" (at 40.64 {y} 0) {font})
                 (pin "IN" bidirectional (at 40.64 {pin_y} 180) (uuid "00000000-0000-0000-0000-0000000001{sheet}") {font})
                 (pin "OUT" bidirectional (at 60.96 {pin_y} 0) (uuid "00000000-0000-0000-0000-0000000002{sheet}") {font})
                 (instances (project "reuse" (path "/{root_uuid}" (page "{page}")))))
@@ -1938,7 +1938,8 @@ fn reused_sheet_file_imports_as_one_module_with_each_instances_references() {
     }
     child.push(')');
     sandbox.write("source/reuse.kicad_sch", &root);
-    sandbox.write("source/channel.kicad_sch", &child);
+    // A Windows-style sheet reference into a subdirectory, which KiCad also accepts.
+    sandbox.write("source/sub/channel.kicad_sch", &child);
 
     let import = sandbox
         .run("pcbc", ["import", "source/reuse.kicad_sch", "out"])
@@ -2027,11 +2028,11 @@ fn reused_sheet_file_imports_as_one_module_with_each_instances_references() {
         BTreeMap::from([
             ("reuse.kicad_sch".to_string(), BTreeSet::new()),
             (
-                "channel.kicad_sch".to_string(),
+                "sub/channel.kicad_sch".to_string(),
                 BTreeSet::from(["CH_A.R1", "CH_A.R2", "CH_A.R3"].map(String::from))
             ),
             (
-                "channel_2.kicad_sch".to_string(),
+                "sub/channel_2.kicad_sch".to_string(),
                 BTreeSet::from(["CH_B.R12", "CH_B.R13", "CH_B.R7"].map(String::from))
             ),
         ])

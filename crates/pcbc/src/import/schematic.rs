@@ -434,9 +434,11 @@ fn split_reused_sheet_files(layout_dir: &Path, tree: &ImportSheetTree) -> Result
                 .zip(property_value(item, "Sheetfile"));
             if let Some((copy, value)) = sheet_file {
                 let reference = value.as_str().context("Invalid Sheetfile")?;
-                let directory = reference.rsplit_once('/').map(|(directory, _)| directory);
-                let reference = directory.map_or(copy.to_string(), |dir| format!("{dir}/{copy}"));
-                patches.replace_string(value.span, &reference);
+                // KiCad accepts either separator; keep the reference's directory as written.
+                let directory = reference
+                    .rfind(['/', '\\'])
+                    .map_or("", |i| &reference[..=i]);
+                patches.replace_string(value.span, &format!("{directory}{copy}"));
             }
         }
         let mut output = Vec::new();
