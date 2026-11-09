@@ -19,7 +19,8 @@ use super::LayerStyle;
 use crate::dialects::artwork::{self, Geometry, Object, PaintOrder, transformed_geometry};
 use crate::dialects::{LayerRole, Side};
 use crate::geom::{
-    Affine2, BBox, ContourBuf, Diagnostics, FillRule, Paint, PathCmd, Point, Polarity,
+    Affine2, BBox, ContourBuf, ContourSet, Diagnostic, Diagnostics, FillRule, Paint, PathCmd,
+    Point, Polarity, Resolution,
 };
 
 pub type CompositeDocument<Meta> = artwork::Document<(), Meta>;
@@ -333,6 +334,153 @@ impl<Meta: Clone + Default> Composite<Meta> {
         for object in objects.into_iter().flatten() {
             self.artwork.push_object(layer, object.clone());
         }
+    }
+
+    /// What a laser landing on `face` of the board alone meets, from the
+    /// layers [`Self::draw`] stacks. `open` is what the source's hole
+    /// semantics leave open; a hole the stack cuts that is not open is
+    /// covered. A side with no mask layer, or whose artwork has diagnostics,
+    /// is unknown but for its holes.
+    pub fn surface_map(
+        mut self,
+        material: &Material<Meta>,
+        face: Face<Meta>,
+        open: &ContourSet,
+        thickness: Thickness,
+        resolution: Resolution,
+    ) -> anyhow::Result<SurfaceMap> {
+        let (side, masked) = (face.side, face.masked);
+        self.stack(Affine2::IDENTITY, material, &Fabrication::default(), face);
+        let board = vec![material.sheet.clone(), material.outside.clone()];
+        self.layer("Board", style(0, 1.0), [&board]);
+        artwork::normalize_bounds(&mut self.artwork);
+        let (images, mut diagnostics) =
+            artwork::compose_owner_regions(&self.artwork, |_| Some(()), resolution)?;
+        let images = images
+            .into_iter()
+            .map(|owners| ContourSet::union_all(resolution, owners.into_iter().map(|(_, i)| i)))
+            .collect::<Result<Vec<_>, _>>()?;
+        let [substrate, finish, copper, mask, legend, _score, board] = &images[..] else {
+            unreachable!("stack draws six layers and the board one");
+        };
+        if !masked {
+            diagnostics.push(Diagnostic::warning(format!("{side:?} has no mask layer")));
+        }
+
+        let less = |region: &ContourSet, cutters: &[&ContourSet]| {
+            cutters
+                .iter()
+                .try_fold(region.clone(), |region, cutter| region.difference(cutter))
+        };
+        let open = open.intersection(board)?;
+        let covered = less(board, &[substrate, &open])?;
+        // Fail closed: what the artwork may have lost is unknown.
+        let empty = || ContourSet::empty(resolution);
+        let [over_laminate, over_copper, legend, finish, bare, unknown] = if diagnostics.is_empty()
+        {
+            [
+                less(mask, &[copper, legend, &open])?,
+                less(copper, &[legend, &open])?,
+                less(legend, &[&open])?,
+                less(finish, &[mask, &open])?,
+                less(substrate, &[finish, mask, &open])?,
+                empty(),
+            ]
+        } else {
+            [
+                empty(),
+                empty(),
+                empty(),
+                empty(),
+                empty(),
+                less(substrate, &[&open])?,
+            ]
+        };
+        Ok(SurfaceMap {
+            side,
+            regions: vec![
+                (Surface::MaskOverLaminate, over_laminate),
+                (Surface::MaskOverCopper, over_copper),
+                (Surface::Legend, legend),
+                (Surface::Finish, finish),
+                (Surface::BareLaminate, bare),
+                (Surface::Hole, open),
+                (Surface::CoveredHole, covered),
+                (Surface::Unknown, unknown),
+            ],
+            thickness,
+            diagnostics,
+        })
+    }
+}
+
+/// What a laser line landing on one side of a board meets.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Surface {
+    MaskOverLaminate,
+    MaskOverCopper,
+    /// Legend ink, which prints only on the mask.
+    Legend,
+    /// Copper a mask opening exposes, in the surface finish.
+    Finish,
+    /// Laminate a mask opening exposes.
+    BareLaminate,
+    /// A hole or opening the surface leaves open.
+    Hole,
+    /// A hole the surface closes over: tented, capped or filled.
+    CoveredHole,
+    Unknown,
+}
+
+/// Nominal thickness in mm of what a side builds up on its laminate.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct Thickness {
+    pub copper: Option<f64>,
+    pub mask: Option<f64>,
+    pub legend: Option<f64>,
+}
+
+impl Surface {
+    /// Nominal height above the laminate. The legend's is over laminate.
+    pub fn height_mm(self, thickness: Thickness) -> Option<f64> {
+        let Thickness {
+            copper,
+            mask,
+            legend,
+        } = thickness;
+        match self {
+            Self::BareLaminate => Some(0.0),
+            Self::Finish => copper,
+            Self::MaskOverLaminate => mask,
+            Self::MaskOverCopper => Some(copper? + mask?),
+            Self::Legend => Some(mask? + legend?),
+            Self::Hole | Self::CoveredHole | Self::Unknown => None,
+        }
+    }
+}
+
+/// One side of a board in disjoint regions, one per [`Surface`], together
+/// covering its profile less its cutouts, in the board's frame.
+#[derive(Debug, Clone)]
+pub struct SurfaceMap {
+    pub side: Side,
+    pub regions: Vec<(Surface, ContourSet)>,
+    pub thickness: Thickness,
+    /// Why the side is unknown, when it is.
+    pub diagnostics: Vec<Diagnostic>,
+}
+
+impl SurfaceMap {
+    pub fn region(&self, surface: Surface) -> &ContourSet {
+        let mut regions = self.regions.iter();
+        &regions
+            .find(|(each, _)| *each == surface)
+            .expect("every surface")
+            .1
+    }
+
+    pub fn height_mm(&self, surface: Surface) -> Option<f64> {
+        surface.height_mm(self.thickness)
     }
 }
 

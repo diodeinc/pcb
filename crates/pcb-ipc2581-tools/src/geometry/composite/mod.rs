@@ -4,11 +4,13 @@
 use anyhow::{Context, Result, anyhow};
 use ipc2581::Symbol;
 use pcb_ir::dialects::artwork::{Geometry, Object};
-use pcb_ir::dialects::ipc::{ProfileSet, profile_occurrences_for};
+use pcb_ir::dialects::ipc::{ArtworkScope, ProfileSet, profile_occurrences_for};
 use pcb_ir::dialects::{LayerRole, Side};
 use pcb_ir::geom::{ContourBuf, LineCap, Paint, PathCmd, Polarity, Resolution, StrokeStyle};
 use pcb_ir::import::ipc2581::{ImportedDesign, LayerId};
-use pcb_ir::render::composite::{Composite, CompositeDocument, CompositeStyle, Fabrication, Face};
+use pcb_ir::render::composite::{
+    Composite, CompositeDocument, CompositeStyle, Fabrication, Face, SurfaceMap, Thickness,
+};
 
 use crate::accessors::{ColorInfo, IpcAccessor};
 use crate::geometry::render::layer_objects;
@@ -126,13 +128,7 @@ fn face(
             layer_role(layer.layer_function) == role && ir_side(layer.side) == side.ir_side()
         }
     };
-    let outer_copper = |side: Side| {
-        let layers = imported.layer_definitions.iter();
-        let is_outer = |layer: &&ipc2581::types::Layer| {
-            layer_role(layer.layer_function) == LayerRole::Copper && ir_side(layer.side) == side
-        };
-        layers.filter(is_outer).map(|layer| layer.name).next()
-    };
+    let outer_copper = |side| first_layer(imported, LayerRole::Copper, side);
     let surface = outer_copper(side.ir_side())
         .with_context(|| format!("IPC-2581 design has no {side} copper layer"))?;
     let [copper, slots] = lower(&|layer| layer.name == surface)?
@@ -167,6 +163,60 @@ fn face(
             .chain(holes.into_iter().flatten().flatten())
             .collect(),
     })
+}
+
+/// The first layer of `role` on `side`: for copper, the side's outer copper.
+fn first_layer(imported: &ImportedDesign, role: LayerRole, side: Side) -> Option<Symbol> {
+    let mut layers = imported.layer_definitions.iter();
+    layers
+        .find(|layer| layer_role(layer.layer_function) == role && ir_side(layer.side) == side)
+        .map(|layer| layer.name)
+}
+
+/// Each side of the board alone, top then bottom: the face
+/// [`composite_artwork`] draws, holes open as
+/// [`ImportedDesign::surface_openings`] leaves them, and the thicknesses the
+/// stackup gives.
+pub fn surface_maps(
+    imported: &ImportedDesign,
+    accessor: &IpcAccessor<'_>,
+    resolution: Resolution,
+) -> Result<[SurfaceMap; 2]> {
+    let copper = |side: BoardSide| {
+        first_layer(imported, LayerRole::Copper, side.ir_side())
+            .with_context(|| format!("IPC-2581 design has no {side} copper layer"))
+    };
+    let copper = [copper(BoardSide::Top)?, copper(BoardSide::Bottom)?];
+    let [top, bottom] = imported.surface_openings(ArtworkScope::Board, copper, resolution)?;
+    let stackup = accessor.stackup_details();
+    let map = |side: BoardSide, open| {
+        let mut composite = Composite::new();
+        let material = composite
+            .material(profile_contours(imported, true))
+            .context("IPC-2581 design has no profile to map a board from")?;
+        let face = face(
+            &mut composite.artwork,
+            imported,
+            accessor,
+            side,
+            true,
+            resolution,
+        )?;
+        // A stated thickness of zero says nothing.
+        let thickness = |role| {
+            let name = imported.resolve(first_layer(imported, role, side.ir_side())?);
+            let layers = &stackup.as_ref()?.layers;
+            let layer = layers.iter().find(|layer| layer.name == name)?;
+            layer.thickness_mm.filter(|mm| *mm > 0.0)
+        };
+        let thickness = Thickness {
+            copper: thickness(LayerRole::Copper),
+            mask: thickness(LayerRole::Soldermask),
+            legend: thickness(LayerRole::Legend),
+        };
+        composite.surface_map(&material, face, &open, thickness, resolution)
+    };
+    Ok([map(BoardSide::Top, top)?, map(BoardSide::Bottom, bottom)?])
 }
 
 /// The profile of the board, or of the array and every board in it: each
@@ -229,6 +279,7 @@ mod tests {
     use super::*;
     use pcb_ir::dialects::artwork;
     use pcb_ir::geom::{BBox, ContourSet, Point};
+    use pcb_ir::render::composite::Surface;
 
     /// A 10 x 6 mm board with a 1 mm square cut out of it. One 4 x 2 mm pad
     /// has its left half opened by the mask and a legend mark half over that
@@ -537,5 +588,114 @@ mod tests {
             (&default.finish, &default.finish)
         );
         assert_eq!(top.substrate, default.substrate);
+    }
+
+    /// [`BOARD`] with three 0.4 mm vias: one in a 2 x 2 mm top mask opening
+    /// of its own, one under the top mask and one capped.
+    fn with_vias() -> String {
+        let hole = r#"<Hole name="H1" diameter="1" platingStatus="NONPLATED" x="8" y="4"/>"#;
+        let vias = r#"
+            <Hole name="V1" diameter="0.4" platingStatus="VIA" x="6.2" y="4.6"/>
+            <Hole name="V2" diameter="0.4" platingStatus="VIA" x="2" y="5"/>
+            <Hole name="V3" diameter="0.4" platingStatus="VIA_CAPPED" x="4.5" y="5.2"/>"#;
+        let opening = r#"<Pad padstackDefRef="opening">"#;
+        let via_opening = r#"<Pad padstackDefRef="opening"><Location x="6.2" y="4.6"/></Pad>"#;
+        BOARD
+            .replace(hole, &format!("{hole}{vias}"))
+            .replace(opening, &format!("{via_opening}{opening}"))
+    }
+
+    const VIA_MM2: f64 = std::f64::consts::PI * 0.04;
+    const HOLE_MM2: f64 = std::f64::consts::PI * 0.25;
+    const PROFILE_MM2: f64 = 60.0 - 1.0;
+
+    fn surface_maps_of(board: &str) -> [SurfaceMap; 2] {
+        let ipc = ipc2581::Ipc2581::parse(board).unwrap();
+        let resolution = Resolution::default();
+        let imported = pcb_ir::import::ipc2581::import_design(&ipc, resolution).unwrap();
+        surface_maps(&imported, &IpcAccessor::new(&ipc), resolution).unwrap()
+    }
+
+    /// Each surface's area, 0 where not listed, and that together they cover
+    /// the board once.
+    fn assert_surfaces(map: &SurfaceMap, expected: &[(Surface, f64)]) {
+        for (surface, region) in &map.regions {
+            let expected = expected.iter().find(|(each, _)| each == surface);
+            let (actual, expected) = (region.area(), expected.map_or(0.0, |(_, area)| *area));
+            // Holes image as polygons inside their circles.
+            assert!(
+                (actual - expected).abs() < 2e-2,
+                "{surface:?} covers {actual} mm², not {expected}"
+            );
+        }
+        let regions = map.regions.iter().map(|(_, region)| region.clone());
+        let union = ContourSet::union_all(Resolution::default(), regions).unwrap();
+        let sum: f64 = map.regions.iter().map(|(_, region)| region.area()).sum();
+        assert!((union.area() - PROFILE_MM2).abs() < 1e-2 && (sum - union.area()).abs() < 1e-2);
+    }
+
+    #[test]
+    fn a_surface_map_classifies_the_composite_and_opens_only_untented_uncapped_vias() {
+        use Surface::*;
+        let [top, bottom] = surface_maps_of(&with_vias());
+        assert_surfaces(
+            &top,
+            &[
+                // The first pad's left half in its opening; the rest of it
+                // and the second pad's 5 mm² on the board under the mask,
+                // less the half legend mark the opening leaves.
+                (Finish, 4.0),
+                (MaskOverCopper, 4.0 + 5.0 - 1.0),
+                (Legend, 1.0),
+                (BareLaminate, 4.0 - VIA_MM2),
+                (Hole, HOLE_MM2 + VIA_MM2),
+                (CoveredHole, 2.0 * VIA_MM2),
+                (
+                    MaskOverLaminate,
+                    PROFILE_MM2 - 17.0 - HOLE_MM2 - 2.0 * VIA_MM2,
+                ),
+            ],
+        );
+        // A mask layer with no artwork masks the bottom but proves no via
+        // tented.
+        assert_surfaces(
+            &bottom,
+            &[
+                (Hole, HOLE_MM2 + 2.0 * VIA_MM2),
+                (CoveredHole, VIA_MM2),
+                (MaskOverLaminate, PROFILE_MM2 - HOLE_MM2 - 3.0 * VIA_MM2),
+            ],
+        );
+        // 35 µm copper and 10 µm mask; the legend's 0 says nothing.
+        let height = |surface| top.height_mm(surface);
+        assert_eq!(
+            (height(Finish), height(MaskOverLaminate)),
+            (Some(0.035), Some(0.01))
+        );
+        assert!((height(MaskOverCopper).unwrap() - 0.045).abs() < 1e-12);
+        assert_eq!(height(Legend), None);
+    }
+
+    #[test]
+    fn a_side_without_a_mask_layer_or_with_lost_artwork_is_unknown_but_for_its_holes() {
+        use Surface::*;
+        let top_mask = r#"layerFunction="SOLDERMASK" side="TOP""#;
+        let bare = with_vias().replace(top_mask, r#"layerFunction="DOCUMENT" side="TOP""#);
+        // No mask tents the via.
+        assert_surfaces(
+            &surface_maps_of(&bare)[0],
+            &[
+                (Hole, HOLE_MM2 + 2.0 * VIA_MM2),
+                (CoveredHole, VIA_MM2),
+                (Unknown, PROFILE_MM2 - HOLE_MM2 - 3.0 * VIA_MM2),
+            ],
+        );
+        // The legend mark has no shape on its layer and is skipped.
+        let mark = r#"<PadstackPadDef layerRef="F.Silk" padUse="REGULAR">"#;
+        let lost = BOARD.replace(mark, r#"<PadstackPadDef layerRef="User" padUse="REGULAR">"#);
+        assert_surfaces(
+            &surface_maps_of(&lost)[0],
+            &[(Hole, HOLE_MM2), (Unknown, PROFILE_MM2 - HOLE_MM2)],
+        );
     }
 }
