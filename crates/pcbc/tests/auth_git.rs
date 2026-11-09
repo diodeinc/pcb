@@ -106,6 +106,14 @@ impl TestContext {
         self.config_dir.join("git-credential-cache/socket")
     }
 
+    // Asks the cache daemon directly, without spawning one. Git for Windows
+    // resets client connections before its daemon unlinks the socket, so the
+    // socket file can outlive `exit` briefly; ask what the cache returns instead.
+    fn cached_credential(&self) -> String {
+        let output = run_with_input(self.git_credential_cache("get"), &credential_request());
+        String::from_utf8(output.stdout).expect("Git credential output is UTF-8")
+    }
+
     fn managed_git_config(&self) -> PathBuf {
         self.config_dir.join("gitconfig")
     }
@@ -377,12 +385,16 @@ fn configure_and_unconfigure_manage_only_pcb_git_config() {
         context.git_credential_cache("store"),
         &cached_credential,
     ));
-    assert!(context.cache_socket().exists());
+    assert!(
+        context
+            .cached_credential()
+            .contains(&format!("password={REPOSITORY_TOKEN}"))
+    );
 
     assert_clean_success(&context.run_config_command("unconfigure"));
     assert_clean_success(&context.run_config_command("unconfigure"));
 
-    assert!(!context.cache_socket().exists());
+    assert_eq!(context.cached_credential(), "");
     assert!(!managed_config.exists());
     assert_eq!(
         context.git_config_values(&context.git_config, "include.path"),
@@ -504,7 +516,11 @@ fn auth_logout_stops_the_git_credential_cache() {
         context.git_credential("approve"),
         &String::from_utf8(fill.stdout).unwrap(),
     ));
-    assert!(context.cache_socket().exists());
+    assert!(
+        context
+            .cached_credential()
+            .contains(&format!("password={REPOSITORY_TOKEN}"))
+    );
 
     let logout = context
         .pcbc()
@@ -512,7 +528,7 @@ fn auth_logout_stops_the_git_credential_cache() {
         .output()
         .expect("run pcb auth logout");
     assert_success(&logout);
-    assert!(!context.cache_socket().exists());
+    assert_eq!(context.cached_credential(), "");
     exchange.assert_calls(1);
 }
 
