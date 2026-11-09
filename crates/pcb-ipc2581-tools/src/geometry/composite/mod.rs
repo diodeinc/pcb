@@ -4,12 +4,14 @@
 use anyhow::{Context, Result, anyhow};
 use ipc2581::Symbol;
 use pcb_ir::dialects::artwork::{Geometry, Object};
-use pcb_ir::dialects::ipc::{ArtworkScope, FeatureSpan, ProfileSet, profile_occurrences_for};
+use pcb_ir::dialects::ipc::{ArtworkScope, ProfileSet, profile_occurrences_for};
 use pcb_ir::dialects::{LayerRole, Side};
-use pcb_ir::geom::{ContourBuf, LineCap, Paint, PathCmd, Polarity, Resolution, StrokeStyle};
+use pcb_ir::geom::{
+    ContourBuf, ContourSet, LineCap, Paint, PathCmd, Polarity, Resolution, StrokeStyle,
+};
 use pcb_ir::import::ipc2581::{ImportedDesign, LayerId};
 use pcb_ir::render::composite::{
-    Composite, CompositeDocument, CompositeStyle, Fabrication, Face, SurfaceMap, Thickness,
+    Composite, CompositeStyle, Fabrication, Face, SurfaceMap, Thickness,
 };
 
 use crate::accessors::{ColorInfo, IpcAccessor};
@@ -47,15 +49,22 @@ pub fn composite_artwork(
     } else {
         array_fabrication(&mut composite, imported, resolution)?
     };
+    let scope = match board {
+        true => ArtworkScope::Board,
+        false => ArtworkScope::ArrayFlattened,
+    };
+    let drills = imported.surface_drills(scope, outer_copper(imported)?, resolution)?;
     let faces = sides
         .iter()
         .map(|&side| {
+            let drilled = &drills[(side == BoardSide::Bottom) as usize];
             face(
-                &mut composite.artwork,
+                &mut composite,
                 imported,
                 accessor,
                 side,
                 board,
+                drilled,
                 resolution,
             )
         })
@@ -101,14 +110,16 @@ pub(crate) fn rgb((red, green, blue): (u8, u8, u8)) -> u32 {
 }
 
 fn face(
-    artwork: &mut CompositeDocument<Option<Symbol>>,
+    composite: &mut Composite<Option<Symbol>>,
     imported: &ImportedDesign,
     accessor: &IpcAccessor<'_>,
     side: BoardSide,
     board: bool,
+    drilled: &ContourSet,
     resolution: Resolution,
 ) -> Result<Face<Option<Symbol>>> {
     let root = root_step(imported, board)?;
+    let artwork = &mut composite.artwork;
     // Source layers lowered into the shared tables, each as its objects by
     // stage.
     let mut lower = |selects: &dyn Fn(&ipc2581::types::Layer) -> bool| -> Result<Vec<_>> {
@@ -128,29 +139,13 @@ fn face(
             layer_role(layer.layer_function) == role && ir_side(layer.side) == side.ir_side()
         }
     };
-    let outer_copper = |side| first_layer(imported, LayerRole::Copper, side);
-    let surface = outer_copper(side.ir_side())
+    let surface = first_layer(imported, LayerRole::Copper, side.ir_side())
         .with_context(|| format!("IPC-2581 design has no {side} copper layer"))?;
-    let [copper, slots] = lower(&|layer| layer.name == surface)?
+    // The copper's slots are among the drills.
+    let [copper, _] = lower(&|layer| layer.name == surface)?
         .into_iter()
         .next()
         .context("the outer copper layer was just found")?;
-    // Slots come with the copper their span reaches; holes image only on
-    // their own layer, and open onto this side as the board's surface
-    // openings have them: one of unknown depth opens.
-    let outer = [Side::Top, Side::Bottom].map(|side| outer_copper(side).unwrap_or(surface));
-    let holes = lower(&|layer| {
-        let span = layer
-            .span
-            .map_or(FeatureSpan::ThroughBoard, |span| FeatureSpan::FromTo {
-                from: span.from_layer,
-                to: span.to_layer,
-            });
-        layer_role(layer.layer_function) == LayerRole::Drill
-            && imported
-                .span_opens_onto(span, surface, outer)
-                .unwrap_or(true)
-    })?;
     let painted = |layers: Vec<[Vec<CompositeObject>; 2]>| {
         layers.into_iter().flat_map(|[painted, _]| painted)
     };
@@ -162,11 +157,18 @@ fn face(
         masked: !masks.is_empty(),
         openings: painted(masks).collect(),
         legend: painted(lower(&on_side(LayerRole::Legend))?).collect(),
-        cutouts: slots
-            .into_iter()
-            .chain(holes.into_iter().flatten().flatten())
-            .collect(),
+        cutouts: vec![composite.region(Polarity::Clear, drilled.to_contours())],
     })
+}
+
+/// The top and bottom outer copper layers; a board with one has it on both.
+fn outer_copper(imported: &ImportedDesign) -> Result<[Symbol; 2]> {
+    let [top, bottom] =
+        [Side::Top, Side::Bottom].map(|side| first_layer(imported, LayerRole::Copper, side));
+    top.or(bottom)
+        .zip(bottom.or(top))
+        .map(|(top, bottom)| [top, bottom])
+        .context("IPC-2581 design has no outer copper layer")
 }
 
 /// The first layer of `role` on `side`: for copper, the side's outer copper.
@@ -186,24 +188,23 @@ pub fn surface_maps(
     accessor: &IpcAccessor<'_>,
     resolution: Resolution,
 ) -> Result<[SurfaceMap; 2]> {
-    let copper = |side: BoardSide| {
-        first_layer(imported, LayerRole::Copper, side.ir_side())
-            .with_context(|| format!("IPC-2581 design has no {side} copper layer"))
-    };
-    let copper = [copper(BoardSide::Top)?, copper(BoardSide::Bottom)?];
+    let copper = outer_copper(imported)?;
     let [top, bottom] = imported.surface_openings(ArtworkScope::Board, copper, resolution)?;
+    let drills = imported.surface_drills(ArtworkScope::Board, copper, resolution)?;
     let stackup = accessor.stackup_details();
     let map = |side: BoardSide, open| {
+        let drilled = &drills[(side == BoardSide::Bottom) as usize];
         let mut composite = Composite::new();
         let material = composite
             .material(profile_contours(imported, true))
             .context("IPC-2581 design has no profile to map a board from")?;
         let face = face(
-            &mut composite.artwork,
+            &mut composite,
             imported,
             accessor,
             side,
             true,
+            drilled,
             resolution,
         )?;
         // A stated thickness of zero says nothing.
@@ -550,6 +551,25 @@ mod tests {
         let [top, bottom] = surface_maps_of(&blind);
         assert_eq!(area(&top, Surface::Hole), 0.0);
         assert!((area(&bottom, Surface::Hole) - HOLE_MM2).abs() < 1e-2);
+
+        // A rout layer with no span cuts through, drawn and mapped alike.
+        let layer = r#"<Layer name="Rout" layerFunction="ROUT" side="ALL" polarity="POSITIVE"/>"#;
+        let feature = r#"<LayerFeature layerRef="Rout"><Set>
+            <SlotCavity name="S1" platingStatus="NONPLATED" plusTol="0" minusTol="0">
+              <Location x="5.5" y="5"/><Oval width="2" height="0.5"/>
+            </SlotCavity>
+          </Set></LayerFeature>"#;
+        let routed = BOARD
+            .replace("<Stackup ", &format!("{layer}<Stackup "))
+            .replace("</Step>", &format!("{feature}</Step>"));
+        let slot = 1.5 * 0.5 + std::f64::consts::PI * 0.0625;
+        for (side, map) in [BoardSide::Top, BoardSide::Bottom]
+            .into_iter()
+            .zip(surface_maps_of(&routed))
+        {
+            assert!((layer_areas(&routed, side)[0].1 - (MATERIAL_MM2 - slot)).abs() < 1e-2);
+            assert!((area(&map, Surface::Hole) - (HOLE_MM2 + slot)).abs() < 1e-2);
+        }
     }
 
     #[test]

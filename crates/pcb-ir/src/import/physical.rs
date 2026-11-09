@@ -372,12 +372,61 @@ impl ImportedDesign {
         )
     }
 
+    /// Every hole and slot a drill or rout layer of `scope` makes, with its
+    /// layer: the openings [`Self::physical_view`] derives.
+    fn drilled_features(
+        &self,
+        scope: ArtworkScope,
+    ) -> Result<Vec<(LayerId, FeatureOccurrence, &Feature)>> {
+        let mut features = Vec::new();
+        for (index, layer) in self.layer_definitions.iter().enumerate() {
+            if !matches!(
+                layer.layer_function,
+                LayerFunction::Drill | LayerFunction::Rout
+            ) {
+                continue;
+            }
+            let layer = LayerId(index as u32);
+            for occurrence in self.feature_occurrences(layer, scope)? {
+                let feature = self
+                    .feature_definition(occurrence.id.feature)
+                    .context("physical opening references a missing feature definition")?;
+                if matches!(feature.kind, FeatureKind::Hole | FeatureKind::Slot) {
+                    features.push((layer, occurrence, feature));
+                }
+            }
+        }
+        Ok(features)
+    }
+
+    /// Top/bottom: every hole and slot that opens onto the surface, given the
+    /// outer copper layers in that order, before mask, caps and fill.
+    pub fn surface_drills(
+        &self,
+        scope: ArtworkScope,
+        copper: [Symbol; 2],
+        resolution: Resolution,
+    ) -> Result<[ContourSet; 2]> {
+        let mut drills = [Vec::new(), Vec::new()];
+        for (_, occurrence, feature) in self.drilled_features(scope)? {
+            let image = self.feature_region(occurrence, resolution)?;
+            for (drills, surface) in drills.iter_mut().zip(copper) {
+                let span = feature.intent.span;
+                if self.span_opens_onto(span, surface, copper).unwrap_or(true) {
+                    drills.push(image.clone());
+                }
+            }
+        }
+        let [top, bottom] = drills.map(|drills| ContourSet::union_all(resolution, drills));
+        Ok([top?, bottom?])
+    }
+
     /// Whether a drilled or routed `span` opens onto the surface whose outer
     /// copper is `surface`, given the top and bottom outer copper `outer`. An
     /// end the span leaves out is the outer copper on its side, as the import
     /// reads slot spans; `None` when the span is unknown or an end names no
     /// copper layer, unless the other end is `surface`.
-    pub fn span_opens_onto(
+    fn span_opens_onto(
         &self,
         span: FeatureSpan,
         surface: Symbol,
@@ -979,74 +1028,56 @@ impl ImportedDesign {
             .map(|(layer, lands)| (layer, LandIndex::new(lands)))
             .collect::<BTreeMap<_, _>>();
         let mut holes = Vec::new();
-        for (layer_index, layer) in self.layer_definitions.iter().enumerate() {
-            if !matches!(
-                layer.layer_function,
-                LayerFunction::Drill | LayerFunction::Rout
-            ) {
+        for (layer_id, occurrence, feature) in self.drilled_features(scope)? {
+            if !include(&occurrence) {
                 continue;
             }
-            let layer_id = LayerId(layer_index as u32);
-            for occurrence in self.feature_occurrences(layer_id, scope)? {
-                let feature = self
-                    .feature_definition(occurrence.id.feature)
-                    .context("physical opening references a missing feature definition")?;
-                if !matches!(feature.kind, FeatureKind::Hole | FeatureKind::Slot)
-                    || !include(&occurrence)
-                {
+            let image = self.feature_region(occurrence, resolution)?;
+            let evidence = self.feature_evidence(occurrence.id);
+            let mut layer_lands = Vec::new();
+            for (&copper_layer, candidates) in &lands_by_layer {
+                if !feature_spans_layer(
+                    feature.intent.span,
+                    self.layer_definitions[copper_layer.0 as usize].name,
+                    &layer_order,
+                ) {
                     continue;
                 }
-                let image = self.feature_region(occurrence, resolution)?;
-                let evidence = self.feature_evidence(occurrence.id);
-                let mut layer_lands = Vec::new();
-                for (&copper_layer, candidates) in &lands_by_layer {
-                    if !feature_spans_layer(
-                        feature.intent.span,
-                        self.layer_definitions[copper_layer.0 as usize].name,
-                        &layer_order,
-                    ) {
-                        continue;
-                    }
-                    let land = associate_lands(
-                        &image,
-                        occurrence.board,
-                        Side::None,
-                        &evidence,
-                        candidates,
-                    )?;
-                    layer_lands.push(LayerLandAssociation {
-                        layer: copper_layer,
-                        land,
-                    });
-                }
-                holes.push(PhysicalHole {
-                    id: HoleId(occurrence.id),
-                    layer: layer_id,
-                    source_name: feature.source_name,
-                    kind: match (feature.kind, feature.shape) {
-                        (FeatureKind::Hole, Some(SimpleShape::Square { .. })) => {
-                            PhysicalHoleKind::Square
-                        }
-                        (FeatureKind::Hole, _) => PhysicalHoleKind::Round,
-                        (FeatureKind::Slot, _) => PhysicalHoleKind::Slot,
-                        _ => unreachable!("physical opening is a hole or slot"),
-                    },
-                    at: occurrence.root_from_local.transform_point(feature.center),
-                    finished_diameter: feature.shape.and_then(SimpleShape::hole_size),
-                    assembly_side: feature.intent.side,
-                    image,
-                    board: occurrence.board,
-                    plating: feature.intent.plating,
-                    padstack: feature.padstack_ref,
-                    net: feature.net,
-                    span: feature.intent.span,
-                    spec_refs: self.feature_spec_refs(layer, feature),
-                    termination: Association::Unresolved,
-                    termination_basis: None,
-                    protection: Vec::new(),
-                    lands: layer_lands,
+                let land =
+                    associate_lands(&image, occurrence.board, Side::None, &evidence, candidates)?;
+                layer_lands.push(LayerLandAssociation {
+                    layer: copper_layer,
+                    land,
                 });
             }
+            holes.push(PhysicalHole {
+                id: HoleId(occurrence.id),
+                layer: layer_id,
+                source_name: feature.source_name,
+                kind: match (feature.kind, feature.shape) {
+                    (FeatureKind::Hole, Some(SimpleShape::Square { .. })) => {
+                        PhysicalHoleKind::Square
+                    }
+                    (FeatureKind::Hole, _) => PhysicalHoleKind::Round,
+                    (FeatureKind::Slot, _) => PhysicalHoleKind::Slot,
+                    _ => unreachable!("physical opening is a hole or slot"),
+                },
+                at: occurrence.root_from_local.transform_point(feature.center),
+                finished_diameter: feature.shape.and_then(SimpleShape::hole_size),
+                assembly_side: feature.intent.side,
+                image,
+                board: occurrence.board,
+                plating: feature.intent.plating,
+                padstack: feature.padstack_ref,
+                net: feature.net,
+                span: feature.intent.span,
+                spec_refs: self
+                    .feature_spec_refs(&self.layer_definitions[layer_id.0 as usize], feature),
+                termination: Association::Unresolved,
+                termination_basis: None,
+                protection: Vec::new(),
+                lands: layer_lands,
+            });
         }
         holes.sort_by_key(|hole| (hole.layer, hole.id));
         Ok(holes)
