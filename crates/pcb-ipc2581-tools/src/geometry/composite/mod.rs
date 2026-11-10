@@ -179,49 +179,46 @@ fn first_layer(imported: &ImportedDesign, role: LayerRole, side: Side) -> Option
         .map(|layer| layer.name)
 }
 
-/// Each side of the board alone, top then bottom: the face
-/// [`composite_artwork`] draws, holes open as
-/// [`ImportedDesign::surface_openings`] leaves them, and the thicknesses the
-/// stackup gives.
-pub fn surface_maps(
+/// One side of the board alone: the face [`composite_artwork`] draws, holes
+/// open as [`ImportedDesign::surface_openings`] leaves them, and the
+/// thicknesses the stackup gives.
+pub fn surface_map(
     imported: &ImportedDesign,
     accessor: &IpcAccessor<'_>,
+    side: BoardSide,
     resolution: Resolution,
-) -> Result<[SurfaceMap; 2]> {
+) -> Result<SurfaceMap> {
     let copper = outer_copper(imported)?;
-    let [top, bottom] = imported.surface_openings(ArtworkScope::Board, copper, resolution)?;
-    let drills = imported.surface_drills(ArtworkScope::Board, copper, resolution)?;
+    let index = (side == BoardSide::Bottom) as usize;
+    let open = &imported.surface_openings(ArtworkScope::Board, copper, resolution)?[index];
+    let drilled = &imported.surface_drills(ArtworkScope::Board, copper, resolution)?[index];
+    let mut composite = Composite::new();
+    let material = composite
+        .material(profile_contours(imported, true))
+        .context("IPC-2581 design has no profile to map a board from")?;
+    let face = face(
+        &mut composite,
+        imported,
+        accessor,
+        side,
+        true,
+        drilled,
+        resolution,
+    )?;
+    // A stated thickness of zero says nothing.
     let stackup = accessor.stackup_details();
-    let map = |side: BoardSide, open| {
-        let drilled = &drills[(side == BoardSide::Bottom) as usize];
-        let mut composite = Composite::new();
-        let material = composite
-            .material(profile_contours(imported, true))
-            .context("IPC-2581 design has no profile to map a board from")?;
-        let face = face(
-            &mut composite,
-            imported,
-            accessor,
-            side,
-            true,
-            drilled,
-            resolution,
-        )?;
-        // A stated thickness of zero says nothing.
-        let thickness = |role| {
-            let name = imported.resolve(first_layer(imported, role, side.ir_side())?);
-            let layers = &stackup.as_ref()?.layers;
-            let layer = layers.iter().find(|layer| layer.name == name)?;
-            layer.thickness_mm.filter(|mm| *mm > 0.0)
-        };
-        let thickness = Thickness {
-            copper: thickness(LayerRole::Copper),
-            mask: thickness(LayerRole::Soldermask),
-            legend: thickness(LayerRole::Legend),
-        };
-        composite.surface_map(&material, face, &open, thickness, resolution)
+    let thickness = |role| {
+        let name = imported.resolve(first_layer(imported, role, side.ir_side())?);
+        let layers = &stackup.as_ref()?.layers;
+        let layer = layers.iter().find(|layer| layer.name == name)?;
+        layer.thickness_mm.filter(|mm| *mm > 0.0)
     };
-    Ok([map(BoardSide::Top, top)?, map(BoardSide::Bottom, bottom)?])
+    let thickness = Thickness {
+        copper: thickness(LayerRole::Copper),
+        mask: thickness(LayerRole::Soldermask),
+        legend: thickness(LayerRole::Legend),
+    };
+    composite.surface_map(&material, face, open, thickness, resolution)
 }
 
 /// The profile of the board, or of the array and every board in it: each
@@ -646,7 +643,9 @@ mod tests {
         let ipc = ipc2581::Ipc2581::parse(board).unwrap();
         let resolution = Resolution::default();
         let imported = pcb_ir::import::ipc2581::import_design(&ipc, resolution).unwrap();
-        surface_maps(&imported, &IpcAccessor::new(&ipc), resolution).unwrap()
+        let accessor = IpcAccessor::new(&ipc);
+        [BoardSide::Top, BoardSide::Bottom]
+            .map(|side| surface_map(&imported, &accessor, side, resolution).unwrap())
     }
 
     fn area(map: &SurfaceMap, surface: Surface) -> f64 {

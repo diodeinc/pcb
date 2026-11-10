@@ -458,11 +458,15 @@ impl ImportedDesign {
         copper: [Symbol; 2],
         resolution: Resolution,
     ) -> Result<[ContourSet; 2]> {
-        let view = self
-            .physical_view(scope, resolution)
-            .context("read measurement surfaces, mask openings and hole protection")?;
+        // Only holes, their protection and the mask bear on what is open: no land, termination
+        // or paste is derived.
+        let all = |_: &FeatureOccurrence| true;
+        let mut holes = self
+            .derive_physical_holes(scope, &[], &all, resolution)
+            .context("read the holes that open measurement surfaces")?;
+        self.attach_hole_protection(scope, &mut holes, resolution)?;
         let mut fills = HashMap::new();
-        for hole in &view.holes {
+        for hole in &holes {
             for evidence in &hole.protection {
                 if evidence.function == LayerFunction::HoleFill
                     && !fills.contains_key(&evidence.layer)
@@ -480,20 +484,24 @@ impl ImportedDesign {
             .zip(copper)
             .enumerate()
         {
-            let mask = view
-                .mask_openings
-                .iter()
-                .filter(|opening| opening.side == side || opening.side == Side::None)
-                .map(|opening| opening.image.clone())
-                .collect::<Vec<_>>();
-            let known_mask = !mask.is_empty();
+            let mut mask = Vec::new();
+            for (index, layer) in self.layer_definitions.iter().enumerate() {
+                let sided = matches!(side_for_layer(layer.side), Side::None)
+                    || side_for_layer(layer.side) == side;
+                if layer.layer_function == LayerFunction::Soldermask && sided {
+                    let layer = LayerId(index as u32);
+                    mask.push(self.composed_layer_image(layer, scope, resolution)?);
+                }
+            }
             let mask = ContourSet::union_all(resolution, mask)?;
-            let mut openings = Vec::new();
+            let known_mask = !mask.is_empty();
+            // Vias open only where the mask does, clipped together: one pass over the mask.
+            let (mut openings, mut vias) = (Vec::new(), Vec::new());
             let reaches = |span, unknown| {
                 self.span_opens_onto(span, surface, copper)
                     .unwrap_or(unknown)
             };
-            for hole in &view.holes {
+            for hole in &holes {
                 if !reaches(hole.span, true) || hole.plating == PlatingKind::ViaCapped {
                     continue;
                 }
@@ -507,10 +515,12 @@ impl ImportedDesign {
                     }
                 }
                 if known_mask && hole.plating == PlatingKind::Via {
-                    opening = opening.intersection(&mask)?;
+                    vias.push(opening);
+                } else {
+                    openings.push(opening);
                 }
-                openings.push(opening);
             }
+            openings.push(ContourSet::union_all(resolution, vias)?.intersection(&mask)?);
             result[index] = ContourSet::union_all(resolution, openings)?;
         }
         Ok(result)
