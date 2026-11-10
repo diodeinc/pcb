@@ -14,12 +14,15 @@ glam = { version = "0.34.1", default-features = false, features = ["std", "f64",
 starlark = { git = "https://github.com/diodeinc/starlark-rust", rev = "74312f2a947db8add89c004a3d43ff166bfb4f29", default-features = false }
 starlark_map = { git = "https://github.com/diodeinc/starlark-rust", rev = "74312f2a947db8add89c004a3d43ff166bfb4f29", default-features = false }
 starlark_syntax = { git = "https://github.com/diodeinc/starlark-rust", rev = "74312f2a947db8add89c004a3d43ff166bfb4f29", default-features = false }
+# The starlark fork above names these buck2 crates by `branch = "main"`, and cargo treats a
+# different ref of the same git repo as a separate source. Rev-pinning them here would pull a
+# second copy of each crate, so the commit is pinned in Cargo.lock instead.
 allocative = { git = "https://github.com/facebook/buck2.git", branch = "main", default-features = false }
 mini_map = { git = "https://github.com/facebook/buck2.git", branch = "main" }
 pagable = { git = "https://github.com/facebook/buck2.git", branch = "main", default-features = false }
 
-ruff_python_formatter = { git = "https://github.com/astral-sh/ruff", tag = "0.17.3" }
-ruff_formatter = { git = "https://github.com/astral-sh/ruff", tag = "0.17.3" }
+ruff_python_formatter = { git = "https://github.com/astral-sh/ruff", tag = "0.17.4" }
+ruff_formatter = { git = "https://github.com/astral-sh/ruff", tag = "0.17.4" }
 
 mimalloc = "0.1"
 
@@ -146,8 +149,9 @@ textwrap = { version = "0.16", default-features = false, features = ["std"] }
 unicode-width = "0.2.2"
 urlencoding = "2.1"
 wasm-bindgen = "0.2.129"
-# ZIP 9 fixes unsafe extraction; Ruff still brings ZIP 8 for its virtual filesystem.
-# The default compression level uses flate2; Zopfli's high levels are unused.
+# ZIP 9 fixes unsafe extraction; Ruff 0.17.4 uses ZIP 9 for its virtual filesystem too,
+# so cargo unifies on one ZIP version. The default compression level uses flate2;
+# Zopfli's high levels are unused.
 zip = { version = "9.3", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 fslock = "0.2"
 rust_decimal = { version = "1.43", features = ["serde", "serde-with-str"] }
@@ -164,8 +168,7 @@ tiny-skia = "0.12"
 zstd = "0.14"
 # Only UTC timestamps and fixed Git offsets are used, not timezone databases.
 jiff = { version = "0.2", default-features = false, features = ["std"] }
-# r2d2_sqlite 0.35 requires rusqlite 0.40 and its matching SQLite bindings.
-rusqlite = { version = "0.40.2", features = ["bundled"] }
+rusqlite = { version = "0.41", features = ["bundled"] }
 r2d2 = "0.8"
 r2d2_sqlite = "0.35"
 tracing = "0.1"
@@ -178,6 +181,12 @@ triangulate = { git = "https://github.com/diodeinc/foxtrot.git", rev = "16b35c6b
 meshopt-rs = { git = "https://github.com/yzsolt/meshopt-rs", rev = "7b64153167830dfe4fb28d6bd699a28d106f172e" }
 ndarray = "0.17"
 rustfft = "6.4"
+
+[patch.crates-io]
+# r2d2_sqlite 0.35 (the newest release) requires rusqlite ^0.40, so it cannot use the
+# rusqlite 0.41 bump that moves us to SQLite 3.54.1. Upstream merged 0.41 support in this
+# commit but has not released it; drop this patch when r2d2_sqlite 0.36.0 ships.
+r2d2_sqlite = { git = "https://github.com/ivanceras/r2d2-sqlite", rev = "4947668f22795a2067e5574ab221b72bf4e9ad9f" }
 
 # The profile that release CI uses for published binaries.
 # The geometry stack burns most of the test suite's wall clock in pcb-ir's
