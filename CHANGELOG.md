@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Fixed
+
+- `pcb build` and `pcb publish --check` no longer keep every symbol of each KiCad symbol library they load parsed in memory, which ran a large workspace out of memory. A full-workspace check of a registry with 1,920 boards now peaks at 610 MiB instead of 3.9 GiB.
+
 ## [0.4.100] - 2026-11-09
 
 ### Fixed

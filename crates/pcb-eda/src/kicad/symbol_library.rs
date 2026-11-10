@@ -7,10 +7,11 @@ use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, LazyLock, RwLock};
+use std::sync::{Arc, LazyLock, OnceLock, RwLock};
 use tracing::{instrument, warn};
 
 use super::symbol::{KicadSymbol, description_from_properties, parse_symbol};
+use super::symbol_check::SymbolIssue;
 
 /// Location of a symbol in the source file
 #[derive(Debug, Clone)]
@@ -32,9 +33,8 @@ pub struct KicadSymbolLibrary {
     symbol_locations: BTreeMap<String, SymbolLocation>,
     /// Cache of already-parsed and resolved symbols
     resolved_cache: RwLock<HashMap<String, Arc<KicadSymbol>>>,
-    /// Symbol definitions as written, before `extends` resolution. Spans are
-    /// relative to the start of the definition.
-    definition_cache: RwLock<HashMap<String, Arc<Sexpr>>>,
+    /// What KiCad refuses to load in the library, checked once.
+    pub(super) unloadable: OnceLock<Vec<SymbolIssue>>,
     /// The `(version ...)` stamp from the library header, if declared.
     format_version: Option<i32>,
 }
@@ -77,7 +77,7 @@ impl KicadSymbolLibrary {
             sources,
             symbol_locations,
             resolved_cache: RwLock::new(HashMap::new()),
-            definition_cache: RwLock::new(HashMap::new()),
+            unloadable: OnceLock::new(),
             format_version,
         })
     }
@@ -112,29 +112,19 @@ impl KicadSymbolLibrary {
     }
 
     /// Symbol `name` as written: its source index, its byte offset in that
-    /// source, and its parse, which symbol loading and checking share.
-    pub(super) fn definition(&self, name: &str) -> Result<Option<(usize, usize, Arc<Sexpr>)>> {
+    /// source, and a fresh parse, whose spans are relative to that offset.
+    /// Only what loading resolves is cached, so checking every symbol of the
+    /// library leaves none of them parsed.
+    pub(super) fn definition(&self, name: &str) -> Result<Option<(usize, usize, Sexpr)>> {
         let Some(location) = self.symbol_locations.get(name) else {
             return Ok(None);
         };
-        let at = |node| Some((location.source_idx, location.range.start, node));
-        let cached = self
-            .definition_cache
-            .read()
-            .map_err(|e| anyhow!("Cache read lock poisoned: {}", e))?
-            .get(name)
-            .cloned();
-        if let Some(node) = cached {
-            return Ok(at(node));
-        }
-        let node = Arc::new(parse(
-            &self.sources[location.source_idx][location.range.clone()],
-        )?);
-        self.definition_cache
-            .write()
-            .map_err(|e| anyhow!("Cache write lock poisoned: {}", e))?
-            .insert(name.to_string(), Arc::clone(&node));
-        Ok(at(node))
+        let text = &self.sources[location.source_idx][location.range.clone()];
+        Ok(Some((
+            location.source_idx,
+            location.range.start,
+            parse(text)?,
+        )))
     }
 
     /// Check if a symbol exists in this library
@@ -613,7 +603,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn definitions_keep_symbol_relative_spans_and_are_shared() {
+    fn definitions_keep_symbol_relative_spans() {
         let source = r#"(kicad_symbol_lib (version 20241209)
             (symbol "Base" (property "Value" "(symbol not-a-definition)"))
             (symbol "Child" (extends "Base")))"#;
@@ -628,10 +618,6 @@ mod tests {
             &source[offset + parent.span.start..offset + parent.span.end],
             "\"Base\""
         );
-        assert!(Arc::ptr_eq(
-            &definition,
-            &library.definition("Child").unwrap().unwrap().2
-        ));
         let child = library.get_symbol_lazy("Child").unwrap().unwrap();
         assert_eq!(
             child.metadata().primary.value.as_deref(),

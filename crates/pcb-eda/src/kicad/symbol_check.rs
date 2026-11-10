@@ -7,7 +7,6 @@
 
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::Arc;
 
 use pcb_sexpr::edit::{Edit, apply};
 use pcb_sexpr::kicad::symbol::property_name_value;
@@ -462,10 +461,13 @@ pub fn fix(mut sources: Vec<String>) -> Vec<String> {
 /// Every issue over which KiCad refuses to load `library`: a fault in a
 /// file, else those of each symbol, as KiCad reads every definition.
 pub fn unloadable(library: &KicadSymbolLibrary) -> Vec<SymbolIssue> {
-    // A file fault is a `symbol.parse` issue, which always blocks.
-    let mut issues = library_issues(library);
-    issues.retain(SymbolIssue::blocks_kicad);
-    issues
+    let issues = library.unloadable.get_or_init(|| {
+        // A file fault is a `symbol.parse` issue, which always blocks.
+        let mut issues = library_issues(library);
+        issues.retain(SymbolIssue::blocks_kicad);
+        issues
+    });
+    issues.clone()
 }
 
 /// The fault in a file of `library`, else the issues of each symbol.
@@ -553,7 +555,7 @@ fn library_fault(text: &str) -> Option<(usize, String, Vec<Edit>)> {
             source: 0,
             offset: range.start,
             name: String::new(),
-            node: Arc::new(node),
+            node,
         };
         let mut fault = None;
         check_form(&def.node, role, &def, &mut |rule, span, message, fix| {
@@ -634,10 +636,12 @@ pub fn check_symbol(
     // Pads are compared with the pins a component gets from loading. A
     // footprint without pads is a mechanical outline and a symbol without
     // pins a mechanical part: neither has a pinout to compare.
-    let loaded = library.resolved(name).ok().flatten();
+    let loaded = footprint
+        .filter(|footprint| !footprint.numbers.is_empty())
+        .and_then(|_| library.resolved(name).ok().flatten());
     let pairing = footprint
         .zip(loaded.as_deref())
-        .filter(|(footprint, loaded)| !footprint.numbers.is_empty() && !loaded.pins().is_empty());
+        .filter(|(_, loaded)| !loaded.pins().is_empty());
     check_body(body, pairing, &mut issues);
     issues.sort_by_key(|issue| (issue.source, issue.span.start));
     issues
@@ -649,7 +653,7 @@ struct Def {
     /// Byte offset of the definition, which its node's spans are relative to.
     offset: usize,
     name: String,
-    node: Arc<Sexpr>,
+    node: Sexpr,
 }
 
 impl Def {
