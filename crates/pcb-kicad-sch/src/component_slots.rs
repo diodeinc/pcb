@@ -5,7 +5,11 @@ use pcb_sch::{
     ATTR_SYMBOL_FORMAT_VERSION, AttributeValue, Instance, InstanceKind, InstanceRef, Schematic,
 };
 
-use crate::{Symbol, SymbolDefinition, SymbolSlotKey, canonical_component_path, symbol};
+use crate::{
+    SchDocument, SchItem, Symbol, SymbolDefinition, SymbolSlotKey, canonical_component_path,
+    connectivity::{ComponentIdentity, Terminal, connected_component_terminals},
+    symbol,
+};
 
 pub(crate) const SYMBOL_VALUE_ATTR: &str = "__symbol_value";
 pub(crate) const SYMBOL_PATH_ATTR: &str = "symbol_path";
@@ -95,6 +99,71 @@ pub(crate) fn component_symbols(
     }
     slots.sort_by(|a, b| a.0.cmp(&b.0));
     Ok(slots)
+}
+
+/// Units a component may leave off the schematic, as KiCad allows for unused
+/// gates: another unit of the component is placed, and none of this unit's own
+/// pins is connected in the netlist. KiCad's netlist omits the pins of an
+/// unplaced unit, so leaving it off is connectivity-equivalent.
+pub(crate) fn optional_unplaced_slots(
+    document: &SchDocument,
+    netlist: &Schematic,
+) -> Result<BTreeSet<SymbolSlotKey>> {
+    let slots = component_symbols(netlist)?;
+    let expected = slots.iter().map(|(slot, _)| slot).collect::<BTreeSet<_>>();
+    // Only a current unit proves the component is placed; a stale one is replaced.
+    let mut placed = BTreeMap::<&str, Vec<&Symbol>>::new();
+    for symbol in document.pages.iter().flat_map(|page| &page.items) {
+        if let SchItem::Symbol(symbol) = symbol
+            && let Some(path) = symbol.field_value("Path")
+            && SymbolSlotKey::new(path, symbol.unit).is_some_and(|slot| expected.contains(&slot))
+        {
+            placed.entry(path).or_default().push(symbol);
+        }
+    }
+    let connected = connected_component_terminals(netlist);
+    let mut optional = BTreeSet::new();
+    for (slot, definition) in &slots {
+        let (Some(definition), Some(placed)) = (definition, placed.get(slot.component_path()))
+        else {
+            continue;
+        };
+        if placed.iter().any(|symbol| symbol.unit == slot.unit()) {
+            continue;
+        }
+        let parsed = symbol::ParsedSymbolDefinition::parse(definition)?;
+        let unit_pins = |unit: u32| {
+            let mut instance = placed[0].clone();
+            instance.unit = unit;
+            instance.pins.clear();
+            parsed.placed_pins(&instance)
+        };
+        // Pins shared with a placed unit are anchored there.
+        let mut anchored = BTreeSet::new();
+        for symbol in placed {
+            anchored.extend(
+                unit_pins(symbol.unit)?
+                    .into_iter()
+                    .flat_map(|pin| pin.numbers),
+            );
+        }
+        let component = ComponentIdentity::ManagedPath(slot.component_path().to_string());
+        let unconnected = unit_pins(slot.unit())?
+            .into_iter()
+            .filter(|pin| pin.numbers.is_disjoint(&anchored))
+            .all(|pin| {
+                !connected.iter().any(|terminal| {
+                    matches!(terminal, Terminal::ComponentPin { component: other, pin_name, pin_numbers }
+                        if *other == component
+                            && (!pin_numbers.is_disjoint(&pin.numbers)
+                                || (pin_numbers.is_empty() && *pin_name == pin.name)))
+                })
+            });
+        if unconnected {
+            optional.insert(slot.clone());
+        }
+    }
+    Ok(optional)
 }
 
 pub(crate) fn component_instances(netlist: &Schematic) -> Result<BTreeMap<String, &Instance>> {
