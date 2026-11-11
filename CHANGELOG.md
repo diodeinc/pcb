@@ -8,6 +8,8 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+## [0.4.101] - 2026-11-11
+
 ### Fixed
 
 - `pcb build` and `pcb publish --check` no longer keep every symbol of each KiCad symbol library they load parsed in memory, which ran a large workspace out of memory. A full-workspace check of a registry with 1,920 boards now peaks at 610 MiB instead of 3.9 GiB.
@@ -2600,7 +2602,8 @@ Tvs(package="DO-214AA", direction="Unidirectional", reverse_standoff_voltage="24
 - Error on invalid type passed to `io()`
 - Format the auto-generated component .zen files
 
-[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.4.100...HEAD
+[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.4.101...HEAD
+[0.4.101]: https://github.com/diodeinc/pcb/compare/v0.4.100...v0.4.101
 [0.4.100]: https://github.com/diodeinc/pcb/compare/v0.4.99...v0.4.100
 [0.4.99]: https://github.com/diodeinc/pcb/compare/v0.4.98...v0.4.99
 [0.4.98]: https://github.com/diodeinc/pcb/compare/v0.4.97...v0.4.98
