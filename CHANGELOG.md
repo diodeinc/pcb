@@ -13,7 +13,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - `pcb step export` files are smaller: silkscreen takes about half the bytes and solder mask a third fewer.
 - The JLCPCB and standard DFM PDKs warn on PTH-to-PTH drill spacing below 0.45 mm and fail only below 0.40 mm.
 - The JLCPCB DFM PDK fails PTH-to-copper clearance only below 0.24 mm, and warns below 0.35 mm on outer layers and 0.30 mm on inner layers.
-- `Board(layers=...)` no longer defaults the solder mask clearance and minimum width to 0, so boards keep their own.
+- `pcb layout` applies the solder mask clearance and minimum width like other design rules, so a value set only in KiCad is reset to the `.zen` value (0 by default for `Board(layers=...)`).
 
 ### Fixed
 
