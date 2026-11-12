@@ -33,25 +33,13 @@ pub use moved::compute_net_renames_patches;
 pub const PCB_VERSION_PLACEHOLDER: &str = "v0.0.0";
 pub const PCB_GIT_HASH_PLACEHOLDER: &str = "d10d3c0";
 
-/// Extract DesignRules from a KiCad project file and the board file it belongs to.
-pub fn extract_design_rules(pro_path: &Path, pcb_text: &str) -> AnyhowResult<Option<DesignRules>> {
+/// Extract DesignRules from a KiCad project file and its board file.
+pub fn extract_kicad_design_rules(
+    pro_path: &Path,
+    pcb_text: &str,
+) -> AnyhowResult<Option<DesignRules>> {
     let board = pcb_sexpr::parse(pcb_text).context("Failed to parse KiCad PCB")?;
-    let mut rules = kicad_project_patch::extract_design_rules_from_kicad_pro(pro_path)?;
-    let mut constraints = rules
-        .as_mut()
-        .and_then(|rules| rules.constraints.take())
-        .unwrap_or_else(|| serde_json::json!({}));
-    extract_setup_rules(&board, &mut constraints);
-    if constraints.as_object().is_some_and(|c| !c.is_empty()) {
-        rules
-            .get_or_insert_with(|| DesignRules {
-                constraints: None,
-                predefined_sizes: None,
-                netclasses: Vec::new(),
-            })
-            .constraints = Some(constraints);
-    }
-    Ok(rules)
+    kicad_project_patch::extract_design_rules(pro_path, &board)
 }
 
 /// Embedded lens module directory (for Python imports)
@@ -1578,80 +1566,39 @@ fn build_pcb_patchset(
     Ok(patches)
 }
 
-/// Design rules KiCad keeps in the board file's `(setup ...)` section, in the order it
-/// writes them: (constraint path, setup key, written when zero). KiCad ignores these in
-/// the `.kicad_pro` (board design settings schema 2 moved them to the board).
-const SETUP_RULES: &[(&[&str], &str, bool)] = &[
-    (&["solder_mask", "clearance"], "pad_to_mask_clearance", true),
-    (
-        &["solder_mask", "minimum_width"],
-        "solder_mask_min_width",
-        false,
-    ),
-];
-
 fn build_setup_rules_patchset(
     board: &pcb_sexpr::Sexpr,
     constraints: &serde_json::Value,
 ) -> Result<pcb_sexpr::PatchSet, LayoutError> {
-    let setup_items = board
-        .as_list()
-        .and_then(|root| pcb_sexpr::find_named_list_index(root, "setup").map(|i| &root[i]))
-        .and_then(pcb_sexpr::Sexpr::as_list)
-        .ok_or_else(|| {
-            LayoutError::StackupPatchingError("PCB file is missing (setup ...) section".to_string())
-        })?;
-
+    let setup = board.find_list("setup").ok_or_else(|| {
+        LayoutError::StackupPatchingError("PCB file is missing (setup ...) section".to_string())
+    })?;
     let mut patches = pcb_sexpr::PatchSet::new();
     // Missing rules go after the previous rule, else after the stackup, else first.
-    let mut insert_at = pcb_sexpr::find_named_list_index(setup_items, "stackup")
-        .map_or(setup_items[0].span.end, |i| setup_items[i].span.end);
-    for (path, key, written_when_zero) in SETUP_RULES {
-        let existing = pcb_sexpr::find_named_list_index(setup_items, key).map(|i| &setup_items[i]);
-        if let Some(existing) = existing {
-            insert_at = existing.span.end;
-        }
-        let Some(value) = path
+    let stackup = pcb_sexpr::find_named_list_index(setup, "stackup").unwrap_or(0);
+    let mut insert_at = setup[stackup].span.end;
+    for (path, key, written_when_zero) in kicad_project_patch::SETUP_RULES {
+        let span = pcb_sexpr::find_named_list_index(setup, key)
+            .map_or(pcb_sexpr::Span::new(insert_at, insert_at), |i| {
+                setup[i].span
+            });
+        insert_at = span.end;
+        let Some(iu) = path
             .iter()
             .try_fold(constraints, |value, key| value.get(key))
             .and_then(serde_json::Value::as_f64)
+            .and_then(PcbIu::from_mm)
         else {
             continue;
         };
-        let iu = PcbIu::from_mm(value).ok_or_else(|| {
-            LayoutError::StackupPatchingError(format!("Invalid {key} value: {value}"))
-        })?;
-        let text =
-            (iu.0 != 0 || *written_when_zero).then(|| format!("({key} {})", iu.to_kicad_mm_text()));
-        match (existing, text) {
-            (Some(existing), text) => patches.replace_raw(existing.span, text.unwrap_or_default()),
-            (None, Some(text)) => patches.replace_raw(
-                pcb_sexpr::Span::new(insert_at, insert_at),
-                format!(" {text}"),
-            ),
-            (None, None) => {}
-        }
+        let text = if iu.0 != 0 || *written_when_zero {
+            format!(" ({key} {})", iu.to_kicad_mm_text())
+        } else {
+            String::new()
+        };
+        patches.replace_raw(span, text);
     }
     Ok(patches)
-}
-
-/// Read the `SETUP_RULES` values from a board into `constraints`.
-fn extract_setup_rules(board: &pcb_sexpr::Sexpr, constraints: &mut serde_json::Value) {
-    let Some(setup) = board.find_list("setup") else {
-        return;
-    };
-    for (path, key, _) in SETUP_RULES {
-        let Some(value) = pcb_sexpr::find_child_list(setup, key)
-            .and_then(|item| item.get(1))
-            .and_then(|v| v.as_float().or_else(|| v.as_int().map(|v| v as f64)))
-        else {
-            continue;
-        };
-        let node = path
-            .iter()
-            .fold(&mut *constraints, |node, key| &mut node[*key]);
-        *node = serde_json::json!(value);
-    }
 }
 
 fn component_internal_connectivity_by_path(
@@ -2031,8 +1978,7 @@ fn build_stackup_patchset(
             .span;
         patches.replace_raw(stackup_span, stackup.to_string());
     } else {
-        // KiCad writes the stackup first in the setup section. Insert it rather than
-        // replacing the whole section, so other patches can edit the section's items.
+        // KiCad writes the stackup first. Insert it so other patches can edit the section.
         let at = setup_items[0].span.end;
         patches.replace_raw(pcb_sexpr::Span::new(at, at), format!(" {stackup}"));
     }
@@ -2481,23 +2427,17 @@ mod tests {
     #[test]
     fn patch_pcb_file_writes_solder_mask_rules_to_setup() {
         let input = r#"(kicad_pcb
-	(version 20260206)
-	(generator "pcbnew")
-	(general
-		(thickness 1.6)
-	)
-	(layers
-		(0 "F.Cu" signal)
-		(2 "B.Cu" signal)
-	)
-	(setup
-		(pad_to_mask_clearance 0.05)
-		(allow_soldermask_bridges_in_footprints no)
-	)
-)
-"#;
-        let config = |clearance: f64, minimum_width: f64| -> BoardConfig {
-            serde_json::from_value(serde_json::json!({
+	(general (thickness 1.6))
+	(layers (0 "F.Cu" signal) (2 "B.Cu" signal))
+	(setup (pad_to_mask_clearance 0.05) (allow_soldermask_bridges_in_footprints no))
+)"#;
+        let temp_dir = tempfile::tempdir().unwrap();
+        let pcb_path = temp_dir.path().join("layout.kicad_pcb");
+        std::fs::write(&pcb_path, input).unwrap();
+        // Returns the setup items after patching. The stackup is inserted too, so both
+        // patches edit the setup section.
+        let layout = |clearance: f64, minimum_width: f64| -> Vec<String> {
+            let config: BoardConfig = serde_json::from_value(serde_json::json!({
                 "design_rules": {"constraints": {"solder_mask": {
                     "clearance": clearance,
                     "minimum_width": minimum_width,
@@ -2509,55 +2449,29 @@ mod tests {
                 ]},
                 "num_user_layers": 0,
             }))
-            .unwrap()
-        };
-        let setup = |pcb: &str| -> Vec<String> {
-            let board = pcb_sexpr::parse(pcb).unwrap();
-            pcb_sexpr::find_child_list(board.as_list().unwrap(), "setup")
-                .unwrap()
+            .unwrap();
+            patch_pcb_file(&pcb_path, Some(&config), "Demo", &BTreeMap::new()).unwrap();
+            let board = pcb_sexpr::parse(&std::fs::read_to_string(&pcb_path).unwrap()).unwrap();
+            board.find_list("setup").unwrap()[1..]
                 .iter()
-                .skip(1)
-                .map(|item| match item.as_list().unwrap()[0].as_sym().unwrap() {
-                    "stackup" => "(stackup ...)".to_string(),
+                .map(|item| match item.as_list().unwrap()[0].as_sym() {
+                    Some("stackup") => "(stackup ...)".to_string(),
                     _ => item.to_string(),
                 })
                 .collect()
         };
-        let temp_dir = tempfile::tempdir().unwrap();
-        let pcb_path = temp_dir.path().join("layout.kicad_pcb");
-        std::fs::write(&pcb_path, input).unwrap();
 
-        // The stackup is inserted too, so both patches edit the setup section.
-        patch_pcb_file(
-            &pcb_path,
-            Some(&config(0.035, 0.1)),
-            "Demo",
-            &BTreeMap::new(),
-        )
-        .unwrap();
-        let first = std::fs::read_to_string(&pcb_path).unwrap();
-        assert_eq!(
-            setup(&first),
-            [
-                "(stackup ...)",
-                "(pad_to_mask_clearance 0.035)",
-                "(solder_mask_min_width 0.1)",
-                "(allow_soldermask_bridges_in_footprints no)",
-            ]
-        );
-        patch_pcb_file(
-            &pcb_path,
-            Some(&config(0.035, 0.1)),
-            "Demo",
-            &BTreeMap::new(),
-        )
-        .unwrap();
-        assert_eq!(std::fs::read_to_string(&pcb_path).unwrap(), first);
-
+        let expected = [
+            "(stackup ...)",
+            "(pad_to_mask_clearance 0.035)",
+            "(solder_mask_min_width 0.1)",
+            "(allow_soldermask_bridges_in_footprints no)",
+        ];
+        assert_eq!(layout(0.035, 0.1), expected);
+        assert_eq!(layout(0.035, 0.1), expected);
         // KiCad omits a zero minimum width but always writes the clearance.
-        patch_pcb_file(&pcb_path, Some(&config(0.0, 0.0)), "Demo", &BTreeMap::new()).unwrap();
         assert_eq!(
-            setup(&std::fs::read_to_string(&pcb_path).unwrap()),
+            layout(0.0, 0.0),
             [
                 "(stackup ...)",
                 "(pad_to_mask_clearance 0)",

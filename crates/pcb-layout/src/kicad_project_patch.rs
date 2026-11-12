@@ -76,6 +76,17 @@ const CONSTRAINT_MAPPINGS: &[(&[&str], &str)] = &[
     ),
 ];
 
+/// Constraints KiCad reads only from the board file's `(setup ...)`, in the order it writes
+/// them: (constraint path, setup key, written when zero).
+pub(crate) const SETUP_RULES: &[(&[&str], &str, bool)] = &[
+    (&["solder_mask", "clearance"], "pad_to_mask_clearance", true),
+    (
+        &["solder_mask", "minimum_width"],
+        "solder_mask_min_width",
+        false,
+    ),
+];
+
 pub(crate) fn patch_kicad_pro(
     pro_path: &Path,
     board_config: Option<&BoardConfig>,
@@ -99,12 +110,15 @@ pub(crate) fn patch_kicad_pro(
         .with_context(|| format!("Failed to write {}", pro_path.display()))
 }
 
-pub(crate) fn extract_design_rules_from_kicad_pro(pro_path: &Path) -> Result<Option<DesignRules>> {
+pub(crate) fn extract_design_rules(
+    pro_path: &Path,
+    board: &pcb_sexpr::Sexpr,
+) -> Result<Option<DesignRules>> {
     let source = fs::read_to_string(pro_path)
         .with_context(|| format!("Failed to read {}", pro_path.display()))?;
     let project: Value = serde_json::from_str(&source)
         .with_context(|| format!("Failed to parse {}", pro_path.display()))?;
-    Ok(extract_design_rules_from_project_value(&project))
+    Ok(extract_design_rules_from_project_value(&project, board))
 }
 
 fn patch_project_value(
@@ -118,8 +132,7 @@ fn patch_project_value(
     // - Netclasses: upsert by class name and patch known fields only.
     // - Netclass patterns: upsert by pattern (when assignments are present).
     // - Never delete unknown keys/classes/patterns; repeated runs are idempotent.
-    // - Drop the solder mask clearance and minimum width earlier versions wrote here: KiCad
-    //   reads them only from the board file, which `patch_pcb_file` patches.
+    // - Drop the `SETUP_RULES` copies earlier versions wrote here; KiCad ignores them.
     if let Some(rules) = project
         .pointer_mut("/board/design_settings/rules")
         .and_then(Value::as_object_mut)
@@ -157,8 +170,11 @@ fn patch_text_variables(project: &mut Value, layout_name: &str) {
     );
 }
 
-fn extract_design_rules_from_project_value(project: &Value) -> Option<DesignRules> {
-    let constraints = extract_constraints(project);
+fn extract_design_rules_from_project_value(
+    project: &Value,
+    board: &pcb_sexpr::Sexpr,
+) -> Option<DesignRules> {
+    let constraints = extract_constraints(project, board);
     let predefined_sizes = extract_predefined_sizes(project);
     let netclasses = extract_netclasses(project);
 
@@ -173,12 +189,25 @@ fn extract_design_rules_from_project_value(project: &Value) -> Option<DesignRule
     })
 }
 
-fn extract_constraints(project: &Value) -> Option<Value> {
+fn extract_constraints(project: &Value, board: &pcb_sexpr::Sexpr) -> Option<Value> {
     let mut constraints = Value::Object(Map::new());
 
     for (source_path, target_path) in CONSTRAINT_MAPPINGS {
         if let Some(value) =
             get_value_at_iter(project, target_path.split('.')).and_then(Value::as_f64)
+        {
+            set_value_at_iter(
+                &mut constraints,
+                source_path.iter().copied(),
+                Value::from(value),
+            );
+        }
+    }
+    let setup = board.find_list("setup").unwrap_or_default();
+    for (source_path, key, _) in SETUP_RULES {
+        if let Some(value) = pcb_sexpr::find_child_list(setup, key)
+            .and_then(|item| item.get(1))
+            .and_then(|v| v.as_float().or_else(|| v.as_int().map(|v| v as f64)))
         {
             set_value_at_iter(
                 &mut constraints,
@@ -972,8 +1001,8 @@ mod tests {
                         "min_clearance": 0.12,
                         "min_track_width": 0.11,
                         "min_through_hole_diameter": 0.3,
-                        "solder_mask_clearance": 0.02,
-                        "solder_mask_min_width": 0.05,
+                        "solder_mask_clearance": 0.9,
+                        "solder_mask_min_width": 0.9,
                         "solder_mask_to_copper_clearance": 0.01
                     },
                     "defaults": {
@@ -1007,8 +1036,13 @@ mod tests {
             }
         });
 
-        let design_rules =
-            extract_design_rules_from_project_value(&project).expect("expected design rules");
+        // KiCad ignores the project's mask clearance and minimum width; the board's apply.
+        let board = pcb_sexpr::parse(
+            "(kicad_pcb (setup (pad_to_mask_clearance 0.02) (solder_mask_min_width 0.05)))",
+        )
+        .unwrap();
+        let design_rules = extract_design_rules_from_project_value(&project, &board)
+            .expect("expected design rules");
 
         assert_eq!(
             design_rules.constraints,
@@ -1021,6 +1055,8 @@ mod tests {
                     "minimum_through_hole": 0.3
                 },
                 "solder_mask": {
+                    "clearance": 0.02,
+                    "minimum_width": 0.05,
                     "to_copper_clearance": 0.01
                 },
                 "zones": {
@@ -1059,6 +1095,7 @@ mod tests {
             }
         });
 
-        assert!(extract_design_rules_from_project_value(&project).is_none());
+        let board = pcb_sexpr::parse("(kicad_pcb (setup))").unwrap();
+        assert!(extract_design_rules_from_project_value(&project, &board).is_none());
     }
 }
