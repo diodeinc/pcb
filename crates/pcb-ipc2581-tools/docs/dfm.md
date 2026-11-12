@@ -534,12 +534,12 @@ fabrication tolerances. JLC's published clearance minimum remains 0.20 mm;
 a warning still calls for review of that requirement. Other limits and existing
 advisory tiers are unchanged.
 
-The JLC kit also lowers three error floors slightly below JLC's published
-minimums:
+The JLC kit also lowers four error floors below JLC's published minimums:
 
 | Profile | Check | Minimum (mm) | Target (mm) | JLC published (mm) |
 | --- | --- | --- | --- | --- |
 | Both | Via-to-via drill spacing | 0.199 | 0.200 | 0.200 |
+| Both | PTH-to-PTH drill spacing | 0.400 | 0.450 | 0.450 |
 | Both | Outer-layer PTH-to-copper | 0.270 | 0.350 | 0.280 |
 | 2 oz | PTH annular ring | 0.250 | 0.254 (10 mil) | 0.254 |
 
