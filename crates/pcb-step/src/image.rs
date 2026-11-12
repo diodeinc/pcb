@@ -301,18 +301,18 @@ pub fn board_image(board: &Board, options: &ImageOptions) -> Result<BoardImage, 
     );
     let tech = tech
         .into_iter()
-        .map(|(tech, islands)| {
+        .map(|(tech, drawn)| {
             let kind = if tech.silk() {
                 ImageKind::Silkscreen
             } else {
                 ImageKind::MaskOpening
             };
-            (kind, tech.front(), islands)
+            (kind, tech.front(), drawn.islands)
         })
         .chain(
             paste
                 .into_iter()
-                .map(|(front, islands)| (ImageKind::Paste, front, islands)),
+                .map(|(front, drawn)| (ImageKind::Paste, front, drawn.islands)),
         );
     for (kind, front, islands) in tech {
         let contours: Vec<ContourBuf> = islands.iter().flat_map(island_contours).collect();

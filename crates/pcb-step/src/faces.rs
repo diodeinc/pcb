@@ -21,7 +21,9 @@ use crate::geom::{
 };
 use crate::outline::{Edge, Frame, Loop, Solid, cut_profile, flatten, orient};
 use crate::outline_font::Fonts;
-use crate::rings::{IndexedRing, Nested, cleaned, fit, nest, nested_of, raw_islands, rings_of};
+use crate::rings::{
+    Circles, IndexedRing, Nested, cleaned, fit, nest, nested_of, raw_islands, rings_of,
+};
 
 /// One face of a tech layer.
 pub struct Face {
@@ -29,8 +31,27 @@ pub struct Face {
     pub holes: Vec<Loop>,
 }
 
-/// The silkscreen and mask openings of each side asked for, as islands:
-/// front and back silkscreen, then front and back mask.
+/// What is drawn on one side of a tech layer: its islands, and the
+/// circles they were drawn on, which their faces take their arcs from.
+pub(crate) struct Drawn {
+    pub(crate) islands: Vec<Nested>,
+    circles: Circles,
+}
+
+impl Drawn {
+    pub(crate) fn faces(&self) -> Vec<Face> {
+        self.islands
+            .par_iter()
+            .map(|island| {
+                let (outer, holes) = fit(island, &self.circles);
+                Face { outer, holes }
+            })
+            .collect()
+    }
+}
+
+/// The silkscreen and mask openings of each side asked for: front and
+/// back silkscreen, then front and back mask.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn build(
     board: &Board,
@@ -42,7 +63,7 @@ pub(crate) fn build(
     fonts: &Fonts,
     variables: &[(String, String)],
     warnings: &mut Vec<String>,
-) -> Vec<(Tech, Vec<Nested>)> {
+) -> Vec<(Tech, Drawn)> {
     let mut layers = Vec::new();
     if silk {
         layers.push(Tech::FrontSilk);
@@ -57,20 +78,20 @@ pub(crate) fn build(
         .with_max_len(1)
         .map(|tech| {
             let mut notes = Vec::new();
-            let islands = if tech.silk() {
-                silk_islands(board, frame, edge, fonts, *tech, variables, &mut notes)
+            let drawn = if tech.silk() {
+                silk_drawn(board, frame, edge, fonts, *tech, variables, &mut notes)
             } else {
                 mask_openings(board, frame, fonts, *tech, cut_vias, variables, &mut notes)
             };
-            (islands, notes)
+            (drawn, notes)
         })
         .collect();
     layers
         .into_iter()
         .zip(built)
-        .map(|(tech, (islands, notes))| {
+        .map(|(tech, (drawn, notes))| {
             warnings.extend(notes);
-            (tech, islands)
+            (tech, drawn)
         })
         .collect()
 }
@@ -697,15 +718,10 @@ fn union_rings(
     rings
 }
 
-pub(crate) fn face(island: &Nested) -> Face {
-    let (outer, holes) = fit(island);
-    Face { outer, holes }
-}
-
 /// The silkscreen of one side. Drills are cut and the board edge
 /// applied only to the islands they actually meet.
 #[allow(clippy::too_many_arguments)]
-fn silk_islands(
+fn silk_drawn(
     board: &Board,
     frame: Frame,
     edge: &BoardEdge,
@@ -713,9 +729,14 @@ fn silk_islands(
     tech: Tech,
     variables: &[(String, String)],
     warnings: &mut Vec<String>,
-) -> Vec<Nested> {
+) -> Drawn {
     let what = format!("{} silkscreen", if tech.front() { "front" } else { "back" });
     let items = drawn_items(board, frame, fonts, Some(tech), true, variables, warnings);
+    let cutters: Vec<(ContourBuf, (Vec2, Vec2))> = pierce_edges(board, frame, tech)
+        .iter()
+        .map(|edges| (contour(edges), edges_bbox(edges)))
+        .collect();
+    let circles = Circles::of(items.iter().flatten().chain(cutters.iter().map(|(c, _)| c)));
     let islands = nest(union_rings(items, &what, warnings));
     let boxes: Vec<(Vec2, Vec2)> = islands.iter().map(|i| ring_bbox(&i.outer)).collect();
     let outline = boxes
@@ -723,10 +744,6 @@ fn silk_islands(
         .any(|b| edge.meets(*b))
         .then(|| edge.region(warnings))
         .flatten();
-    let cutters: Vec<(ContourBuf, (Vec2, Vec2))> = pierce_edges(board, frame, tech)
-        .iter()
-        .map(|edges| (contour(edges), edges_bbox(edges)))
-        .collect();
     let work: Vec<(Nested, (Vec2, Vec2))> = islands.into_iter().zip(boxes).collect();
     let trimmed: Vec<_> = work
         .into_par_iter()
@@ -758,12 +775,12 @@ fn silk_islands(
             (nested_of(&region), notes)
         })
         .collect();
-    let mut out = Vec::new();
-    for (islands, notes) in trimmed {
-        out.extend(islands);
+    let mut islands = Vec::new();
+    for (trimmed, notes) in trimmed {
+        islands.extend(trimmed);
         warnings.extend(notes);
     }
-    out
+    Drawn { islands, circles }
 }
 
 fn mask_what(front: bool) -> String {
@@ -779,7 +796,7 @@ fn mask_openings(
     cut_vias: bool,
     variables: &[(String, String)],
     warnings: &mut Vec<String>,
-) -> Vec<Nested> {
+) -> Drawn {
     let what = mask_what(tech.front());
     let side = usize::from(!tech.front());
     let mut openings: Vec<Vec<ContourBuf>> = Vec::new();
@@ -852,7 +869,11 @@ fn mask_openings(
             .iter()
             .map(|e| vec![contour(e)]),
     );
-    nest(union_rings(openings, &what, warnings))
+    let circles = Circles::of(openings.iter().flatten());
+    Drawn {
+        islands: nest(union_rings(openings, &what, warnings)),
+        circles,
+    }
 }
 
 /// The solder mask of one side: the board less its `openings`. Restore
@@ -861,11 +882,11 @@ fn mask_openings(
 pub(crate) fn mask_coverage(
     outline: &[Solid],
     front: bool,
-    openings: Vec<Nested>,
+    openings: &Drawn,
     warnings: &mut Vec<String>,
 ) -> Vec<Face> {
     let what = mask_what(front);
-    let openings: Vec<Face> = openings.iter().map(face).collect();
+    let openings = openings.faces();
     let boxes: Vec<_> = openings.iter().map(|f| f.outer.bbox()).collect();
     let grid = BoxGrid::new(&boxes);
     let mut faces = Vec::new();
@@ -903,7 +924,7 @@ pub(crate) fn paste(
     include_dnp: bool,
     variables: &[(String, String)],
     warnings: &mut Vec<String>,
-) -> Vec<(bool, Vec<Nested>)> {
+) -> Vec<(bool, Drawn)> {
     let mut layers = Vec::new();
     for front in [true, false] {
         let side = usize::from(!front);
@@ -934,9 +955,10 @@ pub(crate) fn paste(
         if openings.is_empty() {
             continue;
         }
+        let circles = Circles::of(openings.iter().flatten());
         let islands = nest(union_rings(openings, &what, warnings));
         if !islands.is_empty() {
-            layers.push((front, islands));
+            layers.push((front, Drawn { islands, circles }));
         }
     }
     layers

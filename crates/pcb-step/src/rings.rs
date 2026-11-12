@@ -1,9 +1,10 @@
 //! Rings from a 2D boolean, cleaned and turned into loops of lines and
 //! arcs that OCCT reads as manifold shells.
 
+use std::collections::HashSet;
 use std::f64::consts::PI;
 
-use pcb_ir::geom::{ContourBuf, ContourSet};
+use pcb_ir::geom::{ContourBuf, ContourSet, PathOp};
 use rayon::prelude::*;
 
 use crate::geom::{BoxGrid, KICAD_MAX_ERROR, Vec2, circle_center, signed_area};
@@ -13,6 +14,25 @@ use crate::outline::{Edge, Loop, intersect, orient};
 /// have their vertices on the circle to well under a micrometre, so this
 /// only has to cover the boolean's coordinate rounding.
 const REFIT_TOLERANCE: f64 = 0.001;
+
+/// How far a boolean's vertices stray from a circle its sources were
+/// drawn on: pcb-ir flattens an arc to chords within a quarter of the
+/// accuracy budget, a vertex where two such chords cross lies between
+/// them and the circle, and the boolean's rounding comes on top.
+const KNOWN_TOLERANCE: f64 = FLATTEN_SAG + REFIT_TOLERANCE;
+
+/// How far a chord of an arc flattened by pcb-ir sags from its circle: a
+/// quarter of the accuracy budget.
+const FLATTEN_SAG: f64 = KICAD_MAX_ERROR / 4.0;
+
+/// Circles this near touching were drawn to touch: board coordinates
+/// are whole nanometres, and a centre or radius worked out from them is
+/// good to a few.
+const TOUCH_TOLERANCE: f64 = 1e-5;
+
+/// A vertex this near the line through its neighbours is dropped: the
+/// boolean's own resolution.
+const SIMPLIFY_TOLERANCE: f64 = 0.0005;
 
 /// Vertices closer than this are one vertex, and a ring passing through
 /// the same vertex twice is split there. This is above OCCT's read
@@ -88,7 +108,189 @@ pub(crate) fn cleaned(mut ring: Vec<Vec2>) -> Option<Vec<Vec2>> {
 
 /// One `(outer, holes)` per island of a region, with arcs refitted.
 pub(crate) fn loops_of(region: &ContourSet) -> Vec<(Loop, Vec<Loop>)> {
-    nested_of(region).iter().map(fit).collect()
+    let known = Circles::default();
+    nested_of(region).iter().map(|i| fit(i, &known)).collect()
+}
+
+/// The circles a boolean's sources were drawn on. Where its output runs
+/// along one, the chords are an arc of that circle however they are
+/// spaced. Strokes that share a joint each flatten its circle from their
+/// own end, so their union follows it in uneven steps, in and out of the
+/// circle, that no refit by spacing takes for an arc.
+pub(crate) struct Circles {
+    circles: Vec<(Vec2, f64)>,
+    grid: BoxGrid,
+}
+
+impl Default for Circles {
+    fn default() -> Self {
+        Self::of(&[])
+    }
+}
+
+impl Circles {
+    /// The circles of the arcs in `contours`.
+    pub(crate) fn of<'a>(contours: impl IntoIterator<Item = &'a ContourBuf>) -> Self {
+        let mut circles = Vec::new();
+        // Strokes that share a joint share its circle, to the nanometre.
+        let mut seen = HashSet::new();
+        for contour in contours {
+            for cmd in contour.cmds.iter().filter(|c| c.op == PathOp::ArcTo) {
+                let c = Vec2::new(cmd.p1.x, cmd.p1.y);
+                let r = c.distance(Vec2::new(cmd.p0.x, cmd.p0.y));
+                if seen.insert([c.x, c.y, r].map(|v| (v * 1e6).round() as i64)) {
+                    circles.push((c, r));
+                }
+            }
+        }
+        let boxes: Vec<(Vec2, Vec2)> = circles
+            .iter()
+            .map(|&(c, r)| {
+                let reach = Vec2::splat(r + KNOWN_TOLERANCE);
+                (c - reach, c + reach)
+            })
+            .collect();
+        Self {
+            grid: BoxGrid::new(&boxes),
+            circles,
+        }
+    }
+
+    /// The circle the chord from `a` to `b` runs along, and whether it
+    /// runs counter-clockwise. Arcs drawn to continue one another have
+    /// circles a few microns apart, all within tolerance of the chord:
+    /// it is a chord of the one its ends lie nearest.
+    fn along(&self, a: Vec2, b: Vec2) -> Option<(u32, bool)> {
+        let mid = (a + b) * 0.5;
+        let length = a.distance(b);
+        let candidates = self.grid.at(mid).iter().copied().filter_map(|k| {
+            let (c, r) = self.circles[k as usize];
+            let off = |p: Vec2| (p.distance(c) - r).abs();
+            if off(a).max(off(b)).max(off(mid)) > KNOWN_TOLERANCE {
+                return None;
+            }
+            // Along the circle, not across it: a chord shorter than the
+            // tolerance has both ends near any circle it meets.
+            let angle = (a - c).perp_dot(b - c).atan2((a - c).dot(b - c));
+            // A piece of a flattened arc's chord lies on that chord's
+            // line, which leaves the circle no steeper than the
+            // flattening's sagitta allows, give or take the vertices
+            // the simplification dropped. A straight edge that passes
+            // this near the circle cuts through it more steeply.
+            let slope = |sag: f64| (1.0 - sag / r).clamp(-1.0, 1.0).acos();
+            let sag = r - ((b - a).perp_dot(c - a) / length).abs();
+            let steepest = slope(FLATTEN_SAG) + (SIMPLIFY_TOLERANCE / length).atan();
+            (angle.abs() * r >= 0.5 * length && slope(sag) <= steepest)
+                .then_some((off(a).max(off(b)), (k, angle > 0.0)))
+        });
+        candidates
+            .min_by(|a, b| a.0.total_cmp(&b.0))
+            .map(|(_, on)| on)
+    }
+
+    /// `ring` with each chord's known circle, turned to start where it
+    /// joins or leaves one, so no arc spans the ring's start, and with
+    /// each such vertex moved onto the circle. A vertex cut by a boolean
+    /// lies where the neighbouring edge crossed a chord of the flattened
+    /// circle; the corner of the shape drawn is where that edge meets
+    /// the circle.
+    fn traced(&self, ring: &[Vec2]) -> Traced {
+        let mut points = ring.to_vec();
+        let n = points.len();
+        if self.circles.is_empty() || n < 3 {
+            return Traced {
+                points,
+                along: vec![None; n],
+            };
+        }
+        let mut along: Vec<_> = (0..n)
+            .map(|i| self.along(points[i], points[(i + 1) % n]))
+            .collect();
+        let circle = |on: (u32, bool)| self.circles[on.0 as usize];
+        let near = |corner: Option<Vec2>, v: Vec2| {
+            corner.filter(|p| p.distance(v) <= 2.0 * KNOWN_TOLERANCE)
+        };
+        // Two circles that graze each other have no crossing where
+        // their chords crossed, and no vertex is on both. The larger keeps
+        // the vertex and the other gives up its chord there, as a line.
+        for i in 0..n {
+            let before = (i + n - 1) % n;
+            if let (Some(j), Some(k)) = (along[before], along[i])
+                && j.0 != k.0
+                && near(meet_circles(circle(j), circle(k), points[i]), points[i]).is_none()
+            {
+                let smaller = if circle(j).1 < circle(k).1 { before } else { i };
+                along[smaller] = None;
+            }
+        }
+        let Some(seam) = (0..n).find(|&i| along[i] != along[(i + n - 1) % n]) else {
+            return Traced { points, along };
+        };
+        points.rotate_left(seam);
+        along.rotate_left(seam);
+        // Each vertex is judged where the boolean left it.
+        let cut = points.clone();
+        for i in 0..n {
+            let (before, after) = (along[(i + n - 1) % n], along[i]);
+            if before == after {
+                continue;
+            }
+            let (prev, v, next) = (cut[(i + n - 1) % n], cut[i], cut[(i + 1) % n]);
+            let corner = match (before, after) {
+                (Some(j), Some(k)) if j.0 != k.0 => near(meet_circles(circle(j), circle(k), v), v),
+                (Some(k), None) => near(meet_line(circle(k), v, next), v),
+                (None, Some(k)) => near(meet_line(circle(k), v, prev), v),
+                _ => None,
+            };
+            points[i] = corner.unwrap_or_else(|| {
+                let (c, r) = circle(before.or(after).unwrap());
+                c + (v - c).normalize_or_zero() * r
+            });
+        }
+        Traced { points, along }
+    }
+}
+
+/// A ring of a boolean and, for each chord from a vertex to the next,
+/// the known circle it runs along and whether counter-clockwise. Where
+/// a run of chords along one circle begins and ends, the vertex is on
+/// that circle.
+struct Traced {
+    points: Vec<Vec2>,
+    along: Vec<Option<(u32, bool)>>,
+}
+
+/// Where the line from `v` towards `to` meets `circle` nearest `v`, short
+/// of the middle of that segment.
+fn meet_line((c, r): (Vec2, f64), v: Vec2, to: Vec2) -> Option<Vec2> {
+    let d = to - v;
+    let w = v - c;
+    let (qa, qb, qc) = (d.length_squared(), d.dot(w), w.length_squared() - r * r);
+    let root = (qb * qb - qa * qc).sqrt();
+    [(-qb - root) / qa, (-qb + root) / qa]
+        .into_iter()
+        .filter(|t| t.is_finite() && *t < 0.5)
+        .min_by(|a, b| a.abs().total_cmp(&b.abs()))
+        .map(|t| v + d * t)
+}
+
+/// Where two circles cross nearest `v`. Circles drawn to touch, as a
+/// stroke's cap and the edge it rounds off, meet where they touch.
+/// Circles that only graze each other cross twice within reach of one
+/// vertex, or not at all: neither is the corner the vertex stands for.
+fn meet_circles((c1, r1): (Vec2, f64), (c2, r2): (Vec2, f64), v: Vec2) -> Option<Vec2> {
+    let d = c1.distance(c2);
+    let along = (c2 - c1) / d;
+    let x = (d * d + r1 * r1 - r2 * r2) / (2.0 * d);
+    let h = (r1 * r1 - x * x).sqrt();
+    if h.is_nan() || h <= 2.0 * KNOWN_TOLERANCE {
+        let touch = c1 + along * r1.copysign(x);
+        return ((touch.distance(c2) - r2).abs() <= TOUCH_TOLERANCE).then_some(touch);
+    }
+    let base = c1 + along * x;
+    [base + along.perp() * h, base - along.perp() * h]
+        .into_iter()
+        .min_by(|a, b| a.distance(v).total_cmp(&b.distance(v)))
 }
 
 /// An island of a region as point lists: its outer ring and its holes.
@@ -160,19 +362,26 @@ pub(crate) fn raw_islands(region: &ContourSet) -> Vec<Nested> {
 
 /// The loops of one island with arcs refitted, the outer counter-clockwise
 /// and the holes clockwise. Rings are refitted in parallel.
-pub(crate) fn fit(island: &Nested) -> (Loop, Vec<Loop>) {
-    let rings: Vec<&[Vec2]> = std::iter::once(island.outer.as_slice())
-        .chain(island.holes.iter().map(Vec::as_slice))
+pub(crate) fn fit(island: &Nested, known: &Circles) -> (Loop, Vec<Loop>) {
+    let rings: Vec<Traced> = std::iter::once(&island.outer)
+        .chain(&island.holes)
+        .map(|r| known.traced(r))
         .collect();
-    let pieces: Vec<Vec<Piece>> = rings.par_iter().map(|r| refit_pieces(r)).collect();
+    let pieces: Vec<Vec<Piece>> = rings
+        .par_iter()
+        .map(|r| refit_pieces(&r.points, &r.along, known))
+        .collect();
     let refs: Vec<&[Piece]> = pieces.iter().map(Vec::as_slice).collect();
     let demote = crossing_arcs(&refs);
-    let mut loops = rings
-        .iter()
-        .zip(pieces)
-        .zip(&demote)
-        .enumerate()
-        .map(|(i, ((ring, pieces), d))| Loop::new(orient(expand_pieces(ring, pieces, d), i == 0)));
+    let mut loops =
+        rings
+            .iter()
+            .zip(pieces)
+            .zip(&demote)
+            .enumerate()
+            .map(|(i, ((ring, pieces), d))| {
+                Loop::new(orient(expand_pieces(&ring.points, pieces, d), i == 0))
+            });
     let outer = loops.next().unwrap();
     (outer, loops.collect())
 }
@@ -183,7 +392,6 @@ pub(crate) fn fit(island: &Nested) -> (Loop, Vec<Loop>) {
 /// of any radius drawn here, down to the caps of a 0.05 mm pen, bends
 /// more than that between chords and keeps them for the refit.
 fn simplify_ring(ring: &mut Vec<Vec2>) {
-    const SIMPLIFY_TOLERANCE: f64 = 0.0005;
     if ring.len() < 4 {
         return;
     }
@@ -350,7 +558,8 @@ fn split_pinches(points: Vec<Vec2>, out: &mut Vec<Vec<Vec2>>) {
 /// Replace runs of chords that lie on one circle with an arc, the way
 /// KiCad refits its polygonized copper before writing STEP.
 ///
-/// Only arcs that look like a polygonized arc are taken: a bounded radius,
+/// Chords along a `known` circle are an arc of it. Elsewhere only arcs
+/// that look like a polygonized arc are taken: a bounded radius,
 /// evenly spaced chords turning the same way, and at least three of them.
 /// A run is found with a circle through three neighbouring vertices, which
 /// is a poor estimate, then refitted through its ends and middle and
@@ -359,7 +568,7 @@ fn split_pinches(points: Vec<Vec2>, out: &mut Vec<Vec<Vec2>>) {
 /// circle.
 #[cfg(test)]
 pub(crate) fn refit_arcs(points: &[Vec2]) -> Vec<Edge> {
-    let pieces = refit_pieces(points);
+    let pieces = refit_pieces(points, &vec![None; points.len()], &Circles::default());
     let demote = crossing_arcs(&[&pieces]);
     expand_pieces(points, pieces, &demote[0])
 }
@@ -373,7 +582,7 @@ struct Piece {
     end: usize,
 }
 
-fn refit_pieces(points: &[Vec2]) -> Vec<Piece> {
+fn refit_pieces(points: &[Vec2], along: &[Option<(u32, bool)>], known: &Circles) -> Vec<Piece> {
     const MAX_RADIUS: f64 = 25.0;
     const MIN_STEP: f64 = 0.5 * PI / 180.0;
     /// Largest distance from a chord to its arc, with room above KiCad's
@@ -436,6 +645,37 @@ fn refit_pieces(points: &[Vec2]) -> Vec<Piece> {
         (end, angles.first().is_some_and(|a| *a > 0.0))
     };
 
+    // The arc of a known circle that starts at vertex `i`. Its ends were
+    // moved onto the circle when the ring was traced.
+    let known_arc = |i: usize| -> Option<Piece> {
+        let on = along[i]?;
+        let mut end = i + 1;
+        while end < n && along[end] == Some(on) {
+            end += 1;
+        }
+        let (c, r) = known.circles[on.0 as usize];
+        let (a, b) = (points[i], points[end % n]);
+        let edge = if end - i == n {
+            let a = c + (a - c).normalize() * r;
+            Edge::Arc {
+                a,
+                b: a,
+                c,
+                ccw: on.1,
+            }
+        } else {
+            Edge::Arc { a, b, c, ccw: on.1 }
+        };
+        Some(Piece {
+            edge,
+            start: i,
+            end,
+        })
+    };
+    if let Some(circle) = known_arc(0).filter(|p| p.end == n) {
+        return vec![circle];
+    }
+
     // Whole polygon on one circle.
     if n >= 8
         && let Some(c) = circle_center(points[0], points[n / 3], points[2 * n / 3])
@@ -464,6 +704,11 @@ fn refit_pieces(points: &[Vec2]) -> Vec<Piece> {
     let mut pieces: Vec<Piece> = Vec::with_capacity(n);
     let mut i = 0;
     while i < n {
+        if let Some(arc) = known_arc(i) {
+            i = arc.end;
+            pieces.push(arc);
+            continue;
+        }
         let mut best: Option<(usize, Edge)> = None;
         if i + 3 < n
             && let Some(coarse) = circle_center(points[i], points[i + 1], points[i + 3])
@@ -564,19 +809,21 @@ fn crossing_arcs(rings: &[&[Piece]]) -> Vec<Vec<bool>> {
             if a.0.x > b.1.x || b.0.x > a.1.x || a.0.y > b.1.y || b.0.y > a.1.y {
                 continue;
             }
-            // Neighbours in one ring share a vertex.
             let (rg, kg) = flat[g];
+            // Neighbours in one ring share a vertex; the two pieces of
+            // a ring of two share both.
             let n = rings[rf].len();
-            let shared = if rf == rg && (kf + 1) % n == kg {
-                Some(piece(f).edge.end())
-            } else if rf == rg && (kg + 1) % n == kf {
-                Some(piece(g).edge.end())
-            } else {
-                None
-            };
+            let shared = [
+                (rf == rg && (kf + 1) % n == kg).then(|| piece(f).edge.end()),
+                (rf == rg && (kg + 1) % n == kf).then(|| piece(g).edge.end()),
+            ];
             let mut crossing = false;
             intersect(&piece(f).edge, &piece(g).edge, &mut |p| {
-                if shared.is_none_or(|s| p.distance(s) > VERTEX_TOLERANCE) {
+                if shared
+                    .iter()
+                    .flatten()
+                    .all(|s| p.distance(*s) > VERTEX_TOLERANCE)
+                {
                     crossing = true;
                 }
             });

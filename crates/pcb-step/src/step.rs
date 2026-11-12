@@ -5,6 +5,7 @@
 //! order except where a block is reserved first because entities refer
 //! forward to each other.
 
+use std::collections::HashMap;
 use std::io::Write as _;
 
 use crate::geom::{Transform, Vec2, Vec3};
@@ -14,6 +15,11 @@ use crate::outline::{Edge, Loop, Solid};
 pub(crate) struct Writer {
     pub(crate) buf: Vec<u8>,
     pub(crate) next_id: u32,
+    /// The `DIRECTION` written for each direction of a curve or surface,
+    /// by its nine decimals, and the unit `VECTOR` along it once a line
+    /// has needed one. A board's edges run in few directions, and every
+    /// edge would otherwise write its own.
+    directions: HashMap<[i64; 3], (u32, Option<u32>)>,
 }
 
 /// The four ids an `AXIS2_PLACEMENT_3D` occupies.
@@ -128,6 +134,7 @@ impl Writer {
         Self {
             buf: Vec::new(),
             next_id,
+            directions: HashMap::new(),
         }
     }
 
@@ -213,18 +220,53 @@ impl Writer {
         id
     }
 
+    /// The one `DIRECTION` this writer holds along `d`, and the key it is
+    /// held under.
+    fn shared_direction(&mut self, d: Vec3) -> ([i64; 3], u32) {
+        let d = d.normalize_or_zero();
+        // The decimals `push_float` writes.
+        let key = d.to_array().map(|v| (v * 1e9).round() as i64);
+        if let Some((id, _)) = self.directions.get(&key) {
+            return (key, *id);
+        }
+        let id = self.direction(d);
+        self.directions.insert(key, (id, None));
+        (key, id)
+    }
+
+    /// The one unit `VECTOR` this writer holds along `d`.
+    fn unit_vector(&mut self, d: Vec3) -> u32 {
+        let (key, direction) = self.shared_direction(d);
+        if let Some(vector) = self.directions[&key].1 {
+            return vector;
+        }
+        let vector = self.open("VECTOR");
+        self.text("'',");
+        self.reference(direction);
+        self.text(",1.");
+        self.end();
+        self.directions.get_mut(&key).unwrap().1 = Some(vector);
+        vector
+    }
+
+    /// An `AXIS2_PLACEMENT_3D` whose directions are shared.
+    fn placement(&mut self, origin: Vec3, z: Vec3, x: Vec3) -> u32 {
+        let origin = self.cartesian_point(origin);
+        let (_, z) = self.shared_direction(z);
+        let (_, x) = self.shared_direction(x);
+        let id = self.open("AXIS2_PLACEMENT_3D");
+        self.text("'',");
+        self.refs(&[origin, z, x]);
+        self.end();
+        id
+    }
+
     fn vertex(&mut self, point: u32) -> u32 {
         let id = self.open("VERTEX_POINT");
         self.text("'',");
         self.reference(point);
         self.end();
         id
-    }
-
-    pub(crate) fn axis2(&mut self, origin: Vec3, z: Vec3, x: Vec3) -> u32 {
-        let p = Placement::reserve(self);
-        self.axis2_at(p, origin, z, x);
-        p.axis
     }
 
     fn axis2_at(&mut self, p: Placement, origin: Vec3, z: Vec3, x: Vec3) {
@@ -255,7 +297,7 @@ impl Writer {
     }
 
     fn plane(&mut self, origin: Vec3, normal: Vec3, x: Vec3) -> u32 {
-        let placement = self.axis2(origin, normal, x);
+        let placement = self.placement(origin, normal, x);
         let id = self.open("PLANE");
         self.text("'',");
         self.reference(placement);
@@ -264,7 +306,7 @@ impl Writer {
     }
 
     fn cylinder(&mut self, center: Vec2, z: f64, radius: f64) -> u32 {
-        let placement = self.axis2(center.extend(z), Vec3::Z, Vec3::X);
+        let placement = self.placement(center.extend(z), Vec3::Z, Vec3::X);
         let id = self.open("CYLINDRICAL_SURFACE");
         self.text("'',");
         self.reference(placement);
@@ -274,25 +316,21 @@ impl Writer {
         id
     }
 
-    fn line(&mut self, from: Vec3, to: Vec3) -> u32 {
-        let point = self.cartesian_point(from);
-        let direction = self.direction(to - from);
-        let vector = self.open("VECTOR");
-        self.text("'',");
-        self.reference(direction);
-        self.buf.push(b',');
-        self.float(from.distance(to));
-        self.end();
+    /// The line through the point `origin` along `direction`. An edge on
+    /// it passes its start vertex's point, so the line needs none of its
+    /// own, and its vertices bound it whatever the vector's length.
+    fn line(&mut self, origin: u32, direction: Vec3) -> u32 {
+        let vector = self.unit_vector(direction);
         let id = self.open("LINE");
         self.text("'',");
-        self.refs(&[point, vector]);
+        self.refs(&[origin, vector]);
         self.end();
         id
     }
 
     fn circle(&mut self, center: Vec2, z: f64, radius: f64, ccw: bool) -> u32 {
         let axis = if ccw { Vec3::Z } else { Vec3::NEG_Z };
-        let placement = self.axis2(center.extend(z), axis, Vec3::X);
+        let placement = self.placement(center.extend(z), axis, Vec3::X);
         let id = self.open("CIRCLE");
         self.text("'',");
         self.reference(placement);
@@ -796,14 +834,15 @@ struct Ring {
 impl Writer {
     fn ring(&mut self, edges: &[Edge], z0: f64, z1: f64) -> Ring {
         let n = edges.len();
+        // The point and the vertex at the start of each edge.
         let mut top_vertex = Vec::with_capacity(n);
         let mut bottom_vertex = Vec::with_capacity(n);
         for edge in edges {
             let p = edge.start();
             let top = self.cartesian_point(p.extend(z1));
-            top_vertex.push(self.vertex(top));
+            top_vertex.push((top, self.vertex(top)));
             let bottom = self.cartesian_point(p.extend(z0));
-            bottom_vertex.push(self.vertex(bottom));
+            bottom_vertex.push((bottom, self.vertex(bottom)));
         }
         let mut ring = Ring {
             top: Vec::with_capacity(n),
@@ -817,15 +856,14 @@ impl Writer {
                 (z0, &bottom_vertex, &mut ring.bottom),
             ] {
                 let curve = match *edge {
-                    Edge::Line { a, b } => self.line(a.extend(z), b.extend(z)),
+                    Edge::Line { a, b } => self.line(vertices[i].0, (b - a).extend(0.0)),
                     Edge::Arc { c, ccw, .. } => self.circle(c, z, edge.radius(), ccw),
                 };
-                out.push(self.edge_curve(vertices[i], vertices[next], curve));
+                out.push(self.edge_curve(vertices[i].1, vertices[next].1, curve));
             }
-            let p = edge.start();
-            let line = self.line(p.extend(z1), p.extend(z0));
+            let line = self.line(top_vertex[i].0, Vec3::NEG_Z);
             ring.vertical
-                .push(self.edge_curve(top_vertex[i], bottom_vertex[i], line));
+                .push(self.edge_curve(top_vertex[i].1, bottom_vertex[i].1, line));
         }
         ring
     }
@@ -913,7 +951,8 @@ impl Writer {
             else {
                 continue;
             };
-            let seam_line = self.line(Vec3::new(c.x + r0, c.y, z0), Vec3::new(c.x + r1, c.y, z1));
+            let seam_start = self.cartesian_point(Vec3::new(c.x + r0, c.y, z0));
+            let seam_line = self.line(seam_start, Vec3::new(r1 - r0, 0.0, z1 - z0));
             let seam = self.edge_curve(v_top, v_bottom, seam_line);
             let surface = if (r0 - r1).abs() < 1e-9 {
                 self.cylinder(c, z1, r0)
@@ -939,7 +978,7 @@ impl Writer {
     }
 
     fn cone(&mut self, center: Vec2, z: f64, radius: f64, axis: Vec3, semi_angle: f64) -> u32 {
-        let placement = self.axis2(center.extend(z), axis, Vec3::X);
+        let placement = self.placement(center.extend(z), axis, Vec3::X);
         let id = self.open("CONICAL_SURFACE");
         self.text("'',");
         self.reference(placement);
@@ -968,16 +1007,16 @@ impl Writer {
             let mut vertices = Vec::with_capacity(n);
             for edge in &l.edges {
                 let p = self.cartesian_point(edge.start().extend(z));
-                vertices.push(self.vertex(p));
+                vertices.push((p, self.vertex(p)));
             }
             let mut loop_edges = Vec::with_capacity(n);
             for (i, edge) in l.edges.iter().enumerate() {
                 let curve = match *edge {
-                    Edge::Line { a, b } => self.line(a.extend(z), b.extend(z)),
+                    Edge::Line { a, b } => self.line(vertices[i].0, (b - a).extend(0.0)),
                     Edge::Arc { c, ccw, .. } => self.circle(c, z, edge.radius(), ccw),
                 };
                 loop_edges.push((
-                    self.edge_curve(vertices[i], vertices[(i + 1) % n], curve),
+                    self.edge_curve(vertices[i].1, vertices[(i + 1) % n].1, curve),
                     up,
                 ));
             }

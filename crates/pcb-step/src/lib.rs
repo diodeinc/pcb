@@ -364,6 +364,10 @@ ENDSEC;\nDATA;\n",
 /// product. `weights` are the items' edge counts, a proxy for their text
 /// size; `emit` writes one item and returns its id. Returns the ids as
 /// they stand in the file.
+///
+/// The items of a batch share one writer and so its directions, which
+/// makes the text depend on where the batches are cut: by weight alone,
+/// never by the number of threads.
 fn write_batched<W: Write + ?Sized>(
     w: &mut Writer,
     sink: &mut W,
@@ -374,7 +378,7 @@ fn write_batched<W: Write + ?Sized>(
     w.buf.clear();
     let mut ids = Vec::with_capacity(weights.len());
     let threads = rayon::current_num_threads();
-    for wave in batches_of(weights, threads * 4).chunks(threads) {
+    for wave in batches_of(weights).chunks(threads) {
         let written: Vec<_> = wave
             .par_iter()
             .map(|range| {
@@ -407,17 +411,16 @@ fn write_batched<W: Write + ?Sized>(
     Ok(ids)
 }
 
-/// Split items into at most `count` contiguous batches of similar
-/// weight, so emission threads finish together.
-fn batches_of(weights: &[usize], count: usize) -> Vec<std::ops::Range<usize>> {
-    let total: usize = weights.iter().sum();
-    let target = total.div_ceil(count.max(1)).max(1);
+/// Split items into contiguous batches of about `BATCH_EDGES` edges, a
+/// megabyte or so of text each.
+fn batches_of(weights: &[usize]) -> Vec<std::ops::Range<usize>> {
+    const BATCH_EDGES: usize = 4096;
     let mut batches = Vec::new();
     let mut start = 0;
     let mut sum = 0;
     for (i, weight) in weights.iter().enumerate() {
         sum += weight;
-        if sum >= target {
+        if sum >= BATCH_EDGES {
             batches.push(start..i + 1);
             start = i + 1;
             sum = 0;

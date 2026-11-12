@@ -2749,3 +2749,94 @@ fn footprint_files_parse_as_a_board_at_the_origin() {
     let status: Vec<_> = report.coverage.models.iter().map(|m| m.status).collect();
     assert_eq!(status, [crate::Status::Rendered]);
 }
+
+/// The front silkscreen of a 30 x 20 board with `drawn` on it.
+fn front_silk(drawn: &str) -> String {
+    let board = format!("{}{drawn}", rect_outline(0.0, 0.0, 30.0, 20.0));
+    let options = Options {
+        soldermask: false,
+        components: false,
+        ..Options::default()
+    };
+    let (text, report) = export_text(&parse(&board), &options);
+    assert!(report.warnings.is_empty(), "{:?}", report.warnings);
+    let (body, front) = silk_sections(&text);
+    text[body..front].to_string()
+}
+
+fn silk_line(from: &str, to: &str) -> String {
+    format!(
+        r#"(gr_line (start {from}) (end {to}) (stroke (width 0.15) (type solid)) (layer "F.SilkS"))"#
+    )
+}
+
+#[test]
+fn silk_strokes_share_one_arc_at_a_joint() {
+    // Each stroke flattens the round joint from its own end, so their
+    // union follows it in uneven steps of a few microns. It is still
+    // one arc about the joint: with the two end caps and four sides,
+    // seven edges.
+    let silk = front_silk(&format!(
+        "{}{}",
+        silk_line("10 10", "15 10"),
+        silk_line("15 10", "17 14")
+    ));
+    assert_eq!(count(&silk, "LINE"), 4, "{silk}");
+    assert_eq!(count(&silk, "CIRCLE"), 3, "{silk}");
+    assert_eq!(silk.matches(",0.075);").count(), 3, "{silk}");
+    for centre in ["10.0,-10.0", "15.0,-10.0", "17.0,-14.0"] {
+        assert!(
+            silk.contains(&format!("CARTESIAN_POINT('',({centre},")),
+            "{centre}: {silk}"
+        );
+    }
+}
+
+#[test]
+fn edges_share_their_points_and_directions() {
+    let one = front_silk(&silk_line("10 10", "15 10"));
+    let two = front_silk(&format!(
+        "{}{}",
+        silk_line("10 10", "15 10"),
+        silk_line("10 12", "15 12")
+    ));
+    assert_eq!(count(&two, "EDGE_CURVE"), 2 * count(&one, "EDGE_CURVE"));
+    // A line starts at its first vertex's point, and the second stroke
+    // runs the way the first does: it adds its four vertices, two cap
+    // centres and plane origin, and no direction.
+    assert_eq!(
+        count(&two, "CARTESIAN_POINT"),
+        count(&one, "CARTESIAN_POINT") + 7
+    );
+    assert_eq!(count(&two, "DIRECTION"), count(&one, "DIRECTION"));
+    assert_eq!(count(&two, "VECTOR"), count(&one, "VECTOR"));
+}
+
+#[test]
+fn a_grazing_hole_leaves_a_circle_its_arc() {
+    // A via drill reaching 2.6 um into a silkscreen ring. The two
+    // circles meet tens of microns from where their chords crossed, so
+    // no vertex is on both; the ring's outside is still an arc of its
+    // own circle, not of one fitted through the notch's ends.
+    let silk = front_silk(
+        r#"(gr_circle (center 10 10) (end 10.7 10) (stroke (width 0.12) (type solid)) (fill no) (layer "F.SilkS"))
+(via (at 10.859 10) (size 0.4) (drill 0.2032) (layers "F.Cu" "B.Cu"))
+"#,
+    );
+    assert_eq!(silk.matches(",0.76);").count(), 1, "{silk}");
+    assert_eq!(silk.matches(",0.64);").count(), 1, "{silk}");
+}
+
+#[test]
+fn a_cap_meets_the_edge_it_rounds_off_where_they_touch() {
+    // An arc's pen sweep is two arcs about its centre, closed by a cap
+    // at either end that touches both. Circles that touch cross nowhere
+    // else, and each is an arc right up to that point: four edges.
+    let silk = front_silk(
+        r#"(gr_arc (start 13 10) (mid 12.12132 12.12132) (end 10 13) (stroke (width 0.15) (type solid)) (layer "F.SilkS"))
+"#,
+    );
+    assert_eq!(count(&silk, "LINE"), 0, "{silk}");
+    assert_eq!(count(&silk, "CIRCLE"), 4, "{silk}");
+    assert_eq!(silk.matches(",0.075);").count(), 2, "{silk}");
+}

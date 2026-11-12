@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Changed
+
+- `pcb step export` files are smaller: silkscreen takes about half the bytes and solder mask a third fewer.
+
 ## [0.4.101] - 2026-11-11
 
 ### Fixed
