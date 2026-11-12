@@ -1338,6 +1338,40 @@ fn polygonized_arcs_are_refitted() {
 }
 
 #[test]
+fn a_smooth_fit_rounds_a_polygon_whichever_edge_is_longest() {
+    use crate::outline::Edge;
+    use crate::rings::{Nested, fit};
+    // Five sixths of a circle drawn as a polygon of uneven sides, closed
+    // by a notch whose two sides are shorter than its longest chords.
+    let island = |radius: f64| {
+        let at = |degrees: f64, r: f64| Vec2::from_angle(degrees.to_radians()) * r;
+        let mut outer = vec![at(0.0, radius)];
+        let mut angle = 0.0;
+        for step in [20.0, 20.0, 35.0].repeat(4) {
+            angle += step;
+            outer.push(at(angle, radius));
+        }
+        outer.push(at(330.0, 0.6 * radius));
+        Nested {
+            outer,
+            holes: Vec::new(),
+        }
+    };
+    let count = |island: &Nested, smooth: bool| {
+        let (outer, _) = fit(island, smooth);
+        let arcs = outer.edges.iter().filter(|e| matches!(e, Edge::Arc { .. }));
+        (outer.edges.len(), arcs.count())
+    };
+    // Nothing here was flattened from an arc.
+    assert_eq!(count(&island(0.3), false), (14, 0));
+    // Smoothed, it is one arc and the notch, though the ring's longest
+    // edge, where the fit starts, lies inside the arc.
+    assert_eq!(count(&island(0.3), true), (3, 1));
+    // Drawn larger, the arc would stand too far off the longer sides.
+    assert_eq!(count(&island(1.0), true).1, 0);
+}
+
+#[test]
 fn ring_simplification_keeps_a_corner_at_the_ring_start() {
     // A frame side whose ring starts just past a corner: the first and
     // last vertices are each within tolerance of a line through the
@@ -2002,6 +2036,86 @@ fn knockout_text_is_cut_from_its_hull() {
     let (body, front) = silk_sections(&step);
     assert_eq!(step[body..front].matches("ADVANCED_FACE(").count(), 3);
     assert_eq!(step[body..front].matches("FACE_BOUND(").count(), 2);
+}
+
+#[test]
+fn a_bent_stroke_is_rounded_by_one_arc() {
+    // An "L" is two pen segments sharing an end: its outline is their
+    // four sides, the cap at each free end and one arc around the outside
+    // of the corner, at whatever angle the text lies.
+    for angle in [0, 30] {
+        let text = parse(&format!(
+            "{}(gr_text \"L\" (at 10 10 {angle}) (layer \"F.SilkS\") (effects (font (size 2 2) (thickness 0.3))))\n",
+            rect_outline(0.0, 0.0, 30.0, 20.0),
+        ));
+        let options = Options {
+            silkscreen: true,
+            soldermask: false,
+            components: false,
+            ..Options::default()
+        };
+        let (step, report) = export_text(&text, &options);
+        assert!(report.warnings.is_empty(), "{:?}", report.warnings);
+        let (body, front) = silk_sections(&step);
+        let silk = &step[body..front];
+        assert_eq!(count(silk, "ADVANCED_FACE"), 1, "{angle}");
+        assert_eq!(count(silk, "CIRCLE"), 3, "{angle}");
+        assert_eq!(count(silk, "EDGE_CURVE"), 7, "{angle}");
+    }
+}
+
+#[test]
+fn pen_strokes_cover_their_sweep_at_every_join() {
+    use crate::copper::{pen_contours, resolution};
+    use pcb_ir::geom::{ContourSet, FillRule, Point};
+    // A path that turns a little, a lot and back on itself, steps less
+    // than the pen's radius, and branches three ways; then a segment
+    // drawn twice, and a dot.
+    let path = [
+        (0.0, 0.0),
+        (1.0, 0.0),
+        (2.0, 0.17),
+        (2.6, -0.4),
+        (2.6, 0.9),
+        (2.65, 0.92),
+        (1.7, 1.2),
+        (2.5, 1.5),
+    ]
+    .map(|(x, y)| Vec2::new(x, y));
+    let mut segments: Vec<(Vec2, Vec2)> = path.windows(2).map(|p| (p[0], p[1])).collect();
+    segments.push((path[4], Vec2::new(3.3, 0.5)));
+    segments.push((Vec2::new(0.0, 1.0), Vec2::new(0.6, 1.3)));
+    segments.push((Vec2::new(0.6, 1.3), Vec2::new(0.0, 1.0)));
+    segments.push((Vec2::new(0.5, 0.6), Vec2::new(0.5, 0.6)));
+    let r = 0.15;
+    let mut contours = Vec::new();
+    pen_contours(&segments, 2.0 * r, &mut contours);
+    let region = ContourSet::from_contours(&contours, FillRule::NonZero, resolution()).unwrap();
+    let mut wrong = Vec::new();
+    for i in -20..=180 {
+        for j in -40..=90 {
+            let p = Vec2::new(i as f64 * 0.02, j as f64 * 0.02);
+            let nearest = segments
+                .iter()
+                .map(|&(a, b)| {
+                    let d = b - a;
+                    let t = if d.length_squared() > 0.0 {
+                        ((p - a).dot(d) / d.length_squared()).clamp(0.0, 1.0)
+                    } else {
+                        0.0
+                    };
+                    p.distance(a + d * t)
+                })
+                .fold(f64::INFINITY, f64::min);
+            if (nearest - r).abs() < 0.004 {
+                continue;
+            }
+            if region.contains_point(Point::new(p.x, p.y)) != (nearest < r) {
+                wrong.push(p);
+            }
+        }
+    }
+    assert!(wrong.is_empty(), "{wrong:?}");
 }
 
 /// Where the front silkscreen's geometry lies in an export: after the

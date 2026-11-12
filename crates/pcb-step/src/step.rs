@@ -5,6 +5,7 @@
 //! order except where a block is reserved first because entities refer
 //! forward to each other.
 
+use std::collections::HashMap;
 use std::io::Write as _;
 
 use crate::geom::{Transform, Vec2, Vec3};
@@ -14,6 +15,12 @@ use crate::outline::{Edge, Loop, Solid};
 pub(crate) struct Writer {
     pub(crate) buf: Vec<u8>,
     pub(crate) next_id: u32,
+    /// The `DIRECTION`s written so far, by their components as written,
+    /// and the unit `VECTOR` along each. The edges of a board run in few
+    /// directions, and one instance of each serves every line and
+    /// placement along it.
+    directions: HashMap<[i64; 3], u32>,
+    vectors: HashMap<u32, u32>,
 }
 
 /// The four ids an `AXIS2_PLACEMENT_3D` occupies.
@@ -50,13 +57,15 @@ pub(crate) fn push_uint(out: &mut Vec<u8>, mut value: u32) {
     out.extend_from_slice(&digits[i..]);
 }
 
+/// Decimals a real is written with.
+const SCALE: f64 = 1e9;
+
 /// STEP real literal: fixed notation, trailing zeros trimmed, always with
 /// a decimal point.
 pub(crate) fn push_float(out: &mut Vec<u8>, value: f64) {
     // Nine decimals as an integer: coordinates are millimetres, so this
     // is a nanometre grid, and integer digits are far cheaper than
     // formatting a float exactly.
-    const SCALE: f64 = 1e9;
     let scaled = (value * SCALE).round();
     if scaled.abs() >= 1e18 {
         write!(out, "{value:.9}").unwrap();
@@ -128,6 +137,8 @@ impl Writer {
         Self {
             buf: Vec::new(),
             next_id,
+            directions: HashMap::new(),
+            vectors: HashMap::new(),
         }
     }
 
@@ -205,11 +216,19 @@ impl Writer {
         id
     }
 
-    pub(crate) fn direction(&mut self, d: Vec3) -> u32 {
+    /// The `DIRECTION` along `d`, written once however often it is asked
+    /// for.
+    fn direction(&mut self, d: Vec3) -> u32 {
+        let d = d.normalize_or_zero();
+        let key = (d * SCALE).round().to_array().map(|v| v as i64);
+        if let Some(id) = self.directions.get(&key) {
+            return *id;
+        }
         let id = self.open("DIRECTION");
         self.text("'',");
-        self.xyz(d.normalize_or_zero());
+        self.xyz(d);
         self.end();
+        self.directions.insert(key, id);
         id
     }
 
@@ -221,10 +240,14 @@ impl Writer {
         id
     }
 
-    pub(crate) fn axis2(&mut self, origin: Vec3, z: Vec3, x: Vec3) -> u32 {
-        let p = Placement::reserve(self);
-        self.axis2_at(p, origin, z, x);
-        p.axis
+    fn axis2(&mut self, origin: Vec3, z: Vec3, x: Vec3) -> u32 {
+        let origin = self.cartesian_point(origin);
+        let (z, x) = (self.direction(z), self.direction(x));
+        let id = self.open("AXIS2_PLACEMENT_3D");
+        self.text("'',");
+        self.refs(&[origin, z, x]);
+        self.end();
+        id
     }
 
     fn axis2_at(&mut self, p: Placement, origin: Vec3, z: Vec3, x: Vec3) {
@@ -274,15 +297,22 @@ impl Writer {
         id
     }
 
-    fn line(&mut self, from: Vec3, to: Vec3) -> u32 {
-        let point = self.cartesian_point(from);
-        let direction = self.direction(to - from);
-        let vector = self.open("VECTOR");
-        self.text("'',");
-        self.reference(direction);
-        self.buf.push(b',');
-        self.float(from.distance(to));
-        self.end();
+    /// The line through `point`, the id of a `CARTESIAN_POINT` such as
+    /// that of the vertex an edge starts at, along `direction`.
+    fn line(&mut self, point: u32, direction: Vec3) -> u32 {
+        let direction = self.direction(direction);
+        let vector = match self.vectors.get(&direction) {
+            Some(id) => *id,
+            None => {
+                let id = self.open("VECTOR");
+                self.text("'',");
+                self.reference(direction);
+                self.text(",1.");
+                self.end();
+                self.vectors.insert(direction, id);
+                id
+            }
+        };
         let id = self.open("LINE");
         self.text("'',");
         self.refs(&[point, vector]);
@@ -796,14 +826,15 @@ struct Ring {
 impl Writer {
     fn ring(&mut self, edges: &[Edge], z0: f64, z1: f64) -> Ring {
         let n = edges.len();
+        // The point and the vertex at the start of each edge.
         let mut top_vertex = Vec::with_capacity(n);
         let mut bottom_vertex = Vec::with_capacity(n);
         for edge in edges {
             let p = edge.start();
             let top = self.cartesian_point(p.extend(z1));
-            top_vertex.push(self.vertex(top));
+            top_vertex.push((top, self.vertex(top)));
             let bottom = self.cartesian_point(p.extend(z0));
-            bottom_vertex.push(self.vertex(bottom));
+            bottom_vertex.push((bottom, self.vertex(bottom)));
         }
         let mut ring = Ring {
             top: Vec::with_capacity(n),
@@ -817,15 +848,14 @@ impl Writer {
                 (z0, &bottom_vertex, &mut ring.bottom),
             ] {
                 let curve = match *edge {
-                    Edge::Line { a, b } => self.line(a.extend(z), b.extend(z)),
+                    Edge::Line { a, b } => self.line(vertices[i].0, (b - a).extend(0.0)),
                     Edge::Arc { c, ccw, .. } => self.circle(c, z, edge.radius(), ccw),
                 };
-                out.push(self.edge_curve(vertices[i], vertices[next], curve));
+                out.push(self.edge_curve(vertices[i].1, vertices[next].1, curve));
             }
-            let p = edge.start();
-            let line = self.line(p.extend(z1), p.extend(z0));
+            let line = self.line(top_vertex[i].0, Vec3::new(0.0, 0.0, z0 - z1));
             ring.vertical
-                .push(self.edge_curve(top_vertex[i], bottom_vertex[i], line));
+                .push(self.edge_curve(top_vertex[i].1, bottom_vertex[i].1, line));
         }
         ring
     }
@@ -913,7 +943,8 @@ impl Writer {
             else {
                 continue;
             };
-            let seam_line = self.line(Vec3::new(c.x + r0, c.y, z0), Vec3::new(c.x + r1, c.y, z1));
+            let seam_start = self.cartesian_point(Vec3::new(c.x + r0, c.y, z0));
+            let seam_line = self.line(seam_start, Vec3::new(r1 - r0, 0.0, z1 - z0));
             let seam = self.edge_curve(v_top, v_bottom, seam_line);
             let surface = if (r0 - r1).abs() < 1e-9 {
                 self.cylinder(c, z1, r0)
@@ -965,19 +996,20 @@ impl Writer {
                 &reversed
             };
             let n = l.edges.len();
+            // The point and the vertex at the start of each edge.
             let mut vertices = Vec::with_capacity(n);
             for edge in &l.edges {
                 let p = self.cartesian_point(edge.start().extend(z));
-                vertices.push(self.vertex(p));
+                vertices.push((p, self.vertex(p)));
             }
             let mut loop_edges = Vec::with_capacity(n);
             for (i, edge) in l.edges.iter().enumerate() {
                 let curve = match *edge {
-                    Edge::Line { a, b } => self.line(a.extend(z), b.extend(z)),
+                    Edge::Line { a, b } => self.line(vertices[i].0, (b - a).extend(0.0)),
                     Edge::Arc { c, ccw, .. } => self.circle(c, z, edge.radius(), ccw),
                 };
                 loop_edges.push((
-                    self.edge_curve(vertices[i], vertices[(i + 1) % n], curve),
+                    self.edge_curve(vertices[i].1, vertices[(i + 1) % n].1, curve),
                     up,
                 ));
             }

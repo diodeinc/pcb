@@ -317,14 +317,20 @@ ENDSEC;\nDATA;\n",
             }
             (Shape::Faces { z, up, faces }, _) => {
                 let style = w.style_assignment_with(srgb, layer.transparency);
-                let weights: Vec<usize> = faces
-                    .iter()
-                    .map(|f| loop_edges(&f.outer, &f.holes))
-                    .collect();
-                let ids = write_batched(&mut w, sink, &weights, |local, i| {
-                    let face = &faces[i];
-                    local.flat_face(&face.outer, &face.holes, *z, *up)
-                })?;
+                // Written by the one writer, not in batches: text runs in
+                // a few hundred directions however many glyphs there are,
+                // and only a writer that has seen them all shares them. Its
+                // text goes out as it grows, so memory stays at a few
+                // megabytes of it rather than the whole product.
+                const FLUSH_AT: usize = 4 << 20;
+                let mut ids = Vec::with_capacity(faces.len());
+                for face in faces {
+                    ids.push(w.flat_face(&face.outer, &face.holes, *z, *up));
+                    if w.buf.len() >= FLUSH_AT {
+                        sink.write_all(&w.buf)?;
+                        w.buf.clear();
+                    }
+                }
                 let styled: Vec<u32> = ids.iter().map(|&id| w.styled_item(id, style)).collect();
                 items.extend(ids);
                 let representation = w.id();

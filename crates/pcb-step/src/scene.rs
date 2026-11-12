@@ -300,7 +300,7 @@ impl Scene {
                     shape: Shape::Faces {
                         z: above_copper(&physical, front, PASTE_ABOVE_COPPER),
                         up: front,
-                        faces: islands.par_iter().map(faces::face).collect(),
+                        faces: islands.par_iter().map(|i| faces::face(i, false)).collect(),
                     },
                 });
             }
@@ -324,7 +324,7 @@ impl Scene {
                 .map(|(tech, islands)| {
                     let mut notes = Vec::new();
                     let faces = if tech.silk() {
-                        islands.iter().map(faces::face).collect()
+                        islands.iter().map(|i| faces::face(i, true)).collect()
                     } else {
                         faces::mask_coverage(&solids, tech.front(), islands, &mut notes)
                     };
