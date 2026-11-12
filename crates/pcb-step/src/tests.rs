@@ -588,6 +588,15 @@ fn embedded_payloads_decode_like_the_c_zstd_decoder() {
     for compressed in [&b""[..], &skippable, b"not zstd"] {
         assert!(matches!(decode(compressed), Err(crate::Error::Zstd(_))));
     }
+    // Text is decoded in pieces of 2^18 characters, but padding is still
+    // only valid at its end.
+    let mut padded = base64::engine::general_purpose::STANDARD.encode(vec![0; (3 << 16) - 1]);
+    assert!(padded.len() == 1 << 18 && padded.ends_with('='));
+    padded.push_str("AAAA");
+    assert!(matches!(
+        crate::decode_embedded(padded.as_bytes()),
+        Err(crate::Error::Base64)
+    ));
 }
 
 /// A donor STEP file: our own export of a 2x2 board, which has product
@@ -768,11 +777,9 @@ END-ISO-10303-21;
     let donor = Donor::parse(step.to_vec()).unwrap();
     let analysis = donor.analyze().unwrap();
     assert!(!analysis.is_empty());
-    let mut w = crate::step::Writer::new(100);
     let root = crate::step::Root::reserve(&mut crate::step::Writer::new(1));
-    analysis.emit(&donor, &mut w, &root, "model", 1.0).unwrap();
-    assert_eq!(w.next_id, 100 + analysis.id_budget());
-    let text = String::from_utf8(w.buf).unwrap();
+    let emitted = analysis.emit(&donor, 100, &root, "model", 1.0).unwrap();
+    let text = String::from_utf8(emitted.text.concat()).unwrap();
     // Metres become millimetres, degrees become radians.
     assert!(text.contains("CARTESIAN_POINT('a #99 quote''s',(1000.,2000.,3000.))"));
     assert!(
@@ -859,11 +866,10 @@ END-ISO-10303-21;
 "#;
     let donor = Donor::parse(step.to_vec()).unwrap();
     let analysis = donor.analyze().unwrap();
-    let mut w = crate::step::Writer::new(100);
     let root = crate::step::Root::reserve(&mut crate::step::Writer::new(1));
-    let shape = analysis.emit(&donor, &mut w, &root, "model", 1.0).unwrap();
-    assert_eq!(w.next_id, 100 + analysis.id_budget());
-    let text = String::from_utf8(w.buf).unwrap();
+    let emitted = analysis.emit(&donor, 100, &root, "model", 1.0).unwrap();
+    let shape = emitted.part;
+    let text = String::from_utf8(emitted.text.concat()).unwrap();
     // The child geometry is copied once and instanced twice, at the two
     // occurrence placements, under the root representation.
     assert_eq!(count(&text, "GEOMETRIC_CURVE_SET"), 1);
@@ -934,11 +940,9 @@ END-ISO-10303-21;
 "#;
     let donor = Donor::parse(step.to_vec()).unwrap();
     let analysis = donor.analyze().unwrap();
-    let mut w = crate::step::Writer::new(100);
     let root = crate::step::Root::reserve(&mut crate::step::Writer::new(1));
-    analysis.emit(&donor, &mut w, &root, "model", 1.0).unwrap();
-    assert_eq!(w.next_id, 100 + analysis.id_budget());
-    let text = String::from_utf8(w.buf).unwrap();
+    let emitted = analysis.emit(&donor, 100, &root, "model", 1.0).unwrap();
+    let text = String::from_utf8(emitted.text.concat()).unwrap();
     assert!(
         text.contains("CARTESIAN_POINT('',(25.4,50.8,76.2))"),
         "{text}"

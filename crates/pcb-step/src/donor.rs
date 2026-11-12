@@ -12,6 +12,7 @@
 //! entity names.
 
 use std::borrow::Cow;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use memchr::{memchr, memchr2, memchr3};
 use rayon::prelude::*;
@@ -28,6 +29,9 @@ const MODEL_ACCURACY: f64 = 1e-4;
 /// smaller than this is one job, since a board's models are already
 /// copied in parallel.
 const STATEMENT_CHUNK: usize = 1 << 16;
+/// Entities per parallel job when following references or comparing
+/// values.
+const ENTITY_CHUNK: usize = 1 << 12;
 
 #[derive(Clone, Copy)]
 struct Stmt {
@@ -94,6 +98,39 @@ fn classify(body: &[u8]) -> Kind {
     }
 }
 
+/// How many steps a value entity is from the values that refer to
+/// nothing, or `None` for an entity that is not a value.
+///
+/// Two values with the same attributes are the same thing, whoever refers
+/// to them. Vertices, edges and faces are not values, since which of them
+/// are shared is the model's topology.
+fn value_depth(kind: Kind, body: &[u8]) -> Option<usize> {
+    Some(match kind {
+        Kind::CartesianPoint | Kind::Direction => 0,
+        Kind::Axis2Placement => 1,
+        Kind::SurfaceStyleUsage => 5,
+        Kind::StyleAssignment => 6,
+        Kind::Other => match entity_kind(body) {
+            b"COLOUR_RGB" => 0,
+            b"VECTOR" | b"AXIS1_PLACEMENT" | b"FILL_AREA_STYLE_COLOUR" => 1,
+            b"LINE"
+            | b"CIRCLE"
+            | b"ELLIPSE"
+            | b"PLANE"
+            | b"CYLINDRICAL_SURFACE"
+            | b"CONICAL_SURFACE"
+            | b"SPHERICAL_SURFACE"
+            | b"TOROIDAL_SURFACE"
+            | b"FILL_AREA_STYLE" => 2,
+            b"SURFACE_STYLE_FILL_AREA" => 3,
+            b"SURFACE_SIDE_STYLE" => 4,
+            _ => return None,
+        },
+        _ => return None,
+    })
+}
+const VALUE_DEPTHS: usize = 7;
+
 pub(crate) struct Donor {
     data: Vec<u8>,
     stmts: Vec<Stmt>,
@@ -147,27 +184,21 @@ impl Donor {
             + data_start;
         let data = &step[..data_end];
 
-        let mut stmts = Vec::with_capacity(data.len() / 48);
-        let mut max_id = 0u32;
-        let mut stmt_start = data_start;
-        let mut at = data_start;
-        while let Some(off) = memchr2(b'\'', b';', &data[at..]) {
-            let hit = at + off;
-            if data[hit] == b'\'' {
-                at = string_end(data, hit + 1).ok_or(Error::Step("unterminated string"))?;
-                continue;
-            }
-            if let Some(stmt) = parse_statement(data, stmt_start, hit) {
-                max_id = max_id.max(stmt.id);
-                stmts.push(stmt);
-            }
-            at = hit + 1;
-            stmt_start = at;
-        }
-        let kinds = stmts
-            .iter()
-            .map(|s| classify(&step[s.start as usize..s.end as usize]))
-            .collect();
+        let ends = statement_ends(data, data_start)?;
+        let (stmts, kinds): (Vec<Stmt>, Vec<Kind>) = ends
+            .par_iter()
+            .enumerate()
+            .with_min_len(STATEMENT_CHUNK)
+            .filter_map(|(i, end)| {
+                let start = if i == 0 { data_start } else { ends[i - 1] + 1 };
+                let stmt = parse_statement(data, start, *end)?;
+                Some((
+                    stmt,
+                    classify(&data[stmt.start as usize..stmt.end as usize]),
+                ))
+            })
+            .unzip();
+        let max_id = stmts.iter().map(|s| s.id).max().unwrap_or(0);
         let mut by_id = vec![NONE; max_id as usize + 1];
         for (i, s) in stmts.iter().enumerate() {
             by_id[s.id as usize] = i as u32;
@@ -297,12 +328,14 @@ impl Donor {
         let mut roots = self.displayed_roots();
         roots.sort_unstable();
         roots.dedup();
+        let (refs, styles) = rayon::join(|| self.references(), || self.surface_style_index());
 
         if roots.is_empty() {
             let mut geometry: Vec<u32> = self.of_kind(Kind::Geometry).map(|s| s.id).collect();
             geometry.sort_unstable();
-            let (closure, aliases) = self.closure(&geometry);
+            let (closure, aliases) = self.closure(&refs, &styles, &geometry);
             let scales = vec![self.unit_scale; closure.len()];
+            let (closure, scales, aliases) = self.shared(closure, scales, aliases);
             return Ok(Analysis {
                 closure,
                 scales,
@@ -361,7 +394,7 @@ impl Donor {
             all_geometry.extend_from_slice(&items);
             rep.geometry = items;
         }
-        let (closure, aliases) = self.closure(&all_geometry);
+        let (closure, aliases) = self.closure(&refs, &styles, &all_geometry);
         // Each entity takes the scale of the first representation that
         // reaches it.
         let mut scale_of = vec![0.0f64; self.by_id.len()];
@@ -369,7 +402,7 @@ impl Donor {
             if rep.scale == self.unit_scale {
                 continue;
             }
-            let (own, own_aliases) = self.closure(&rep.geometry);
+            let (own, own_aliases) = self.closure(&refs, &styles, &rep.geometry);
             for id in own.iter().chain(own_aliases.iter().map(|(from, _)| from)) {
                 if scale_of[*id as usize] == 0.0 {
                     scale_of[*id as usize] = rep.scale;
@@ -383,6 +416,7 @@ impl Donor {
                 if s == 0.0 { self.unit_scale } else { s }
             })
             .collect();
+        let (closure, scales, aliases) = self.shared(closure, scales, aliases);
         let root_indices = roots
             .iter()
             .map(|r| reps.iter().position(|rep| rep.id == *r).unwrap() as u32)
@@ -610,45 +644,177 @@ impl Donor {
     /// Surface curves are not copied: like OCCT's writer in its default
     /// mode, references to them are redirected to the 3D basis curve, which
     /// drops every parametric curve and its 2D geometry from the output.
-    fn closure(&self, roots: &[u32]) -> (Vec<u32>, Vec<(u32, u32)>) {
-        let styles = self.surface_style_index();
-        let refs = self.references();
-        let mut seen = vec![false; self.by_id.len()];
-        let mut stack: Vec<u32> = Vec::new();
-        let mut ids = Vec::new();
-        let mut aliases: Vec<(u32, u32)> = Vec::new();
-        let mut push = |mut id: u32, stack: &mut Vec<u32>, ids: &mut Vec<u32>| {
+    fn closure(
+        &self,
+        refs: &Adjacency,
+        styles: &StyleIndex,
+        roots: &[u32],
+    ) -> (Vec<u32>, Vec<(u32, u32)>) {
+        let seen: Vec<AtomicBool> = (0..self.by_id.len())
+            .map(|_| AtomicBool::new(false))
+            .collect();
+        // The entity `id` stands for, when this is the first time it is
+        // reached.
+        let reach = |mut id: u32, aliases: &mut Vec<(u32, u32)>| {
             if let Some(basis) = self.surface_curve_basis(id) {
                 aliases.push((id, basis));
                 id = basis;
             }
-            if let Some(s) = seen.get_mut(id as usize)
-                && !*s
-            {
-                *s = true;
-                stack.push(id);
-                ids.push(id);
-            }
+            let seen = seen.get(id as usize)?;
+            (!seen.load(Ordering::Relaxed) && !seen.swap(true, Ordering::Relaxed)).then_some(id)
         };
-        for r in roots {
-            push(*r, &mut stack, &mut ids);
-        }
-        while let Some(id) = stack.pop() {
-            if let Some(index) = self.index(id) {
-                let (lo, hi) = (refs.offsets[index], refs.offsets[index + 1]);
-                for r in &refs.items[lo as usize..hi as usize] {
-                    push(*r, &mut stack, &mut ids);
-                }
+        let mut aliases: Vec<(u32, u32)> = Vec::new();
+        let mut frontier: Vec<u32> = roots
+            .iter()
+            .filter_map(|r| reach(*r, &mut aliases))
+            .collect();
+        // Breadth first, each level in parallel: a model is a few levels
+        // deep and most of the work is cache misses. What is reached does
+        // not depend on the order it is reached in.
+        while !frontier.is_empty() {
+            let reached: Vec<_> = frontier
+                .par_iter()
+                .with_min_len(ENTITY_CHUNK)
+                .fold(
+                    || (Vec::new(), Vec::new()),
+                    |(mut next, mut aliases), id| {
+                        let own = self.index(*id).map_or(&[][..], |index| {
+                            let (lo, hi) = (refs.offsets[index], refs.offsets[index + 1]);
+                            &refs.items[lo as usize..hi as usize]
+                        });
+                        let (lo, hi) = (
+                            styles.offsets[*id as usize],
+                            styles.offsets[*id as usize + 1],
+                        );
+                        let styled = &styles.items[lo as usize..hi as usize];
+                        next.extend(
+                            own.iter()
+                                .chain(styled)
+                                .filter_map(|r| reach(*r, &mut aliases)),
+                        );
+                        (next, aliases)
+                    },
+                )
+                .collect();
+            frontier.clear();
+            for (next, found) in reached {
+                frontier.extend(next);
+                aliases.extend(found);
             }
-            let (lo, hi) = (styles.offsets[id as usize], styles.offsets[id as usize + 1]);
-            for styled in &styles.items[lo as usize..hi as usize] {
-                push(*styled, &mut stack, &mut ids);
-            }
         }
-        ids.sort_unstable();
-        aliases.sort_unstable();
+        let ids = seen
+            .iter()
+            .enumerate()
+            .filter(|(_, seen)| seen.load(Ordering::Relaxed))
+            .map(|(id, _)| id as u32)
+            .collect();
+        aliases.par_sort_unstable();
         aliases.dedup();
         (ids, aliases)
+    }
+
+    /// `closure` with each value entity that repeats another left out and
+    /// aliased to it. The tools that write component models give every
+    /// edge its own points, directions and vector, and every face its own
+    /// style: a third of a typical model says again what it already said.
+    ///
+    /// Two values are equal when they are scaled alike and their text is
+    /// the same once each reference is replaced by what it stands for, so
+    /// values are compared a depth at a time, those that refer to nothing
+    /// first. Each depth is hashed, sorted and compared in parallel.
+    fn shared(
+        &self,
+        closure: Vec<u32>,
+        scales: Vec<f64>,
+        mut aliases: Vec<(u32, u32)>,
+    ) -> (Vec<u32>, Vec<f64>, Vec<(u32, u32)>) {
+        let depths: Vec<(usize, u32)> = closure
+            .par_iter()
+            .enumerate()
+            .with_min_len(ENTITY_CHUNK)
+            .filter_map(|(rank, id)| {
+                let index = self.index(*id)?;
+                let depth = value_depth(self.kinds[index], self.body(self.stmts[index]))?;
+                Some((depth, rank as u32))
+            })
+            .collect();
+        let mut ranks: [Vec<u32>; VALUE_DEPTHS] = Default::default();
+        for (depth, rank) in depths {
+            ranks[depth].push(rank);
+        }
+
+        // The entity each id stands for.
+        let mut same: Vec<u32> = (0..self.by_id.len() as u32).collect();
+        for ranks in &ranks {
+            let id = |rank: u32| closure[rank as usize];
+            let scale = |rank: u32| scales[rank as usize].to_bits();
+            let mut hashed: Vec<(u64, u32)> = ranks
+                .par_iter()
+                .with_min_len(ENTITY_CHUNK)
+                .map_init(Vec::new, |buf, rank| {
+                    let text = self.value_text(id(*rank), &same, buf);
+                    (crate::content_hash(text) ^ scale(*rank), *rank)
+                })
+                .collect();
+            hashed.par_sort_unstable();
+            // Equal values hash alike, so they are now neighbours, lowest
+            // id first. The hash only brings them together: a value is
+            // merged into the first of its run when the two compare equal.
+            let repeats: Vec<(u32, u32)> = hashed
+                .par_chunk_by(|a, b| a.0 == b.0)
+                .map_init(
+                    || (Vec::new(), Vec::new()),
+                    |(first_buf, buf), run| {
+                        let (first, rest) = (run[0].1, &run[1..]);
+                        if rest.is_empty() {
+                            return Vec::new();
+                        }
+                        let first_text = self.value_text(id(first), &same, first_buf);
+                        rest.iter()
+                            .map(|(_, rank)| *rank)
+                            .filter(|rank| {
+                                scale(*rank) == scale(first)
+                                    && self.value_text(id(*rank), &same, buf) == first_text
+                            })
+                            .map(|rank| (id(rank), id(first)))
+                            .collect()
+                    },
+                )
+                .flatten_iter()
+                .collect();
+            for (id, first) in repeats {
+                same[id as usize] = first;
+            }
+        }
+
+        // A surface curve's basis may itself repeat another curve.
+        for (_, to) in &mut aliases {
+            if let Some(first) = same.get(*to as usize) {
+                *to = *first;
+            }
+        }
+        let mut kept = Vec::with_capacity(closure.len());
+        let mut kept_scales = Vec::with_capacity(closure.len());
+        for (rank, id) in closure.iter().enumerate() {
+            let first = same[*id as usize];
+            if first == *id {
+                kept.push(*id);
+                kept_scales.push(scales[rank]);
+            } else {
+                aliases.push((*id, first));
+            }
+        }
+        (kept, kept_scales, aliases)
+    }
+
+    /// The text of entity `id` in `buf`, with each reference replaced by
+    /// the entity it stands for.
+    fn value_text<'a>(&self, id: u32, same: &[u32], buf: &'a mut Vec<u8>) -> &'a [u8] {
+        buf.clear();
+        if let Some(stmt) = self.get(id) {
+            copy_refs(self.body(stmt), same, buf);
+        }
+        buf
     }
 
     /// The entity references of every statement, by statement index.
@@ -782,8 +948,9 @@ impl Analysis {
         (self.closure.len() + reps + wrapper + 2) as u32
     }
 
-    /// Copy the closure and rebuild the representation tree. `scale` is
-    /// baked into the copied coordinates along with the donor's unit.
+    /// Copy the closure and rebuild the representation tree, with ids
+    /// from `base`, which takes [`Analysis::id_budget`] of them. `scale`
+    /// is baked into the copied coordinates along with the donor's unit.
     ///
     /// The copied representations get their own context declaring the
     /// distance accuracy KiCad reads models at, since readers sew geometry
@@ -792,11 +959,13 @@ impl Analysis {
     pub(crate) fn emit(
         &self,
         donor: &Donor,
-        w: &mut Writer,
+        base: u32,
         root: &Root,
         name: &str,
         scale: f64,
-    ) -> Result<Part, Error> {
+    ) -> Result<Emitted, Error> {
+        let end = base + self.id_budget();
+        let w = &mut Writer::new(base);
         let geom_context = w.geometry_context(&root.context, MODEL_ACCURACY);
         let base = w.next_id;
         w.next_id += self.closure.len() as u32;
@@ -815,7 +984,7 @@ impl Analysis {
         };
 
         // Statements are copied in rank order; a large donor is copied
-        // in chunks in parallel and the chunks joined.
+        // in chunks in parallel.
         let copy_range = |range: std::ops::Range<usize>| -> Result<Vec<u8>, Error> {
             let mut out = Vec::with_capacity(range.len() * 72);
             for rank in range {
@@ -849,8 +1018,11 @@ impl Analysis {
             .map(|start| start..(start + STATEMENT_CHUNK).min(self.closure.len()))
             .collect();
         let copied: Vec<Result<Vec<u8>, Error>> = ranges.into_par_iter().map(copy_range).collect();
+        // The copied statements stay in their chunks: joining a large
+        // model's text would cost as much as writing it out.
+        let mut text = vec![std::mem::take(&mut w.buf)];
         for copied in copied {
-            w.buf.extend_from_slice(&copied?);
+            text.push(copied?);
         }
 
         // Every representation reserves its ids first so children can be
@@ -916,27 +1088,84 @@ impl Analysis {
             w.shape_representation(own.representation, &items, geom_context);
         }
 
-        if let [root] = self.roots.as_slice() {
-            return Ok(ids[*root as usize].part);
-        }
-        let placement = Placement::reserve(w);
-        w.axis_placement_at(placement, &Transform::IDENTITY);
-        let representation = w.id();
-        let part = w.part(root, name, representation, placement.axis);
-        items.clear();
-        items.push(placement.axis);
-        for (index, root) in self.roots.iter().enumerate() {
-            items.push(w.suboccurrence(
-                part,
-                ids[*root as usize].part,
-                index + 1,
-                "",
-                &Transform::IDENTITY,
-            ));
-        }
-        w.shape_representation(representation, &items, geom_context);
-        Ok(part)
+        let part = if let [root] = self.roots.as_slice() {
+            ids[*root as usize].part
+        } else {
+            let placement = Placement::reserve(w);
+            w.axis_placement_at(placement, &Transform::IDENTITY);
+            let representation = w.id();
+            let part = w.part(root, name, representation, placement.axis);
+            items.clear();
+            items.push(placement.axis);
+            for (index, root) in self.roots.iter().enumerate() {
+                items.push(w.suboccurrence(
+                    part,
+                    ids[*root as usize].part,
+                    index + 1,
+                    "",
+                    &Transform::IDENTITY,
+                ));
+            }
+            w.shape_representation(representation, &items, geom_context);
+            part
+        };
+        debug_assert_eq!(w.next_id, end);
+        text.push(std::mem::take(&mut w.buf));
+        Ok(Emitted { part, text })
     }
+}
+
+/// A model as [`Analysis::emit`] wrote it.
+pub(crate) struct Emitted {
+    pub(crate) part: Part,
+    /// The statements, in file order, in as many pieces as they were
+    /// written in.
+    pub(crate) text: Vec<Vec<u8>>,
+}
+
+/// Where each statement of the `DATA` section ends: the semicolons after
+/// `start` that are not in a string.
+///
+/// A quote opens or closes a string, and the doubled quote that stands for
+/// one inside a string closes and reopens it, so a byte is in a string when
+/// an odd number of quotes precede it. That makes a large file splittable:
+/// count the quotes of each chunk, then scan the chunks in parallel, each
+/// knowing whether it starts inside a string.
+fn statement_ends(data: &[u8], start: usize) -> Result<Vec<usize>, Error> {
+    const CHUNK: usize = 1 << 20;
+    let chunks = || data[start..].par_chunks(CHUNK);
+    let odd_quotes: Vec<bool> = chunks()
+        .map(|chunk| memchr::memchr_iter(b'\'', chunk).count() % 2 == 1)
+        .collect();
+    let mut in_string = false;
+    let starts_in_string: Vec<bool> = odd_quotes
+        .iter()
+        .map(|odd| {
+            let before = in_string;
+            in_string ^= odd;
+            before
+        })
+        .collect();
+    if in_string {
+        return Err(Error::Step("unterminated string"));
+    }
+    let ends: Vec<Vec<usize>> = chunks()
+        .zip(starts_in_string)
+        .enumerate()
+        .map(|(index, (chunk, mut in_string))| {
+            let base = start + index * CHUNK;
+            let mut ends = Vec::with_capacity(chunk.len() / 48);
+            for at in memchr::memchr2_iter(b'\'', b';', chunk) {
+                if chunk[at] == b'\'' {
+                    in_string = !in_string;
+                } else if !in_string {
+                    ends.push(base + at);
+                }
+            }
+            ends
+        })
+        .collect();
+    Ok(ends.concat())
 }
 
 fn parse_statement(data: &[u8], start: usize, end: usize) -> Option<Stmt> {
@@ -1015,6 +1244,27 @@ fn scan_refs(body: &[u8], mut visit: impl FnMut(u32)) {
             at += 1;
         }
     }
+}
+
+/// Copy `body` to `out` with each `#id` mapped through `same`.
+fn copy_refs(body: &[u8], same: &[u32], out: &mut Vec<u8>) {
+    let (mut at, mut copied) = (0, 0);
+    while let Some(off) = memchr2(b'\'', b'#', &body[at..]) {
+        at += off;
+        if body[at] == b'\'' {
+            at = string_end(body, at + 1).unwrap_or(body.len());
+        } else if let Some((id, next)) = parse_uint(body, at + 1)
+            && let Some(id) = usize::try_from(id).ok().and_then(|id| same.get(id))
+        {
+            out.extend_from_slice(&body[copied..=at]);
+            crate::step::push_uint(out, *id);
+            at = next;
+            copied = at;
+        } else {
+            at += 1;
+        }
+    }
+    out.extend_from_slice(&body[copied..]);
 }
 
 /// Copy `body` to `out` with each `#id` mapped through `new_id` and each
@@ -1322,6 +1572,79 @@ mod tests {
     use std::f64::consts::{FRAC_PI_2, PI};
 
     #[test]
+    fn repeated_values_are_copied_once() {
+        // Two edges along one line, each with its own copy of the line.
+        // The donor is not interpreted, so an edge can sit in a curve set.
+        let donor = Donor::parse(
+            br#"DATA;
+#1 = CARTESIAN_POINT('',(0.,0.,0.));
+#2 = CARTESIAN_POINT('',(0.,0.,0.));
+#3 = DIRECTION('',(1.,0.,0.));
+#4 = DIRECTION('',(1.,0.,0.));
+#5 = VECTOR('',#3,1.);
+#6 = VECTOR('',#4,1.);
+#7 = LINE('',#1,#5);
+#8 = LINE('',#2,#6);
+#9 = VERTEX_POINT('',#1);
+#10 = VERTEX_POINT('',#2);
+#11 = CARTESIAN_POINT('',(1.,0.,0.));
+#12 = VERTEX_POINT('',#11);
+#13 = EDGE_CURVE('',#9,#12,#7,.T.);
+#14 = EDGE_CURVE('',#10,#12,#8,.T.);
+#15 = GEOMETRIC_CURVE_SET('',(#13,#14));
+ENDSEC;"#
+                .to_vec(),
+        )
+        .unwrap();
+        let analysis = donor.analyze().unwrap();
+        let mut w = Writer::new(1);
+        let root = Root::reserve(&mut w);
+        w.text("DATA;\n");
+        let emitted = analysis
+            .emit(&donor, w.next_id, &root, "edges", 1.0)
+            .unwrap();
+        let copied = String::from_utf8(emitted.text.concat()).unwrap();
+        let count = |name: &str| copied.matches(&format!(" = {name}(")).count();
+        // The second point, direction, vector and line say nothing new.
+        assert_eq!(copied.matches("(0.,0.,0.)").count(), 1);
+        assert_eq!(copied.matches("(1.,0.,0.)").count(), 2);
+        assert_eq!((count("VECTOR"), count("LINE")), (1, 1));
+        // Two vertices at one point are still two vertices, and the edges
+        // between them two edges.
+        assert_eq!((count("VERTEX_POINT"), count("EDGE_CURVE")), (3, 2));
+
+        // The same text at another scale is another value.
+        let (closure, _, aliases) = donor.shared(vec![1, 2], vec![1.0, 25.4], Vec::new());
+        assert_eq!((closure, aliases), (vec![1, 2], Vec::new()));
+        let (closure, _, aliases) = donor.shared(vec![1, 2], vec![25.4, 25.4], Vec::new());
+        assert_eq!((closure, aliases), (vec![1], vec![(2, 1)]));
+    }
+
+    #[test]
+    fn strings_spanning_parallel_pieces_do_not_end_statements() {
+        // The data is split into 1 MiB pieces. Whichever byte of a string
+        // a piece starts at, the string's semicolons and doubled quotes
+        // are text.
+        let text = "a;''".repeat(600_000);
+        for pad in 0..4 {
+            let step = format!(
+                "DATA;{}#1 = PRODUCT('{text}');\n#2 = CARTESIAN_POINT('',(0.,0.,0.));\nENDSEC;",
+                " ".repeat(pad)
+            );
+            let donor = Donor::parse(step.into_bytes()).unwrap();
+            let ids: Vec<u32> = donor.stmts.iter().map(|s| s.id).collect();
+            assert_eq!(ids, [1, 2]);
+            let product = donor.body(donor.stmts[0]);
+            assert!(product.len() > text.len() && product.ends_with(b"')"));
+        }
+        let open = format!("DATA;#1 = PRODUCT('{text});\nENDSEC;");
+        assert!(matches!(
+            Donor::parse(open.into_bytes()),
+            Err(Error::Step("unterminated string"))
+        ));
+    }
+
+    #[test]
     fn nested_products_keep_scaled_geometry_under_each_board_occurrence() {
         let donor = Donor::parse(
             br#"DATA;
@@ -1333,7 +1656,8 @@ ENDSEC;"#
                 .to_vec(),
         )
         .unwrap();
-        let (closure, aliases) = donor.closure(&[4, 5]);
+        let (closure, aliases) =
+            donor.closure(&donor.references(), &donor.surface_style_index(), &[4, 5]);
         let mut analysis = Analysis {
             scales: vec![1.0; closure.len()],
             closure,
@@ -1378,11 +1702,12 @@ ENDSEC;"#
             let mut w = Writer::new(1);
             let root = Root::reserve(&mut w);
             w.text("DATA;\n");
-            let base = w.next_id;
-            let part = analysis
-                .emit(&donor, &mut w, &root, "connector", 2.0)
+            let emitted = analysis
+                .emit(&donor, w.next_id, &root, "connector", 2.0)
                 .unwrap();
-            assert_eq!(w.next_id - base, analysis.id_budget());
+            w.next_id += analysis.id_budget();
+            w.buf.extend(emitted.text.concat());
+            let part = emitted.part;
             let a = w.occurrence(
                 &root,
                 part,
