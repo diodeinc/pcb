@@ -11,8 +11,8 @@ use rayon::prelude::*;
 
 use crate::board::{Board, Knockout, Machining, Mouth, Shape, ShapeKind, Tech, Text, Via};
 use crate::copper::{
-    PLATING, circle_edges, contour, grown_pad_outline, pad_drill, pad_outline, point, resolution,
-    stroke_contour,
+    PLATING, circle_edges, contour, grown_pad_outline, pad_drill, pad_outline, pen_contours, point,
+    resolution, stroke_contour,
 };
 use crate::font;
 use crate::geom::{
@@ -387,17 +387,15 @@ fn text_contours(
         let pts: Vec<Vec2> = ring.iter().map(|p| frame.point(*p)).collect();
         glyphs.push(polyline_contour(&pts));
     }
+    let mut segments = Vec::new();
     for stroke in &strokes {
         let pts: Vec<Vec2> = stroke.iter().map(|p| frame.point(*p)).collect();
         if pts.len() == 1 {
-            glyphs.push(contour(&circle_edges(pts[0], pen * 0.5)));
+            segments.push((pts[0], pts[0]));
         }
-        for pair in pts.windows(2) {
-            if let Some(c) = stroke_contour(pair[0], pair[0], pair[1], pen) {
-                glyphs.push(c);
-            }
-        }
+        segments.extend(pts.windows(2).map(|pair| (pair[0], pair[1])));
     }
+    pen_contours(&segments, pen, &mut glyphs);
     let hull = match text.knockout {
         Knockout::No => return out.extend(glyphs),
         Knockout::Hull => text_hull(&rings, &strokes, text, pen),
@@ -697,8 +695,8 @@ fn union_rings(
     rings
 }
 
-pub(crate) fn face(island: &Nested) -> Face {
-    let (outer, holes) = fit(island);
+pub(crate) fn face(island: &Nested, smooth: bool) -> Face {
+    let (outer, holes) = fit(island, smooth);
     Face { outer, holes }
 }
 
@@ -865,7 +863,7 @@ pub(crate) fn mask_coverage(
     warnings: &mut Vec<String>,
 ) -> Vec<Face> {
     let what = mask_what(front);
-    let openings: Vec<Face> = openings.iter().map(face).collect();
+    let openings: Vec<Face> = openings.iter().map(|o| face(o, false)).collect();
     let boxes: Vec<_> = openings.iter().map(|f| f.outer.bbox()).collect();
     let grid = BoxGrid::new(&boxes);
     let mut faces = Vec::new();

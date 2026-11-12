@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Changed
+
+- `pcb step export` writes smaller files that import faster. Silkscreen text takes about a quarter of the bytes and a third of the edges: the strokes of a text are outlined together, and the curves of its glyphs are written as arcs on the terms KiCad's exporter uses, which round the stroke font's polygons by at most 0.02 mm. The board body and solder mask shrink too, because lines and planes share their direction entities.
+
 ## [0.4.101] - 2026-11-11
 
 ### Fixed

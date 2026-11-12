@@ -99,7 +99,12 @@ The defaults follow KiCad's exporter (`pcbnew/exporters/step/`):
   board. Text is KiCad's stroke font (the `newstroke` crate, U+0020 to U+FFEE)
   laid out with KiCad's spacing, justification, italic tilt and markup;
   `${NAME}` variables come from the project file beside the board, and
-  `${REFERENCE}`/`${VALUE}` from the footprint. The mask is the board
+  `${REFERENCE}`/`${VALUE}` from the footprint. Silkscreen outlines are
+  rounded as KiCad rounds them: a run of polygon corners on one circle,
+  such as the curve of a stroke-font glyph, is written as an arc on the
+  terms of KiCad's `approximateLineChainWithArcs`, which stands off the
+  drawn polygon by each chord's sagitta, here at most 0.02 mm. The other
+  layers only refit arcs that were flattened from one. The mask is the board
   minus every opening: pads on the mask layer grown by their margin (pad,
   then footprint, then the board's clearance), untented via rings grown
   by the board's clearance with their drills, graphics and text drawn on

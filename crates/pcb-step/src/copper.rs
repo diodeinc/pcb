@@ -12,6 +12,9 @@
 //! Layer indices are copper layer indices, top first, matching
 //! `Physical::copper_z`.
 
+use std::collections::HashMap;
+use std::f64::consts::{PI, TAU};
+
 use pcb_ir::geom::{
     BBox, ContourBuf, ContourSet, FillRule, GeometryAccuracy, PathCmd, Point, PreparedRegion,
     Resolution,
@@ -1013,6 +1016,97 @@ pub(crate) fn stroke_contour(a: Vec2, mid: Vec2, b: Vec2, width: f64) -> Option<
         },
     ];
     Some(contour(&orient(edges, true)))
+}
+
+/// The outlines of straight pen strokes of one width, some of which share
+/// ends, such as the segments of a glyph. Together they cover what a
+/// round-ended track along each segment would, but the round at a shared
+/// end is drawn once, as the arc between the corners of the two segments
+/// either side of it. Two tracks would each flatten that circle from
+/// their own corner, and the union of the two polygons zigzags between
+/// them in chords no arc can be refitted to.
+pub(crate) fn pen_contours(segments: &[(Vec2, Vec2)], width: f64, out: &mut Vec<ContourBuf>) {
+    /// A bend is drawn as the corner where its two sides meet when that
+    /// stands no further than this off the round. The round of a shallow
+    /// bend flattens to a chord or two, and KiCad's exporter drops
+    /// outline detail of this size (`SimplifyOutlines`).
+    const MITRE: f64 = 0.003;
+    let r = width * 0.5;
+    if r <= 0.0 {
+        return;
+    }
+    let key = |p: Vec2| (p.x.to_bits(), p.y.to_bits());
+    // The directions the segments leave each end point in.
+    let mut leaving: HashMap<(u64, u64), Vec<Vec2>> = HashMap::new();
+    for &(a, b) in segments {
+        if a.distance(b) >= 1e-9 {
+            let d = (b - a).normalize();
+            leaving.entry(key(a)).or_default().push(d);
+            leaving.entry(key(b)).or_default().push(-d);
+        }
+    }
+    // The end of a segment leaving `v` along `e`, from its corner on the
+    // left of `e` to the one on the right. A segment covers the half of
+    // the pen's disc at `v` ahead of it, so what is left of the disc
+    // between this segment and the next one anticlockwise is the sector
+    // from this one's left corner to that one's right corner; the chord
+    // back from there lies in the next segment's half.
+    let end = |v: Vec2, e: Vec2, edges: &mut Vec<Edge>| {
+        let (from, to) = (v + e.perp() * r, v - e.perp() * r);
+        let turn = |o: &Vec2| {
+            let angle = e.perp_dot(*o).atan2(e.dot(*o));
+            if angle <= 1e-9 { angle + TAU } else { angle }
+        };
+        let next = leaving[&key(v)]
+            .iter()
+            .min_by(|p, q| turn(p).total_cmp(&turn(q)))
+            .unwrap();
+        let mut at = from;
+        let stop = v - next.perp() * r;
+        let bend = turn(next) - PI;
+        if bend > 0.0 && from.distance(stop) > 1e-9 {
+            // The sides either way meet this far out along the bisector.
+            let reach = r / (0.5 * bend).cos();
+            if reach - r <= MITRE {
+                let corner = v + (from + stop - v * 2.0).normalize() * reach;
+                edges.push(Edge::Line { a: from, b: corner });
+                edges.push(Edge::Line { a: corner, b: stop });
+            } else {
+                edges.push(Edge::Arc {
+                    a: from,
+                    b: stop,
+                    c: v,
+                    ccw: true,
+                });
+            }
+            at = stop;
+        }
+        if at.distance(to) > 1e-9 {
+            edges.push(Edge::Line { a: at, b: to });
+        }
+    };
+    for &(a, b) in segments {
+        if a.distance(b) < 1e-9 {
+            // A dot, unless a segment's end already rounds it.
+            if !leaving.contains_key(&key(a)) && !leaving.contains_key(&key(b)) {
+                out.push(contour(&circle_edges(a, r)));
+            }
+            continue;
+        }
+        let d = (b - a).normalize();
+        let side = d.perp() * r;
+        let mut edges = vec![Edge::Line {
+            a: a - side,
+            b: b - side,
+        }];
+        end(b, -d, &mut edges);
+        edges.push(Edge::Line {
+            a: b + side,
+            b: a + side,
+        });
+        end(a, d, &mut edges);
+        out.push(contour(&edges));
+    }
 }
 
 /// Everything unioned together on one layer for one net.

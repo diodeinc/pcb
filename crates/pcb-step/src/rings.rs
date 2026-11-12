@@ -88,7 +88,7 @@ pub(crate) fn cleaned(mut ring: Vec<Vec2>) -> Option<Vec<Vec2>> {
 
 /// One `(outer, holes)` per island of a region, with arcs refitted.
 pub(crate) fn loops_of(region: &ContourSet) -> Vec<(Loop, Vec<Loop>)> {
-    nested_of(region).iter().map(fit).collect()
+    nested_of(region).iter().map(|i| fit(i, false)).collect()
 }
 
 /// An island of a region as point lists: its outer ring and its holes.
@@ -159,12 +159,45 @@ pub(crate) fn raw_islands(region: &ContourSet) -> Vec<Nested> {
 }
 
 /// The loops of one island with arcs refitted, the outer counter-clockwise
-/// and the holes clockwise. Rings are refitted in parallel.
-pub(crate) fn fit(island: &Nested) -> (Loop, Vec<Loop>) {
-    let rings: Vec<&[Vec2]> = std::iter::once(island.outer.as_slice())
-        .chain(island.holes.iter().map(Vec::as_slice))
+/// and the holes clockwise. Rings are refitted in parallel. `smooth`
+/// also takes a polygon's own corners for an arc, as KiCad's exporter
+/// does: see `refit_pieces`.
+pub(crate) fn fit(island: &Nested, smooth: bool) -> (Loop, Vec<Loop>) {
+    // Each ring from the end of its longest edge. The refit works along
+    // a ring from its first vertex to its last, and an arc lying across
+    // that seam comes out as two arcs, or as an arc and a chord left
+    // over; the longest edge is a straight one wherever there is one,
+    // unless the fit is smooth.
+    let mut rings: Vec<Vec<Vec2>> = std::iter::once(&island.outer)
+        .chain(&island.holes)
+        .map(|ring| {
+            let n = ring.len();
+            let length = |i: usize| ring[i].distance_squared(ring[(i + 1) % n]);
+            let longest = (0..n)
+                .rev()
+                .max_by(|&i, &j| length(i).total_cmp(&length(j)));
+            let mut ring = ring.clone();
+            ring.rotate_left(longest.map_or(0, |i| (i + 1) % n));
+            ring
+        })
         .collect();
-    let pieces: Vec<Vec<Piece>> = rings.par_iter().map(|r| refit_pieces(r)).collect();
+    let pieces: Vec<Vec<Piece>> = rings
+        .par_iter_mut()
+        .map(|ring| {
+            let mut pieces = refit_pieces(ring, smooth);
+            // A smooth arc can take in the longest edge, so go round
+            // again from where the first arc found ended.
+            if smooth
+                && let Some(arc) = pieces
+                    .iter()
+                    .find(|p| matches!(p.edge, Edge::Arc { .. }) && p.end < ring.len())
+            {
+                ring.rotate_left(arc.end);
+                pieces = refit_pieces(ring, smooth);
+            }
+            pieces
+        })
+        .collect();
     let refs: Vec<&[Piece]> = pieces.iter().map(Vec::as_slice).collect();
     let demote = crossing_arcs(&refs);
     let mut loops = rings
@@ -359,7 +392,7 @@ fn split_pinches(points: Vec<Vec2>, out: &mut Vec<Vec<Vec2>>) {
 /// circle.
 #[cfg(test)]
 pub(crate) fn refit_arcs(points: &[Vec2]) -> Vec<Edge> {
-    let pieces = refit_pieces(points);
+    let pieces = refit_pieces(points, false);
     let demote = crossing_arcs(&[&pieces]);
     expand_pieces(points, pieces, &demote[0])
 }
@@ -373,7 +406,14 @@ struct Piece {
     end: usize,
 }
 
-fn refit_pieces(points: &[Vec2]) -> Vec<Piece> {
+/// `smooth` takes any run of chords on one circle for an arc, on the
+/// terms of KiCad's `approximateLineChainWithArcs`: each turning less
+/// than 30 degrees from the one before, or 46 where both are under
+/// 0.1 mm long, and none over five times the first or under a fifth of
+/// it. That rounds the curves of a stroke font, which are polygons, and
+/// the arc stands off each chord by that chord's own sagitta, at most
+/// `MAX_SAGITTA` as for any other arc.
+fn refit_pieces(points: &[Vec2], smooth: bool) -> Vec<Piece> {
     const MAX_RADIUS: f64 = 25.0;
     const MIN_STEP: f64 = 0.5 * PI / 180.0;
     /// Largest distance from a chord to its arc, with room above KiCad's
@@ -409,25 +449,38 @@ fn refit_pieces(points: &[Vec2]) -> Vec<Piece> {
         let sagitta = r * (1.0 - (0.5 * angle).cos());
         (angle.abs() >= MIN_STEP && sagitta <= MAX_SAGITTA).then_some(angle)
     };
-    let uniform = |angles: &[f64]| {
+    let (least, most) = if smooth { (0.2, 5.0) } else { (0.8, 1.2) };
+    let uniform = |angles: &[f64], r: f64| {
         let first = angles[0];
-        angles.iter().all(|a| {
-            a.signum() == first.signum() && (a.abs() - first.abs()).abs() <= 0.2 * first.abs()
-        })
+        angles
+            .iter()
+            .all(|a| a.signum() == first.signum() && (least..=most).contains(&(a / first)))
+            // The turn from one chord to the next is the mean of their
+            // steps.
+            && (!smooth
+                || angles.windows(2).all(|pair| {
+                    let short = pair.iter().all(|a| 2.0 * r * (0.5 * a).sin().abs() < 0.1);
+                    let limit: f64 = if short { 46.0 } else { 30.0 };
+                    (0.5 * (pair[0] + pair[1])).abs() < limit.to_radians()
+                }))
     };
+    // Where a run may end. The ring starts after its longest edge, which
+    // closes it and stays a chord; a smooth ring starts where an arc
+    // ended, and an arc may end there again.
+    let last = if smooth { n } else { n - 1 };
     // The last vertex of the uniform run on the circle starting at `i`,
     // and the run's turning direction.
     let run = |c: Vec2, r: f64, i: usize, tolerance: f64| -> (usize, bool) {
         let mut angles = Vec::new();
         let mut end = i;
-        while end + 1 < n {
+        while end < last {
             let Some(angle) = step(c, r, end, tolerance) else {
                 break;
             };
             angles.push(angle);
             // Within a half turn: the corners of a rectangle share a
             // circle too, and three of its sides would pass as an arc.
-            if !uniform(&angles) || angles.iter().sum::<f64>().abs() > PI + 1e-9 {
+            if !uniform(&angles, r) || angles.iter().sum::<f64>().abs() > PI + 1e-9 {
                 angles.pop();
                 break;
             }
@@ -444,7 +497,7 @@ fn refit_pieces(points: &[Vec2]) -> Vec<Piece> {
         if r <= MAX_RADIUS {
             let angles: Option<Vec<f64>> = (0..n).map(|k| step(c, r, k, REFIT_TOLERANCE)).collect();
             if let Some(angles) = angles
-                && uniform(&angles)
+                && uniform(&angles, r)
             {
                 let p = points[0];
                 return vec![Piece {
@@ -465,18 +518,18 @@ fn refit_pieces(points: &[Vec2]) -> Vec<Piece> {
     let mut i = 0;
     while i < n {
         let mut best: Option<(usize, Edge)> = None;
-        if i + 3 < n
-            && let Some(coarse) = circle_center(points[i], points[i + 1], points[i + 3])
+        if i + 3 <= last
+            && let Some(coarse) = circle_center(points[i], points[i + 1], points[(i + 3) % n])
             && points[i].distance(coarse) <= MAX_RADIUS
         {
             let (end, _) = run(coarse, points[i].distance(coarse), i, COARSE_TOLERANCE);
             if end - i >= 3
-                && let Some(c) = circle_center(points[i], points[(i + end) / 2], points[end])
+                && let Some(c) = circle_center(points[i], points[(i + end) / 2], points[end % n])
             {
                 let r = points[i].distance(c);
                 let (end, ccw) = run(c, r, i, REFIT_TOLERANCE);
                 if end - i >= 3 {
-                    let (a, b) = (points[i], points[end]);
+                    let (a, b) = (points[i], points[end % n]);
                     best = Some((
                         end,
                         Edge::Arc {
