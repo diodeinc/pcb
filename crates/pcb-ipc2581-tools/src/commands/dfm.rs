@@ -1521,9 +1521,11 @@ limit = { minimum = "300 mil" }
             ("NONPLATED", 0.0, "IN1", "npth", 0.189, 0.22),
             ("NONPLATED", 0.0, "TOP", "npth.preferred", 0.19, 0.20),
             ("NONPLATED", 0.0, "IN1", "npth.preferred", 0.195, 0.201),
-            ("PLATED", 0.16, "TOP", "pth.outer", 0.265, 0.27),
+            // A 0.15 mm ring keeps 0.245 mm above JLC's 0.09 mm copper spacing.
+            ("PLATED", 0.15, "TOP", "pth.outer", 0.235, 0.245),
             ("PLATED", 0.16, "TOP", "pth.outer.preferred", 0.275, 0.35),
-            ("PLATED", 0.16, "IN1", "pth.inner", 0.29, 0.32),
+            ("PLATED", 0.15, "IN1", "pth.inner", 0.235, 0.245),
+            ("PLATED", 0.16, "IN1", "pth.inner.preferred", 0.29, 0.32),
         ] {
             for (gap, fails) in [(below, true), (above, false)] {
                 let left = 10.5 + gap;
