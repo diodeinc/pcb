@@ -10,7 +10,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Changed
 
-- `pcb step export` writes smaller files for boards with silkscreen text and solder mask openings. Strokes that share a round joint now give one arc there instead of a run of micron-long lines, and edges share their points and directions. Across 71 boards the silkscreen is 52% smaller, the solder mask 33%, and the files 16% overall; a board whose file was 92% silkscreen went from 34.6 MB to 16.7 MB.
+- `pcb step export` files are smaller: silkscreen takes about half the bytes and solder mask a third fewer.
 
 ## [0.4.101] - 2026-11-11
 
