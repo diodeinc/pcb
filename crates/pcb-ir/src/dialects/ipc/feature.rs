@@ -135,6 +135,12 @@ impl Feature {
             && self.intent.domain == FeatureDomain::Score
     }
 
+    /// A hole its source declares a breakaway perforation rather than a
+    /// hole of the finished board.
+    pub fn is_mouse_bite(&self) -> bool {
+        self.kind == FeatureKind::Hole && self.intent.role == FeatureRole::ArraySeparation
+    }
+
     pub fn is_drill_like(&self) -> bool {
         matches!(
             self.intent.operation,

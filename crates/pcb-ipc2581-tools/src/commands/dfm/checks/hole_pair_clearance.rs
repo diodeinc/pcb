@@ -38,7 +38,10 @@ pub(super) fn evaluate(
     let holes = design
         .holes
         .iter()
-        .filter(|hole| hole.class == first_class || hole.class == second_class)
+        .filter(|hole| {
+            let class = hole.class.against_neighbours();
+            class == first_class || class == second_class
+        })
         .collect::<Vec<_>>();
     let reach = limit_mm - COMPARISON_EPSILON_MM;
     let measured = holes
@@ -50,9 +53,12 @@ pub(super) fn evaluate(
                     .iter()
                     .take_while(move |second| second.bbox.min.x - first.bbox.max.x < reach)
                     .filter(move |second| {
-                        let classes_match = (first.class == first_class
-                            && second.class == second_class)
-                            || (first.class == second_class && second.class == first_class);
+                        let classes = (
+                            first.class.against_neighbours(),
+                            second.class.against_neighbours(),
+                        );
+                        let classes_match = classes == (first_class, second_class)
+                            || classes == (second_class, first_class);
                         let y_gap = (second.bbox.min.y - first.bbox.max.y)
                             .max(first.bbox.min.y - second.bbox.max.y)
                             .max(0.0);

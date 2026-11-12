@@ -580,11 +580,15 @@ fn missing_subjects(kind: RuleKind, design: &Design) -> Option<String> {
         RuleKind::HoleDiameter(class)
         | RuleKind::HoleAspectRatio(class)
         | RuleKind::AnnularRing(class)
-        | RuleKind::HoleToCopperClearance(class)
         | RuleKind::HoleToBoardEdgeClearance(class) => design
             .holes
             .iter()
             .all(|hole| hole.class != class)
+            .then(|| format!("{} holes", class.label())),
+        RuleKind::HoleToCopperClearance(class) => design
+            .holes
+            .iter()
+            .all(|hole| hole.class.against_neighbours() != class)
             .then(|| format!("{} holes", class.label())),
         RuleKind::HolePairClearance(first, second) => {
             (!has_hole_pair(design, first, second)).then(|| {
@@ -645,7 +649,7 @@ fn unresolved_span(rule: &Rule, design: &Design) -> Option<String> {
             .holes
             .iter()
             .find(|hole| {
-                hole.class == class
+                hole.class.against_neighbours() == class
                     && hole.branch.is_none()
                     && unresolved(&hole.drill_span)
                     && applies(&hole.drill_span)
@@ -770,13 +774,18 @@ fn has_hole_pair(design: &Design, first: HoleClass, second: HoleClass) -> bool {
         design
             .holes
             .iter()
-            .filter(|hole| hole.class == first)
+            .filter(|hole| hole.class.against_neighbours() == first)
             .take(2)
             .count()
             == 2
     } else {
-        design.holes.iter().any(|hole| hole.class == first)
-            && design.holes.iter().any(|hole| hole.class == second)
+        let any = |class| {
+            design
+                .holes
+                .iter()
+                .any(|hole| hole.class.against_neighbours() == class)
+        };
+        any(first) && any(second)
     }
 }
 

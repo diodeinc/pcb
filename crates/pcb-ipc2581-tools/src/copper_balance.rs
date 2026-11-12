@@ -115,6 +115,7 @@ impl BalanceFeatureSets {
             layer_name: layer_name.to_string(),
             polarity,
             copper_balance: Some(kind),
+            mouse_bites: false,
             spec_refs: Vec::new(),
             features,
             void_set,

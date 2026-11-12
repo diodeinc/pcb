@@ -2118,6 +2118,13 @@ fn mouse_bite_array_routes_slots_bridged_by_perforated_tabs() {
         array.profile.as_ref().unwrap().cutouts.len(),
         4 * tabs_per_board
     );
+    // The drill file tells the fabricator the break holes are not board holes.
+    let package = manufacturing_package(&reparsed, ArtworkScope::ArrayFlattened).unwrap();
+    let drill = gerber(&package, "NPTH.drl").unwrap();
+    assert!(
+        drill
+            .contains("; #@! TA.AperFunction,NonPlated,NPTH,MechanicalDrill,Breakout\nT01C0.381\n")
+    );
 }
 
 /// A `width` x `height` board whose courtyard leaves only the bottom edge

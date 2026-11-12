@@ -85,6 +85,9 @@ report as JSON.
 
 `board-array create` uses routed slots and perforated tabs by default;
 `--v-score` selects V-scores. `--mouse-bite-placement` only analyzes placement and writes JSON.
+The tab perforations are declared mouse bites, which [DFM](docs/dfm.md#rule-semantics)
+holds to their own diameter limit and does not measure to the board edge. The
+drill file tags their tool `MechanicalDrill,Breakout`.
 The [experimental tab geometry and physical-acceptance limits](../pcb-ir/src/geom/mouse_bite/README.md)
 apply even when manufacturing files are generated.
 

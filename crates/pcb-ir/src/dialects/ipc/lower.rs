@@ -473,6 +473,9 @@ fn nc_object_from_feature(
     let (plating, function) = match feature.intent.plating {
         PlatingKind::Via | PlatingKind::ViaCapped => (nc::Plating::Plated, nc::Function::Via),
         PlatingKind::Plated => (nc::Plating::Plated, nc::Function::Component),
+        PlatingKind::NonPlated | PlatingKind::None if feature.is_mouse_bite() => {
+            (nc::Plating::NonPlated, nc::Function::Breakout)
+        }
         PlatingKind::NonPlated | PlatingKind::None => {
             (nc::Plating::NonPlated, nc::Function::Component)
         }

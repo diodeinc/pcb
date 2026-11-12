@@ -104,7 +104,7 @@ pub(super) fn evaluate(
     let mut measured = Vec::new();
     // A nonplated hole has no net for a tie to name.
     let ties = match class {
-        HoleClass::Npth => Vec::new(),
+        HoleClass::Npth | HoleClass::MouseBite => Vec::new(),
         HoleClass::Via | HoleClass::Pth => design
             .copper_layers
             .iter()
@@ -118,7 +118,7 @@ pub(super) fn evaluate(
         .holes
         .iter()
         .enumerate()
-        .filter(|(_, hole)| hole.class == class)
+        .filter(|(_, hole)| hole.class.against_neighbours() == class)
     {
         let radius_mm = hole.diameter_mm / 2.0;
         let owner = Ownership::of(
@@ -149,7 +149,7 @@ pub(super) fn evaluate(
                         .max(pcb_ir::geom::tol::EPSILON_MM),
             );
             let land_remainders = match class {
-                HoleClass::Npth => preparation.remainders(
+                HoleClass::Npth | HoleClass::MouseBite => preparation.remainders(
                     [design_index, hole_index, copper_index],
                     copper,
                     design,

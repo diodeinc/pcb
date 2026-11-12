@@ -117,20 +117,22 @@ fn xnc_file_function(key: &XncGroupKey, copper_layers: &[ipc2581::Symbol]) -> Xn
 }
 
 fn xnc_tool_attributes(object: &nc::Object, span: XncSpanKey) -> Vec<XncAttribute> {
-    let drill_function = match object.function {
-        nc::Function::Via => "ViaDrill",
-        nc::Function::Component => "ComponentDrill",
-    };
-    let fields = match (object.plating, span) {
-        (nc::Plating::Plated, XncSpanKey::ThroughBoard) => vec!["Plated", "PTH", drill_function],
+    let plating = match (object.plating, span) {
+        (nc::Plating::Plated, XncSpanKey::ThroughBoard) => ["Plated", "PTH"],
         // KiCad uses Buried for both blind and buried tools; FileFunction
         // carries the exact span and distinguishes Blind from Buried.
-        (nc::Plating::Plated, XncSpanKey::FromTo { .. }) => {
-            vec!["Plated", "Buried", drill_function]
-        }
-        (nc::Plating::NonPlated, _) => vec!["NonPlated", "NPTH", drill_function],
+        (nc::Plating::Plated, XncSpanKey::FromTo { .. }) => ["Plated", "Buried"],
+        (nc::Plating::NonPlated, _) => ["NonPlated", "NPTH"],
     };
-    vec![XncAttribute::tool("AperFunction", fields)]
+    let function: &[&str] = match object.function {
+        nc::Function::Via => &["ViaDrill"],
+        nc::Function::Component => &["ComponentDrill"],
+        nc::Function::Breakout => &["MechanicalDrill", "Breakout"],
+    };
+    vec![XncAttribute::tool(
+        "AperFunction",
+        plating.iter().chain(function).copied(),
+    )]
 }
 
 fn xnc_object_attributes(imported: &ImportedDesign, object: &nc::Object) -> Vec<XncAttribute> {

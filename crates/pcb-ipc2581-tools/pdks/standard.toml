@@ -4,7 +4,7 @@ default_profile = "standard"
 [pdk]
 id = "standard"
 name = "Standard"
-revision = "jlc-floor-2026-10-26"
+revision = "mouse-bites-2026-11-12"
 manufacturer = "Diode"
 process = "Standard"
 
@@ -90,6 +90,12 @@ source = "jlc-baseline"
 id = "drilling.minimum_npth_hole_diameter"
 select = { hole = "npth" }
 limit = { minimum = "0.50 mm" }
+source = "jlc-baseline"
+
+[[rules.drilling.hole_diameter]]
+id = "drilling.minimum_mouse_bite_hole_diameter"
+select = { hole = "mouse_bite" }
+limit = { minimum = "15 mil" }
 source = "jlc-baseline"
 
 [[rules.drilling.slot_width]]

@@ -10,10 +10,10 @@ use anyhow::Result;
 
 use super::design::HoleClass;
 use super::pdk::{
-    AssemblyDiagnostic, BOARD_OUTLINE_RULE_ID, Case, CopperWeight, HoleKind, LayerPosition, Length,
-    LengthCase, LengthLimit, PartialDepth, Pdk, PlatedHoleKind, Profile, ProfileStatus, Ratio,
-    RatioLimit, RuleConditions, RuleMetadata, SelectingRule, SizeLimit, SlotPlating,
-    SoldermaskColor, StackupBuild, SurfaceFinish, ThicknessLimit,
+    AssemblyDiagnostic, BOARD_OUTLINE_RULE_ID, Case, CopperWeight, DrilledHoleKind, HoleKind,
+    LayerPosition, Length, LengthCase, LengthLimit, PartialDepth, Pdk, PlatedHoleKind, Profile,
+    ProfileStatus, Ratio, RatioLimit, RuleConditions, RuleMetadata, SelectingRule, SizeLimit,
+    SlotPlating, SoldermaskColor, StackupBuild, SurfaceFinish, ThicknessLimit,
 };
 use super::report::{Severity, ViewRecipe};
 use crate::accessors::nominal_copper_weight;
@@ -852,7 +852,7 @@ pub(super) fn lower(pdk: &Pdk, selected_profile: Option<&str>) -> Result<Vec<Rul
         (profile_name, profile),
     );
     rules.extend(selecting(&drilling.hole_diameter, selected, |select| {
-        let class = hole_class(select.hole);
+        let class = drilled_hole_class(select.hole);
         (
             format!("Minimum {} hole diameter", class.label()),
             RuleKind::HoleDiameter(class),
@@ -1352,6 +1352,15 @@ fn hole_class(kind: HoleKind) -> HoleClass {
         HoleKind::Via => HoleClass::Via,
         HoleKind::Pth => HoleClass::Pth,
         HoleKind::Npth => HoleClass::Npth,
+    }
+}
+
+fn drilled_hole_class(kind: DrilledHoleKind) -> HoleClass {
+    match kind {
+        DrilledHoleKind::Via => HoleClass::Via,
+        DrilledHoleKind::Pth => HoleClass::Pth,
+        DrilledHoleKind::Npth => HoleClass::Npth,
+        DrilledHoleKind::MouseBite => HoleClass::MouseBite,
     }
 }
 

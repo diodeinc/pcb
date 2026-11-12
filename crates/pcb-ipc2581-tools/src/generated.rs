@@ -11,6 +11,7 @@ use ipc2581::types::{
 };
 use ipc2581::write;
 use pcb_ir::import::ipc2581::{
+    ARRAY_SEPARATION_ATTRIBUTE_NAME, ARRAY_SEPARATION_MOUSE_BITE_VALUE,
     COPPER_BALANCE_ATTRIBUTE_NAME, COPPER_BALANCE_LATTICE_ATTRIBUTE_NAME,
     COPPER_BALANCE_LATTICE_ORIGIN_X_ATTRIBUTE_NAME, COPPER_BALANCE_LATTICE_ORIGIN_Y_ATTRIBUTE_NAME,
     COPPER_BALANCE_LATTICE_PITCH_ATTRIBUTE_NAME, COPPER_BALANCE_LATTICE_VALUE,
@@ -30,6 +31,8 @@ pub(crate) struct GeneratedLayerFeature {
     pub polarity: Polarity,
     /// Semantic role of this generated copper-balance set.
     pub copper_balance: Option<CopperBalanceKind>,
+    /// Declares the set's holes mouse bites, which perforate breakaway tabs.
+    pub mouse_bites: bool,
     pub spec_refs: Vec<String>,
     pub features: Vec<SetFeature>,
     /// One exact rounded-hex radius class on its declared lattice.
@@ -71,6 +74,14 @@ pub(crate) fn write_generated_layer_feature(
             COPPER_BALANCE_ATTRIBUTE_NAME,
             "STRING",
             kind.attribute_value(),
+        );
+    }
+    if layer_feature.mouse_bites {
+        write_nonstandard_attribute(
+            writer,
+            ARRAY_SEPARATION_ATTRIBUTE_NAME,
+            "STRING",
+            ARRAY_SEPARATION_MOUSE_BITE_VALUE,
         );
     }
     if let Some(void_set) = &layer_feature.void_set {

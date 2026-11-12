@@ -102,7 +102,10 @@ The schema gives each kind of constraint one place:
   compared without regard to case or repeated spaces.
 - `select` identifies the physical subjects a rule measures. Hole rules select
   `via`, `pth`, or `npth`; slots select `plated` or `nonplated`; hole-pair rules
-  state both classes. Hole-aspect-ratio rules accept only plated `via` or `pth`
+  state both classes. `rules.drilling.hole_diameter` also selects
+  `mouse_bite`, a declared breakaway perforation (see
+  [Rule semantics](#rule-semantics)); it is a schema error in every other
+  rule. Hole-aspect-ratio rules accept only plated `via` or `pth`
   holes; selecting `npth` is a schema error. A
   `rules.copper.hole_clearance` selector chooses the drill class measured to
   unrelated final copper.
@@ -280,6 +283,18 @@ Each Step's findings apply at its placements; the report lists these in
   A hole's class is its IPC plating status, except that a `PLATED` hole of
   at most 0.5 mm whose every land is a pad of a `SURFACE` package pin holds
   no lead and is judged as a via.
+- A mouse bite is a `NONPLATED` hole in a Set that carries the
+  `NonstandardAttribute` `diode.array_separation` (`STRING`, value
+  `mouse_bite`); IPC-2581 has no standard element for one.
+  `pcb ipc2581 board-array create` writes it on the holes that perforate its
+  breakaway tabs. A mouse bite is drilled across a routed edge to be broken
+  away and has no land, so `npth` diameter, board-edge, and annular-ring
+  rules do not select it; a `rules.drilling.hole_diameter` rule that selects
+  `mouse_bite` limits it instead. Next to copper or another hole it is an
+  NPTH: hole-pair rules and `rules.copper.hole_clearance` that select `npth`
+  measure it. The attribute is a declaration, not an inference: perforations
+  without it, such as another tool's, are judged as NPTHs, and a plated hole
+  in such a Set, or any other value, fails import.
 - Hole aspect ratio is physical drilled-span thickness divided by finished
   circular hole diameter. A through hole uses IPC-2581 `overallThickness` when
   it is positive and finite, otherwise a complete sum of physical stackup
@@ -552,7 +567,7 @@ A design inside a band warns until reviewed against JLC's published value.
 Measurements whose geometric
 uncertainty spans a floor stay unresolved, as for every other limit.
 
-Two JLC source ambiguities affect the kit:
+Three JLC source ambiguities affect the kit:
 
 - NPTH diameter retains the [published 0.50 mm minimum](https://jlcpcb.com/capabilities/pcb-capabilities).
   [Support calls it blockage guidance](https://jlcpcb.com/help/answers/detail/861-Regarding-the-Minimum-NPTH-Diameter)
@@ -561,6 +576,14 @@ Two JLC source ambiguities affect the kit:
   [Mouse bites allow smaller NPTH gaps](https://jlcpcb.com/blog/mouse-bite-panelization-guide);
   [POFV spacing requirements](https://jlcpcb.com/news/free-via-in-pad-6-20-layer-pcbs-pofv)
   are process-specific. Neither establishes ordinary mixed-pair limits.
+- JLC publishes no minimum mouse-bite diameter; its
+  [capabilities page](https://jlcpcb.com/capabilities/pcb-capabilities)
+  recommends 0.5–0.8 mm holes. Two orders of `board-array create` arrays
+  came back with their 15 mil perforations kept where they were uploaded
+  and drilled 0.35 mm, so the kit requires 15 mil as an observed floor, not
+  a published one, and the standard kit takes the same limit. Mouse-bite
+  spacing is NPTH spacing, so the 10 mil webs of a `board-array create` tab
+  still draw the advisory 0.45 mm warning.
 
 All nine IPC profiles pin earlier Diode `standard.toml` limits, cited as
 `diode-standard`; later standard changes do not propagate. These are Diode

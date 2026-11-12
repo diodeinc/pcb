@@ -253,11 +253,11 @@ pub(super) fn append_step_layer(
 
         for (set_index, set) in layer_feature.sets.iter().enumerate() {
             let polarity = set.polarity.map(map_polarity).unwrap_or(layer_polarity);
-            let copper_balance = set_copper_balance_metadata(
-                context.strings,
-                set.nonstandard_attributes
-                    .slice(&layer_feature.nonstandard_attributes),
-            )?;
+            let attributes = set
+                .nonstandard_attributes
+                .slice(&layer_feature.nonstandard_attributes);
+            let copper_balance = set_copper_balance_metadata(context.strings, attributes)?;
+            let mouse_bites = set_declares_mouse_bites(context.strings, attributes)?;
             let mut emitted = Vec::new();
             let set_features = set.features.slice(&layer_feature.features);
             let holes = set_features
@@ -280,7 +280,18 @@ pub(super) fn append_step_layer(
                 };
                 let mark = DocumentMark::of(doc);
                 let feature = match set_feature {
-                    SetFeature::Hole(hole) => extract_hole(source, set.geometry, hole, doc),
+                    SetFeature::Hole(hole) => {
+                        let mut feature = extract_hole(source, set.geometry, hole, doc);
+                        if mouse_bites {
+                            if feature.intent.plating != PlatingKind::NonPlated {
+                                bail!(
+                                    "a {ARRAY_SEPARATION_ATTRIBUTE_NAME} set holds a plated hole"
+                                );
+                            }
+                            feature.intent.role = FeatureRole::ArraySeparation;
+                        }
+                        feature
+                    }
                     SetFeature::Slot(slot) => {
                         extract_slot(context, source, set.geometry, slot, doc)?
                     }
@@ -1067,6 +1078,24 @@ pub(super) fn extract_polygon(
     let mut feature = lowered_feature(FeatureKind::Polygon, polarity, false, net, source);
     take_pushed_paths(doc, &mut feature, path_start);
     feature
+}
+
+/// Declares every hole of a Set a mouse bite: an unplated drill that
+/// perforates a breakaway tab instead of serving the finished board.
+/// IPC-2581 has no element or enumeration for one.
+pub const ARRAY_SEPARATION_ATTRIBUTE_NAME: &str = "diode.array_separation";
+pub const ARRAY_SEPARATION_MOUSE_BITE_VALUE: &str = "mouse_bite";
+
+fn set_declares_mouse_bites(
+    strings: &Interner,
+    attributes: &[ipc2581::types::NonstandardAttribute],
+) -> Result<bool> {
+    let name = ARRAY_SEPARATION_ATTRIBUTE_NAME;
+    match nonstandard_attribute(strings, attributes, name, "STRING")? {
+        None => Ok(false),
+        Some(ARRAY_SEPARATION_MOUSE_BITE_VALUE) => Ok(true),
+        Some(value) => bail!("unknown {name} value '{value}'"),
+    }
 }
 
 pub(super) fn extract_hole(
