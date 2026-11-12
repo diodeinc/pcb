@@ -11,6 +11,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ### Changed
 
 - `pcb step export` files are smaller: silkscreen takes about half the bytes and solder mask a third fewer.
+- The JLCPCB DFM PDK warns on PTH-to-PTH drill spacing below 0.45 mm and fails only below 0.40 mm.
 
 ## [0.4.101] - 2026-11-11
 
