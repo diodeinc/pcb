@@ -995,11 +995,15 @@ fn project_perforated_geometry(
         )
     };
     let mut best = candidate(profile.min_void_radius_mm);
-    for level in 1..profile.void_area_levels {
+    for (level, &edge_area_mm2) in lattice.edge_area_by_level_mm2[..profile.void_area_levels]
+        .iter()
+        .enumerate()
+        .skip(1)
+    {
         // A level starts just past the one below, where rounding up first
         // lands on it. A lattice of edge sites alone leaves the quotient
         // infinite or undefined, which lands on whichever end is nearer.
-        let squared_radius = ((target_void_area_mm2 - lattice.edge_area_by_level_mm2[level])
+        let squared_radius = ((target_void_area_mm2 - edge_area_mm2)
             / full_area_per_radius_squared)
             .max(profile.void_area_level(level - 1) + 2.0 * NUMERIC_EPSILON)
             .min(profile.void_area_level(level));

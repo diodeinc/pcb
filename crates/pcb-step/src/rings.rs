@@ -490,8 +490,8 @@ impl IndexedRing {
         }
         let band = |y: f64| (((y - self.lo.y) * self.inv_band) as usize).min(self.bands.len() - 1);
         let (first, last) = (band(lo.y.max(self.lo.y)), band(hi.y.min(self.hi.y)));
-        for bi in first..=last {
-            for &k in &self.bands[bi] {
+        for (bi, edges) in self.bands.iter().enumerate().take(last + 1).skip(first) {
+            for &k in edges {
                 // An edge lies in every band it spans; take it once,
                 // from its first band inside the window.
                 let (a, b) = (ring[k as usize], ring[(k as usize + 1) % n]);

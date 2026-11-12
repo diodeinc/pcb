@@ -42,13 +42,18 @@
         system:
         import nixpkgs {
           inherit system;
+          overlays = [ rust-overlay.overlays.default ];
         };
 
       packagesFor =
         system:
         let
           pkgs = pkgsFor system;
-          craneLib = crane.mkLib pkgs;
+          craneLib = (crane.mkLib pkgs).overrideToolchain (
+            pkgs.rust-bin.fromRustupToolchain (
+              (lib.importTOML ./rust-toolchain.toml).toolchain // { profile = "minimal"; }
+            )
+          );
 
           cargoSrc = lib.fileset.toSource {
             root = ./.;

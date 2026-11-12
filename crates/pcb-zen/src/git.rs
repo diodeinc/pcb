@@ -1017,17 +1017,14 @@ fn with_remote_fallback<T>(
 
 pub fn parse_remote_url(url: &str) -> anyhow::Result<String> {
     if let Some(rest) = url.strip_prefix("https://") {
-        return Ok(rest.strip_suffix(".git").unwrap_or(rest).to_string());
+        return Ok(rest.trim_suffix(".git").to_string());
     }
     if let Some(rest) = url.strip_prefix("ssh://git@") {
-        return Ok(rest.strip_suffix(".git").unwrap_or(rest).to_string());
+        return Ok(rest.trim_suffix(".git").to_string());
     }
     if let Some(rest) = url.strip_prefix("git@") {
         let normalized = rest.replace(':', "/");
-        return Ok(normalized
-            .strip_suffix(".git")
-            .unwrap_or(&normalized)
-            .to_string());
+        return Ok(normalized.trim_suffix(".git").to_string());
     }
     anyhow::bail!("Unsupported git URL format: {}", url)
 }

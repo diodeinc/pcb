@@ -194,7 +194,7 @@ fn format_changelog_markdown(content: &str) -> String {
         }
 
         if trimmed.starts_with("```") {
-            in_fence = !in_fence;
+            in_fence.toggle();
         }
     }
 

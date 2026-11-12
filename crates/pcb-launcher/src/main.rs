@@ -340,11 +340,7 @@ fn clean_command_output(output: &[u8]) -> String {
         .chars()
         .filter(|character| !character.is_control() || matches!(character, '\n' | '\t'))
         .collect();
-    cleaned
-        .trim()
-        .strip_prefix("Error: ")
-        .unwrap_or(cleaned.trim())
-        .to_owned()
+    cleaned.trim().trim_prefix("Error: ").to_owned()
 }
 
 fn validate_uri(uri: &str) -> Result<()> {
@@ -520,14 +516,6 @@ mod platform {
 </plist>
 "#;
 
-    struct StagedAppCleanup(PathBuf);
-
-    impl Drop for StagedAppCleanup {
-        fn drop(&mut self) {
-            let _ = fs::remove_dir_all(&self.0);
-        }
-    }
-
     pub fn install(launcher: &Path, pcb: &Path, toolchain: LauncherToolchain) -> Result<()> {
         let home = dirs::home_dir().context("could not locate the home directory")?;
         let applications = home.join("Applications");
@@ -544,7 +532,9 @@ mod platform {
         ));
         remove_dir_if_exists(&staged_app)?;
         remove_dir_if_exists(&backup_app)?;
-        let _staged_app_cleanup = StagedAppCleanup(staged_app.clone());
+        let _staged_app_cleanup = std::mem::DropGuard::new(&staged_app, |path| {
+            let _ = fs::remove_dir_all(path);
+        });
 
         let contents = staged_app.join("Contents");
         let macos = contents.join("MacOS");
