@@ -67,14 +67,6 @@ const CONSTRAINT_MAPPINGS: &[(&[&str], &str)] = &[
         "board.design_settings.rules.min_text_height",
     ),
     (
-        &["solder_mask", "clearance"],
-        "board.design_settings.rules.solder_mask_clearance",
-    ),
-    (
-        &["solder_mask", "minimum_width"],
-        "board.design_settings.rules.solder_mask_min_width",
-    ),
-    (
         &["solder_mask", "to_copper_clearance"],
         "board.design_settings.rules.solder_mask_to_copper_clearance",
     ),
@@ -126,6 +118,15 @@ fn patch_project_value(
     // - Netclasses: upsert by class name and patch known fields only.
     // - Netclass patterns: upsert by pattern (when assignments are present).
     // - Never delete unknown keys/classes/patterns; repeated runs are idempotent.
+    // - Drop the solder mask clearance and minimum width earlier versions wrote here: KiCad
+    //   reads them only from the board file, which `patch_pcb_file` patches.
+    if let Some(rules) = project
+        .pointer_mut("/board/design_settings/rules")
+        .and_then(Value::as_object_mut)
+    {
+        rules.remove("solder_mask_clearance");
+        rules.remove("solder_mask_min_width");
+    }
     patch_constraints(project, board_config);
     patch_predefined_sizes(project, board_config);
     patch_netclasses(project, board_config);
@@ -647,7 +648,10 @@ mod tests {
         let mut project = json!({
             "board": {
                 "design_settings": {
-                    "rules": {},
+                    "rules": {
+                        "solder_mask_clearance": 0.05,
+                        "solder_mask_min_width": 0.1
+                    },
                     "defaults": {},
                     "track_widths": [],
                     "via_dimensions": []
@@ -702,14 +706,12 @@ mod tests {
             project["board"]["design_settings"]["rules"]["min_through_hole_diameter"],
             json!(0.3)
         );
-        assert_eq!(
-            project["board"]["design_settings"]["rules"]["solder_mask_clearance"],
-            json!(0.02)
-        );
-        assert_eq!(
-            project["board"]["design_settings"]["rules"]["solder_mask_min_width"],
-            json!(0.05)
-        );
+        // KiCad reads these from the board file, not the project.
+        let rules = project["board"]["design_settings"]["rules"]
+            .as_object()
+            .unwrap();
+        assert!(!rules.contains_key("solder_mask_clearance"));
+        assert!(!rules.contains_key("solder_mask_min_width"));
         assert_eq!(
             project["board"]["design_settings"]["rules"]["solder_mask_to_copper_clearance"],
             json!(0.01)
@@ -1019,8 +1021,6 @@ mod tests {
                     "minimum_through_hole": 0.3
                 },
                 "solder_mask": {
-                    "clearance": 0.02,
-                    "minimum_width": 0.05,
                     "to_copper_clearance": 0.01
                 },
                 "zones": {
