@@ -292,7 +292,7 @@ impl Scene {
             }
         }
         if options.visual {
-            for (front, islands) in faces::paste(board, frame, &fonts, true, &variables, warnings) {
+            for (front, drawn) in faces::paste(board, frame, &fonts, true, &variables, warnings) {
                 layers.push(Layer {
                     kind: LayerKind::Paste { front },
                     color: PASTE_RGB,
@@ -300,7 +300,7 @@ impl Scene {
                     shape: Shape::Faces {
                         z: above_copper(&physical, front, PASTE_ABOVE_COPPER),
                         up: front,
-                        faces: islands.par_iter().map(faces::face).collect(),
+                        faces: drawn.faces(),
                     },
                 });
             }
@@ -321,12 +321,12 @@ impl Scene {
             let built: Vec<_> = tech_layers
                 .into_par_iter()
                 .with_max_len(1)
-                .map(|(tech, islands)| {
+                .map(|(tech, drawn)| {
                     let mut notes = Vec::new();
                     let faces = if tech.silk() {
-                        islands.iter().map(faces::face).collect()
+                        drawn.faces()
                     } else {
-                        faces::mask_coverage(&solids, tech.front(), islands, &mut notes)
+                        faces::mask_coverage(&solids, tech.front(), &drawn, &mut notes)
                     };
                     (tech, faces, notes)
                 })
