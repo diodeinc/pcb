@@ -33,9 +33,13 @@ pub use moved::compute_net_renames_patches;
 pub const PCB_VERSION_PLACEHOLDER: &str = "v0.0.0";
 pub const PCB_GIT_HASH_PLACEHOLDER: &str = "d10d3c0";
 
-/// Extract DesignRules from a KiCad project file.
-pub fn extract_design_rules_from_kicad_pro(pro_path: &Path) -> AnyhowResult<Option<DesignRules>> {
-    kicad_project_patch::extract_design_rules_from_kicad_pro(pro_path)
+/// Extract DesignRules from a KiCad project file and its board file.
+pub fn extract_kicad_design_rules(
+    pro_path: &Path,
+    pcb_text: &str,
+) -> AnyhowResult<Option<DesignRules>> {
+    let board = pcb_sexpr::parse(pcb_text).context("Failed to parse KiCad PCB")?;
+    kicad_project_patch::extract_design_rules(pro_path, &board)
 }
 
 /// Embedded lens module directory (for Python imports)
@@ -1552,6 +1556,48 @@ fn build_pcb_patchset(
         )?);
     }
 
+    if let Some(constraints) = board_config
+        .and_then(|config| config.design_rules.as_ref())
+        .and_then(|rules| rules.constraints.as_ref())
+    {
+        patches.extend(build_setup_rules_patchset(board, constraints)?);
+    }
+
+    Ok(patches)
+}
+
+fn build_setup_rules_patchset(
+    board: &pcb_sexpr::Sexpr,
+    constraints: &serde_json::Value,
+) -> Result<pcb_sexpr::PatchSet, LayoutError> {
+    let setup = board.find_list("setup").ok_or_else(|| {
+        LayoutError::StackupPatchingError("PCB file is missing (setup ...) section".to_string())
+    })?;
+    let mut patches = pcb_sexpr::PatchSet::new();
+    // Missing rules go after the previous rule, else after the stackup, else first.
+    let stackup = pcb_sexpr::find_named_list_index(setup, "stackup").unwrap_or(0);
+    let mut insert_at = setup[stackup].span.end;
+    for (path, key, written_when_zero) in kicad_project_patch::SETUP_RULES {
+        let span = pcb_sexpr::find_named_list_index(setup, key)
+            .map_or(pcb_sexpr::Span::new(insert_at, insert_at), |i| {
+                setup[i].span
+            });
+        insert_at = span.end;
+        let Some(iu) = path
+            .iter()
+            .try_fold(constraints, |value, key| value.get(key))
+            .and_then(serde_json::Value::as_f64)
+            .and_then(PcbIu::from_mm)
+        else {
+            continue;
+        };
+        let text = if iu.0 != 0 || *written_when_zero {
+            format!(" ({key} {})", iu.to_kicad_mm_text())
+        } else {
+            String::new()
+        };
+        patches.replace_raw(span, text);
+    }
     Ok(patches)
 }
 
@@ -1932,13 +1978,9 @@ fn build_stackup_patchset(
             .span;
         patches.replace_raw(stackup_span, stackup.to_string());
     } else {
-        let mut new_setup = setup_node.clone();
-        let setup_items = new_setup.as_list_mut().ok_or_else(|| {
-            LayoutError::StackupPatchingError("setup section is not a list".to_string())
-        })?;
-        // KiCad writes the stackup first in the setup section.
-        setup_items.insert(1, stackup.clone());
-        patches.replace_raw(setup_node.span, new_setup.to_string());
+        // KiCad writes the stackup first. Insert it so other patches can edit the section.
+        let at = setup_items[0].span.end;
+        patches.replace_raw(pcb_sexpr::Span::new(at, at), format!(" {stackup}"));
     }
 
     if let Some(board_thickness_iu) = board_thickness_iu {
@@ -2380,6 +2422,62 @@ mod tests {
         )
         .unwrap();
         assert_eq!(std::fs::read_to_string(&pcb_path).unwrap(), first);
+    }
+
+    #[test]
+    fn patch_pcb_file_writes_solder_mask_rules_to_setup() {
+        let input = r#"(kicad_pcb
+	(general (thickness 1.6))
+	(layers (0 "F.Cu" signal) (2 "B.Cu" signal))
+	(setup (pad_to_mask_clearance 0.05) (allow_soldermask_bridges_in_footprints no))
+)"#;
+        let temp_dir = tempfile::tempdir().unwrap();
+        let pcb_path = temp_dir.path().join("layout.kicad_pcb");
+        std::fs::write(&pcb_path, input).unwrap();
+        // Returns the setup items after patching. The stackup is inserted too, so both
+        // patches edit the setup section.
+        let layout = |clearance: f64, minimum_width: f64| -> Vec<String> {
+            let config: BoardConfig = serde_json::from_value(serde_json::json!({
+                "design_rules": {"constraints": {"solder_mask": {
+                    "clearance": clearance,
+                    "minimum_width": minimum_width,
+                }}},
+                "stackup": {"layers": [
+                    {"thickness": 0.035, "role": "signal"},
+                    {"thickness": 1.51, "material": "FR4", "form": "core"},
+                    {"thickness": 0.035, "role": "signal"},
+                ]},
+                "num_user_layers": 0,
+            }))
+            .unwrap();
+            patch_pcb_file(&pcb_path, Some(&config), "Demo", &BTreeMap::new()).unwrap();
+            let board = pcb_sexpr::parse(&std::fs::read_to_string(&pcb_path).unwrap()).unwrap();
+            board.find_list("setup").unwrap()[1..]
+                .iter()
+                .map(|item| match item.as_list().unwrap()[0].as_sym() {
+                    Some("stackup") => "(stackup ...)".to_string(),
+                    _ => item.to_string(),
+                })
+                .collect()
+        };
+
+        let expected = [
+            "(stackup ...)",
+            "(pad_to_mask_clearance 0.035)",
+            "(solder_mask_min_width 0.1)",
+            "(allow_soldermask_bridges_in_footprints no)",
+        ];
+        assert_eq!(layout(0.035, 0.1), expected);
+        assert_eq!(layout(0.035, 0.1), expected);
+        // KiCad omits a zero minimum width but always writes the clearance.
+        assert_eq!(
+            layout(0.0, 0.0),
+            [
+                "(stackup ...)",
+                "(pad_to_mask_clearance 0)",
+                "(allow_soldermask_bridges_in_footprints no)",
+            ]
+        );
     }
 
     #[test]

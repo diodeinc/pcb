@@ -159,7 +159,7 @@ fn write_imported_board_zen(args: ImportedBoardZenArgs<'_>) -> Result<()> {
             )
         })?;
         let (copper_layers, stackup) = try_extract_stackup(&pcb_text, layout_kicad_pcb)?;
-        let design_rules = pcb_layout::extract_design_rules_from_kicad_pro(args.layout_kicad_pro)
+        let design_rules = pcb_layout::extract_kicad_design_rules(args.layout_kicad_pro, &pcb_text)
             .ok()
             .flatten();
 
