@@ -98,4 +98,6 @@ pub enum DrillSpan {
 pub enum Function {
     Via,
     Component,
+    /// A perforation of a breakaway tab.
+    Breakout,
 }

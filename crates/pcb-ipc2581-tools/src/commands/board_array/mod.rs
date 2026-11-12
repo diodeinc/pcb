@@ -204,7 +204,7 @@ struct BoardArrayGeneratedGeometry {
 
 impl BoardArrayGeneratedGeometry {
     /// One positive `Set` of `features` on a layer, returned so a caller can
-    /// attach spec refs.
+    /// attach spec refs or declare mouse bites.
     fn add_layer_feature(
         &mut self,
         scope: GeneratedFeatureScope,
@@ -217,6 +217,7 @@ impl BoardArrayGeneratedGeometry {
                 layer_name: layer_name.to_string(),
                 polarity: Polarity::Positive,
                 copper_balance: None,
+                mouse_bites: false,
                 spec_refs: Vec::new(),
                 features,
                 void_set: None,
@@ -658,14 +659,17 @@ fn build_board_array_spec(
             );
             let tabs =
                 mouse_bite::generate(&placement, cell, &stock, &offsets, preset, resolution)?;
-            generated_geometry.add_layer_feature(
-                GeneratedFeatureScope::Array,
-                &tooling_hole_layer,
-                round_nonplated_hole_features(
-                    tabs.holes.iter().map(|hole| (hole.center.x, hole.center.y)),
-                    pcb_ir::geom::mouse_bite::SparkFunShallow::HOLE_DIAMETER_MM,
-                ),
-            );
+            // Declared, so DFM does not hold them to the limits of a board NPTH.
+            generated_geometry
+                .add_layer_feature(
+                    GeneratedFeatureScope::Array,
+                    &tooling_hole_layer,
+                    round_nonplated_hole_features(
+                        tabs.holes.iter().map(|hole| (hole.center.x, hole.center.y)),
+                        pcb_ir::geom::mouse_bite::SparkFunShallow::HOLE_DIAMETER_MM,
+                    ),
+                )
+                .mouse_bites = true;
             (
                 tabs.cutouts
                     .iter()

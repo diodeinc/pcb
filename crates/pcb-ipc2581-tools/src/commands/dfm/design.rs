@@ -1226,6 +1226,10 @@ pub(super) enum HoleClass {
     Via,
     Pth,
     Npth,
+    /// An unplated hole its source declares a breakaway-tab perforation. It
+    /// is drilled across a routed edge to be broken off, so no rule that
+    /// measures an NPTH on its own selects it.
+    MouseBite,
 }
 
 impl HoleClass {
@@ -1234,6 +1238,7 @@ impl HoleClass {
             Self::Via => "via",
             Self::Pth => "PTH",
             Self::Npth => "NPTH",
+            Self::MouseBite => "mouse-bite",
         }
     }
 
@@ -1241,7 +1246,17 @@ impl HoleClass {
         match self {
             Self::Via => "via_hole",
             Self::Pth => "plated_hole",
-            Self::Npth => "nonplated_hole",
+            Self::Npth | Self::MouseBite => "nonplated_hole",
+        }
+    }
+
+    /// The class a rule about what surrounds the hole selects it by: next to
+    /// copper or another hole a mouse bite is an unplated drill like any
+    /// other.
+    pub fn against_neighbours(self) -> Self {
+        match self {
+            Self::MouseBite => Self::Npth,
+            class => class,
         }
     }
 }
@@ -1611,7 +1626,7 @@ fn collect_drilled(
                         );
                         continue;
                     };
-                    let Some(class) = hole_class(feature.intent.plating) else {
+                    let Some(class) = hole_class(feature) else {
                         block(Pools::HOLES, format!("{at} has unknown plating"));
                         continue;
                     };
@@ -1876,10 +1891,11 @@ fn feature_provenance(source: Source<'_>, layer: &str, feature: &Feature) -> Sou
     }
 }
 
-fn hole_class(plating: PlatingKind) -> Option<HoleClass> {
-    match plating {
+fn hole_class(feature: &Feature) -> Option<HoleClass> {
+    match feature.intent.plating {
         PlatingKind::Via | PlatingKind::ViaCapped => Some(HoleClass::Via),
         PlatingKind::Plated => Some(HoleClass::Pth),
+        PlatingKind::NonPlated if feature.is_mouse_bite() => Some(HoleClass::MouseBite),
         PlatingKind::NonPlated => Some(HoleClass::Npth),
         PlatingKind::Unknown | PlatingKind::None => None,
     }

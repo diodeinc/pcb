@@ -416,6 +416,50 @@ fn nc_refuses_a_square_hole_instead_of_drilling_it_round() {
 }
 
 #[test]
+fn a_set_declares_its_unplated_holes_mouse_bites() {
+    let holes = |value: Option<&str>, plating: &str| {
+        let attribute = value.map_or(String::new(), |value| {
+            format!(
+                r#"<NonstandardAttribute name="{ARRAY_SEPARATION_ATTRIBUTE_NAME}" type="STRING" value="{value}"/>"#
+            )
+        });
+        let ipc = shape_fixture(
+            "",
+            &format!(
+                r#"{attribute}<Hole name="H" diameter="0.381" platingStatus="{plating}" plusTol="0" minusTol="0" x="3" y="4"/>"#
+            ),
+        );
+        extract_layer_for_view(&ipc, "DRILL", ArtworkScope::Board, Resolution::default())
+            .map(|doc| doc.features[0].clone())
+            .map_err(|error| error.to_string())
+    };
+
+    let undeclared = holes(None, "NONPLATED").unwrap();
+    assert_eq!(undeclared.intent.role, FeatureRole::Hole);
+    assert!(!undeclared.is_mouse_bite());
+
+    // The declaration changes what the hole is for, not how it is made.
+    let declared = holes(Some("mouse_bite"), "NONPLATED").unwrap();
+    assert!(declared.is_mouse_bite());
+    assert_eq!(
+        declared.intent,
+        FeatureIntent {
+            role: FeatureRole::ArraySeparation,
+            ..undeclared.intent
+        }
+    );
+    assert_eq!(declared.bucket, undeclared.bucket);
+
+    let plated = holes(Some("mouse_bite"), "PLATED").unwrap_err();
+    assert!(plated.contains("plated hole"), "{plated}");
+    let unknown = holes(Some("v_score"), "NONPLATED").unwrap_err();
+    assert!(
+        unknown.contains("unknown") && unknown.contains("v_score"),
+        "{unknown}"
+    );
+}
+
+#[test]
 fn nc_plunges_an_oval_slot_as_wide_as_it_is_long() {
     let slot = |oval: &str| {
         let ipc = shape_fixture(

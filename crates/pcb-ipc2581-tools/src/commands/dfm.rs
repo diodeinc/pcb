@@ -720,6 +720,25 @@ limit = { minimum = "300 mil" }
         .xml
     }
 
+    /// A 2 x 2 array of `board` as `board-array create` makes it by default:
+    /// perforated tabs, 5 mm margins and rails, balanced copper.
+    fn tab_array_of(board: &str) -> String {
+        create_board_array(
+            board,
+            &BoardArrayCreateOptions {
+                columns: 2,
+                rows: 2,
+                board_margin_mm: EdgeInsetsMm::all(5.0),
+                edge_rail_mm: EdgeInsetsMm::all(5.0),
+            },
+            true,
+            crate::commands::board_array::Separation::MouseBite,
+            Resolution::default(),
+        )
+        .unwrap()
+        .xml
+    }
+
     /// A fabrication panel of two of `array`.
     fn fab_panel_of(array: &String) -> String {
         create_fab_panel(
@@ -2431,6 +2450,100 @@ limit = {{ minimum = \"0.5 mm\" }}
             assert_eq!(rule(&results, "npth-copper").checked, 2 * tooling);
             assert!(results.findings.is_empty(), "{:?}", results.findings);
         }
+    }
+
+    #[test]
+    fn a_default_tab_array_has_no_drilling_errors_under_the_builtin_pdks() {
+        let array = tab_array_of(BOARD);
+        for xml in [&array, &fab_panel_of(&array)] {
+            // The IPC kits pin limits older than the mouse-bite diameter rule.
+            for (pdk, limits_mouse_bites) in
+                [("jlcpcb-1oz", true), ("standard", true), ("ipc-2b", false)]
+            {
+                let results = super::check(
+                    &fixtures::import(xml),
+                    CheckRequest {
+                        pdk: PdkSource::Builtin(pdk),
+                        ..fixtures::request(xml, "", LayoutTarget::BoardArray)
+                    },
+                    Resolution::default(),
+                )
+                .unwrap();
+                let drilling = || {
+                    results
+                        .rules
+                        .iter()
+                        .filter(|rule| rule.id.contains("drilling."))
+                };
+                // Advisory NPTH spacing still warns on the webs of a tab.
+                let failed = drilling()
+                    .filter(|rule| {
+                        matches!(
+                            rule.status,
+                            report::RuleStatus::Fail | report::RuleStatus::Incomplete
+                        )
+                    })
+                    .map(|rule| rule.id.as_str())
+                    .collect::<Vec<_>>();
+                assert!(failed.is_empty(), "{pdk}: {failed:?}");
+                // Exempt from the NPTH limits, not from measurement.
+                let measured = drilling()
+                    .any(|rule| rule.id.ends_with("mouse_bite_hole_diameter") && rule.checked > 0);
+                assert_eq!(measured, limits_mouse_bites, "{pdk}");
+            }
+        }
+    }
+
+    #[test]
+    fn mouse_bites_are_npths_except_in_diameter_and_board_edge_clearance() {
+        let array = tab_array_of(BOARD);
+        let bites = array.matches(r#"diameter="0.381""#).count();
+        assert!(bites > 0 && bites.is_multiple_of(5));
+        // Each diameter limit sits between the tooling holes and the
+        // perforations, and the perforations cross a routed edge, so a rule
+        // that selected the other class would report otherwise.
+        let pdk = format!(
+            "{PDK}
+[[rules.drilling.hole_diameter]]
+id = \"npth-diameter\"
+select = {{ hole = \"npth\" }}
+limit = {{ minimum = \"0.5 mm\" }}
+
+[[rules.drilling.hole_diameter]]
+id = \"bite-diameter\"
+select = {{ hole = \"mouse_bite\" }}
+limit = {{ minimum = \"0.4 mm\" }}
+
+[[rules.drilling.hole_to_board_edge_clearance]]
+id = \"npth-edge\"
+select = {{ hole = \"npth\" }}
+limit = {{ minimum = \"0.5 mm\" }}
+
+[[rules.drilling.hole_to_hole_clearance]]
+id = \"npth-spacing\"
+select = {{ first_hole = \"npth\", second_hole = \"npth\" }}
+limit = {{ minimum = \"0.3 mm\" }}
+
+[[rules.copper.hole_clearance]]
+id = \"npth-copper\"
+select = {{ hole = \"npth\" }}
+limit = {{ minimum = \"0.2 mm\" }}
+"
+        );
+        let results = check_with_pdk(&array, LayoutTarget::BoardArray, &pdk);
+        let count = |id| {
+            let rule = rule(&results, id);
+            (rule.checked, rule.finding_count)
+        };
+        let tooling = count("npth-diameter").0;
+        assert!(tooling > 0);
+        assert_eq!(count("npth-diameter"), (tooling, 0));
+        assert_eq!(count("npth-edge"), (tooling, 0));
+        assert_eq!(count("bite-diameter"), (bites, bites));
+        // Five holes on a 25 mil pitch leave four 10 mil webs a tab.
+        assert_eq!(count("npth-spacing"), (tooling + bites, bites / 5 * 4));
+        // Through-board: every drill meets both copper layers.
+        assert_eq!(count("npth-copper"), (2 * (tooling + bites), 0));
     }
 
     /// A board with two nets 0.1 mm apart, in a cell whose own NPTH hole sits

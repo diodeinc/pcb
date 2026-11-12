@@ -851,9 +851,9 @@ pub enum AssemblyDiagnostic {
 #[serde(deny_unknown_fields)]
 pub struct DrillingRules {
     #[serde(default)]
-    pub hole_diameter: Vec<SelectingRule<HoleSelector>>,
+    pub hole_diameter: Vec<SelectingRule<HoleSelector<DrilledHoleKind>>>,
     #[serde(default)]
-    pub hole_aspect_ratio: Vec<SelectingRule<PlatedHoleSelector, RatioLimit>>,
+    pub hole_aspect_ratio: Vec<SelectingRule<HoleSelector<PlatedHoleKind>, RatioLimit>>,
     #[serde(default)]
     pub slot_width: Vec<SelectingRule<SlotSelector>>,
     #[serde(default)]
@@ -1147,10 +1147,11 @@ pub struct LengthRule {
     pub cases: Vec<LengthCase>,
 }
 
+/// Selects holes of one kind, among the kinds its rule family measures.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct HoleSelector {
-    pub hole: HoleKind,
+pub struct HoleSelector<Kind = HoleKind> {
+    pub hole: Kind,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -1166,18 +1167,23 @@ pub struct HolePairSelector {
     pub second_hole: HoleKind,
 }
 
-#[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct PlatedHoleSelector {
-    pub hole: PlatedHoleKind,
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum HoleKind {
     Via,
     Pth,
     Npth,
+}
+
+/// What a rule about the drill alone selects: only there does a mouse bite
+/// have a limit of its own.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DrilledHoleKind {
+    Via,
+    Pth,
+    Npth,
+    MouseBite,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
@@ -1529,6 +1535,18 @@ limit = { minimum = "300 mil" }
                 "",
             ),
             (VIA_RATIO, "hole = \"via\"\nmaximum = 8.0", ""),
+            // Only a hole-diameter rule selects mouse bites.
+            (
+                "select = { hole = \"npth\" }",
+                "select = { hole = \"mouse_bite\" }",
+                "",
+            ),
+            (
+                VIA_COPPER,
+                "select = { hole = \"mouse_bite\" }\nlimit = { minimum = \"0.2 mm\" }",
+                "",
+            ),
+            ("second_hole = \"via\"", "second_hole = \"mouse_bite\"", ""),
             ("maximum = 8.0", "maximum = 0.0", ""),
             ("maximum = 8.0", "maximum = -1.0", ""),
             ("maximum = 8.0", "maximum = inf", ""),

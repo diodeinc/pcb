@@ -14,10 +14,12 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - The JLCPCB and standard DFM PDKs warn on PTH-to-PTH drill spacing below 0.45 mm and fail only below 0.40 mm.
 - The JLCPCB DFM PDK fails PTH-to-copper clearance only below 0.24 mm, and warns below 0.35 mm on outer layers and 0.30 mm on inner layers.
 - `pcb layout` applies the solder mask clearance and minimum width like other design rules, so a value set only in KiCad is reset to the `.zen` value (0 by default for `Board(layers=...)`).
+- `pcb ipc2581 gerber` tags the tab perforations of a board array `MechanicalDrill,Breakout` in the NPTH drill file instead of `ComponentDrill`, so the fabricator can tell them from holes of the finished board.
 
 ### Fixed
 
 - `pcb layout` writes `SolderMask.clearance` and `minimum_width` to the `.kicad_pcb`, where KiCad reads them, not the `.kicad_pro`. `pcb import` reads them from there too.
+- `pcb ipc2581 dfm check` no longer fails a default tab array from `pcb ipc2581 board-array create` on the built-in `standard`, JLCPCB, and IPC PDKs: the array now declares its tab perforations as mouse bites, which DFM holds to their own diameter limit (`hole = "mouse_bite"`, 15 mil in `standard` and JLCPCB) instead of the NPTH diameter and board-edge limits. Arrays created earlier need to be recreated.
 
 ## [0.4.101] - 2026-11-11
 
