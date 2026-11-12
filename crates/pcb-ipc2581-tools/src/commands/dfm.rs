@@ -1623,6 +1623,20 @@ limit = { minimum = "300 mil" }
                 assert_eq!(findings[0].severity, severity, "{first}/{second}");
                 assert!((findings[0].measurement.actual_mm().unwrap() - gap).abs() < 1e-8);
             }
+            if (first, second) == ("PLATED", "PLATED") {
+                let standard = check_builtin(&xml, "standard").unwrap();
+                let severities = standard
+                    .findings
+                    .iter()
+                    .filter(|finding| {
+                        finding
+                            .rule_id
+                            .starts_with("drilling.minimum_hole_to_hole_clearance.pth_pth")
+                    })
+                    .map(|finding| finding.severity)
+                    .collect::<Vec<_>>();
+                assert_eq!(severities, Vec::from_iter(severity), "standard: {gap} mm");
+            }
         }
     }
 

@@ -11,7 +11,7 @@ process = "Standard"
 [sources.review-band-policy]
 title = "Diode dimensional review bands"
 url = "https://github.com/diodeinc/pcb/blob/main/crates/pcb-ipc2581-tools/docs/dfm.md"
-note = "Via drill diameter, via annular ring, NPTH-to-copper and copper-to-edge clearance allow a 0.01 mm review band below the existing target. This is Diode policy, not a manufacturer-qualified tolerance."
+note = "Via drill diameter, via annular ring, NPTH-to-copper and copper-to-edge clearance allow a 0.01 mm review band below the existing target. PTH-to-PTH drill spacing warns below 0.45 mm and errors below 0.40 mm. This is Diode policy, not a manufacturer-qualified tolerance."
 
 [sources.jlc-baseline]
 title = "JLCPCB baseline"
@@ -123,8 +123,8 @@ source = "jlc-baseline"
 [[rules.drilling.hole_to_hole_clearance]]
 id = "drilling.minimum_hole_to_hole_clearance.pth_pth"
 select = { first_hole = "pth", second_hole = "pth" }
-limit = { minimum = "0.45 mm" }
-source = "jlc-baseline"
+limit = { minimum = "0.40 mm", preferred = "0.45 mm" }
+source = "review-band-policy"
 
 [[rules.drilling.hole_to_hole_clearance]]
 id = "drilling.minimum_hole_to_hole_clearance.pth_npth"
