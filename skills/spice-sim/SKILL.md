@@ -9,7 +9,7 @@ Use a focused testbench such as `<package>/testbench/test_<scenario>.zen` for on
 Reuse an existing bench when it covers the request.
 Run it with `pcb sim -v <file>.zen`; a separate dummy simulation is only useful when diagnosing setup problems.
 
-`pcb sim` runs the `ngspice` executable in batch mode in the testbench's directory and stops it after 5 seconds.
+`pcb sim` runs the `ngspice` executable in batch mode in the testbench's directory and waits for it to finish; it sets no time limit.
 Without `-v`, a successful run prints only that it passed.
 
 ## Model and testbench
@@ -72,7 +72,7 @@ Read the `-v` output: take values from `meas` or `echo` lines, because `print` t
 `hardcopy` and `wrdata` write only into an existing directory, so create `testbench/output/` first.
 Convert an SVG plot to PNG with `rsvg-convert` before viewing it, and inspect only the signals needed to establish the result.
 
-A switching converter at nanosecond steps simulates only about 1 to 3 ms within the 5-second limit.
-For a longer run, write the netlist with `pcb sim <file>.zen -o <file>.cir`, then run `ngspice -b <file>.cir` in the testbench's directory with a longer timeout.
+Because nothing stops a long analysis, choose the `tran` stop time and step for the run time you can afford before starting it.
+A switching converter at nanosecond steps takes about 2 to 5 seconds per simulated millisecond.
 
 Distinguish a model or simulator failure from an electrical finding, and state what the model and analysis actually verify.
