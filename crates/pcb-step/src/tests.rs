@@ -580,9 +580,9 @@ fn embedded_payloads_decode_like_the_c_zstd_decoder() {
     bad_size[size_at] ^= 1;
     for (corrupt, error) in [
         (bad_checksum, "checksum mismatch"),
-        (bad_size, "content size mismatch"),
+        (bad_size, "frame content size"),
     ] {
-        assert!(matches!(decode(&corrupt), Err(crate::Error::Zstd(e)) if e == error));
+        assert!(matches!(decode(&corrupt), Err(crate::Error::Zstd(e)) if e.contains(error)));
     }
     // No data frame, or no zstd at all, is not an embedded file.
     for compressed in [&b""[..], &skippable, b"not zstd"] {

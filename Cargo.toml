@@ -138,7 +138,9 @@ ttf-parser = "0.25"
 subsetter = { version = "0.2", default-features = false }
 pdf-writer = "0.15"
 flate2 = "1"
-ruzstd = "0.9.1"
+# Pure Rust and free of unsafe code. Its SIMD feature is off: it adds a dependency with
+# unsafe code and gains nothing on wasm32.
+zrip = { version = "0.8.17", default-features = false, features = ["std"] }
 terminal_size = "0.4.4"
 uppsala = "0.12"
 termimad = "0.35.5"

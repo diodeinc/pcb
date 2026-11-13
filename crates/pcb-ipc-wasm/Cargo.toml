@@ -20,9 +20,9 @@ ipc2581 = { workspace = true }
 log = { workspace = true }
 pcb-ir = { workspace = true }
 pcb-ipc2581-tools = { workspace = true, default-features = false }
-ruzstd = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 serde-wasm-bindgen = { workspace = true }
 serde-value = { workspace = true }
 wasm-bindgen = { workspace = true }
+zrip = { workspace = true }

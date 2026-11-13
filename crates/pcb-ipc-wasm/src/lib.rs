@@ -6,9 +6,8 @@ mod options;
 const TYPESCRIPT: &str = include_str!("api.d.ts");
 
 use pcb_ir::geom::Resolution;
-use std::io::{Cursor, Read};
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, anyhow};
 use ipc2581::Ipc2581;
 use pcb_ipc2581_tools::accessors::IpcAccessor;
 use pcb_ipc2581_tools::commands::{self, dfm};
@@ -20,7 +19,7 @@ use wasm_bindgen::prelude::*;
 
 use options::*;
 
-const MAX_DECOMPRESSED_BYTES: u64 = 256 * 1024 * 1024;
+const MAX_DECOMPRESSED_BYTES: usize = 256 * 1024 * 1024;
 
 #[wasm_bindgen(start)]
 pub fn start() {
@@ -377,59 +376,19 @@ fn safe_name(name: &str) -> String {
 }
 
 fn decode_xml(bytes: Vec<u8>) -> Result<String> {
-    if is_zstd_frame(&bytes) || is_skippable_frame(&bytes) {
-        let bytes = bytes.as_slice();
-        let mut input = Cursor::new(bytes);
-        let mut decoded = Vec::new();
-        while (input.position() as usize) < bytes.len() {
-            let remaining = &bytes[input.position() as usize..];
-            if is_skippable_frame(remaining) {
-                let length = remaining
-                    .get(4..8)
-                    .context("truncated Zstandard skippable frame")?;
-                let length = u32::from_le_bytes(length.try_into().unwrap()) as u64;
-                let end = input.position() + 8 + length;
-                if end > bytes.len() as u64 {
-                    bail!("truncated Zstandard skippable frame");
-                }
-                input.set_position(end);
-                continue;
+    let bytes = if is_zstd_frame(&bytes) || is_skippable_frame(&bytes) {
+        // Every frame is decoded, skippable frames are skipped, and content
+        // sizes and checksums are verified.
+        zrip::decompress_with_limit(&bytes, MAX_DECOMPRESSED_BYTES).map_err(|err| match err {
+            zrip::DecompressError::OutputTooSmall => {
+                anyhow!("decompressed IPC input exceeds 256 MiB")
             }
-            if !is_zstd_frame(remaining) {
-                bail!("invalid trailing data in Zstandard IPC input");
-            }
-            let frame_start = decoded.len();
-            let mut decoder = ruzstd::decoding::StreamingDecoder::new(&mut input)
-                .context("invalid Zstandard IPC input")?;
-            // content_size() returns zero both for an absent size and an
-            // explicitly empty frame. The header type is private in ruzstd;
-            // bits 7-6 (size flag) or bit 5 (single segment) imply a size.
-            // Successful decoder initialization guarantees this byte exists.
-            let expected_size = (remaining[4] & 0xe0 != 0).then(|| decoder.decoder.content_size());
-            (&mut decoder)
-                .take(MAX_DECOMPRESSED_BYTES - decoded.len() as u64 + 1)
-                .read_to_end(&mut decoded)
-                .context("failed to decompress IPC input")?;
-            if decoded.len() as u64 > MAX_DECOMPRESSED_BYTES {
-                bail!("decompressed IPC input exceeds 256 MiB");
-            }
-            if let Some(expected) = expected_size
-                && expected != (decoded.len() - frame_start) as u64
-            {
-                bail!("Zstandard IPC input content size mismatch");
-            }
-            // ruzstd reads the optional checksum but leaves verification to
-            // its caller. Check each frame after collecting all its bytes.
-            if let Some(expected) = decoder.decoder.get_checksum_from_data()
-                && decoder.decoder.get_calculated_checksum() != Some(expected)
-            {
-                bail!("Zstandard IPC input checksum mismatch");
-            }
-        }
-        String::from_utf8(decoded).context("IPC XML is not UTF-8")
+            err => anyhow!("invalid Zstandard IPC input: {err}"),
+        })?
     } else {
-        String::from_utf8(bytes).context("IPC XML is not UTF-8")
-    }
+        bytes
+    };
+    String::from_utf8(bytes).context("IPC XML is not UTF-8")
 }
 
 fn is_zstd_frame(bytes: &[u8]) -> bool {

@@ -21,8 +21,8 @@ serde_json = { workspace = true }
 console_error_panic_hook = { workspace = true }
 starlark = { workspace = true }
 zip = { workspace = true }
+zrip = { workspace = true }
 tar = { workspace = true }
-ruzstd = { workspace = true }
 console_log = { workspace = true }
 log = { workspace = true }
 semver = { workspace = true }

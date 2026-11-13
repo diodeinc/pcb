@@ -363,8 +363,7 @@ mod tests {
     use super::*;
 
     fn embedded_payload(bytes: &[u8]) -> (String, String) {
-        let compressed =
-            ruzstd::encoding::compress_to_vec(bytes, ruzstd::encoding::CompressionLevel::Fastest);
+        let compressed = zrip::compress(bytes, 1).unwrap();
         let encoded = base64::engine::general_purpose::STANDARD.encode(compressed);
         let checksum = hex::encode(Sha256::digest(bytes));
         (encoded, checksum)
