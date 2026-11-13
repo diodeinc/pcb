@@ -8,6 +8,8 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+## [0.4.102] - 2026-11-13
+
 ### Changed
 
 - `pcb step export` writes smaller files and is faster on boards with large models.
@@ -2615,7 +2617,8 @@ Tvs(package="DO-214AA", direction="Unidirectional", reverse_standoff_voltage="24
 - Error on invalid type passed to `io()`
 - Format the auto-generated component .zen files
 
-[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.4.101...HEAD
+[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.4.102...HEAD
+[0.4.102]: https://github.com/diodeinc/pcb/compare/v0.4.101...v0.4.102
 [0.4.101]: https://github.com/diodeinc/pcb/compare/v0.4.100...v0.4.101
 [0.4.100]: https://github.com/diodeinc/pcb/compare/v0.4.99...v0.4.100
 [0.4.99]: https://github.com/diodeinc/pcb/compare/v0.4.98...v0.4.99
