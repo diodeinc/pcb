@@ -416,14 +416,15 @@ fn geometric_association_requires_a_known_reachable_land() {
 /// two terminations of pin SH: its own oval pad and the SMD pad over it.
 #[test]
 fn a_slot_through_two_terminations_of_one_pad_links_to_its_own_padstack() {
-    let unnamed = include_str!("../commands/dfm/fixtures/usb_micro_b.xml");
+    // Git may check the fixture out with CRLF on Windows.
+    let unnamed = &include_str!("../commands/dfm/fixtures/usb_micro_b.xml").replace("\r\n", "\n");
     let slot = "<Set net=\"GND\">\n            <SlotCavity name=\"SLOT1\"";
     let named = unnamed.replace(slot, &slot.replace("<Set", "<Set geometry=\"PADSTACK_4\""));
-    assert_ne!(unnamed, named);
+    assert_ne!(*unnamed, named);
     // The SMD lands renumbered as pin 5: the slot now joins two pads.
     let smd = "<StandardPrimitiveRef id=\"ROUNDRECT_5\"/>\n              <PinRef componentRef=\"J18\" pin=\"";
     let two_pads = unnamed.replace(&format!("{smd}SH"), &format!("{smd}5"));
-    assert_ne!(unnamed, two_pads);
+    assert_ne!(*unnamed, two_pads);
 
     let slot1 = |xml: &str| {
         let report = report_xml(xml, LayoutTarget::Board);

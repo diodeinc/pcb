@@ -991,8 +991,9 @@ pub(super) fn without_own_lands<'a>(
 ///
 /// A canonical land link can mean unique overlap rather than identity, and
 /// proximity never implies ownership: a linked land is the feature's own only
-/// with the same stated padstack or, where the feature states none, with all
-/// of the drilled material inside it, and no contradicting net. The feature then
+/// with the same stated padstack or, where the feature states none, when its
+/// pad's lands on that layer together hold all of the drilled material, and
+/// with no contradicting net. The feature then
 /// owns, within its Step occurrence, its net and the nets of those lands on
 /// any layer, and the netless pads that are those lands.
 pub(super) struct Ownership<'a> {
@@ -1040,17 +1041,29 @@ impl<'a> Ownership<'a> {
         drilled: Drilled<'a>,
     ) -> anyhow::Result<Self> {
         let mut lands = Vec::new();
-        for link in links {
-            let land =
-                &design.copper_layers[link.copper_index as usize].lands[link.land_index as usize];
-            let own = match (padstack, &land.image) {
-                (Some(padstack), _) => padstack == land.padstack,
-                (None, Some(image)) => drilled.within(image)?,
-                (None, None) => false,
+        // The links of one layer are one land, or the lands of one pad.
+        for pad in links.chunk_by(|a, b| a.copper_index == b.copper_index) {
+            let pad = pad.iter().map(|link| {
+                &design.copper_layers[link.copper_index as usize].lands[link.land_index as usize]
+            });
+            let own = match padstack {
+                Some(padstack) => pad.filter(|land| land.padstack == padstack).collect(),
+                None => {
+                    let images = pad.clone().filter_map(|land| land.image.as_ref());
+                    let held = match images.collect::<Vec<_>>()[..] {
+                        [image] => drilled.within(image)?,
+                        ref images => {
+                            let images = images.iter().copied().cloned();
+                            drilled.within(&ContourSet::union_all(design.resolution, images)?)?
+                        }
+                    };
+                    if held { pad.collect() } else { Vec::new() }
+                }
             };
-            if own && net.zip(land.net).is_none_or(|(own, land)| own == land) {
-                lands.push(land);
-            }
+            lands.extend(
+                own.into_iter()
+                    .filter(|land| net.zip(land.net).is_none_or(|(own, land)| own == land)),
+            );
         }
         Ok(Self {
             step,

@@ -343,6 +343,25 @@ limit = {{ minimum = "0.20 mm" }}"#
                 "overlap or conflicting net is not ownership"
             );
         }
+        // Two lands of one pad own an unnamed slot only when together they
+        // hold it: 0.6 mm either side they do, 1.5 mm they leave a gap.
+        let pin = land.replace("</Pad>", r#"<PinRef componentRef="J1" pin="1"/></Pad>"#);
+        for (offset, findings) in [("0.6", 0), ("1.5", 1)] {
+            let at = |x: &str| {
+                pin.replace(
+                    r#"<Location x="0""#,
+                    &format!(r#"<Location x="{x}{offset}""#),
+                )
+            };
+            let joined = format!(
+                r#"<Package name="P" type="OTHER"/><Component refDes="J1" packageRef="P" part="P" layerRef="L0" mountType="SMT"><Location x="0" y="0"/></Component>{}{}"#,
+                at("-"),
+                at("")
+            );
+            let report = check(&board("PLATED", "", &joined), &pdk("plated"));
+            assert!(report.rules[0].skip_reason.is_none(), "{report:#?}");
+            assert_eq!(report.findings.len(), findings, "{offset}");
+        }
         let foreign = check(
             &board(
                 "PLATED",
@@ -413,11 +432,12 @@ limit = {{ minimum = "0.20 mm" }}"#
     /// two F.Cu lands of pin SH: its own oval pad and the SMD pad over it.
     #[test]
     fn a_slot_through_several_lands_is_measured_only_when_they_are_one_pad() {
-        let one_pad = include_str!("../fixtures/usb_micro_b.xml");
+        // Git may check the fixture out with CRLF on Windows.
+        let one_pad = &include_str!("../fixtures/usb_micro_b.xml").replace("\r\n", "\n");
         // The SMD lands renumbered as pin 5: each slot now joins two pads.
         let smd = "<StandardPrimitiveRef id=\"ROUNDRECT_5\"/>\n              <PinRef componentRef=\"J18\" pin=\"";
         let two_pads = one_pad.replace(&format!("{smd}SH"), &format!("{smd}5"));
-        assert_ne!(one_pad, two_pads);
+        assert_ne!(*one_pad, two_pads);
         fn blocked(report: &report::DfmReport) -> Vec<&str> {
             let rules = report.rules.iter();
             rules
