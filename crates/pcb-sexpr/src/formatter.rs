@@ -148,7 +148,7 @@ pub fn prettify(source: &str, mode: FormatMode) -> String {
                 if current == b'\\' {
                     backslash_count += 1;
                 } else if current == QUOTE_CHAR && (backslash_count & 1) == 0 {
-                    in_quote = !in_quote;
+                    in_quote.toggle();
                 }
 
                 out.push(current);

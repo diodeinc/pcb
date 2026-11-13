@@ -8,7 +8,6 @@ authors.workspace = true
 
 [dependencies]
 hex = { workspace = true }
-insta = { workspace = true }
 tempfile = { workspace = true }
 assert_cmd = { workspace = true }
 assert_fs = { workspace = true }
@@ -18,3 +17,6 @@ regex = { workspace = true }
 sha2 = { workspace = true }
 globset = { workspace = true }
 pcb-zen = { workspace = true }
+
+[dev-dependencies]
+insta = { workspace = true }

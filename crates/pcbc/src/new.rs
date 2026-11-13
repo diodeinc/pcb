@@ -175,7 +175,7 @@ fn clean_repo_url(url: &str) -> Result<String> {
 
     // Handle SSH format: git@github.com:user/repo.git
     if let Some(rest) = url.strip_prefix("git@") {
-        let rest = rest.strip_suffix(".git").unwrap_or(rest);
+        let rest = rest.trim_suffix(".git");
         // Replace first ':' with '/'
         if let Some(idx) = rest.find(':') {
             let (host, path) = rest.split_at(idx);
@@ -191,8 +191,7 @@ fn clean_repo_url(url: &str) -> Result<String> {
         .or_else(|| url.strip_prefix("http://"))
         .unwrap_or(url);
 
-    let url = url.strip_suffix(".git").unwrap_or(url);
-    let url = url.strip_suffix('/').unwrap_or(url);
+    let url = url.trim_suffix(".git").trim_suffix('/');
 
     // Validate it looks like a valid repo path
     let parts: Vec<&str> = url.split('/').collect();

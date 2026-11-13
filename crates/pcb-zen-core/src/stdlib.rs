@@ -59,7 +59,9 @@ pub mod native {
     use anyhow::{Context, Result};
     use std::path::{Path, PathBuf};
 
-    const MAX_SOURCE_SEARCH_ANCESTORS: usize = 5;
+    // Cargo 1.100 puts test binaries in target/debug/build/<crate>/<hash>/out/.
+    // Include the checkout root, or target's lib/std link for external build directories.
+    const MAX_SOURCE_SEARCH_ANCESTORS: usize = 8;
 
     pub fn discover_source() -> Result<PathBuf> {
         let exe = std::env::current_exe().context("failed to determine current executable path")?;
@@ -82,6 +84,26 @@ pub mod native {
 
     #[cfg(test)]
     mod tests {
+        #[test]
+        fn discovers_cargo_build_stdlib() {
+            let temp = tempfile::tempdir().expect("create temp dir");
+            let root = temp.path();
+            std::fs::create_dir_all(root.join("lib/std")).expect("create stdlib");
+            std::fs::write(root.join("lib/std/pcb.toml"), "[dependencies]\n")
+                .expect("write manifest");
+
+            for path in [
+                "target/debug/deps/integration-hash",
+                "target/debug/build/pcb-zen/hash/out/integration-hash",
+                "debug/build/pcb-zen/hash/out/integration-hash",
+            ] {
+                assert_eq!(
+                    super::discover_source_from_exe(&root.join(path)).expect("discover stdlib"),
+                    root.join("lib/std")
+                );
+            }
+        }
+
         #[test]
         fn discovers_installed_toolchain_stdlib() {
             let temp = tempfile::tempdir().expect("create temp dir");

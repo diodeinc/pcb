@@ -27,8 +27,7 @@ use crate::git;
 /// assert_eq!(parse_version("v1.2.3"), Some(Version::new(1, 2, 3)));
 /// ```
 pub fn parse_version(s: &str) -> Option<Version> {
-    let s = s.strip_prefix('v').unwrap_or(s);
-    Version::parse(s).ok()
+    Version::parse(s.trim_prefix('v')).ok()
 }
 
 /// Parse a tag like `path/to/pkg/v1.2.3` or `path/to/pkg/1.2.3`.

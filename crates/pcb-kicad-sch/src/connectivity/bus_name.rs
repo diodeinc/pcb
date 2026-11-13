@@ -88,7 +88,7 @@ fn prefix(chars: &[char], vector: bool) -> Option<(String, usize, usize)> {
             continue;
         }
         if c == '"' && !escaped(chars, i) {
-            quoted = !quoted;
+            quoted.toggle();
         } else if quoted {
             name.push(c);
         } else {
@@ -198,7 +198,7 @@ fn group(chars: &[char]) -> Option<Syntax> {
             continue;
         }
         if c == '"' && !escaped(chars, i) {
-            quoted = !quoted;
+            quoted.toggle();
         } else if quoted {
             member.push(c);
         } else {

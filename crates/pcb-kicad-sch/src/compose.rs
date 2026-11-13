@@ -2953,16 +2953,15 @@ fn page_driver_contexts(
     let page_by_file = crate::connectivity::kicad::PagesByFile::new(&document.pages);
     loop {
         let mut changed = false;
-        for parent_index in 0..document.pages.len() {
+        for (parent_index, parent_page) in document.pages.iter().enumerate() {
             let Some(parent_context) = contexts.get(&parent_index).cloned() else {
                 continue;
             };
-            for item in &document.pages[parent_index].items {
+            for item in &parent_page.items {
                 let SchItem::Sheet(sheet) = item else {
                     continue;
                 };
-                let Some(child_index) = page_by_file.child(&document.pages[parent_index], sheet)
-                else {
+                let Some(child_index) = page_by_file.child(parent_page, sheet) else {
                     continue;
                 };
                 if child_index == parent_index || contexts.contains_key(&child_index) {
