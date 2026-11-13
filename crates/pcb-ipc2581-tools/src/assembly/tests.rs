@@ -374,7 +374,7 @@ fn reports_ambiguous_overlap_without_selecting_a_termination() {
 }
 
 #[test]
-fn geometric_association_requires_one_known_reachable_land() {
+fn geometric_association_requires_a_known_reachable_land() {
     for replacement in [
         "<Span fromLayer=\"TOP\"/>",
         "<Span fromLayer=\"BOTTOM\" toLayer=\"BOTTOM\"/>",
@@ -405,8 +405,54 @@ fn geometric_association_requires_one_known_reachable_land() {
         .iter()
         .find(|hole| hole.source_name.as_deref() == Some("U1-via"))
         .unwrap();
-    assert_eq!(via.termination.status, report::AssociationStatus::Ambiguous);
+    assert_eq!(
+        via.termination.status,
+        report::AssociationStatus::ExactGeometric
+    );
     assert_eq!(via.termination.termination_ids.len(), 1);
+}
+
+/// Each outer shield slot of this USB Micro-B footprint is drilled through
+/// two terminations of pin SH: its own oval pad and the SMD pad over it.
+#[test]
+fn a_slot_through_two_terminations_of_one_pad_links_to_its_own_padstack() {
+    let unnamed = include_str!("../commands/dfm/fixtures/usb_micro_b.xml");
+    let slot = "<Set net=\"GND\">\n            <SlotCavity name=\"SLOT1\"";
+    let named = unnamed.replace(slot, &slot.replace("<Set", "<Set geometry=\"PADSTACK_4\""));
+    assert_ne!(unnamed, named);
+    // The SMD lands renumbered as pin 5: the slot now joins two pads.
+    let smd = "<StandardPrimitiveRef id=\"ROUNDRECT_5\"/>\n              <PinRef componentRef=\"J18\" pin=\"";
+    let two_pads = unnamed.replace(&format!("{smd}SH"), &format!("{smd}5"));
+    assert_ne!(unnamed, two_pads);
+
+    let slot1 = |xml: &str| {
+        let report = report_xml(xml, LayoutTarget::Board);
+        let hole = report
+            .holes
+            .iter()
+            .find(|hole| hole.source_name.as_deref() == Some("SLOT1"))
+            .unwrap();
+        let warned = report
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.subject.id == hole.id);
+        let mut padstacks = report
+            .terminations
+            .iter()
+            .filter(|termination| hole.termination.termination_ids.contains(&termination.id))
+            .map(|termination| termination.padstack.clone())
+            .collect::<Vec<_>>();
+        padstacks.sort();
+        (hole.termination.status, padstacks.join(" "), warned)
+    };
+    use report::AssociationStatus::{Ambiguous, ExactGeometric};
+    let both = "PADSTACK_4 PADSTACK_5".to_owned();
+    assert_eq!(slot1(unnamed), (Ambiguous, both.clone(), false));
+    assert_eq!(slot1(&two_pads), (Ambiguous, both, true));
+    assert_eq!(
+        slot1(&named),
+        (ExactGeometric, "PADSTACK_4".to_owned(), false)
+    );
 }
 
 #[test]

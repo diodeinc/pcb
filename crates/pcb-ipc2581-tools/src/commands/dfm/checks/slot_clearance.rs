@@ -51,7 +51,7 @@ pub(super) fn evaluate(
             slot.provenance.instance_index,
             &design.slot_lands[slot_index],
             Drilled::Outline(&slot.outline),
-        );
+        )?;
         // Extraction orders copper layers and drill spans by the same
         // validated physical stackup.
         for (copper_index, copper) in spanned_layers(design, &slot.drill_span, conditions) {
@@ -324,8 +324,13 @@ limit = {{ minimum = "0.20 mm" }}"#
             &pdk("plated"),
         );
         assert!(own.findings.is_empty());
+        // Unnamed, the land that wholly holds the slot is still its own; moved
+        // 0.5 mm, the 2.4 mm land no longer holds the 2 mm slot.
+        let held = check(&board("PLATED", "", land), &pdk("plated"));
+        assert!(held.findings.is_empty());
+        let moved = land.replace(r#"<Location x="0" y="0"/>"#, r#"<Location x="0.5" y="0"/>"#);
         for (identity, copper_land) in [
-            ("", land.to_owned()),
+            ("", moved),
             (
                 "geometry=\"land-stack\" net=\"N1\"",
                 land.replace("<Set>", "<Set net=\"N2\">"),
@@ -401,5 +406,41 @@ limit = {{ minimum = "0.20 mm" }}"#
             check(&missing, &inactive).rules[0].status,
             report::RuleStatus::NotApplicable
         ));
+    }
+
+    /// KiCad 10.0.8's export of a USB Micro-B footprint, which names no
+    /// padstack on a slot's `Set`. Each outer shield slot is drilled through
+    /// two F.Cu lands of pin SH: its own oval pad and the SMD pad over it.
+    #[test]
+    fn a_slot_through_several_lands_is_measured_only_when_they_are_one_pad() {
+        let one_pad = include_str!("../fixtures/usb_micro_b.xml");
+        // The SMD lands renumbered as pin 5: each slot now joins two pads.
+        let smd = "<StandardPrimitiveRef id=\"ROUNDRECT_5\"/>\n              <PinRef componentRef=\"J18\" pin=\"";
+        let two_pads = one_pad.replace(&format!("{smd}SH"), &format!("{smd}5"));
+        assert_ne!(one_pad, two_pads);
+        fn blocked(report: &report::DfmReport) -> Vec<&str> {
+            let rules = report.rules.iter();
+            rules
+                .filter(|rule| matches!(rule.status, report::RuleStatus::Incomplete))
+                .filter_map(|rule| rule.skip_reason.as_deref())
+                .collect()
+        }
+        for pdk in dfm::builtin_pdks() {
+            let report = check(one_pad, pdk.source);
+            assert!(
+                matches!(report.verdict, report::Verdict::Pass),
+                "{}",
+                pdk.name
+            );
+            assert_eq!(blocked(&report), [""; 0], "{}", pdk.name);
+            let report = check(&two_pads, pdk.source);
+            assert!(
+                blocked(&report)
+                    .iter()
+                    .any(|reason| reason.contains("ambiguous physical-land")),
+                "{}",
+                pdk.name
+            );
+        }
     }
 }

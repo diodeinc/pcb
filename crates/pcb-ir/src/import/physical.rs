@@ -213,12 +213,19 @@ pub struct PhysicalHole {
     pub net: Option<Symbol>,
     pub span: FeatureSpan,
     pub spec_refs: Vec<Symbol>,
+    /// The termination its evidence names. Without evidence, the terminations
+    /// whose source lands it overlaps, or only those of its own padstack when
+    /// it overlaps any.
     pub termination: Association<PhysicalTerminationId>,
     pub termination_basis: Option<AssociationBasis>,
+    /// The pad of `termination`: `Resolved` when several candidate
+    /// terminations are one pad.
+    pub pad: Association<PadId>,
     pub protection: Vec<HoleProtectionEvidence>,
-    /// One explicit result per copper layer the opening geometrically reaches.
-    /// Associations use source geometry before routing and clears, so links
-    /// can name lands with no surviving final copper.
+    /// One explicit result per copper layer the opening geometrically reaches,
+    /// or one resolved result per land where it reaches several lands of one
+    /// pad ([`PadId`]). Associations use source geometry before routing and
+    /// clears, so links can name lands with no surviving final copper.
     pub lands: Vec<LayerLandAssociation>,
 }
 
@@ -265,6 +272,7 @@ pub struct AssemblyHole {
     pub plating: PlatingKind,
     pub termination: Association<PhysicalTerminationId>,
     pub termination_basis: Option<AssociationBasis>,
+    pub pad: Association<PadId>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -600,6 +608,7 @@ impl ImportedDesign {
                     plating: hole.plating,
                     termination: hole.termination,
                     termination_basis: hole.termination_basis,
+                    pad: hole.pad,
                 })
                 .collect(),
         })
@@ -764,39 +773,13 @@ impl ImportedDesign {
                 .then_with(|| left.at.x.total_cmp(&right.at.x))
                 .then_with(|| left.at.y.total_cmp(&right.at.y))
         });
-        // A pad joins the terminations of one component that share a pin or
-        // an exactly stacked land. Each set is rooted at its first member.
-        let mut root = (0..terminations.len()).collect::<Vec<_>>();
-        fn find(root: &mut [usize], mut index: usize) -> usize {
-            while root[index] != index {
-                root[index] = root[root[index]];
-                index = root[index];
-            }
-            index
-        }
-        let mut by_pin = HashMap::new();
-        let mut by_land = HashMap::new();
-        for (index, termination) in terminations.iter().enumerate() {
-            let land = (
-                termination.component,
-                termination.padstack,
-                exact_coordinate(termination.at.x),
-                exact_coordinate(termination.at.y),
-            );
-            for first in [
-                *by_pin
-                    .entry((termination.component, termination.pin))
-                    .or_insert(index),
-                *by_land.entry(land).or_insert(index),
-            ] {
-                let (a, b) = (find(&mut root, index), find(&mut root, first));
-                root[a.max(b)] = a.min(b);
-            }
-        }
+        let firsts = pad_firsts(terminations.iter().map(|termination| {
+            let land = (termination.padstack, termination.at);
+            (termination.component, Some(termination.pin), Some(land))
+        }));
         let mut pads = Vec::<PadId>::with_capacity(terminations.len());
         let mut count = 0;
-        for index in 0..terminations.len() {
-            let first = find(&mut root, index);
+        for (index, first) in firsts.into_iter().enumerate() {
             pads.push(if first == index {
                 count += 1;
                 PadId(count - 1)
@@ -1055,10 +1038,18 @@ impl ImportedDesign {
                 }
                 let land =
                     associate_lands(&image, occurrence.board, Side::None, &evidence, candidates)?;
-                layer_lands.push(LayerLandAssociation {
+                // An opening through several lands of one pad is drilled
+                // through each. Lands of different pads stay ambiguous.
+                let lands = match land {
+                    Association::Ambiguous(lands) if candidates.one_pad(&lands) => {
+                        lands.into_iter().map(Association::Resolved).collect()
+                    }
+                    land => vec![land],
+                };
+                layer_lands.extend(lands.into_iter().map(|land| LayerLandAssociation {
                     layer: copper_layer,
                     land,
-                });
+                }));
             }
             holes.push(PhysicalHole {
                 id: HoleId(occurrence.id),
@@ -1085,6 +1076,7 @@ impl ImportedDesign {
                     .feature_spec_refs(&self.layer_definitions[layer_id.0 as usize], feature),
                 termination: Association::Unresolved,
                 termination_basis: None,
+                pad: Association::Unresolved,
                 protection: Vec::new(),
                 lands: layer_lands,
             });
@@ -1094,8 +1086,8 @@ impl ImportedDesign {
     }
 
     /// Link each hole to the termination its evidence names or, without
-    /// evidence, whose source lands it overlaps. Source lands, because a
-    /// slot clears the copper it passes through.
+    /// evidence, whose source lands it overlaps, and to that termination's
+    /// pad. Source lands, because a slot clears the copper it passes through.
     fn attach_hole_terminations(
         &self,
         source_lands: &[PhysicalLand],
@@ -1103,18 +1095,15 @@ impl ImportedDesign {
         holes: &mut [PhysicalHole],
     ) -> Result<()> {
         let stackup = physical_stackup_layers(&self.stackups, &self.layer_definitions)?;
-        let terminations = TerminationIndex::new(self, source_lands, terminations);
+        let index = TerminationIndex::new(self, source_lands, terminations);
         for hole in holes.iter_mut() {
             let evidence = self.feature_evidence(hole.id.0);
-            let (termination, basis) = self.hole_termination_association(
-                hole,
-                &evidence,
-                &terminations,
-                stackup.as_deref(),
-            )?;
-            if let Some(side) = terminations.common_side(&termination) {
+            let (termination, basis) =
+                self.hole_termination_association(hole, &evidence, &index, stackup.as_deref())?;
+            if let Some(side) = index.common_side(&termination) {
                 hole.assembly_side = side;
             }
+            hole.pad = linked_pad([&termination], terminations);
             hole.termination = termination;
             hole.termination_basis = basis;
         }
@@ -1139,32 +1128,33 @@ impl ImportedDesign {
             return Ok((association, Some(AssociationBasis::SourceIdentity)));
         }
 
-        let candidates = terminations.overlapping(&hole.image, hole.board, |land| {
-            feature_definitely_spans_layer(
-                hole.span,
-                self.layer_definitions[land.layer.0 as usize].name,
-                stackup,
-            )
-        })?;
-        Ok(match candidates.as_slice() {
-            [] => (Association::Unresolved, None),
-            [termination] => (
-                Association::Resolved(*termination),
-                Some(AssociationBasis::ExactGeometry),
-            ),
-            // Several overlapping lands stay ambiguous even when they belong
-            // to one termination.
-            _ => (
-                Association::Ambiguous(
-                    candidates
-                        .into_iter()
-                        .collect::<BTreeSet<_>>()
-                        .into_iter()
-                        .collect(),
-                ),
-                Some(AssociationBasis::ExactGeometry),
-            ),
-        })
+        let overlapped = terminations
+            .overlapping(&hole.image, hole.board, |land| {
+                feature_definitely_spans_layer(
+                    hole.span,
+                    self.layer_definitions[land.layer.0 as usize].name,
+                    stackup,
+                )
+            })?
+            .into_iter()
+            .collect::<BTreeSet<_>>();
+        // A hole is its own padstack's: of the terminations it overlaps,
+        // those of that padstack own it. A hole of another padstack, such as
+        // a via in a pad, links to every termination it overlaps.
+        let own = |id: &PhysicalTerminationId| {
+            Some(terminations.terminations[id.0 as usize].padstack) == evidence.geometry_ref
+        };
+        let candidates = if overlapped.iter().any(own) {
+            overlapped.into_iter().filter(own).collect()
+        } else {
+            overlapped.into_iter().collect::<Vec<_>>()
+        };
+        let association = match candidates.as_slice() {
+            [] => return Ok((Association::Unresolved, None)),
+            [termination] => Association::Resolved(*termination),
+            _ => Association::Ambiguous(candidates),
+        };
+        Ok((association, Some(AssociationBasis::ExactGeometry)))
     }
 
     fn attach_hole_protection(
@@ -1405,8 +1395,6 @@ fn paste_regions(
         });
         groups[group].1.push(island);
     }
-    // Termination ids are positions in `terminations`.
-    let pad = |id: &PhysicalTerminationId| terminations[id.0 as usize].pad;
     let pad_population = terminations
         .iter()
         .map(|termination| (termination.pad, termination.population))
@@ -1435,28 +1423,8 @@ fn paste_regions(
             }
         }
         for (image, members) in images.into_iter().zip(members) {
-            let mut named = BTreeSet::new();
-            let mut conflicting = false;
-            for island in &members {
-                match &island.termination {
-                    Association::Resolved(id) => {
-                        named.insert(pad(id));
-                    }
-                    Association::Ambiguous(ids) => named.extend(ids.iter().map(pad)),
-                    Association::Conflicting(ids) => {
-                        conflicting = true;
-                        named.extend(ids.iter().map(pad));
-                    }
-                    Association::Unresolved => {}
-                }
-            }
-            let named = named.into_iter().collect::<Vec<_>>();
-            let pad = match named.as_slice() {
-                _ if conflicting => Association::Conflicting(named),
-                [] => Association::Unresolved,
-                [pad] => Association::Resolved(*pad),
-                _ => Association::Ambiguous(named),
-            };
+            let links = members.iter().map(|island| &island.termination);
+            let pad = linked_pad(links, terminations);
             let pad_basis = (pad != Association::Unresolved).then(|| {
                 if members.iter().all(|island| {
                     island.termination_basis == Some(AssociationBasis::SourceIdentity)
@@ -1502,6 +1470,81 @@ fn paste_regions(
     Ok(regions)
 }
 
+/// The pad that termination links name: `Resolved` when they name one pad,
+/// `Ambiguous` when they name several, and `Conflicting` when any link is.
+fn linked_pad<'a>(
+    links: impl IntoIterator<Item = &'a Association<PhysicalTerminationId>>,
+    terminations: &[PhysicalTermination],
+) -> Association<PadId> {
+    // Termination ids are positions in `terminations`.
+    let pad = |id: &PhysicalTerminationId| terminations[id.0 as usize].pad;
+    let mut named = BTreeSet::new();
+    let mut conflicting = false;
+    for link in links {
+        match link {
+            Association::Resolved(id) => {
+                named.insert(pad(id));
+            }
+            Association::Ambiguous(ids) => named.extend(ids.iter().map(pad)),
+            Association::Conflicting(ids) => {
+                conflicting = true;
+                named.extend(ids.iter().map(pad));
+            }
+            Association::Unresolved => {}
+        }
+    }
+    let named = named.into_iter().collect::<Vec<_>>();
+    match named.as_slice() {
+        _ if conflicting => Association::Conflicting(named),
+        [] => Association::Unresolved,
+        [pad] => Association::Resolved(*pad),
+        _ => Association::Ambiguous(named),
+    }
+}
+
+/// A contact's component, pin, and padstack with its location.
+type PadContact = (
+    ComponentOccurrenceId,
+    Option<Symbol>,
+    Option<(Symbol, Point)>,
+);
+
+/// The pad rule of [`PadId`]: for each contact, the index of the first
+/// contact of its pad. Contacts of one component join through an equal pin,
+/// or through an exactly equal padstack and location.
+fn pad_firsts(contacts: impl IntoIterator<Item = PadContact>) -> Vec<usize> {
+    fn find(root: &mut [usize], mut index: usize) -> usize {
+        while root[index] != index {
+            root[index] = root[root[index]];
+            index = root[index];
+        }
+        index
+    }
+    let mut root = Vec::new();
+    let mut by_pin = HashMap::new();
+    let mut by_land = HashMap::new();
+    for (index, (component, pin, land)) in contacts.into_iter().enumerate() {
+        root.push(index);
+        let pin = pin.map(|pin| *by_pin.entry((component, pin)).or_insert(index));
+        let land = land.map(|(padstack, at)| {
+            let land = (
+                component,
+                padstack,
+                exact_coordinate(at.x),
+                exact_coordinate(at.y),
+            );
+            *by_land.entry(land).or_insert(index)
+        });
+        for first in pin.into_iter().chain(land) {
+            let (a, b) = (find(&mut root, index), find(&mut root, first));
+            root[a.max(b)] = a.min(b);
+        }
+    }
+    (0..root.len())
+        .map(|index| find(&mut root, index))
+        .collect()
+}
+
 /// Lands of one association context in view order, indexed once by image
 /// bounds and by the identities IPC evidence can name.
 struct LandIndex<'a> {
@@ -1532,6 +1575,17 @@ impl<'a> LandIndex<'a> {
             by_component_ref,
             by_padstack,
         }
+    }
+
+    /// Whether `lands` are one pad of one resolved component ([`pad_firsts`]).
+    fn one_pad(&self, lands: &[LandId]) -> bool {
+        let contacts = lands.iter().map(|id| {
+            let land = self.lands.iter().find(|land| land.id == *id)?;
+            let placement = land.padstack.map(|padstack| (padstack, land.at));
+            Some((*land.component.resolved()?, land.pin, placement))
+        });
+        let contacts = contacts.collect::<Option<Vec<_>>>().unwrap_or_default();
+        !contacts.is_empty() && pad_firsts(contacts).iter().all(|&first| first == 0)
     }
 
     /// Ascending ids of a superset of the lands `evidence` names, through
@@ -2046,6 +2100,7 @@ mod tests {
                 plating: hole.plating,
                 termination: hole.termination.clone(),
                 termination_basis: hole.termination_basis,
+                pad: hole.pad.clone(),
             })
             .collect::<Vec<_>>();
         let expected = format!(

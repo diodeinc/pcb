@@ -1,7 +1,7 @@
 //! Deterministic PCBA assembly reports over the canonical imported design.
 
 use pcb_ir::geom::Resolution;
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use anyhow::{Context, Result, bail, ensure};
 use ipc2581::types::LayerFunction;
@@ -245,7 +245,7 @@ pub fn build_report(
         .collect::<Vec<_>>();
     terminations.sort_by(|left, right| left.id.cmp(&right.id));
 
-    let (mut holes, mut termination_holes) =
+    let (mut holes, mut termination_holes, one_pad_holes) =
         physical_hole_reports(imported, &physical, &board_ids, &termination_ids, &mut ids);
     holes.sort_by(|left, right| left.id.cmp(&right.id));
     for termination in &mut terminations {
@@ -317,7 +317,7 @@ pub fn build_report(
             },
             ..Default::default()
         },
-        diagnostics: hole_diagnostics(&holes, &mut ids),
+        diagnostics: hole_diagnostics(&holes, &one_pad_holes, &mut ids),
         profiles,
         boards,
         packages,
@@ -731,8 +731,13 @@ fn physical_hole_reports(
     board_ids: &HashMap<LayoutOccurrenceId, String>,
     termination_ids: &HashMap<PhysicalTerminationId, String>,
     ids: &mut IdAllocator,
-) -> (Vec<report::Hole>, HashMap<String, Vec<String>>) {
+) -> (
+    Vec<report::Hole>,
+    HashMap<String, Vec<String>>,
+    HashSet<String>,
+) {
     let mut termination_holes = HashMap::<String, Vec<String>>::new();
+    let mut one_pad_holes = HashSet::new();
     let holes = physical
         .holes
         .iter()
@@ -789,6 +794,9 @@ fn physical_hole_reports(
                     .or_default()
                     .push(id.clone());
             }
+            if hole.pad.resolved().is_some() {
+                one_pad_holes.insert(id.clone());
+            }
             report::Hole {
                 id: id.clone(),
                 board_id,
@@ -806,7 +814,7 @@ fn physical_hole_reports(
             }
         })
         .collect();
-    (holes, termination_holes)
+    (holes, termination_holes, one_pad_holes)
 }
 
 fn termination_association(
@@ -1170,11 +1178,16 @@ pub(crate) fn component_diagnostic_message(
     }
 }
 
-fn hole_diagnostics(holes: &[report::Hole], ids: &mut IdAllocator) -> Vec<report::Diagnostic> {
+fn hole_diagnostics(
+    holes: &[report::Hole],
+    one_pad: &HashSet<String>,
+    ids: &mut IdAllocator,
+) -> Vec<report::Diagnostic> {
     let mut diagnostics = Vec::new();
     for hole in holes {
         let association_code = match hole.termination.status {
-            report::AssociationStatus::Ambiguous => {
+            // Several terminations of one pad are one contact.
+            report::AssociationStatus::Ambiguous if !one_pad.contains(&hole.id) => {
                 Some(report::DiagnosticCode::AmbiguousHoleTermination)
             }
             report::AssociationStatus::Conflicting => {

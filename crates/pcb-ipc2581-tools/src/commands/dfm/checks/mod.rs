@@ -991,7 +991,8 @@ pub(super) fn without_own_lands<'a>(
 ///
 /// A canonical land link can mean unique overlap rather than identity, and
 /// proximity never implies ownership: a linked land is the feature's own only
-/// with the same stated padstack and no contradicting net. The feature then
+/// with the same stated padstack or, where the feature states none, with all
+/// of the drilled material inside it, and no contradicting net. The feature then
 /// owns, within its Step occurrence, its net and the nets of those lands on
 /// any layer, and the netless pads that are those lands.
 pub(super) struct Ownership<'a> {
@@ -1037,16 +1038,21 @@ impl<'a> Ownership<'a> {
         instance: Option<u32>,
         links: &[super::design::HoleLand],
         drilled: Drilled<'a>,
-    ) -> Self {
-        let lands = links
-            .iter()
-            .map(|link| {
-                &design.copper_layers[link.copper_index as usize].lands[link.land_index as usize]
-            })
-            .filter(|land| padstack == Some(land.padstack))
-            .filter(|land| net.zip(land.net).is_none_or(|(own, land)| own == land))
-            .collect::<Vec<_>>();
-        Self {
+    ) -> anyhow::Result<Self> {
+        let mut lands = Vec::new();
+        for link in links {
+            let land =
+                &design.copper_layers[link.copper_index as usize].lands[link.land_index as usize];
+            let own = match (padstack, &land.image) {
+                (Some(padstack), _) => padstack == land.padstack,
+                (None, Some(image)) => drilled.within(image)?,
+                (None, None) => false,
+            };
+            if own && net.zip(land.net).is_none_or(|(own, land)| own == land) {
+                lands.push(land);
+            }
+        }
+        Ok(Self {
             step,
             instance,
             nets: net
@@ -1055,7 +1061,7 @@ impl<'a> Ownership<'a> {
                 .collect(),
             lands: lands.iter().map(|land| land.id).collect(),
             drilled,
-        }
+        })
     }
 
     /// Whether a NetShort on `layer` lets `conductor` meet this feature's

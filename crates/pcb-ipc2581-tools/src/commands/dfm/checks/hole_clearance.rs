@@ -132,7 +132,7 @@ pub(super) fn evaluate(
                 center: hole.center,
                 radius_mm,
             },
-        );
+        )?;
         for (copper_index, copper) in spanned_layers(design, &hole.drill_span, conditions) {
             checked += usize::from(hole.branch.is_none());
             // An NPTH's own mounting land is not an offender; the rest of
