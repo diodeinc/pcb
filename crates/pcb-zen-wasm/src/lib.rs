@@ -7,7 +7,6 @@ use pcb_zen_core::resolution::{
 use pcb_zen_core::workspace::WorkspaceInfo;
 use pcb_zen_core::workspace::get_workspace_info;
 use pcb_zen_core::{EvalContext, FileProvider, FileProviderError};
-use ruzstd::decoding::StreamingDecoder;
 use semver::Version;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -338,10 +337,16 @@ fn parse_zip_bundle(bundle_bytes: &[u8]) -> Result<ParsedBundle, zip::result::Zi
     })
 }
 
+/// zrip reads input without a data frame as an empty stream, so require one.
+fn zstd_reader(bytes: &[u8]) -> Result<zrip::FrameDecoder<&[u8]>, String> {
+    if !bytes.starts_with(&zrip::frame::ZSTD_MAGIC.to_le_bytes()) {
+        return Err("zstd decode error: not a zstd frame".to_owned());
+    }
+    Ok(zrip::FrameDecoder::new(bytes))
+}
+
 fn parse_tar_zst_bundle(bundle_bytes: &[u8]) -> Result<ParsedBundle, String> {
-    let decoder = StreamingDecoder::new(Cursor::new(bundle_bytes))
-        .map_err(|e| format!("zstd decode error: {e}"))?;
-    let mut archive = Archive::new(decoder);
+    let mut archive = Archive::new(zstd_reader(bundle_bytes)?);
     let mut files = HashMap::new();
     let mut hinted_main_file = None;
 
@@ -388,9 +393,8 @@ fn parse_tar_zst_bundle(bundle_bytes: &[u8]) -> Result<ParsedBundle, String> {
 }
 
 fn parse_stdlib_archive(stdlib_tar_zst_bytes: &[u8]) -> Result<HashMap<String, Vec<u8>>, String> {
-    let decoder = StreamingDecoder::new(Cursor::new(stdlib_tar_zst_bytes))
-        .map_err(|e| format!("stdlib zstd decode error: {e}"))?;
-    let mut archive = Archive::new(decoder);
+    let mut archive =
+        Archive::new(zstd_reader(stdlib_tar_zst_bytes).map_err(|e| format!("stdlib {e}"))?);
     let mut files = HashMap::new();
 
     for entry_result in archive
@@ -600,6 +604,15 @@ mod tests {
             Err(err) => err,
         };
         assert!(err.contains("stdlib"));
+    }
+
+    #[test]
+    fn input_without_a_zstd_frame_is_rejected() {
+        let skippable = [0x50, 0x2a, 0x4d, 0x18, 1, 0, 0, 0, 9];
+        for input in [&b""[..], &skippable] {
+            assert!(parse_bundle(input.to_vec()).is_err());
+            assert!(parse_stdlib_archive(input).unwrap_err().contains("zstd"));
+        }
     }
 
     #[test]

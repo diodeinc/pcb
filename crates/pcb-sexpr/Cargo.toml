@@ -12,9 +12,9 @@ base64 = { workspace = true }
 bumpalo = { workspace = true }
 hex = { workspace = true }
 memchr = { workspace = true }
-ruzstd = { workspace = true }
 serde = { workspace = true, optional = true }
 sha2 = { workspace = true }
+zrip = { workspace = true }
 
 [features]
 default = []

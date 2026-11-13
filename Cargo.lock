@@ -3669,12 +3669,12 @@ dependencies = [
  "log",
  "pcb-ipc2581-tools",
  "pcb-ir",
- "ruzstd",
  "serde",
  "serde-value",
  "serde-wasm-bindgen",
  "serde_json",
  "wasm-bindgen",
+ "zrip",
 ]
 
 [[package]]
@@ -3855,9 +3855,9 @@ dependencies = [
  "bumpalo",
  "hex",
  "memchr",
- "ruzstd",
  "serde",
  "sha2",
+ "zrip",
 ]
 
 [[package]]
@@ -4035,7 +4035,6 @@ dependencies = [
  "log",
  "pcb-sch",
  "pcb-zen-core",
- "ruzstd",
  "semver",
  "serde",
  "serde_json",
@@ -4043,6 +4042,7 @@ dependencies = [
  "tar",
  "wasm-bindgen",
  "zip",
+ "zrip",
  "zstd",
 ]
 
@@ -5258,15 +5258,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.119",
-]
-
-[[package]]
-name = "ruzstd"
-version = "0.9.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "69e4ce4a039f42bf25920b95667e4d789e98749ab11bbb8d2c2936f788421bb5"
-dependencies = [
- "twox-hash",
 ]
 
 [[package]]
@@ -6593,12 +6584,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "twox-hash"
-version = "2.1.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "86a801b3cea342a06d468c8710662aa29e5e05e4f5c0d62f00bbb7f2ad7941c2"
-
-[[package]]
 name = "ty_static"
 version = "0.0.21"
 source = "git+https://github.com/astral-sh/ruff?tag=0.17.4#05cdc36a45a29e078c2af9358969d0f576408bef"
@@ -7410,6 +7395,41 @@ name = "zmij"
 version = "1.0.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "29666d0abbfad1e3dc4dcf6144730dd3a3ab225bbbdac83319345b1b44ccfc1b"
+
+[[package]]
+name = "zrip"
+version = "0.8.17"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "415dbf772f67454d879e807d0b60a6eee55df91dd8ba66132317e764aa03569e"
+dependencies = [
+ "zrip-core",
+ "zrip-decode",
+ "zrip-encode",
+]
+
+[[package]]
+name = "zrip-core"
+version = "0.11.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "80f6de2d9ed313cfb14a113e6da994e6ddd7891c3c6af2eed5ccb887e40178ec"
+
+[[package]]
+name = "zrip-decode"
+version = "0.8.13"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "94ebe0e933f1ae28cd83f7ba83bcff5060663928fcfa9aeb13562bcb8bfb8ff7"
+dependencies = [
+ "zrip-core",
+]
+
+[[package]]
+name = "zrip-encode"
+version = "0.9.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cdff0f7a354653eb02a84564a373db124c14e73c86ebba8ad601290a17d25f23"
+dependencies = [
+ "zrip-core",
+]
 
 [[package]]
 name = "zstd"
