@@ -232,7 +232,10 @@ pub fn export(
     sink: &mut dyn Write,
     report: &mut Report,
 ) -> Result<(), Error> {
-    let mut scene = Scene::build(board, options, &mut report.warnings)?;
+    if scene::selects_nothing(options) {
+        return Err(Error::NothingToExport);
+    }
+    let mut scene = Scene::components(board, options, &mut report.warnings);
 
     let mut w = Writer::new(1);
     let root = Root::reserve(&mut w);
@@ -247,16 +250,31 @@ FILE_SCHEMA(('AUTOMOTIVE_DESIGN { 1 0 10303 214 1 1 1 1 }'));\n\
 ENDSEC;\nDATA;\n",
     );
     let mut placements: Vec<u32> = Vec::new();
-    let outcomes = export_components(
-        board,
-        options,
-        &scene,
-        &root,
-        &mut w,
-        sink,
-        report,
-        &mut placements,
-    )?;
+    // The models need only the components, so they are copied while the
+    // layers are built. The layers' warnings still come first.
+    let before_models = report.warnings.len();
+    let mut layer_warnings = Vec::new();
+    let mut built = None;
+    let outcomes = rayon::in_place_scope(|scope| {
+        scope.spawn(|_| built = Some(Scene::layers(board, options, &mut layer_warnings)));
+        export_components(
+            board,
+            options,
+            &scene,
+            &root,
+            &mut w,
+            sink,
+            report,
+            &mut placements,
+        )
+    });
+    report
+        .warnings
+        .splice(before_models..before_models, layer_warnings);
+    let built = built.expect("the scope runs what it spawned")?;
+    let outcomes = outcomes?;
+    scene.layers = built.layers;
+    scene.synthetic_outline = built.synthetic_outline;
     scene.resolve(board, options, &outcomes);
     report.coverage = scene.coverage.clone();
 
@@ -577,29 +595,28 @@ fn export_components(
                 if job.base == 0 {
                     return Ok(None);
                 }
-                let mut local = Writer::new(job.base);
                 let name = scene.models[job.index].name();
-                let part = job
-                    .analysis
-                    .emit(&job.donor, &mut local, root, name, job.scale)?;
-                debug_assert_eq!(local.next_id, job.base + job.analysis.id_budget());
-                Ok(Some((local.buf, part)))
+                job.analysis
+                    .emit(&job.donor, job.base, root, name, job.scale)
+                    .map(Some)
             })
             .collect();
 
         sink.write_all(&w.buf)?;
         w.buf.clear();
         for (job, result) in jobs.iter().zip(emitted) {
-            let Some((buf, part)) = result? else {
+            let Some(emitted) = result? else {
                 parts[job.index] = parts_by_content
                     .iter()
                     .find(|(h, s, _)| *h == job.hash && *s == job.scale)
                     .map(|(_, _, part)| *part);
                 continue;
             };
-            sink.write_all(&buf)?;
-            parts_by_content.push((job.hash, job.scale, part));
-            parts[job.index] = Some(part);
+            for text in &emitted.text {
+                sink.write_all(text)?;
+            }
+            parts_by_content.push((job.hash, job.scale, emitted.part));
+            parts[job.index] = Some(emitted.part);
         }
     }
 
@@ -621,6 +638,20 @@ fn export_components(
 
 /// Cheap content fingerprint for deduplicating identical model payloads.
 pub fn content_hash(data: &[u8]) -> u64 {
+    /// A payload longer than this is hashed in pieces in parallel, and
+    /// the hashes of the pieces hashed in turn.
+    const PIECE: usize = 1 << 20;
+    if data.len() <= PIECE {
+        return hash_bytes(data);
+    }
+    let pieces: Vec<u8> = data
+        .par_chunks(PIECE)
+        .flat_map_iter(|piece| hash_bytes(piece).to_le_bytes())
+        .collect();
+    hash_bytes(&pieces)
+}
+
+fn hash_bytes(data: &[u8]) -> u64 {
     let mut h: u64 = 0xcbf29ce484222325 ^ data.len() as u64;
     let (chunks, rest) = data.as_chunks::<8>();
     for chunk in chunks {
@@ -669,16 +700,33 @@ pub(crate) fn decode_embedded(text: &[u8]) -> Result<Vec<u8>, Error> {
     pcb_sexpr::kicad::embedded::decode_zstd_stream(&compressed).map_err(Error::Zstd)
 }
 
+/// Characters per parallel piece of base64 text; a multiple of four, so
+/// every piece but the last decodes on its own without padding.
+const BASE64_CHUNK: usize = 1 << 18;
+
 fn base64_decode(text: &[u8]) -> Result<Vec<u8>, Error> {
     use base64::Engine;
-    // Copy the runs between line breaks whole, not byte by byte.
-    let mut compact = Vec::with_capacity(text.len());
-    for run in text.split(u8::is_ascii_whitespace) {
-        compact.extend_from_slice(run);
-    }
-    base64::engine::general_purpose::STANDARD
-        .decode(compact)
-        .map_err(|_| Error::Base64)
+    use rayon::prelude::*;
+    let compact: Vec<u8> = text
+        .par_chunks(BASE64_CHUNK)
+        .flat_map_iter(|chunk| chunk.iter().copied().filter(|b| !b.is_ascii_whitespace()))
+        .collect();
+    let pieces = compact.len().div_ceil(BASE64_CHUNK);
+    let decoded = compact
+        .par_chunks(BASE64_CHUNK)
+        .enumerate()
+        .map(|(index, chunk)| {
+            // Padding ends the text, so it is an error anywhere earlier,
+            // as it is when the text is decoded in one piece.
+            if index + 1 < pieces && chunk.contains(&b'=') {
+                return Err(Error::Base64);
+            }
+            base64::engine::general_purpose::STANDARD
+                .decode(chunk)
+                .map_err(|_| Error::Base64)
+        })
+        .collect::<Result<Vec<_>, Error>>()?;
+    Ok(decoded.concat())
 }
 
 #[cfg(test)]

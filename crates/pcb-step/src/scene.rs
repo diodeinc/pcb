@@ -157,11 +157,7 @@ impl Scene {
         options: &Options,
         warnings: &mut Vec<String>,
     ) -> Result<Self, Error> {
-        if !options.board_body
-            && !options.components
-            && !(options.pads || options.tracks || options.zones)
-            && !(options.silkscreen || options.soldermask)
-        {
+        if selects_nothing(options) {
             return Err(Error::NothingToExport);
         }
         let mut scene = Self::components(board, options, warnings);
@@ -538,6 +534,14 @@ fn proxy(board: &Board, index: usize, frame: Frame, physical: &Physical) -> Opti
         footprint: index,
         transform: placement.0 * DMat4::from_translation(center) * DMat4::from_scale(size),
     })
+}
+
+/// Whether the options leave out everything a board is made of.
+pub(crate) fn selects_nothing(options: &Options) -> bool {
+    !options.board_body
+        && !options.components
+        && !(options.pads || options.tracks || options.zones)
+        && !(options.silkscreen || options.soldermask)
 }
 
 /// Height of a face `above` the outer copper of one side, below it for
