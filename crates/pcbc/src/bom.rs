@@ -47,6 +47,7 @@ pub fn execute(args: BomArgs) -> Result<()> {
 
     // Resolve dependencies before evaluation
     let resolution_result = crate::resolve::resolve(Some(&args.file), args.offline)?;
+    let workspace = crate::publish::release_workspace_name(&resolution_result.workspace_info).ok();
 
     let file_name = args.file.file_name().unwrap().to_string_lossy();
 
@@ -73,8 +74,18 @@ pub fn execute(args: BomArgs) -> Result<()> {
     if !args.offline {
         spinner.set_message(format!("{file_name}: Fetching availability"));
         let ctx = pcb_diode_api::WorkspaceContext::from_path(&args.file);
+        // Signed-in members also see their workspace's own stock.
+        let token = pcb_diode_api::auth::get_api_token_with_context(&ctx)
+            .ok()
+            .flatten();
         // A BOM without sourcing data must not pass for a successful lookup.
-        pcb_diode_api::match_bom_with_context(&ctx, None, &mut bom).context(
+        pcb_diode_api::match_bom_with_context(
+            &ctx,
+            token.as_deref(),
+            workspace.as_deref(),
+            &mut bom,
+        )
+        .context(
             "Failed to fetch availability data (use --offline for a BOM without sourcing data)",
         )?;
     }

@@ -974,7 +974,7 @@ fn match_sourcing_bom(info: &ReleaseInfo) -> Result<Option<pcb_sch::bom::Bom>> {
     }
 
     let ctx = pcb_diode_api::WorkspaceContext::from_path(&info.zen_path);
-    pcb_diode_api::match_bom_with_context(&ctx, None, &mut bom)?;
+    pcb_diode_api::match_bom_with_context(&ctx, None, None, &mut bom)?;
     anyhow::ensure!(
         bom.availability.len() == bom.entries.len(),
         "BOM matching could not complete"

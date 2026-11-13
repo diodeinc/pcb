@@ -78,7 +78,7 @@ pub fn execute(file: &Path, format: BomFormat, offline: bool) -> Result<()> {
             .context("Not authenticated. Run `pcb auth login` to authenticate.")?;
 
         // A BOM without sourcing data must not pass for a successful lookup.
-        pcb_diode_api::match_bom_with_context(&ctx, token.as_deref(), &mut bom).context(
+        pcb_diode_api::match_bom_with_context(&ctx, token.as_deref(), None, &mut bom).context(
             "Failed to fetch availability data (use --offline for a BOM without sourcing data)",
         )?;
 

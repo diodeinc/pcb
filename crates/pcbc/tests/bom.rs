@@ -1,7 +1,9 @@
 #![cfg(not(target_os = "windows"))]
 
+use httpmock::prelude::*;
 use pcb_test_utils::assert_snapshot;
 use pcb_test_utils::sandbox::Sandbox;
+use serde_json::{Value, json};
 
 const LED_MODULE_ZEN: &str = r#"
 load("@stdlib/interfaces.zen", "Gpio")
@@ -312,6 +314,101 @@ fn bom_fails_when_availability_cannot_be_fetched() {
             stderr.contains("Failed to fetch availability data") && stderr.contains("--offline"),
             "{format}: {stderr}"
         );
+    }
+}
+
+#[test]
+fn bom_uses_workspace_inventory_when_signed_in_and_still_works_anonymously() {
+    for (workspace_config, signed_in, disable_auth) in [
+        ("name = \"acme\"", true, false),
+        (
+            "repository = \"https://github.com/acme/boards.git\"",
+            true,
+            false,
+        ),
+        ("name = \"acme\"", false, false),
+        ("name = \"acme\"", true, true),
+    ] {
+        let server = MockServer::start();
+        let authenticated = signed_in && !disable_auth;
+        let (offer_id, stock) = if authenticated {
+            ("reserve", 176)
+        } else {
+            ("public", 5000)
+        };
+        let bom_match = server.mock(|when, then| {
+            let when = when
+                .method(POST)
+                .path("/api/boms/match")
+                .json_body_includes(r#"{"workspace":"acme","regions":["US","GLOBAL"]}"#);
+            if authenticated {
+                when.header("authorization", "Bearer workspace-member-token");
+            } else {
+                when.header_missing("authorization");
+            }
+            then.status(200).json_body(json!({
+                "lines": (["R1.R", "R2.R", "R3.R"].map(|path| json!({
+                    "designEntry": {"path": path},
+                    "match": "MATCH_COMPATIBLE",
+                    "ranked": {"US": [{"offerId": offer_id, "stockClass": "PLENTY"}]}
+                }))),
+                "offers": {(offer_id): {
+                    "id": offer_id,
+                    "geography": "US",
+                    "sellerName": if authenticated { "Diode (Reserve)" } else { "DigiKey" },
+                    "marketStock": stock,
+                    "priceBreaks": [{"quantity": 1, "unitPrice": {"amountMicros": 250_000, "currency": "USD"}}]
+                }}
+            }));
+        });
+        let mut sandbox = Sandbox::new();
+        sandbox
+            .env("DIODE_API_URL", server.base_url())
+            .env("NO_PROXY", "127.0.0.1,localhost")
+            .write(
+                "pcb.toml",
+                format!("{WORKSPACE_TOML}\n{workspace_config}\n"),
+            )
+            .write("boards/SimpleResistors.zen", SIMPLE_RESISTOR_BOARD_ZEN);
+        if signed_in {
+            let auth_file = sandbox
+                .home
+                .join(format!(".pcb/auth/http_127_0_0_1_{}.toml", server.port()));
+            sandbox.write(
+                auth_file,
+                "access_token = \"workspace-member-token\"\nrefresh_token = \"refresh\"\nexpires_at = 4102444800\n",
+            );
+        }
+        if disable_auth {
+            sandbox.env("DIODE_API_AUTH", "none");
+        }
+        let output = sandbox
+            .run("pcbc", ["bom", "boards/SimpleResistors.zen", "-f", "json"])
+            .stdout_capture()
+            .stderr_capture()
+            .unchecked()
+            .run()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let groups: Vec<Value> = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(
+            groups
+                .iter()
+                .map(|group| group["quantity"].as_u64().unwrap())
+                .sum::<u64>(),
+            3
+        );
+        for group in &groups {
+            let availability = &group["availability"];
+            assert_eq!(availability["selected_offer_id"], offer_id);
+            assert_eq!(availability["us"]["stock"], stock);
+            assert_eq!(availability["us"]["price"], 0.25);
+        }
+        bom_match.assert_calls(1);
     }
 }
 
