@@ -992,8 +992,8 @@ pub(super) fn without_own_lands<'a>(
 /// A canonical land link can mean unique overlap rather than identity, and
 /// proximity never implies ownership: a linked land is the feature's own only
 /// with the same stated padstack or, where the feature states none, when its
-/// pad's lands on that layer together hold all of the drilled material, and
-/// with no contradicting net. The feature then
+/// pad's lands on that layer state at most one net and together hold all of
+/// the drilled material, and with no contradicting net. The feature then
 /// owns, within its Step occurrence, its net and the nets of those lands on
 /// any layer, and the netless pads that are those lands.
 pub(super) struct Ownership<'a> {
@@ -1049,14 +1049,19 @@ impl<'a> Ownership<'a> {
             let own = match padstack {
                 Some(padstack) => pad.filter(|land| land.padstack == padstack).collect(),
                 None => {
+                    // Lands of two nets are a short, not one owner.
+                    let mut nets = pad.clone().filter_map(|land| land.net);
+                    let one_net = nets.next().is_none_or(|net| nets.all(|other| other == net));
                     let images = pad.clone().filter_map(|land| land.image.as_ref());
-                    let held = match images.collect::<Vec<_>>()[..] {
-                        [image] => drilled.within(image)?,
-                        ref images => {
-                            let images = images.iter().copied().cloned();
-                            drilled.within(&ContourSet::union_all(design.resolution, images)?)?
-                        }
-                    };
+                    let held = one_net
+                        && match images.collect::<Vec<_>>()[..] {
+                            [image] => drilled.within(image)?,
+                            ref images => {
+                                let images = images.iter().copied().cloned();
+                                drilled
+                                    .within(&ContourSet::union_all(design.resolution, images)?)?
+                            }
+                        };
                     if held { pad.collect() } else { Vec::new() }
                 }
             };

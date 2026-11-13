@@ -344,23 +344,27 @@ limit = {{ minimum = "0.20 mm" }}"#
             );
         }
         // Two lands of one pad own an unnamed slot only when together they
-        // hold it: 0.6 mm either side they do, 1.5 mm they leave a gap.
+        // hold it, 0.6 mm either side but not 1.5 mm, and are not two nets.
         let pin = land.replace("</Pad>", r#"<PinRef componentRef="J1" pin="1"/></Pad>"#);
-        for (offset, findings) in [("0.6", 0), ("1.5", 1)] {
-            let at = |x: &str| {
-                pin.replace(
+        for (offset, nets, findings) in [
+            ("0.6", ["", ""], 0),
+            ("1.5", ["", ""], 1),
+            ("0.6", [" net=\"N1\"", " net=\"N2\""], 1),
+        ] {
+            let at = |x: &str, net: &str| {
+                pin.replace("<Set>", &format!("<Set{net}>")).replace(
                     r#"<Location x="0""#,
                     &format!(r#"<Location x="{x}{offset}""#),
                 )
             };
             let joined = format!(
                 r#"<Package name="P" type="OTHER"/><Component refDes="J1" packageRef="P" part="P" layerRef="L0" mountType="SMT"><Location x="0" y="0"/></Component>{}{}"#,
-                at("-"),
-                at("")
+                at("-", nets[0]),
+                at("", nets[1])
             );
             let report = check(&board("PLATED", "", &joined), &pdk("plated"));
             assert!(report.rules[0].skip_reason.is_none(), "{report:#?}");
-            assert_eq!(report.findings.len(), findings, "{offset}");
+            assert_eq!(report.findings.len(), findings, "{offset} {nets:?}");
         }
         let foreign = check(
             &board(
