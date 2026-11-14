@@ -319,23 +319,48 @@ fn bom_fails_when_availability_cannot_be_fetched() {
 
 #[test]
 fn bom_uses_workspace_inventory_when_signed_in_and_still_works_anonymously() {
-    for (workspace_config, signed_in, disable_auth) in [
-        ("name = \"acme\"", true, false),
+    for (workspace_config, signed_in, disable_auth, selected_offer) in [
+        ("name = \"acme\"", true, false, "reserve"),
         (
             "repository = \"https://github.com/acme/boards.git\"",
             true,
             false,
+            "market",
         ),
-        ("name = \"acme\"", false, false),
-        ("name = \"acme\"", true, true),
+        ("name = \"acme\"", true, false, "shared"),
+        ("name = \"acme\"", false, false, "shared"),
+        ("name = \"acme\"", true, true, "shared"),
     ] {
         let server = MockServer::start();
         let authenticated = signed_in && !disable_auth;
-        let (offer_id, stock) = if authenticated {
-            ("reserve", 176)
-        } else {
-            ("public", 5000)
-        };
+        let mut offers = serde_json::Map::new();
+        for (id, supplier, seller, stock) in [
+            ("market", "digikey", "DigiKey", 5000),
+            ("shared", "diode", "Diode", 41),
+            ("reserve", "diode-dw-example", "Diode", 176),
+        ] {
+            if id == "reserve" && !authenticated {
+                continue;
+            }
+            offers.insert(id.to_string(), json!({
+                "id": id,
+                "supplier": supplier,
+                "geography": "US",
+                "sellerName": seller,
+                "mpn": "R-1K",
+                "marketStock": stock,
+                "priceBreaks": [{"quantity": 1, "unitPrice": {"amountMicros": 250_000, "currency": "USD"}}]
+            }));
+        }
+        let ranked = std::iter::once(selected_offer)
+            .chain(
+                offers
+                    .keys()
+                    .map(String::as_str)
+                    .filter(|id| *id != selected_offer),
+            )
+            .map(|id| json!({"offerId": id, "stockClass": "PLENTY"}))
+            .collect::<Vec<_>>();
         let bom_match = server.mock(|when, then| {
             let when = when
                 .method(POST)
@@ -350,15 +375,9 @@ fn bom_uses_workspace_inventory_when_signed_in_and_still_works_anonymously() {
                 "lines": (["R1.R", "R2.R", "R3.R"].map(|path| json!({
                     "designEntry": {"path": path},
                     "match": "MATCH_COMPATIBLE",
-                    "ranked": {"US": [{"offerId": offer_id, "stockClass": "PLENTY"}]}
+                    "ranked": {"US": ranked}
                 }))),
-                "offers": {(offer_id): {
-                    "id": offer_id,
-                    "geography": "US",
-                    "sellerName": if authenticated { "Diode (Reserve)" } else { "DigiKey" },
-                    "marketStock": stock,
-                    "priceBreaks": [{"quantity": 1, "unitPrice": {"amountMicros": 250_000, "currency": "USD"}}]
-                }}
+                "offers": offers,
             }));
         });
         let mut sandbox = Sandbox::new();
@@ -402,13 +421,56 @@ fn bom_uses_workspace_inventory_when_signed_in_and_still_works_anonymously() {
                 .sum::<u64>(),
             3
         );
+        let (stock, alt_stock, source) = match selected_offer {
+            "reserve" => (176, 5041, "Diode (Reserve)"),
+            "market" => (5000, 217, "DigiKey"),
+            "shared" if authenticated => (41, 5176, "Diode"),
+            "shared" => (41, 5000, "Diode"),
+            _ => unreachable!(),
+        };
         for group in &groups {
             let availability = &group["availability"];
-            assert_eq!(availability["selected_offer_id"], offer_id);
+            assert_eq!(availability["selected_offer_id"], selected_offer);
             assert_eq!(availability["us"]["stock"], stock);
+            assert_eq!(availability["us"]["alt_stock"], alt_stock);
             assert_eq!(availability["us"]["price"], 0.25);
+            let offers = availability["offers"].as_array().unwrap();
+            assert_eq!(offers.len(), if authenticated { 3 } else { 2 });
+            for offer in offers {
+                let expected = match offer["id"].as_str().unwrap() {
+                    "reserve" => "Diode (Reserve)",
+                    "shared" => "Diode",
+                    "market" => "DigiKey",
+                    _ => unreachable!(),
+                };
+                assert_eq!(offer["distributor"], expected);
+            }
         }
-        bom_match.assert_calls(1);
+        let output = sandbox
+            .run("pcbc", ["bom", "boards/SimpleResistors.zen"])
+            .stdout_capture()
+            .stderr_capture()
+            .unchecked()
+            .run()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let table = String::from_utf8(output.stdout).unwrap();
+        assert!(table.contains("Selected source"), "{table}");
+        assert!(table.contains(source), "{table}");
+        assert_eq!(
+            table.contains("Diode (Reserve)"),
+            selected_offer == "reserve",
+            "{table}"
+        );
+        assert!(
+            table.contains(&format!("{stock} (+{alt_stock})")),
+            "{table}"
+        );
+        bom_match.assert_calls(2);
     }
 }
 

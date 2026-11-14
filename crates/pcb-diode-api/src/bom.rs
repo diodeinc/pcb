@@ -54,6 +54,7 @@ impl std::fmt::Display for Geography {
 #[serde(rename_all = "camelCase")]
 struct ComponentOffer {
     id: String,
+    supplier: Option<String>,
     geography: Geography,
     seller_name: String,
     seller_sku: Option<String>,
@@ -69,6 +70,12 @@ struct ComponentOffer {
 }
 
 impl ComponentOffer {
+    fn workspace_supplier(&self) -> Option<&str> {
+        self.supplier
+            .as_deref()
+            .filter(|supplier| supplier.starts_with("diode-dw-"))
+    }
+
     /// USD price breaks as (quantity, unit price in dollars).
     fn usd_price_breaks(&self) -> Vec<(i32, f64)> {
         self.price_breaks
@@ -99,7 +106,11 @@ impl ComponentOffer {
         Offer {
             id: Some(self.id.clone()),
             region: self.geography.to_string(),
-            distributor: self.seller_name.clone(),
+            distributor: if self.workspace_supplier().is_some() {
+                format!("{} (Reserve)", self.seller_name)
+            } else {
+                self.seller_name.clone()
+            },
             stock: self.market_stock.unwrap_or_default(),
             price: self.unit_price_at_qty(qty),
             part_id: self.seller_sku.clone(),
@@ -204,11 +215,12 @@ impl MatchBomResponse {
     }
 }
 
-/// Stock of the alternative offers, counting each (seller, mpn) once at its best price.
+/// Count each (seller, mpn) once at its best price, keeping workspace pools separate.
 fn alt_stock<'a>(offers: impl Iterator<Item = &'a ComponentOffer>) -> i32 {
-    let mut best_by_key: HashMap<(&str, &str), &ComponentOffer> = HashMap::new();
+    let mut best_by_key = HashMap::<_, &ComponentOffer>::new();
     for offer in offers {
         let key = (
+            offer.workspace_supplier(),
             offer.seller_name.as_str(),
             offer.mpn.as_deref().unwrap_or(""),
         );

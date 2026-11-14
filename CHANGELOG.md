@@ -11,6 +11,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ### Changed
 
 - `pcb bom` sends the signed-in user's token and the workspace named in `pcb.toml`, so workspace members also see their workspace's own stock. It still works without signing in.
+- `pcb bom` shows the selected source in its table and labels workspace-owned stock `Diode (Reserve)` in table and JSON output, distinct from shared `Diode` stock. Alternative stock counts keep these inventory pools separate.
 
 ## [0.4.102] - 2026-11-13
 
