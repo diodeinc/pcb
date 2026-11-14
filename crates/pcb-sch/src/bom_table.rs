@@ -451,8 +451,16 @@ impl Bom {
             // Build row
             let mut row = vec![qty_cell];
 
-            // Add stock columns (US and Global)
+            // The selected source follows the planner's US-first, then Global choice.
             if has_availability {
+                row.push(styled_cell(
+                    avail
+                        .and_then(|availability| availability.selected_offer())
+                        .map(|offer| offer.distributor.as_str())
+                        .unwrap_or_default(),
+                    is_dnp,
+                    None,
+                ));
                 row.push(styled_status_cell(
                     us_data.format_stock(),
                     is_dnp,
@@ -505,6 +513,7 @@ impl Bom {
         let mut headers = vec!["Qty"];
 
         if has_availability {
+            headers.push("Selected source");
             headers.push("Stock US (+alt)");
             headers.push("Stock Global (+alt)");
         }

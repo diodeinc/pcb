@@ -54,6 +54,7 @@ impl std::fmt::Display for Geography {
 #[serde(rename_all = "camelCase")]
 struct ComponentOffer {
     id: String,
+    supplier: Option<String>,
     geography: Geography,
     seller_name: String,
     seller_sku: Option<String>,
@@ -69,6 +70,12 @@ struct ComponentOffer {
 }
 
 impl ComponentOffer {
+    fn workspace_supplier(&self) -> Option<&str> {
+        self.supplier
+            .as_deref()
+            .filter(|supplier| supplier.starts_with("diode-dw-"))
+    }
+
     /// USD price breaks as (quantity, unit price in dollars).
     fn usd_price_breaks(&self) -> Vec<(i32, f64)> {
         self.price_breaks
@@ -99,7 +106,11 @@ impl ComponentOffer {
         Offer {
             id: Some(self.id.clone()),
             region: self.geography.to_string(),
-            distributor: self.seller_name.clone(),
+            distributor: if self.workspace_supplier().is_some() {
+                format!("{} (Reserve)", self.seller_name)
+            } else {
+                self.seller_name.clone()
+            },
             stock: self.market_stock.unwrap_or_default(),
             price: self.unit_price_at_qty(qty),
             part_id: self.seller_sku.clone(),
@@ -204,11 +215,12 @@ impl MatchBomResponse {
     }
 }
 
-/// Stock of the alternative offers, counting each (seller, mpn) once at its best price.
+/// Count each (seller, mpn) once at its best price, keeping workspace pools separate.
 fn alt_stock<'a>(offers: impl Iterator<Item = &'a ComponentOffer>) -> i32 {
-    let mut best_by_key: HashMap<(&str, &str), &ComponentOffer> = HashMap::new();
+    let mut best_by_key = HashMap::<_, &ComponentOffer>::new();
     for offer in offers {
         let key = (
+            offer.workspace_supplier(),
             offer.seller_name.as_str(),
             offer.mpn.as_deref().unwrap_or(""),
         );
@@ -230,6 +242,7 @@ fn alt_stock<'a>(offers: impl Iterator<Item = &'a ComponentOffer>) -> i32 {
 fn call_bom_match_api(
     ctx: &WorkspaceContext,
     auth_token: Option<&str>,
+    workspace: Option<&str>,
     design_bom: &serde_json::Value,
     timeout_secs: u64,
 ) -> Result<MatchBomResponse> {
@@ -240,12 +253,17 @@ fn call_bom_match_api(
     let client = Client::builder()
         .timeout(Duration::from_secs(timeout_secs))
         .build()?;
+    let mut body = serde_json::json!({
+        "designBom": design_bom,
+        "boardQuantity": BOARD_QUANTITY,
+        "regions": [Geography::Us, Geography::Global],
+    });
+    // The API offers a workspace's own stock to its signed-in members.
+    if let Some(workspace) = workspace {
+        body["workspace"] = workspace.into();
+    }
     let response = crate::auth::apply_bearer_auth(client.post(&url), auth_token)
-        .json(&serde_json::json!({
-            "designBom": design_bom,
-            "boardQuantity": BOARD_QUANTITY,
-            "regions": [Geography::Us, Geography::Global],
-        }))
+        .json(&body)
         .send()
         .context("Failed to send BOM match request")?;
     let status = response.status();
@@ -263,13 +281,20 @@ fn call_bom_match_api(
 pub fn match_bom_with_context(
     ctx: &WorkspaceContext,
     auth_token: Option<&str>,
+    workspace: Option<&str>,
     bom: &mut pcb_sch::bom::Bom,
 ) -> Result<()> {
     if bom.is_empty() {
         return Ok(());
     }
     let design_bom = serde_json::to_value(bom.ungrouped_entries())?;
-    let response = call_bom_match_api(ctx, auth_token, &design_bom, BOM_MATCH_TIMEOUT_SECS)?;
+    let response = call_bom_match_api(
+        ctx,
+        auth_token,
+        workspace,
+        &design_bom,
+        BOM_MATCH_TIMEOUT_SECS,
+    )?;
     apply_bom_match(bom, &response);
     Ok(())
 }
@@ -470,10 +495,10 @@ mod tests {
         });
 
         let mut empty = Bom::new(HashMap::new(), HashMap::new());
-        match_bom_with_context(&context, None, &mut empty).unwrap();
+        match_bom_with_context(&context, None, None, &mut empty).unwrap();
         mock.assert_calls(0);
 
-        match_bom_with_context(&context, None, &mut bom).unwrap();
+        match_bom_with_context(&context, None, None, &mut bom).unwrap();
         mock.assert_calls(1);
         assert_eq!(bom.entries["root.U1"].mpn.as_deref(), Some("us-MPN"));
         let availability = &bom.availability["root.U1"];

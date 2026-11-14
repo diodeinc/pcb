@@ -1,7 +1,9 @@
 #![cfg(not(target_os = "windows"))]
 
+use httpmock::prelude::*;
 use pcb_test_utils::assert_snapshot;
 use pcb_test_utils::sandbox::Sandbox;
+use serde_json::{Value, json};
 
 const LED_MODULE_ZEN: &str = r#"
 load("@stdlib/interfaces.zen", "Gpio")
@@ -312,6 +314,163 @@ fn bom_fails_when_availability_cannot_be_fetched() {
             stderr.contains("Failed to fetch availability data") && stderr.contains("--offline"),
             "{format}: {stderr}"
         );
+    }
+}
+
+#[test]
+fn bom_uses_workspace_inventory_when_signed_in_and_still_works_anonymously() {
+    for (workspace_config, signed_in, disable_auth, selected_offer) in [
+        ("name = \"acme\"", true, false, "reserve"),
+        (
+            "repository = \"https://github.com/acme/boards.git\"",
+            true,
+            false,
+            "market",
+        ),
+        ("name = \"acme\"", true, false, "shared"),
+        ("name = \"acme\"", false, false, "shared"),
+        ("name = \"acme\"", true, true, "shared"),
+    ] {
+        let server = MockServer::start();
+        let authenticated = signed_in && !disable_auth;
+        let mut offers = serde_json::Map::new();
+        for (id, supplier, seller, stock) in [
+            ("market", "digikey", "DigiKey", 5000),
+            ("shared", "diode", "Diode", 41),
+            ("reserve", "diode-dw-example", "Diode", 176),
+        ] {
+            if id == "reserve" && !authenticated {
+                continue;
+            }
+            offers.insert(id.to_string(), json!({
+                "id": id,
+                "supplier": supplier,
+                "geography": "US",
+                "sellerName": seller,
+                "mpn": "R-1K",
+                "marketStock": stock,
+                "priceBreaks": [{"quantity": 1, "unitPrice": {"amountMicros": 250_000, "currency": "USD"}}]
+            }));
+        }
+        let ranked = std::iter::once(selected_offer)
+            .chain(
+                offers
+                    .keys()
+                    .map(String::as_str)
+                    .filter(|id| *id != selected_offer),
+            )
+            .map(|id| json!({"offerId": id, "stockClass": "PLENTY"}))
+            .collect::<Vec<_>>();
+        let bom_match = server.mock(|when, then| {
+            let when = when
+                .method(POST)
+                .path("/api/boms/match")
+                .json_body_includes(r#"{"workspace":"acme","regions":["US","GLOBAL"]}"#);
+            if authenticated {
+                when.header("authorization", "Bearer workspace-member-token");
+            } else {
+                when.header_missing("authorization");
+            }
+            then.status(200).json_body(json!({
+                "lines": (["R1.R", "R2.R", "R3.R"].map(|path| json!({
+                    "designEntry": {"path": path},
+                    "match": "MATCH_COMPATIBLE",
+                    "ranked": {"US": ranked}
+                }))),
+                "offers": offers,
+            }));
+        });
+        let mut sandbox = Sandbox::new();
+        sandbox
+            .env("DIODE_API_URL", server.base_url())
+            .env("NO_PROXY", "127.0.0.1,localhost")
+            .write(
+                "pcb.toml",
+                format!("{WORKSPACE_TOML}\n{workspace_config}\n"),
+            )
+            .write("boards/SimpleResistors.zen", SIMPLE_RESISTOR_BOARD_ZEN);
+        if signed_in {
+            let auth_file = sandbox
+                .home
+                .join(format!(".pcb/auth/http_127_0_0_1_{}.toml", server.port()));
+            sandbox.write(
+                auth_file,
+                "access_token = \"workspace-member-token\"\nrefresh_token = \"refresh\"\nexpires_at = 4102444800\n",
+            );
+        }
+        if disable_auth {
+            sandbox.env("DIODE_API_AUTH", "none");
+        }
+        let output = sandbox
+            .run("pcbc", ["bom", "boards/SimpleResistors.zen", "-f", "json"])
+            .stdout_capture()
+            .stderr_capture()
+            .unchecked()
+            .run()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let groups: Vec<Value> = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(
+            groups
+                .iter()
+                .map(|group| group["quantity"].as_u64().unwrap())
+                .sum::<u64>(),
+            3
+        );
+        let (stock, alt_stock, source) = match selected_offer {
+            "reserve" => (176, 5041, "Diode (Reserve)"),
+            "market" => (5000, 217, "DigiKey"),
+            "shared" if authenticated => (41, 5176, "Diode"),
+            "shared" => (41, 5000, "Diode"),
+            _ => unreachable!(),
+        };
+        for group in &groups {
+            let availability = &group["availability"];
+            assert_eq!(availability["selected_offer_id"], selected_offer);
+            assert_eq!(availability["us"]["stock"], stock);
+            assert_eq!(availability["us"]["alt_stock"], alt_stock);
+            assert_eq!(availability["us"]["price"], 0.25);
+            let offers = availability["offers"].as_array().unwrap();
+            assert_eq!(offers.len(), if authenticated { 3 } else { 2 });
+            for offer in offers {
+                let expected = match offer["id"].as_str().unwrap() {
+                    "reserve" => "Diode (Reserve)",
+                    "shared" => "Diode",
+                    "market" => "DigiKey",
+                    _ => unreachable!(),
+                };
+                assert_eq!(offer["distributor"], expected);
+            }
+        }
+        let output = sandbox
+            .run("pcbc", ["bom", "boards/SimpleResistors.zen"])
+            .stdout_capture()
+            .stderr_capture()
+            .unchecked()
+            .run()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let table = String::from_utf8(output.stdout).unwrap();
+        assert!(table.contains("Selected source"), "{table}");
+        assert!(table.contains(source), "{table}");
+        assert_eq!(
+            table.contains("Diode (Reserve)"),
+            selected_offer == "reserve",
+            "{table}"
+        );
+        assert!(
+            table.contains(&format!("{stock} (+{alt_stock})")),
+            "{table}"
+        );
+        bom_match.assert_calls(2);
     }
 }
 
