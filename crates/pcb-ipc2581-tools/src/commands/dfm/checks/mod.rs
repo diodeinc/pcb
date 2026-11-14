@@ -991,7 +991,9 @@ pub(super) fn without_own_lands<'a>(
 ///
 /// A canonical land link can mean unique overlap rather than identity, and
 /// proximity never implies ownership: a linked land is the feature's own only
-/// with the same stated padstack and no contradicting net. The feature then
+/// with the same stated padstack or, where the feature states none, when its
+/// pad's lands on that layer state at most one net and together hold all of
+/// the drilled material, and with no contradicting net. The feature then
 /// owns, within its Step occurrence, its net and the nets of those lands on
 /// any layer, and the netless pads that are those lands.
 pub(super) struct Ownership<'a> {
@@ -1037,16 +1039,38 @@ impl<'a> Ownership<'a> {
         instance: Option<u32>,
         links: &[super::design::HoleLand],
         drilled: Drilled<'a>,
-    ) -> Self {
-        let lands = links
-            .iter()
-            .map(|link| {
+    ) -> anyhow::Result<Self> {
+        let mut lands = Vec::new();
+        // The links of one layer are one land, or the lands of one pad.
+        for pad in links.chunk_by(|a, b| a.copper_index == b.copper_index) {
+            let pad = pad.iter().map(|link| {
                 &design.copper_layers[link.copper_index as usize].lands[link.land_index as usize]
-            })
-            .filter(|land| padstack == Some(land.padstack))
-            .filter(|land| net.zip(land.net).is_none_or(|(own, land)| own == land))
-            .collect::<Vec<_>>();
-        Self {
+            });
+            let own = match padstack {
+                Some(padstack) => pad.filter(|land| land.padstack == padstack).collect(),
+                None => {
+                    // Lands of two nets are a short, not one owner.
+                    let mut nets = pad.clone().filter_map(|land| land.net);
+                    let one_net = nets.next().is_none_or(|net| nets.all(|other| other == net));
+                    let images = pad.clone().filter_map(|land| land.image.as_ref());
+                    let held = one_net
+                        && match images.collect::<Vec<_>>()[..] {
+                            [image] => drilled.within(image)?,
+                            ref images => {
+                                let images = images.iter().copied().cloned();
+                                drilled
+                                    .within(&ContourSet::union_all(design.resolution, images)?)?
+                            }
+                        };
+                    if held { pad.collect() } else { Vec::new() }
+                }
+            };
+            lands.extend(
+                own.into_iter()
+                    .filter(|land| net.zip(land.net).is_none_or(|(own, land)| own == land)),
+            );
+        }
+        Ok(Self {
             step,
             instance,
             nets: net
@@ -1055,7 +1079,7 @@ impl<'a> Ownership<'a> {
                 .collect(),
             lands: lands.iter().map(|land| land.id).collect(),
             drilled,
-        }
+        })
     }
 
     /// Whether a NetShort on `layer` lets `conductor` meet this feature's

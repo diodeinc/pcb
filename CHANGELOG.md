@@ -13,6 +13,11 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - `pcb bom` sends the signed-in user's token and the workspace named in `pcb.toml`, so workspace members also see their workspace's own stock. It still works without signing in.
 - `pcb bom` shows the selected source in its table and labels workspace-owned stock `Diode (Reserve)` in table and JSON output, distinct from shared `Diode` stock. Alternative stock counts keep these inventory pools separate.
 
+### Fixed
+
+- `pcb ipc2581 dfm check` measures a hole or slot drilled through several lands of one pad instead of reporting its rules as not evaluated.
+- `pcb ipc2581 assembly` links a hole to the termination of its own padstack, and no longer warns `ambiguous_hole_termination` when the terminations it overlaps are one pad.
+
 ## [0.4.102] - 2026-11-13
 
 ### Changed
