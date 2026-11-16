@@ -46,11 +46,14 @@ static CANCEL: AtomicBool = AtomicBool::new(false);
 static FORCE_KILL: AtomicBool = AtomicBool::new(false);
 static CHILD: Mutex<Option<Arc<Mutex<Child>>>> = Mutex::new(None);
 
+/// Route `board_path` with FreeRouting. `prepare_dsn` may rewrite the
+/// exported DSN before routing, for rules KiCad's export cannot carry.
 pub fn execute(
     board_path: &Path,
     project_path: &Path,
     board_name: &str,
     timeout_minutes: u32,
+    prepare_dsn: &dyn Fn(&Path) -> Result<()>,
 ) -> Result<()> {
     let expected_hash = hex_decode32(FREEROUTING_JAR_SHA256);
     let explicit_jar = resolve_explicit_freerouting_jar(&expected_hash)?;
@@ -92,20 +95,26 @@ pub fn execute(
     CANCEL.store(false, Ordering::SeqCst);
     FORCE_KILL.store(false, Ordering::SeqCst);
     *CHILD.lock().unwrap() = None;
-    if let Err(e) = ctrlc::set_handler(|| {
-        if CANCEL.swap(true, Ordering::SeqCst) {
-            eprintln!("\n  Force-stopping FreeRouting...");
-            FORCE_KILL.store(true, Ordering::SeqCst);
-            kill_child_now();
-        } else {
-            eprintln!("\n  Stopping FreeRouting and fetching the best result so far...");
+    // The handler only touches the statics reset above, so one
+    // registration serves every run in the process.
+    static HANDLER: std::sync::Once = std::sync::Once::new();
+    HANDLER.call_once(|| {
+        if let Err(e) = ctrlc::set_handler(|| {
+            if CANCEL.swap(true, Ordering::SeqCst) {
+                eprintln!("\n  Force-stopping FreeRouting...");
+                FORCE_KILL.store(true, Ordering::SeqCst);
+                kill_child_now();
+            } else {
+                eprintln!("\n  Stopping FreeRouting and fetching the best result so far...");
+            }
+        }) {
+            eprintln!("{} Could not set Ctrl+C handler: {}", "!".yellow(), e);
         }
-    }) {
-        eprintln!("{} Could not set Ctrl+C handler: {}", "!".yellow(), e);
-    }
+    });
 
     let spinner = Spinner::builder("Exporting DSN...").start();
     export_dsn(&work_board, &dsn_path)?;
+    prepare_dsn(&dsn_path)?;
     spinner.finish();
 
     if CANCEL.load(Ordering::SeqCst) {

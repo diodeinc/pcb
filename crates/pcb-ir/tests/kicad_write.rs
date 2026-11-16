@@ -105,6 +105,7 @@ fn sample() -> Document {
         layer: "F.Cu".into(),
         net: sig,
         uuid: uuids.next_uuid(),
+        locked: false,
     });
     doc.vias.push(Via {
         at: Point::new(14.25, 24.75),
@@ -225,9 +226,11 @@ fn number_formatting_matches_kicad() {
             layer: "F.Cu".into(),
             net: 0,
             uuid: uuids.next_uuid(),
+            locked: width == 1.0,
         });
     }
     let text = kicad::write(&doc);
+    assert_eq!(text.matches("(locked yes)").count(), 1);
     assert!(text.contains("(width 0.123457)"));
     assert!(text.contains("(width 1)"));
     assert!(text.contains("(width 0.25)"));

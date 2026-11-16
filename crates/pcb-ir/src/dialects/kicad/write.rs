@@ -95,6 +95,9 @@ pub fn write(document: &Document) -> String {
         w.line(&format!("(start {})", xy(segment.start)));
         w.line(&format!("(end {})", xy(segment.end)));
         w.line(&format!("(width {})", num(segment.width)));
+        if segment.locked {
+            w.line("(locked yes)");
+        }
         w.line(&format!("(layer {})", quote(&segment.layer)));
         w.line(&net(document, segment.net));
         w.line(&format!("(uuid {})", quote(&segment.uuid)));

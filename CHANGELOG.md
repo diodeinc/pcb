@@ -8,6 +8,17 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added
+
+- `pcb ipc interposer --bed switchyard-rev1` mates the Switchyard rev-1 bed, giving each board one per-DUT cell and drilling its D1 dowel, D2 slot and M3 clearance with Ø6 mm keep-outs; contacts with no free land of their role are reported, not wired.
+- `pcb ipc interposer` routes VTarget nets 0.8 mm wide; on the Switchyard bed VTarget and the SIG0–5 lanes carry 60 V, keeping 0.6 mm at bare pads and 0.13 mm between tracks and tented vias under solder mask (IPC-2221 B2/B4) through a sibling `.kicad_dru` and the DSN handed to FreeRouting, and a board's VTarget contacts share one net.
+- `pcb ipc interposer --interposer-id <1-1023>` straps the Switchyard bed's interposer-ID lands to encode the number; the Switchyard bed requires it.
+- On the Switchyard bed the interposer is cut to the conveyor envelope (x 5–100, y 5–69) with its own three fiducials, placed over no land; boards whose pogos would leave it are not tested.
+- `pcb ipc interposer --layers 4` on the Switchyard bed holds the 60 V exposed clearance (0.6 mm) on every net, pad and track instead of per item, with no `.kicad_dru` or DSN clearance classes; GND pads get no routing ring; a second attempt, only if the first leaves a gap, reserves a via site overlapping each GND pad instead.
+- `pcb ipc interposer --layers 4-signal` builds the 4-layer stackup with a GND plane on In1 and In2 left as a signal layer for routing.
+- `pcb ipc interposer --dut-plate <plate.scad>` writes the DUT plate as OpenSCAD: a printed slab on the interposer that stops the DUT panel at the pogos' working travel, seats on the bed's dowels, and locates the panel with tapered nubs in the channels between boards, or Ø2 mm dowel pins with `--dut-plate-locators dowels`.
+- TestPoint `ict="analog"` marks an analog-only contact, which the Switchyard bed keeps off its digital lanes.
+
 ### Changed
 
 - `pcb bom` sends the signed-in user's token and the workspace named in `pcb.toml`, so workspace members also see their workspace's own stock. It still works without signing in.
@@ -65,8 +76,17 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [0.4.98] - 2026-11-07
 
+||||||| parent of 7ddef42f (feat(interposer): add the Switchyard rev-1 bed)
 ### Fixed
 
+- `pcb ipc interposer` USB pairs get the USB net class; its name pattern never matched the generated nets.
+- `pcb ipc interposer --route` keeps routed traces clear of every GND pad and its reserved escape via (and out of alignment keep-outs), so traces can no longer seal a GND pad off from the pour; it then prunes dead GND islands, bridges cut-off GND clusters, and reroutes (up to 3 attempts) when KiCad still finds connections missing.
+- `pcb ipc interposer --route` keeps traces off fiducials.
+- `pcb ipc interposer` pre-routes the Switchyard interposer-ID straps as locked tracks, one net in a lane just above the ID row and the other just below it, so the autorouter no longer fails on the long strap runs.
+- `pcb ipc interposer --route` keeps vias out of the board-edge clearance, and rips up and reroutes (up to 3 times) any net whose via FreeRouting set inside the 60 V clearance of a bare pad.
+- `pcb ipc interposer --route` drops GND vias FreeRouting sets inside the board-edge clearance, and gives each net class's vias its own clearance class so 60 V vias keep their distance from bare pads.
+- `pcb ipc interposer --route` bridges GND fill islands that reach a thermal-relief pad only at its spokes, and warns about any GND pad no via can reach instead of leaving it silently unconnected.
+- `pcb ipc interposer` no longer drills the panel's mouse-bite perforations into the interposer or keeps pogos clear of them.
 - `json.encode` and `Board()` configs nested more than 32 levels deep now fail with an error instead of crashing.
 - `pcb import` reads the MPN from Altium's `Manufacturer Part` symbol field.
 - `pcb build --netlist` and the LSP's `zener/evaluate` return the netlist even when the build has errors; the build still fails.

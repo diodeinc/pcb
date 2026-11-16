@@ -43,8 +43,12 @@ pub enum Role {
     Vtarget,
     Gnd,
     Ls,
-    /// One land of a corner mate-detect continuity pair.
+    /// An analog-only input: never driven, so digital roles stay off it.
+    Analog,
+    /// One land of a mate-detect continuity pair.
     Detect,
+    /// An interposer-ID strap land.
+    Id,
 }
 
 impl Role {
@@ -57,7 +61,9 @@ impl Role {
             Role::Vtarget => "vtarget",
             Role::Gnd => "gnd",
             Role::Ls => "ls",
+            Role::Analog => "analog",
             Role::Detect => "detect",
+            Role::Id => "id",
         }
     }
 
@@ -73,8 +79,11 @@ impl Role {
 pub struct Land {
     pub xy: [f64; 2],
     pub role: Role,
-    /// Which 2×3 connector block the land belongs to (0..24).
+    /// Which connector block the land belongs to: a 2×3 block in S13
+    /// (0..25), a per-DUT cell or sense group in other beds.
     pub block: u32,
+    /// The bed's own name for the land (`S0`, `VT`, …); the role name in S13.
+    pub label: &'static str,
 }
 
 /// Dimensions of the A7 mate region at the origin corner of a standard
@@ -210,7 +219,12 @@ fn s13() -> Vec<Land> {
                     } else {
                         [along, cross]
                     };
-                    lands.push(Land { xy, role, block });
+                    lands.push(Land {
+                        xy,
+                        role,
+                        block,
+                        label: role.name(),
+                    });
                 }
             }
             pos += extent + gap;

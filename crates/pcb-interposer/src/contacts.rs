@@ -11,6 +11,7 @@ use std::collections::BTreeMap;
 
 use anyhow::{Context, Result, bail};
 use ipc2581::Ipc2581;
+use ipc2581::types::{Step, StepRepeat};
 
 use crate::pattern::Role;
 
@@ -23,12 +24,15 @@ pub struct PanelContact {
     /// The component's zen `Path`, when the export carries one.
     pub path: String,
     pub role: Role,
+    /// The `ict` name the role was parsed from (`swclk`, `ls`, …).
+    pub ict: String,
     /// Position in the Y-down sheet frame.
     pub xy: [f64; 2],
 }
 
 /// Parse an `ict` role name into the fixture vocabulary. Low-speed debug
-/// roles collapse into [`Role::Ls`]; unknown names are `None`.
+/// roles collapse into [`Role::Ls`] (the contact keeps its `ict` name for
+/// beds that pin them); unknown names are `None`.
 fn parse_role(name: &str) -> Option<Role> {
     Some(match name {
         "usb_dp" => Role::UsbDp,
@@ -37,13 +41,16 @@ fn parse_role(name: &str) -> Option<Role> {
         "vtarget" => Role::Vtarget,
         "gnd" => Role::Gnd,
         "ls" | "swdio" | "swclk" | "nrst" | "swo" => Role::Ls,
+        "analog" => Role::Analog,
         _ => return None,
     })
 }
 
 /// Extract every board instance's ICT contacts. `sheet_height` is the
 /// panel height used for the Y flip (from [`crate::panel::extract`]).
-pub fn extract_contacts(ipc: &Ipc2581, sheet_height: f64) -> Result<Vec<PanelContact>> {
+/// The panel's board grid: the array's repeat of the board cell, the
+/// cell's constant offset of the board step, and the board step.
+fn board_grid(ipc: &Ipc2581) -> Result<(&StepRepeat, &StepRepeat, &Step)> {
     let ecad = ipc.ecad().context("panel has no ECAD section")?;
     let steps = &ecad.cad_data.steps;
     let array = pcb_ir::import::ipc2581::primary_step(ipc, steps).context("panel has no step")?;
@@ -71,6 +78,40 @@ pub fn extract_contacts(ipc: &Ipc2581, sheet_height: f64) -> Result<Vec<PanelCon
     if offset.angle.abs() > 1e-6 || grid.angle.abs() > 1e-6 {
         bail!("rotated board cells are not supported");
     }
+    Ok((grid, offset, board_step))
+}
+
+/// Every board instance's bounding box `[x0, y0, x1, y1]` in the Y-down
+/// sheet frame, in grid order.
+pub fn board_outlines(ipc: &Ipc2581, sheet_height: f64) -> Result<Vec<[f64; 4]>> {
+    let (grid, offset, board_step) = board_grid(ipc)?;
+    let profile = board_step
+        .profile
+        .as_ref()
+        .context("board step has no profile")?;
+    let points = profile.polygon.points();
+    let x0 = points.iter().map(|p| p.x).fold(f64::MAX, f64::min);
+    let x1 = points.iter().map(|p| p.x).fold(f64::MIN, f64::max);
+    let y0 = points.iter().map(|p| p.y).fold(f64::MAX, f64::min);
+    let y1 = points.iter().map(|p| p.y).fold(f64::MIN, f64::max);
+    let mut boards = Vec::new();
+    for j in 0..grid.ny.max(1) {
+        for i in 0..grid.nx.max(1) {
+            let dx = offset.x + grid.x + i as f64 * grid.dx;
+            let dy = offset.y + grid.y + j as f64 * grid.dy;
+            boards.push([
+                x0 + dx,
+                sheet_height - (y1 + dy),
+                x1 + dx,
+                sheet_height - (y0 + dy),
+            ]);
+        }
+    }
+    Ok(boards)
+}
+
+pub fn extract_contacts(ipc: &Ipc2581, sheet_height: f64) -> Result<Vec<PanelContact>> {
+    let (grid, offset, board_step) = board_grid(ipc)?;
 
     let roles = bom_roles(ipc);
     let mut contacts = Vec::new();
@@ -97,6 +138,7 @@ pub fn extract_contacts(ipc: &Ipc2581, sheet_height: f64) -> Result<Vec<PanelCon
                     refdes: refdes.clone(),
                     path: path.clone(),
                     role,
+                    ict: ict.clone(),
                     xy: [x, sheet_height - y],
                 });
             }
