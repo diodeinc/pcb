@@ -21,19 +21,29 @@
 //! spread evenly across the sheet — a clumped prefix concentrates every
 //! net far from half the perimeter and routes badly. A board whose
 //! contact would put a pogo pad inside a fixed-feature keep-out (the A7
-//! tile's corner tooling can sit under the board field on large sheets)
-//! is not selectable.
+//! tile's corner tooling can sit under the board field on large sheets),
+//! or outside the bed's envelope, is not selectable.
 //!
 //! **Assignment** runs per kind: demands and slots of one kind form a
 //! square cost matrix (cost = centroid distance, dummy zero-cost rows
 //! filling unused slots) solved exactly by the Hungarian algorithm, so
 //! each kind's total wire length is minimal. Within a matched slot,
 //! pair members take the land of their own polarity and bank members
-//! take lands in order. Every binding gets a stable net name,
-//! `B{board}.{path}`.
+//! take lands in order. `analog` contacts ride S13's generic LS lands.
+//!
+//! The **Switchyard** bed instead gives each tested board one whole
+//! per-DUT cell, boards matched to cells by the same Hungarian solve
+//! over centroid distances. Inside the cell each contact takes a land of
+//! its own role — digital roles never reach the analog-only lands — and
+//! a contact with no free land of its role is dropped, not failed. A
+//! cell's VTarget lands are one bed net, so a board's VTarget contacts
+//! and lands form one net, `B{board}.VTARGET`.
+//!
+//! Every binding gets a stable net name, `B{board}.{path}`.
 
 use anyhow::{Result, bail};
 
+use crate::bed::Bed;
 use crate::contacts::PanelContact;
 use crate::pattern::{Land, Role};
 
@@ -56,6 +66,9 @@ pub struct Plan {
     pub tested: Vec<u32>,
     pub contacts: Vec<PanelContact>,
     pub bindings: Vec<Binding>,
+    /// Contacts of tested boards that found no land (indices into
+    /// `contacts`).
+    pub dropped: Vec<usize>,
 }
 
 /// Slot kinds a demand can occupy.
@@ -81,23 +94,89 @@ struct DemandRow {
     at: [f64; 2],
 }
 
-/// Compute the plan for a panel's contacts against the S13 lands.
+/// Compute the plan for a panel's contacts against a bed's lands.
 /// `keepouts` are fixed-feature disks (center, radius) a pogo pad must
 /// stay out of.
 pub fn plan(
     contacts: Vec<PanelContact>,
     lands: &[Land],
     keepouts: &[([f64; 2], f64)],
+    bed: Bed,
 ) -> Result<Plan> {
     if contacts.is_empty() {
         bail!("panel has no ICT contacts; mark test points with the TestPoint `ict` config");
     }
+    let boards_total = contacts.iter().map(|c| c.board).max().unwrap_or(0) + 1;
+    // A pogo's whole courtyard must sit inside the bed's envelope.
+    let inside = |xy: [f64; 2]| {
+        bed.envelope().is_none_or(|[x0, y0, x1, y1]| {
+            let r = crate::pogo::COURTYARD_RADIUS_MM;
+            xy[0] - r >= x0 && xy[0] + r <= x1 && xy[1] - r >= y0 && xy[1] + r <= y1
+        })
+    };
+    let valid: Vec<u32> = (0..boards_total)
+        .filter(|&board| {
+            contacts
+                .iter()
+                .filter(|contact| contact.board == board)
+                .all(|contact| {
+                    inside(contact.xy)
+                        && keepouts
+                            .iter()
+                            .all(|(center, radius)| distance(contact.xy, *center) >= *radius)
+                })
+        })
+        .collect();
+    if valid.is_empty() {
+        bail!(
+            "every board instance has a contact inside a fixed-feature keep-out or outside the \
+             bed's envelope"
+        );
+    }
+
+    let (tested, mut bindings, dropped) = match bed {
+        Bed::S13 => by_kind(&contacts, lands, &valid)?,
+        Bed::SwitchyardRev1 => by_cell(&contacts, lands, &valid),
+    };
+    for (index, contact) in contacts.iter().enumerate() {
+        if contact.role == Role::Gnd && tested.contains(&contact.board) {
+            bindings.push(Binding {
+                contact: index,
+                land: None,
+                net: "GND".into(),
+            });
+        }
+    }
+    bindings.sort_by_key(|binding| binding.contact);
+
+    Ok(Plan {
+        boards_total,
+        tested,
+        contacts,
+        bindings,
+        dropped,
+    })
+}
+
+/// `testable` of the valid boards, spread evenly across the sheet.
+fn spread(valid: &[u32], testable: usize) -> Vec<u32> {
+    (0..testable)
+        .map(|i| valid[i * valid.len() / testable])
+        .collect()
+}
+
+/// S13: slots and demands matched per kind across the whole
+/// constellation. Returns the tested boards and their non-GND bindings.
+fn by_kind(
+    contacts: &[PanelContact],
+    lands: &[Land],
+    valid: &[u32],
+) -> Result<(Vec<u32>, Vec<Binding>, Vec<usize>)> {
     let slots = derive_slots(lands);
     let capacity = |kind: Kind| slots.iter().filter(|slot| slot.kind == kind).count();
 
-    let boards_total = contacts.iter().map(|c| c.board).max().unwrap_or(0) + 1;
-    let per_board = board_demands(&contacts, 0);
-    let mut testable = boards_total as usize;
+    let per_board = board_demands(contacts, 0);
+    let mut testable = valid.len();
     for kind in [Kind::Pair, Kind::VtBank, Kind::Vusb, Kind::Ls] {
         let need = per_board
             .iter()
@@ -114,31 +193,11 @@ pub fn plan(
             testable = testable.min(cap / need);
         }
     }
-    let valid: Vec<u32> = (0..boards_total)
-        .filter(|&board| {
-            contacts
-                .iter()
-                .filter(|contact| contact.board == board)
-                .all(|contact| {
-                    keepouts.iter().all(|(center, radius)| {
-                        let dx = contact.xy[0] - center[0];
-                        let dy = contact.xy[1] - center[1];
-                        (dx * dx + dy * dy).sqrt() >= *radius
-                    })
-                })
-        })
-        .collect();
-    if valid.is_empty() {
-        bail!("every board instance has a contact inside a fixed-feature keep-out");
-    }
-    let testable = testable.min(valid.len());
-    let tested: Vec<u32> = (0..testable)
-        .map(|i| valid[i * valid.len() / testable])
-        .collect();
+    let tested = spread(valid, testable);
 
     let mut demands: Vec<DemandRow> = Vec::new();
     for &board in &tested {
-        demands.extend(board_demands(&contacts, board));
+        demands.extend(board_demands(contacts, board));
     }
     let mut bindings: Vec<Binding> = Vec::new();
     for kind in [Kind::Pair, Kind::VtBank, Kind::Vusb, Kind::Ls] {
@@ -152,11 +211,7 @@ pub fn plan(
             .map(|i| {
                 (0..n)
                     .map(|j| match kind_demands.get(i) {
-                        Some(demand) => {
-                            let dx = demand.at[0] - kind_slots[j].at[0];
-                            let dy = demand.at[1] - kind_slots[j].at[1];
-                            ((dx * dx + dy * dy).sqrt() * 1000.0) as i64
-                        }
+                        Some(demand) => cost_of(demand.at, kind_slots[j].at),
                         None => 0,
                     })
                     .collect()
@@ -175,23 +230,154 @@ pub fn plan(
             }
         }
     }
-    for (index, contact) in contacts.iter().enumerate() {
-        if contact.role == Role::Gnd && tested.contains(&contact.board) {
+    Ok((tested, bindings, Vec::new()))
+}
+
+/// Switchyard: each tested board takes one whole cell (a block with
+/// Vtarget lands), boards matched to cells by centroid distance. Inside
+/// a cell every contact takes a land of its own role, SWCLK and SWDIO
+/// their default S0 and S1; a contact whose role has no free land left
+/// is dropped. Returns the tested boards, their non-GND bindings, and the
+/// dropped contacts.
+fn by_cell(
+    contacts: &[PanelContact],
+    lands: &[Land],
+    valid: &[u32],
+) -> (Vec<u32>, Vec<Binding>, Vec<usize>) {
+    let mut cells: Vec<u32> = lands
+        .iter()
+        .filter(|land| land.role == Role::Vtarget)
+        .map(|land| land.block)
+        .collect();
+    cells.sort_unstable();
+    cells.dedup();
+    let tested = spread(valid, cells.len().min(valid.len()));
+
+    let cell_lands = |cell: u32| -> Vec<usize> {
+        (0..lands.len())
+            .filter(|&i| lands[i].block == cell)
+            .collect()
+    };
+    let board_contacts = |board: u32| -> Vec<usize> {
+        (0..contacts.len())
+            .filter(|&i| contacts[i].board == board)
+            .collect()
+    };
+    let n = cells.len();
+    let cell_at: Vec<[f64; 2]> = cells
+        .iter()
+        .map(|&cell| centroid(cell_lands(cell).iter().map(|&i| lands[i].xy)))
+        .collect();
+    let cost: Vec<Vec<i64>> = (0..n)
+        .map(|i| {
+            (0..n)
+                .map(|j| match tested.get(i) {
+                    Some(&board) => {
+                        let at = centroid(board_contacts(board).iter().map(|&c| contacts[c].xy));
+                        cost_of(at, cell_at[j])
+                    }
+                    None => 0,
+                })
+                .collect()
+        })
+        .collect();
+    let matching = hungarian(&cost);
+
+    let mut bindings = Vec::new();
+    let mut dropped = Vec::new();
+    for (i, &board) in tested.iter().enumerate() {
+        let cell = cells[matching[i].expect("square matching is total")];
+        let mut mine: Vec<usize> = board_contacts(board)
+            .into_iter()
+            .filter(|&c| contacts[c].role != Role::Gnd)
+            .collect();
+        let mut free = cell_lands(cell);
+        // The cell's VTarget lands are one bed net, so the board's
+        // VTarget contacts share one interposer net too: any pogo can feed
+        // any land, and the board's current splits over every path.
+        let mut bind = |contact: usize, land: usize| {
+            let net = match contacts[contact].role {
+                Role::Vtarget => format!("B{board}.VTARGET"),
+                _ => net_name(&contacts[contact]),
+            };
             bindings.push(Binding {
-                contact: index,
-                land: None,
-                net: "GND".into(),
+                contact,
+                land: Some(land),
+                net,
             });
+        };
+        for (ict, label) in [("swclk", "S0"), ("swdio", "S1")] {
+            let contact = mine.iter().position(|&c| contacts[c].ict == ict);
+            let land = free.iter().position(|&l| lands[l].label == label);
+            if let (Some(contact), Some(land)) = (contact, land) {
+                bind(mine.remove(contact), free.remove(land));
+            }
+        }
+        for role in [
+            Role::UsbDp,
+            Role::UsbDm,
+            Role::Vtarget,
+            Role::Vusb,
+            Role::Ls,
+            Role::Analog,
+        ] {
+            let want: Vec<usize> = mine
+                .iter()
+                .copied()
+                .filter(|&c| contacts[c].role == role)
+                .collect();
+            if want.is_empty() {
+                continue;
+            }
+            let have: Vec<usize> = free
+                .iter()
+                .copied()
+                .filter(|&l| lands[l].role == role)
+                .collect();
+            // Square with zero-cost dummies; a contact matched to a dummy
+            // land has nowhere to go.
+            let n = want.len().max(have.len());
+            let cost: Vec<Vec<i64>> = (0..n)
+                .map(|i| {
+                    (0..n)
+                        .map(|j| match (want.get(i), have.get(j)) {
+                            (Some(&c), Some(&l)) => cost_of(contacts[c].xy, lands[l].xy),
+                            _ => 0,
+                        })
+                        .collect()
+                })
+                .collect();
+            let matching = hungarian(&cost);
+            for (i, &contact) in want.iter().enumerate() {
+                match have.get(matching[i].expect("square matching is total")) {
+                    Some(&land) => bind(contact, land),
+                    None => dropped.push(contact),
+                }
+            }
         }
     }
-    bindings.sort_by_key(|binding| binding.contact);
+    dropped.sort_unstable();
+    (tested, bindings, dropped)
+}
 
-    Ok(Plan {
-        boards_total,
-        tested,
-        contacts,
-        bindings,
-    })
+fn distance(a: [f64; 2], b: [f64; 2]) -> f64 {
+    ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2)).sqrt()
+}
+
+/// Integer matching cost: distance in µm.
+fn cost_of(a: [f64; 2], b: [f64; 2]) -> i64 {
+    (distance(a, b) * 1000.0) as i64
+}
+
+fn centroid(points: impl Iterator<Item = [f64; 2]>) -> [f64; 2] {
+    let (mut sum, mut n) = ([0.0, 0.0], 0.0);
+    for p in points {
+        sum[0] += p[0];
+        sum[1] += p[1];
+        n += 1.0;
+    }
+    let n = f64::max(n, 1.0);
+    [sum[0] / n, sum[1] / n]
 }
 
 fn net_name(contact: &PanelContact) -> String {
@@ -303,6 +489,7 @@ fn board_demands(contacts: &[PanelContact], board: u32) -> Vec<DemandRow> {
         });
     }
     let mut ls: Vec<usize> = of(Role::Ls);
+    ls.extend(of(Role::Analog));
     ls.extend(dp.into_iter().skip(pairs));
     ls.extend(dm.into_iter().skip(pairs));
     for chunk in of(Role::Vtarget).chunks(2) {
@@ -429,6 +616,15 @@ pub fn to_json(plan: &Plan, panel: &crate::panel::Panel, lands: &[Land]) -> Stri
         "boards_total": plan.boards_total,
         "boards_tested": plan.tested,
         "bindings": bindings,
+        "dropped": plan.dropped.iter().map(|&contact| {
+            let contact = &plan.contacts[contact];
+            serde_json::json!({
+                "board": contact.board,
+                "refdes": contact.refdes,
+                "path": contact.path,
+                "role": contact.ict,
+            })
+        }).collect::<Vec<_>>(),
     });
     serde_json::to_string_pretty(&doc).expect("fixture map serializes") + "\n"
 }
@@ -448,6 +644,7 @@ mod tests {
                 refdes: "TP1".into(),
                 path: "TP_DP.TP".into(),
                 role: Role::UsbDp,
+                ict: "usb_dp".into(),
                 xy: [30.0, 50.0],
             },
             PanelContact {
@@ -455,14 +652,81 @@ mod tests {
                 refdes: "TP2".into(),
                 path: "TP_SWDIO.TP".into(),
                 role: Role::Ls,
+                ict: "swdio".into(),
                 xy: [32.0, 50.0],
             },
         ];
-        let plan = plan(contacts, &lands, &[]).expect("plans without panicking");
+        let plan = plan(contacts, &lands, &[], Bed::S13).expect("plans without panicking");
         assert_eq!(plan.bindings.len(), 2);
         for binding in &plan.bindings {
             // Both bind to ordinary LS lands.
             assert_eq!(lands[binding.land.unwrap()].role, Role::Ls);
+        }
+    }
+
+    #[test]
+    fn switchyard_cells_bind_by_role() {
+        let lands = Bed::SwitchyardRev1.lands(105.0, 74.0).unwrap();
+        // One board over cell 0 (column R1, inner rows): the rev-1 contact
+        // set plus a fifth digital line, which has no S lane left.
+        let roles = [
+            ("vtarget", Role::Vtarget),
+            ("vtarget", Role::Vtarget),
+            ("vusb", Role::Vusb),
+            ("gnd", Role::Gnd),
+            ("usb_dp", Role::UsbDp),
+            ("usb_dm", Role::UsbDm),
+            ("swdio", Role::Ls),
+            ("swclk", Role::Ls),
+            ("nrst", Role::Ls),
+            ("ls", Role::Ls),
+            ("ls", Role::Ls),
+            ("analog", Role::Analog),
+            ("analog", Role::Analog),
+        ];
+        let contacts: Vec<PanelContact> = roles
+            .iter()
+            .enumerate()
+            .map(|(i, (ict, role))| PanelContact {
+                board: 0,
+                refdes: format!("TP{}", i + 1),
+                path: format!("TP{}.TP", i + 1),
+                role: *role,
+                ict: (*ict).into(),
+                xy: [80.0 + i as f64, 50.0],
+            })
+            .collect();
+        let plan = plan(contacts, &lands, &[], Bed::SwitchyardRev1).unwrap();
+        assert_eq!(plan.tested, vec![0]);
+        assert_eq!(plan.dropped.len(), 1);
+        assert_eq!(plan.contacts[plan.dropped[0]].role, Role::Ls);
+        let land_of = |ict: &str| {
+            plan.bindings
+                .iter()
+                .find(|b| plan.contacts[b.contact].ict == ict)
+                .and_then(|b| b.land)
+                .map(|land| lands[land])
+                .unwrap()
+        };
+        // VTarget contacts share one net.
+        let vt: Vec<&str> = plan
+            .bindings
+            .iter()
+            .filter(|b| plan.contacts[b.contact].role == Role::Vtarget)
+            .map(|b| b.net.as_str())
+            .collect();
+        assert_eq!(vt, ["B0.VTARGET", "B0.VTARGET"]);
+        // Nearest cell, SWD on its default lanes.
+        assert_eq!(land_of("swclk").block, 0);
+        assert_eq!(land_of("swclk").label, "S0");
+        assert_eq!(land_of("swdio").label, "S1");
+        for binding in &plan.bindings {
+            let contact = &plan.contacts[binding.contact];
+            match binding.land {
+                None => assert_eq!(contact.role, Role::Gnd),
+                // Role-faithful: digital never lands on S4/S5.
+                Some(land) => assert_eq!(lands[land].role, contact.role),
+            }
         }
     }
 

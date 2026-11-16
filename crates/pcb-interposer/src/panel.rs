@@ -3,7 +3,9 @@
 //! The interposer stacks under the assembly panel on the same tooling
 //! pins, so its outline, tooling holes, and global fiducials are
 //! *inherited* from the generated panel (`pcbc ipc2581 board-array
-//! create` output) rather than recomputed — they cannot drift. On top of
+//! create` output) rather than recomputed — they cannot drift. Mouse-bite
+//! perforations share the panel's drill layer but are not tooling, so
+//! they are left out. On top of
 //! the panel's holes we add the folded A7 tile's corner tooling, the
 //! fixture connector plate's registration; exactly coincident holes
 //! collapse, so holes either overlap perfectly or not at all.
@@ -22,6 +24,7 @@ use crate::pattern::mate_dims;
 /// Corner tooling matches the board-array generator's spec.
 const CORNER_TOOLING_DIA_MM: f64 = 2.1;
 const CORNER_TOOLING_INSET_MM: f64 = 3.0;
+const MOUSE_BITE_DIA_MM: f64 = pcb_ir::geom::mouse_bite::SparkFunShallow::HOLE_DIAMETER_MM;
 const EPS: f64 = 1e-6;
 
 /// The panel's fixed features, in the KiCad sheet frame.
@@ -36,6 +39,9 @@ pub struct Panel {
     /// Global fiducial centers per face.
     pub fids_top: Vec<[f64; 2]>,
     pub fids_bottom: Vec<[f64; 2]>,
+    /// Mouse-bite perforation centers: where the boards' break-away tabs
+    /// bridge the channels around them.
+    pub mouse_bites: Vec<[f64; 2]>,
 }
 
 /// One outline primitive. Arcs carry a KiCad-style mid point.
@@ -166,16 +172,27 @@ pub fn extract(ipc: &Ipc2581) -> Result<Panel> {
     let mut holes: Vec<([f64; 2], f64)> = Vec::new();
     let mut fids_top = Vec::new();
     let mut fids_bottom = Vec::new();
+    let mut mouse_bites = Vec::new();
     for layer_feature in &step.layer_features {
         let on_drill = drill_layers.contains(&layer_feature.layer_ref);
         let side = copper_side(layer_feature.layer_ref);
         for set in &layer_feature.sets {
             for feature in set.features.slice(&layer_feature.features) {
                 match feature {
+                    // Mouse-bite perforations break the panel apart; the
+                    // interposer has no tabs, and drilling them would cut
+                    // lands and pogo pads.
+                    SetFeature::Hole(hole)
+                        if on_drill
+                            && hole.plating_status == PlatingStatus::NonPlated
+                            && (hole.diameter - MOUSE_BITE_DIA_MM).abs() > EPS =>
+                    {
+                        holes.push((flip([hole.x, hole.y]), hole.diameter));
+                    }
                     SetFeature::Hole(hole)
                         if on_drill && hole.plating_status == PlatingStatus::NonPlated =>
                     {
-                        holes.push((flip([hole.x, hole.y]), hole.diameter));
+                        mouse_bites.push(flip([hole.x, hole.y]));
                     }
                     SetFeature::Fiducial(fiducial) if fiducial.kind == FiducialKind::Global => {
                         let at = flip([fiducial.location.x, fiducial.location.y]);
@@ -233,5 +250,6 @@ pub fn extract(ipc: &Ipc2581) -> Result<Panel> {
         holes,
         fids_top,
         fids_bottom,
+        mouse_bites,
     })
 }

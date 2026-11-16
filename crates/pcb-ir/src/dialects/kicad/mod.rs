@@ -352,6 +352,8 @@ pub struct Segment {
     pub layer: String,
     pub net: u32,
     pub uuid: String,
+    /// Locked tracks are fixed wiring to autorouters.
+    pub locked: bool,
 }
 
 /// A curved track segment through `mid`.

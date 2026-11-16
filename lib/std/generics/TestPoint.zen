@@ -73,6 +73,7 @@ ict = config(
         "usb_dp",
         "usb_dm",
         "ls",
+        "analog",
     ],
     help="Optional ICT fixture role, copied onto the footprint. Implies the TestPoint_ICT footprint, whose 3mm courtyard reserves the interposer pogo pitch.",
 )

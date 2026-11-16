@@ -2,7 +2,7 @@ use anyhow::Context as _;
 use clap::{Args, Subcommand, ValueEnum};
 use pcb_ir::geom::Resolution;
 use std::io::Read as _;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use pcb_ipc2581_tools::{
     BoardSide, LayoutTarget, OutputFormat, RenderFormat, UnitFormat, ViewMode, commands,
@@ -65,15 +65,32 @@ enum Commands {
         /// Board-array IPC-2581 XML file (`board-array create` output)
         #[arg(value_hint = clap::ValueHint::FilePath)]
         input: PathBuf,
-        /// Output `.kicad_pcb` path; a sibling `.kicad_pro` is written too
+        /// Output `.kicad_pcb` path; a sibling `.kicad_pro` is written too, and a
+        /// `.kicad_dru` on a bed with high voltage
         #[arg(short, long, value_hint = clap::ValueHint::FilePath)]
         output: PathBuf,
         /// Also write the fixture map (tested boards + contact→land bindings) as JSON
         #[arg(long, value_hint = clap::ValueHint::FilePath)]
         fixture_map: Option<PathBuf>,
-        /// Copper layers, 2 or 4; 4 adds two inner GND planes
+        /// Also write the DUT plate, the printed slab between the interposer and the
+        /// DUT panel, as OpenSCAD source (beds with alignment dowels)
+        #[arg(long, value_hint = clap::ValueHint::FilePath)]
+        dut_plate: Option<PathBuf>,
+        /// How the DUT plate locates the DUT panel: printed nubs, or Ø2 mm dowel pins
+        /// for interposers that see more insertions
+        #[arg(long, default_value = "nubs")]
+        dut_plate_locators: pcb_interposer::plate::Locators,
+        /// Copper layers, 2, 4 or 4-signal; 4 adds two inner GND planes and, on a
+        /// bed with high voltage, holds its exposed clearance on every net;
+        /// 4-signal a GND plane (In1) and a signal layer (In2)
         #[arg(long, default_value = "2")]
         layers: pcb_interposer::Layers,
+        /// Fixture bed the bottom lands mate: s13 or switchyard-rev1
+        #[arg(long, default_value = "s13")]
+        bed: pcb_interposer::Bed,
+        /// Interposer number (1-1023) the bed's ID straps encode; required by switchyard-rev1
+        #[arg(long)]
+        interposer_id: Option<u16>,
         /// Auto-route the interposer with FreeRouting (requires Java 25+)
         #[arg(long)]
         route: bool,
@@ -523,22 +540,37 @@ pub fn execute(args: Ipc2581Args, resolution: Resolution) -> anyhow::Result<()> 
             input,
             output,
             fixture_map,
+            dut_plate,
+            dut_plate_locators,
             layers,
+            bed,
+            interposer_id,
             route,
             ipc,
         } => {
-            let (pcb, pro) = pcb_interposer::generate(&input, layers)?;
+            let (pcb, pro, rules) = pcb_interposer::generate(&input, layers, bed, interposer_id)?;
             std::fs::write(&output, pcb).with_context(|| format!("write {}", output.display()))?;
             let pro_path = output.with_extension("kicad_pro");
             std::fs::write(&pro_path, pro)
                 .with_context(|| format!("write {}", pro_path.display()))?;
+            if let Some(rules) = rules {
+                let dru_path = output.with_extension("kicad_dru");
+                std::fs::write(&dru_path, rules)
+                    .with_context(|| format!("write {}", dru_path.display()))?;
+            }
             println!(
                 "✓ Wrote interposer {} and {}",
                 output.display(),
                 pro_path.display()
             );
+            if let Some(plate_path) = dut_plate {
+                let plate = pcb_interposer::dut_plate(&input, bed, dut_plate_locators)?;
+                std::fs::write(&plate_path, plate)
+                    .with_context(|| format!("write {}", plate_path.display()))?;
+                println!("✓ Wrote DUT plate {}", plate_path.display());
+            }
             if let Some(map_path) = fixture_map {
-                let map = pcb_interposer::fixture_map(&input)?;
+                let map = pcb_interposer::fixture_map(&input, bed)?;
                 std::fs::write(&map_path, map)
                     .with_context(|| format!("write {}", map_path.display()))?;
                 println!("✓ Wrote fixture map {}", map_path.display());
@@ -549,13 +581,110 @@ pub fn execute(args: Ipc2581Args, resolution: Resolution) -> anyhow::Result<()> 
                     .context("output path has no file name")?
                     .to_string_lossy()
                     .to_string();
-                // Stitch whatever board state routing left behind — a
-                // partial result published before a routing error still
-                // gets a coherent GND — then surface the routing error.
-                let routed = crate::freerouting::execute(&output, &pro_path, &board_name, 20);
-                let vias = pcb_interposer::stitch::stitch(&output)?;
-                println!("✓ Stitched {vias} GND vias");
-                routed?;
+                // FreeRouting occasionally reports a net complete while its
+                // session drops one leg, more often under tight clearances;
+                // KiCad's connectivity of the stitched board is the check,
+                // and a fresh run usually closes the gap. The best attempt
+                // is kept.
+                const ATTEMPTS: usize = 3;
+                let generated =
+                    std::fs::read(&output).with_context(|| format!("read {}", output.display()))?;
+                // FreeRouting does not always hold the clearance it is
+                // given at vias; each offender's net is ripped up and
+                // rerouted around a guard, a bounded number of times.
+                const REPAIRS: usize = 3;
+                let uniform = layers.uniform_clearance(bed);
+                // Over GND planes, FreeRouting is deterministic, so a
+                // rerun changes the guards instead: unguarded GND pads
+                // first, then a via site reserved in each, which reopens
+                // a pad sealed off unguarded but crowds other boards.
+                let rings = |attempt: usize| {
+                    use pcb_interposer::guard::Rings;
+                    match layers {
+                        pcb_interposer::Layers::Four if attempt == 1 => Rings::None,
+                        pcb_interposer::Layers::Four => Rings::Sites,
+                        pcb_interposer::Layers::Two | pcb_interposer::Layers::FourSignal => {
+                            Rings::Pour
+                        }
+                    }
+                };
+                let route = |output: &Path| {
+                    crate::freerouting::execute(output, &pro_path, &board_name, 20, &|dsn| {
+                        // A uniform clearance is the DSN's own already.
+                        match (uniform, bed.hv_clearance()) {
+                            (None, Some(hv)) => pcb_interposer::dsn::expose(dsn, hv),
+                            _ => Ok(()),
+                        }
+                    })
+                };
+                // Best attempt: fewest unconnected plus offending vias.
+                let attempts = match layers {
+                    pcb_interposer::Layers::Four => 2,
+                    pcb_interposer::Layers::Two | pcb_interposer::Layers::FourSignal => ATTEMPTS,
+                };
+                let mut best: Option<((usize, usize), Vec<u8>)> = None;
+                for attempt in 1..=attempts {
+                    std::fs::write(&output, &generated)
+                        .with_context(|| format!("write {}", output.display()))?;
+                    let sites = pcb_interposer::guard::add(&output, rings(attempt), uniform)?;
+                    let mut routed = route(&output);
+                    for _ in 0..REPAIRS {
+                        if routed.is_err() {
+                            break;
+                        }
+                        let ripped = pcb_interposer::repair::rip_up(&output, bed)?;
+                        if ripped == 0 {
+                            break;
+                        }
+                        println!(
+                            "{ripped} via{} too close to a pad or the edge; ripping up and rerouting",
+                            if ripped == 1 { "" } else { "s" }
+                        );
+                        routed = route(&output);
+                    }
+                    pcb_interposer::guard::remove(&output)?;
+                    // Stitch whatever board state routing left behind — a
+                    // partial result published before a routing error still
+                    // gets a coherent GND — then surface the routing error.
+                    let vias = pcb_interposer::stitch::stitch(&output, &sites)?;
+                    println!("✓ Stitched {vias} GND vias");
+                    routed?;
+                    let gaps = pcb_interposer::stitch::unconnected(&output)?;
+                    let faults = pcb_interposer::repair::violations(&output, bed)?;
+                    if best
+                        .as_ref()
+                        .is_none_or(|((g, f), _)| gaps + faults < g + f)
+                    {
+                        best = Some(((gaps, faults), std::fs::read(&output)?));
+                    }
+                    if gaps + faults == 0 {
+                        break;
+                    }
+                    if attempt < attempts {
+                        println!(
+                            "{gaps} connection{} unconnected, {faults} via{} breaking clearance; rerouting (attempt {}/{attempts})",
+                            if gaps == 1 { "" } else { "s" },
+                            if faults == 1 { "" } else { "s" },
+                            attempt + 1
+                        );
+                    }
+                }
+                if let Some(((gaps, faults), board)) = best {
+                    std::fs::write(&output, board)
+                        .with_context(|| format!("write {}", output.display()))?;
+                    if gaps > 0 {
+                        eprintln!(
+                            "warning: {gaps} connection{} still unconnected after {attempts} routing attempts",
+                            if gaps == 1 { "" } else { "s" }
+                        );
+                    }
+                    if faults > 0 {
+                        eprintln!(
+                            "warning: {faults} via{} still too close to a pad or the board edge",
+                            if faults == 1 { "" } else { "s" }
+                        );
+                    }
+                }
             }
             if let Some(ipc_path) = ipc {
                 pcb_kicad::KiCadCliBuilder::new()

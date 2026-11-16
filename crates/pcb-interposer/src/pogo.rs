@@ -16,6 +16,15 @@ use anyhow::{Context, Result, bail};
 /// The vendored template, compiled in.
 const TEMPLATE: &str = include_str!("../footprints/806-22-001-30-0xx191.kicad_mod");
 const LIB_NICKNAME: &str = "Interposer";
+/// The vendored footprint's courtyard radius: the cap is wider than the
+/// solder land, so the courtyard governs interference.
+pub const COURTYARD_RADIUS_MM: f64 = 1.5;
+/// The part's solder land.
+pub const LAND_DIA_MM: f64 = 2.08;
+/// The plunger tip's free height above the board, and its full stroke
+/// (Mill-Max 806-22-001-30-012191 data sheet).
+pub const FREE_HEIGHT_MM: f64 = 6.48;
+pub const STROKE_MM: f64 = 1.40;
 
 /// A parsed-and-validated stamping template.
 pub struct PogoTemplate {
