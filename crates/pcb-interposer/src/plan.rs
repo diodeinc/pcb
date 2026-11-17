@@ -106,6 +106,41 @@ pub fn plan(
     if contacts.is_empty() {
         bail!("panel has no ICT contacts; mark test points with the TestPoint `ict` config");
     }
+    // A pogo over the bed's dowels or screws cannot be built at all, on
+    // any board instance: fail rather than leave the board untested.
+    let pogo = crate::pogo::COURTYARD_RADIUS_MM;
+    let blocked: Vec<String> = contacts
+        .iter()
+        .flat_map(|contact| {
+            bed.alignment().into_iter().filter_map(move |feature| {
+                let reach = feature.keepout_dia / 2.0 + pogo;
+                let gap = distance(contact.xy, feature.at);
+                (gap < reach).then(|| {
+                    format!(
+                        "board {} {} ({}) at ({:.2}, {:.2}) is {gap:.2} mm from the bed's {} {} \
+                         hole at ({:.2}, {:.2}); its pogo needs {reach:.2} mm",
+                        contact.board,
+                        contact.refdes,
+                        contact.path,
+                        contact.xy[0],
+                        contact.xy[1],
+                        feature.name,
+                        if feature.clamps { "screw" } else { "alignment" },
+                        feature.at[0],
+                        feature.at[1],
+                    )
+                })
+            })
+        })
+        .collect();
+    if !blocked.is_empty() {
+        bail!(
+            "{} contact{} would put a pogo in a bed alignment or screw keep-out:\n  {}",
+            blocked.len(),
+            if blocked.len() == 1 { "" } else { "s" },
+            blocked.join("\n  ")
+        );
+    }
     let boards_total = contacts.iter().map(|c| c.board).max().unwrap_or(0) + 1;
     // A pogo's whole courtyard must sit inside the bed's envelope.
     let inside = |xy: [f64; 2]| {
@@ -662,6 +697,51 @@ mod tests {
             // Both bind to ordinary LS lands.
             assert_eq!(lands[binding.land.unwrap()].role, Role::Ls);
         }
+    }
+
+    #[test]
+    fn pogo_in_an_alignment_or_screw_keepout_fails() {
+        let lands = Bed::SwitchyardRev1.lands(105.0, 74.0).unwrap();
+        let contact = |xy| PanelContact {
+            board: 2,
+            refdes: "TP7".into(),
+            path: "TP_SWDIO.TP".into(),
+            role: Role::Ls,
+            ict: "swdio".into(),
+            xy,
+        };
+        // The M3 screw at (52.5, 31.25): Ø6 keep-out plus the pogo's
+        // 1.5 mm courtyard.
+        let err = plan(
+            vec![contact([52.5, 35.7])],
+            &lands,
+            &[],
+            Bed::SwitchyardRev1,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("board 2 TP7 (TP_SWDIO.TP)"), "{err}");
+        assert!(err.contains("M3 screw hole"), "{err}");
+        let err = plan(
+            vec![contact([28.5, 28.0])],
+            &lands,
+            &[],
+            Bed::SwitchyardRev1,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("D1 alignment hole"), "{err}");
+        // Clear of every feature: plans (the contact is just untested
+        // where no cell takes it).
+        assert!(
+            plan(
+                vec![contact([52.5, 35.8])],
+                &lands,
+                &[],
+                Bed::SwitchyardRev1
+            )
+            .is_ok()
+        );
     }
 
     #[test]
