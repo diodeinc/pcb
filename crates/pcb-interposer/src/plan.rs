@@ -31,9 +31,15 @@
 //! pair members take the land of their own polarity and bank members
 //! take lands in order. `analog` contacts ride S13's generic LS lands.
 //!
-//! The **Switchyard** bed instead gives each tested board one whole
-//! per-DUT cell, boards matched to cells by the same Hungarian solve
-//! over centroid distances. Inside the cell each contact takes a land of
+//! The **Switchyard** bed instead gives each tested board whole per-DUT
+//! cells: as many as its signal contacts (USB, digital, analog) need
+//! against one cell's lanes, so a wide board halves (or worse) the
+//! boards one insertion tests. Board copies are matched to cells by the
+//! same Hungarian solve over centroid distances. The board's supplies
+//! and SWD use only its primary cell, the one nearest those contacts: a
+//! DUT's VTarget or VUSB pads are one DUT net, and binding them to two
+//! cells would tie two tester supplies together. Each USB pair (a DP and
+//! its nearest DM) stays inside one cell. Every contact takes a land of
 //! its own role — digital roles never reach the analog-only lands — and
 //! a contact with no free land of its role is dropped, not failed. A
 //! cell's VTarget lands are one bed net, so a board's VTarget contacts
@@ -64,6 +70,9 @@ pub struct Plan {
     pub boards_total: u32,
     /// Board instance indices one fixture insertion tests.
     pub tested: Vec<u32>,
+    /// Per tested board, the bed cells it spans, primary first; empty on
+    /// beds without cells.
+    pub cells: Vec<Vec<u32>>,
     pub contacts: Vec<PanelContact>,
     pub bindings: Vec<Binding>,
     /// Contacts of tested boards that found no land (indices into
@@ -169,8 +178,11 @@ pub fn plan(
         );
     }
 
-    let (tested, mut bindings, dropped) = match bed {
-        Bed::S13 => by_kind(&contacts, lands, &valid)?,
+    let (tested, cells, mut bindings, dropped) = match bed {
+        Bed::S13 => {
+            let (tested, bindings, dropped) = by_kind(&contacts, lands, &valid)?;
+            (tested, Vec::new(), bindings, dropped)
+        }
         Bed::SwitchyardRev1 => by_cell(&contacts, lands, &valid),
     };
     for (index, contact) in contacts.iter().enumerate() {
@@ -187,6 +199,7 @@ pub fn plan(
     Ok(Plan {
         boards_total,
         tested,
+        cells,
         contacts,
         bindings,
         dropped,
@@ -268,17 +281,20 @@ fn by_kind(
     Ok((tested, bindings, Vec::new()))
 }
 
-/// Switchyard: each tested board takes one whole cell (a block with
-/// Vtarget lands), boards matched to cells by centroid distance. Inside
-/// a cell every contact takes a land of its own role, SWCLK and SWDIO
-/// their default S0 and S1; a contact whose role has no free land left
-/// is dropped. Returns the tested boards, their non-GND bindings, and the
-/// dropped contacts.
+/// Switchyard: each tested board takes `span` whole cells (blocks with
+/// Vtarget lands), as many as its signal contacts need, board copies
+/// matched to cells by centroid distance. The board's supplies and SWD
+/// use only its primary cell, the one nearest those contacts, so the
+/// DUT never ties two cells' supplies together; a USB pair stays inside
+/// one cell. Every contact takes a land of its own role, SWCLK and SWDIO
+/// the primary's S0 and S1; a contact whose role has no free land left
+/// is dropped. Returns the tested boards, their cells (primary first),
+/// their non-GND bindings, and the dropped contacts.
 fn by_cell(
     contacts: &[PanelContact],
     lands: &[Land],
     valid: &[u32],
-) -> (Vec<u32>, Vec<Binding>, Vec<usize>) {
+) -> (Vec<u32>, Vec<Vec<u32>>, Vec<Binding>, Vec<usize>) {
     let mut cells: Vec<u32> = lands
         .iter()
         .filter(|land| land.role == Role::Vtarget)
@@ -286,7 +302,7 @@ fn by_cell(
         .collect();
     cells.sort_unstable();
     cells.dedup();
-    let tested = spread(valid, cells.len().min(valid.len()));
+    let n = cells.len();
 
     let cell_lands = |cell: u32| -> Vec<usize> {
         (0..lands.len())
@@ -298,35 +314,83 @@ fn by_cell(
             .filter(|&i| contacts[i].board == board)
             .collect()
     };
-    let n = cells.len();
+    let board_at = |board: u32| centroid(board_contacts(board).iter().map(|&c| contacts[c].xy));
+    let supply = |role: Role| matches!(role, Role::Vtarget | Role::Vusb);
+    let anchors = |contact: &PanelContact| {
+        supply(contact.role) || matches!(contact.ict.as_str(), "swclk" | "swdio")
+    };
+
+    // The cells are alike and the boards one design, so one board's
+    // signal counts against one cell's lanes size every board's span.
+    let span = match (valid.first(), cells.first()) {
+        (Some(&board), Some(&cell)) => {
+            let lanes = cell_lands(cell);
+            [Role::UsbDp, Role::UsbDm, Role::Ls, Role::Analog]
+                .into_iter()
+                .map(|role| {
+                    let need = board_contacts(board)
+                        .iter()
+                        .filter(|&&c| contacts[c].role == role)
+                        .count();
+                    let cap = lanes.iter().filter(|&&l| lands[l].role == role).count();
+                    if cap == 0 { 1 } else { need.div_ceil(cap) }
+                })
+                .max()
+                .unwrap_or(1)
+                .clamp(1, n)
+        }
+        _ => 1,
+    };
+    let tested = spread(valid, (n / span).min(valid.len()));
+
+    // One row per board copy; zero-cost dummies square the matrix.
     let cell_at: Vec<[f64; 2]> = cells
         .iter()
         .map(|&cell| centroid(cell_lands(cell).iter().map(|&i| lands[i].xy)))
         .collect();
+    let rows: Vec<[f64; 2]> = tested
+        .iter()
+        .flat_map(|&board| std::iter::repeat_n(board_at(board), span))
+        .collect();
     let cost: Vec<Vec<i64>> = (0..n)
         .map(|i| {
             (0..n)
-                .map(|j| match tested.get(i) {
-                    Some(&board) => {
-                        let at = centroid(board_contacts(board).iter().map(|&c| contacts[c].xy));
-                        cost_of(at, cell_at[j])
-                    }
-                    None => 0,
-                })
+                .map(|j| rows.get(i).map_or(0, |&at| cost_of(at, cell_at[j])))
                 .collect()
         })
         .collect();
     let matching = hungarian(&cost);
 
+    let mut board_cells = Vec::new();
     let mut bindings = Vec::new();
     let mut dropped = Vec::new();
     for (i, &board) in tested.iter().enumerate() {
-        let cell = cells[matching[i].expect("square matching is total")];
         let mut mine: Vec<usize> = board_contacts(board)
             .into_iter()
             .filter(|&c| contacts[c].role != Role::Gnd)
             .collect();
-        let mut free = cell_lands(cell);
+        let anchor: Vec<[f64; 2]> = mine
+            .iter()
+            .filter(|&&c| anchors(&contacts[c]))
+            .map(|&c| contacts[c].xy)
+            .collect();
+        let anchor = if anchor.is_empty() {
+            board_at(board)
+        } else {
+            centroid(anchor.into_iter())
+        };
+        let mut own: Vec<usize> = (i * span..(i + 1) * span)
+            .map(|row| matching[row].expect("square matching is total"))
+            .collect();
+        own.sort_by_key(|&j| (cost_of(anchor, cell_at[j]), cells[j]));
+        let own: Vec<u32> = own.into_iter().map(|j| cells[j]).collect();
+        let primary = own[0];
+        let mut free: Vec<usize> = own
+            .iter()
+            .flat_map(|&cell| cell_lands(cell))
+            .filter(|&l| lands[l].block == primary || !supply(lands[l].role))
+            .collect();
+
         // The cell's VTarget lands are one bed net, so the board's
         // VTarget contacts share one interposer net too: any pogo can feed
         // any land, and the board's current splits over every path.
@@ -341,13 +405,77 @@ fn by_cell(
                 net,
             });
         };
+        let take = |list: &mut Vec<usize>, item: usize| {
+            let at = list.iter().position(|&x| x == item).expect("listed");
+            list.remove(at)
+        };
         for (ict, label) in [("swclk", "S0"), ("swdio", "S1")] {
-            let contact = mine.iter().position(|&c| contacts[c].ict == ict);
-            let land = free.iter().position(|&l| lands[l].label == label);
+            let contact = mine.iter().copied().find(|&c| contacts[c].ict == ict);
+            let land = free
+                .iter()
+                .copied()
+                .find(|&l| lands[l].block == primary && lands[l].label == label);
             if let (Some(contact), Some(land)) = (contact, land) {
-                bind(mine.remove(contact), free.remove(land));
+                bind(take(&mut mine, contact), take(&mut free, land));
             }
         }
+
+        // USB pairs, each DP with its nearest DM, matched whole to cells.
+        let mut dms: Vec<usize> = mine
+            .iter()
+            .copied()
+            .filter(|&c| contacts[c].role == Role::UsbDm)
+            .collect();
+        let mut pairs: Vec<(usize, usize)> = Vec::new();
+        for dp in mine
+            .iter()
+            .copied()
+            .filter(|&c| contacts[c].role == Role::UsbDp)
+        {
+            if let Some(dm) = dms
+                .iter()
+                .copied()
+                .min_by_key(|&dm| cost_of(contacts[dp].xy, contacts[dm].xy))
+            {
+                take(&mut dms, dm);
+                pairs.push((dp, dm));
+            }
+        }
+        let ports: Vec<(usize, usize)> = own
+            .iter()
+            .filter_map(|&cell| {
+                let find = |role: Role| {
+                    free.iter()
+                        .copied()
+                        .find(|&l| lands[l].block == cell && lands[l].role == role)
+                };
+                Some((find(Role::UsbDp)?, find(Role::UsbDm)?))
+            })
+            .collect();
+        if !pairs.is_empty() && !ports.is_empty() {
+            let m = pairs.len().max(ports.len());
+            let cost: Vec<Vec<i64>> = (0..m)
+                .map(|i| {
+                    (0..m)
+                        .map(|j| match (pairs.get(i), ports.get(j)) {
+                            (Some(&(dp, dm)), Some(&(p, q))) => {
+                                cost_of(contacts[dp].xy, lands[p].xy)
+                                    + cost_of(contacts[dm].xy, lands[q].xy)
+                            }
+                            _ => 0,
+                        })
+                        .collect()
+                })
+                .collect();
+            let matching = hungarian(&cost);
+            for (i, &(dp, dm)) in pairs.iter().enumerate() {
+                if let Some(&(p, q)) = ports.get(matching[i].expect("square matching is total")) {
+                    bind(take(&mut mine, dp), take(&mut free, p));
+                    bind(take(&mut mine, dm), take(&mut free, q));
+                }
+            }
+        }
+
         for role in [
             Role::UsbDp,
             Role::UsbDm,
@@ -371,10 +499,10 @@ fn by_cell(
                 .collect();
             // Square with zero-cost dummies; a contact matched to a dummy
             // land has nowhere to go.
-            let n = want.len().max(have.len());
-            let cost: Vec<Vec<i64>> = (0..n)
+            let m = want.len().max(have.len());
+            let cost: Vec<Vec<i64>> = (0..m)
                 .map(|i| {
-                    (0..n)
+                    (0..m)
                         .map(|j| match (want.get(i), have.get(j)) {
                             (Some(&c), Some(&l)) => cost_of(contacts[c].xy, lands[l].xy),
                             _ => 0,
@@ -390,9 +518,10 @@ fn by_cell(
                 }
             }
         }
+        board_cells.push(own);
     }
     dropped.sort_unstable();
-    (tested, bindings, dropped)
+    (tested, board_cells, bindings, dropped)
 }
 
 fn distance(a: [f64; 2], b: [f64; 2]) -> f64 {
@@ -650,6 +779,7 @@ pub fn to_json(plan: &Plan, panel: &crate::panel::Panel, lands: &[Land]) -> Stri
         "panel": { "width": panel.width, "height": panel.height },
         "boards_total": plan.boards_total,
         "boards_tested": plan.tested,
+        "cells": plan.cells,
         "bindings": bindings,
         "dropped": plan.dropped.iter().map(|&contact| {
             let contact = &plan.contacts[contact];
@@ -748,8 +878,10 @@ mod tests {
     fn switchyard_cells_bind_by_role() {
         let lands = Bed::SwitchyardRev1.lands(105.0, 74.0).unwrap();
         // One board over cell 0 (column R1, inner rows): the rev-1 contact
-        // set plus a fifth digital line, which has no S lane left.
+        // set plus a third VTarget, which has no VT land left; supplies
+        // never claim a second cell.
         let roles = [
+            ("vtarget", Role::Vtarget),
             ("vtarget", Role::Vtarget),
             ("vtarget", Role::Vtarget),
             ("vusb", Role::Vusb),
@@ -759,7 +891,6 @@ mod tests {
             ("swdio", Role::Ls),
             ("swclk", Role::Ls),
             ("nrst", Role::Ls),
-            ("ls", Role::Ls),
             ("ls", Role::Ls),
             ("analog", Role::Analog),
             ("analog", Role::Analog),
@@ -778,8 +909,9 @@ mod tests {
             .collect();
         let plan = plan(contacts, &lands, &[], Bed::SwitchyardRev1).unwrap();
         assert_eq!(plan.tested, vec![0]);
+        assert_eq!(plan.cells, vec![vec![0]]);
         assert_eq!(plan.dropped.len(), 1);
-        assert_eq!(plan.contacts[plan.dropped[0]].role, Role::Ls);
+        assert_eq!(plan.contacts[plan.dropped[0]].role, Role::Vtarget);
         let land_of = |ict: &str| {
             plan.bindings
                 .iter()
@@ -806,6 +938,105 @@ mod tests {
                 None => assert_eq!(contact.role, Role::Gnd),
                 // Role-faithful: digital never lands on S4/S5.
                 Some(land) => assert_eq!(lands[land].role, contact.role),
+            }
+        }
+    }
+
+    /// A board with more signals than one cell's lanes, repeated on a
+    /// panel with more boards than cells.
+    fn wide_board(boards: u32) -> Vec<PanelContact> {
+        let roles = [
+            ("vtarget", Role::Vtarget),
+            ("vusb", Role::Vusb),
+            ("gnd", Role::Gnd),
+            ("usb_dp", Role::UsbDp),
+            ("usb_dm", Role::UsbDm),
+            ("usb_dp", Role::UsbDp),
+            ("usb_dm", Role::UsbDm),
+            ("swclk", Role::Ls),
+            ("swdio", Role::Ls),
+            ("ls", Role::Ls),
+            ("ls", Role::Ls),
+            ("ls", Role::Ls),
+            ("analog", Role::Analog),
+        ];
+        (0..boards)
+            .flat_map(|board| {
+                roles
+                    .iter()
+                    .enumerate()
+                    .map(move |(i, (ict, role))| PanelContact {
+                        board,
+                        refdes: format!("TP{}", i + 1),
+                        path: format!("TP{}.TP", i + 1),
+                        role: *role,
+                        ict: (*ict).into(),
+                        // Two USB ports far apart on each board: DP/DM at
+                        // i = 3/4 and 5/6.
+                        xy: [
+                            10.0 + 22.0 * (board % 4) as f64
+                                + if i == 5 || i == 6 { 15.0 } else { i as f64 },
+                            20.0 + 30.0 * (board / 4) as f64
+                                + if i == 4 || i == 6 { 1.0 } else { 0.0 },
+                        ],
+                    })
+            })
+            .collect()
+    }
+
+    #[test]
+    fn switchyard_board_spans_cells() {
+        let lands = Bed::SwitchyardRev1.lands(105.0, 74.0).unwrap();
+        let plan = plan(wide_board(8), &lands, &[], Bed::SwitchyardRev1).unwrap();
+        // Two USB pairs and five digital lines need two cells a board, so
+        // eight cells test four of the eight boards.
+        assert_eq!(plan.tested.len(), 4);
+        assert!(plan.dropped.is_empty(), "{:?}", plan.dropped);
+        let mut all: Vec<u32> = plan.cells.iter().flatten().copied().collect();
+        all.sort_unstable();
+        assert_eq!(all, (0..8).collect::<Vec<_>>());
+        for (&board, own) in plan.tested.iter().zip(&plan.cells) {
+            assert_eq!(own.len(), 2);
+            let land_of = |contact: usize| {
+                plan.bindings
+                    .iter()
+                    .find(|b| b.contact == contact)
+                    .and_then(|b| b.land)
+                    .map(|land| lands[land])
+            };
+            let mine = |role: Role| -> Vec<usize> {
+                (0..plan.contacts.len())
+                    .filter(|&c| plan.contacts[c].board == board && plan.contacts[c].role == role)
+                    .collect()
+            };
+            // Supplies and SWD on the primary cell only.
+            for role in [Role::Vtarget, Role::Vusb] {
+                for c in mine(role) {
+                    assert_eq!(land_of(c).unwrap().block, own[0]);
+                }
+            }
+            for c in mine(Role::Ls) {
+                let land = land_of(c).unwrap();
+                match plan.contacts[c].ict.as_str() {
+                    "swclk" => assert_eq!((land.block, land.label), (own[0], "S0")),
+                    "swdio" => assert_eq!((land.block, land.label), (own[0], "S1")),
+                    _ => {}
+                }
+            }
+            // Each USB pair shares one cell, the two pairs different ones.
+            let dp = mine(Role::UsbDp);
+            let dm = mine(Role::UsbDm);
+            for (&p, &m) in dp.iter().zip(&dm) {
+                assert_eq!(land_of(p).unwrap().block, land_of(m).unwrap().block);
+            }
+            assert_ne!(land_of(dp[0]).unwrap().block, land_of(dp[1]).unwrap().block);
+            // No secondary-cell supply land carries anything.
+            for binding in &plan.bindings {
+                if let Some(land) = binding.land
+                    && lands[land].block == own[1]
+                {
+                    assert!(!matches!(lands[land].role, Role::Vtarget | Role::Vusb));
+                }
             }
         }
     }

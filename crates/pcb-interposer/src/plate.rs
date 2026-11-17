@@ -431,6 +431,7 @@ mod tests {
         Plan {
             boards_total: 2,
             tested: vec![0, 1],
+            cells: Vec::new(),
             contacts: Vec::new(),
             bindings: Vec::new(),
             dropped: Vec::new(),

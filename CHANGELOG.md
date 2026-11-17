@@ -11,7 +11,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ### Added
 
 - `advanced` DFM PDK (`pcb dfm --pdk advanced`) for 1-8 layer, 1 oz, through-hole boards that a fine-line fab prices without a manual quote: 0.091 mm copper spacing, 0.074 mm via rings, 6 mil plated holes, 4 mil traces and an 8.5 aspect ratio.
-- `pcb ipc interposer --bed switchyard-rev1` mates the Switchyard rev-1 bed, giving each board one per-DUT cell and drilling its D1 dowel, D2 slot and M3 clearance with Ø6 mm keep-outs; contacts with no free land of their role are reported, not wired.
+- `pcb ipc interposer --bed switchyard-rev1` mates the Switchyard rev-1 bed, giving each board as many per-DUT cells as its USB, digital and analog contacts need (supplies and SWD on the nearest one, each USB pair inside one cell, the cells listed in the fixture map) and drilling its D1 dowel, D2 slot and M3 clearance with Ø6 mm keep-outs; contacts with no free land of their role are reported, not wired.
 - `pcb ipc interposer` routes VTarget nets 0.8 mm wide; on the Switchyard bed VTarget and the SIG0–5 lanes carry 60 V, keeping 0.6 mm at bare pads and 0.13 mm between tracks and tented vias under solder mask (IPC-2221 B2/B4) through a sibling `.kicad_dru` and the DSN handed to FreeRouting, and a board's VTarget contacts share one net.
 - `pcb ipc interposer --interposer-id <1-1023>` straps the Switchyard bed's interposer-ID lands to encode the number; the Switchyard bed requires it.
 - On the Switchyard bed the interposer is cut to the conveyor envelope (x 5–100, y 5–69) with its own three fiducials, placed over no land; boards whose pogos would leave it are not tested.
