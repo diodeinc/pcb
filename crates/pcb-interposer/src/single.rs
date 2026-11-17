@@ -19,7 +19,7 @@ use ipc2581::Ipc2581;
 use ipc2581::types::Side;
 
 use crate::bed::Bed;
-use crate::contacts::{PanelContact, bom_roles, component_side, parse_role};
+use crate::contacts::{Footprints, PanelContact, bom_roles, component_side, parse_role};
 use crate::panel::{Outline, Panel};
 use crate::pattern::{A7_H, A7_W, Role};
 
@@ -76,8 +76,9 @@ fn distance(a: [f64; 2], b: [f64; 2]) -> f64 {
     (a[0] - b[0]).hypot(a[1] - b[1])
 }
 
-/// Place the board step of `ipc` on `bed`.
-pub fn place(ipc: &Ipc2581, bed: Bed) -> Result<Placed> {
+/// Place the board step of `ipc` on `bed`, probing the test points
+/// `footprints` admits.
+pub fn place(ipc: &Ipc2581, bed: Bed, footprints: Footprints) -> Result<Placed> {
     let Some([ex0, ey0, ex1, ey1]) = bed.envelope() else {
         bail!("the {bed:?} bed has no envelope to place a single board in");
     };
@@ -105,7 +106,7 @@ pub fn place(ipc: &Ipc2581, bed: Bed) -> Result<Placed> {
         vec![[x0, y0], [x1, y0], [x1, y1], [x0, y1]]
     };
 
-    let roles = bom_roles(ipc);
+    let roles = bom_roles(ipc, footprints);
     let mut found: Vec<(PanelContact, [f64; 2])> = Vec::new();
     let mut sides: Vec<(String, Option<Side>)> = Vec::new();
     for component in &board.components {
