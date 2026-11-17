@@ -489,6 +489,8 @@ fn patch_netclasses(project: &mut Value, board_config: &BoardConfig) {
         set_number_if_some(obj, "diff_pair_via_gap", netclass.diff_pair_via_gap);
 
         // Not KiCad fields: Zener owns them, so a target removed from the class goes too.
+        let had_target = obj.contains_key("single_ended_impedance")
+            || obj.contains_key("differential_pair_impedance");
         for (key, ohms) in [
             (
                 "single_ended_impedance",
@@ -515,15 +517,25 @@ fn patch_netclasses(project: &mut Value, board_config: &BoardConfig) {
                     .map(|ohms| (TUNING_PROFILE_SINGLE, ohms))
             });
         // Each impedance class gets a profile of its own name, so classes with different targets
-        // never share one. Once the class loses its target, it no longer selects that profile.
-        let profile = obj.get("tuning_profile").and_then(Value::as_str);
+        // never share one; a new one starts from the profile the class selected before. Once a
+        // target Zener wrote is removed, the class no longer selects that profile.
+        let profile = obj
+            .get("tuning_profile")
+            .and_then(Value::as_str)
+            .filter(|profile| !profile.is_empty())
+            .map(ToString::to_string);
         if let Some((profile_type, ohms)) = target {
             obj.insert(
                 "tuning_profile".to_string(),
                 Value::String(netclass.name.clone()),
             );
-            tuning_profiles.push((netclass.name.clone(), profile_type, ohms));
-        } else if profile == Some(netclass.name.as_str()) {
+            tuning_profiles.push(TuningTarget {
+                name: netclass.name.clone(),
+                seed: profile.filter(|profile| *profile != netclass.name),
+                profile_type,
+                ohms,
+            });
+        } else if had_target && profile.as_deref() == Some(netclass.name.as_str()) {
             obj.insert("tuning_profile".to_string(), Value::String(String::new()));
         }
     }
@@ -539,11 +551,22 @@ fn patch_netclasses(project: &mut Value, board_config: &BoardConfig) {
     }
 }
 
-/// Upsert the KiCad tuning profile of each impedance-controlled netclass, named after the class.
-/// Only the type and target are Zener's; per-layer geometry, delays and via overrides that the
-/// designer set up in KiCad are kept. A new profile has no layer entries, so KiCad derives no routing or DRC rules
-/// from it until the designer adds them.
-fn patch_tuning_profiles(project: &mut Value, targets: &[(String, i64, f64)]) {
+/// The tuning profile of an impedance-controlled netclass.
+struct TuningTarget {
+    /// The profile's name: the netclass's.
+    name: String,
+    /// The profile the class selected before, which a new profile is copied from.
+    seed: Option<String>,
+    profile_type: i64,
+    ohms: f64,
+}
+
+/// Upsert the KiCad tuning profile of each impedance-controlled netclass. Only the type and
+/// target are Zener's; per-layer geometry, delays and via overrides that the designer set up in
+/// KiCad are kept, and a new profile starts as a copy of the one its class selected before.
+/// Without one it has no layer entries, so KiCad derives no routing or DRC rules from it until
+/// the designer adds them.
+fn patch_tuning_profiles(project: &mut Value, targets: &[TuningTarget]) {
     let root = ensure_object(project)
         .entry("tuning_profiles".to_string())
         .or_insert_with(|| json!({ "meta": { "version": 0 } }));
@@ -553,12 +576,17 @@ fn patch_tuning_profiles(project: &mut Value, targets: &[(String, i64, f64)]) {
         .unwrap_or_default();
     let mut index = index_by_string_field(&profiles, "profile_name");
 
-    for (name, profile_type, ohms) in targets {
-        let (profile_type, ohms) = (*profile_type, *ohms);
+    for target in targets {
+        if !index.contains_key(&target.name)
+            && let Some(seed) = target.seed.as_ref().and_then(|seed| index.get(seed))
+        {
+            profiles.push(profiles[*seed].clone());
+            index.insert(target.name.clone(), profiles.len() - 1);
+        }
         let profile =
-            upsert_object_by_string_field(&mut profiles, &mut index, "profile_name", name);
-        profile.insert("type".to_string(), Value::from(profile_type));
-        profile.insert("target_impedance".to_string(), Value::from(ohms));
+            upsert_object_by_string_field(&mut profiles, &mut index, "profile_name", &target.name);
+        profile.insert("type".to_string(), Value::from(target.profile_type));
+        profile.insert("target_impedance".to_string(), Value::from(target.ohms));
         // KiCad reads every one of these keys without a default.
         for (key, default) in [
             ("enable_time_domain_tuning", Value::Bool(false)),
@@ -1040,8 +1068,10 @@ mod tests {
                     // and the shared profile keeps its target.
                     {"name": "PCIE_85", "tuning_profile": "Shared"},
                     {"name": "SE_50", "tuning_profile": "Shared"},
-                    // A class without a target keeps the profile the designer picked.
-                    {"name": "MANUAL", "tuning_profile": "Shared"}
+                    // A class without a target keeps the profile the designer picked, even one
+                    // of its own name, since Zener never wrote a target for it.
+                    {"name": "MANUAL", "tuning_profile": "Shared"},
+                    {"name": "NATIVE", "tuning_profile": "NATIVE"}
                 ]
             },
             "tuning_profiles": {
@@ -1051,8 +1081,8 @@ mod tests {
                     "type": 1,
                     "target_impedance": 77.0,
                     "enable_time_domain_tuning": false,
-                    "layer_entries": [],
-                    "via_prop_delay": 0,
+                    "layer_entries": [{"signal_layer": "In1.Cu", "width": 100000}],
+                    "via_prop_delay": 5,
                     "via_overrides": []
                 }, {
                     "profile_name": "USB2_90",
@@ -1071,6 +1101,7 @@ mod tests {
                 "netclasses": [
                     {"name": "GBE_100"},
                     {"name": "MANUAL"},
+                    {"name": "NATIVE"},
                     {"name": "PCIE_85", "differential_pair_impedance": impedance("85")},
                     {"name": "USB2_90", "differential_pair_impedance": impedance("90")},
                     {
@@ -1101,6 +1132,7 @@ mod tests {
         assert!(!class("GBE_100").contains_key("differential_pair_impedance"));
         assert_eq!(class("GBE_100")["tuning_profile"], "");
         assert_eq!(class("MANUAL")["tuning_profile"], "Shared");
+        assert_eq!(class("NATIVE")["tuning_profile"], "NATIVE");
         assert_eq!(class("PCIE_85")["differential_pair_impedance"], json!(85.0));
         assert_eq!(class("PCIE_85")["tuning_profile"], "PCIE_85");
         assert_eq!(class("SE_50")["tuning_profile"], "SE_50");
@@ -1119,8 +1151,8 @@ mod tests {
                     "type": 1,
                     "target_impedance": 77.0,
                     "enable_time_domain_tuning": false,
-                    "layer_entries": [],
-                    "via_prop_delay": 0,
+                    "layer_entries": [{"signal_layer": "In1.Cu", "width": 100000}],
+                    "via_prop_delay": 5,
                     "via_overrides": []
                 },
                 {
@@ -1142,21 +1174,23 @@ mod tests {
                     "via_overrides": []
                 },
                 {
+                    // A copy of the profile the class selected before.
                     "profile_name": "PCIE_85",
                     "type": 1,
                     "target_impedance": 85.0,
                     "enable_time_domain_tuning": false,
-                    "layer_entries": [],
-                    "via_prop_delay": 0,
+                    "layer_entries": [{"signal_layer": "In1.Cu", "width": 100000}],
+                    "via_prop_delay": 5,
                     "via_overrides": []
                 },
                 {
+                    // A copy of the profile the class selected before.
                     "profile_name": "SE_50",
                     "type": 0,
                     "target_impedance": 50.0,
                     "enable_time_domain_tuning": false,
-                    "layer_entries": [],
-                    "via_prop_delay": 0,
+                    "layer_entries": [{"signal_layer": "In1.Cu", "width": 100000}],
+                    "via_prop_delay": 5,
                     "via_overrides": []
                 }
             ])
