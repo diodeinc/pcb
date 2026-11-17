@@ -12,6 +12,9 @@ const DEFAULT_WIRE_WIDTH_MIL: i64 = 6;
 const DEFAULT_BUS_WIDTH_MIL: i64 = 12;
 const DEFAULT_LINE_STYLE: i64 = 0;
 const FLOAT_EQ_EPS: f64 = 1e-9;
+/// `TUNING_PROFILE::PROFILE_TYPE` values KiCad stores in a tuning profile's `type`.
+const TUNING_PROFILE_SINGLE: i64 = 0;
+const TUNING_PROFILE_DIFFERENTIAL: i64 = 1;
 
 const CONSTRAINT_MAPPINGS: &[(&[&str], &str)] = &[
     (
@@ -413,6 +416,7 @@ fn patch_netclasses(project: &mut Value, board_config: &BoardConfig) {
         .max()
         .map(|max| max + 1)
         .unwrap_or(0);
+    let mut tuning_profiles = Vec::new();
 
     for netclass in iter {
         let existing_idx = class_index.get(&netclass.name).copied();
@@ -476,12 +480,93 @@ fn patch_netclasses(project: &mut Value, board_config: &BoardConfig) {
         set_number_if_some(obj, "diff_pair_width", netclass.diff_pair_width);
         set_number_if_some(obj, "diff_pair_gap", netclass.diff_pair_gap);
         set_number_if_some(obj, "diff_pair_via_gap", netclass.diff_pair_via_gap);
+
+        // Not KiCad fields: Zener owns them, so a target removed from the class goes too.
+        for (key, ohms) in [
+            (
+                "single_ended_impedance",
+                netclass.single_ended_impedance_ohms(),
+            ),
+            (
+                "differential_pair_impedance",
+                netclass.differential_pair_impedance_ohms(),
+            ),
+        ] {
+            match ohms {
+                Some(ohms) => obj.insert(key.to_string(), Value::from(ohms)),
+                None => obj.remove(key),
+            };
+        }
+
+        // KiCad's tuning profile has one type, so a class with both targets gets the differential one.
+        let target = netclass
+            .differential_pair_impedance_ohms()
+            .map(|ohms| (TUNING_PROFILE_DIFFERENTIAL, ohms))
+            .or_else(|| {
+                netclass
+                    .single_ended_impedance_ohms()
+                    .map(|ohms| (TUNING_PROFILE_SINGLE, ohms))
+            });
+        if let Some((profile_type, ohms)) = target {
+            // A profile the designer already chose for the class in KiCad gets the target;
+            // otherwise the class gets a profile of its own name.
+            let profile = obj
+                .get("tuning_profile")
+                .and_then(Value::as_str)
+                .filter(|profile| !profile.is_empty())
+                .unwrap_or(&netclass.name)
+                .to_string();
+            obj.insert("tuning_profile".to_string(), Value::String(profile.clone()));
+            tuning_profiles.push((profile, profile_type, ohms));
+        }
     }
 
     set_value_at_iter(
         project,
         "net_settings.classes".split('.'),
         Value::Array(classes),
+    );
+
+    if !tuning_profiles.is_empty() {
+        patch_tuning_profiles(project, &tuning_profiles);
+    }
+}
+
+/// Upsert the KiCad tuning profile of each impedance-controlled netclass. Only the type and
+/// target are Zener's; per-layer geometry, delays and via overrides that the designer set up in
+/// KiCad are kept. A new profile has no layer entries, so KiCad derives no routing or DRC rules
+/// from it until the designer adds them.
+fn patch_tuning_profiles(project: &mut Value, targets: &[(String, i64, f64)]) {
+    let root = ensure_object(project)
+        .entry("tuning_profiles".to_string())
+        .or_insert_with(|| json!({ "meta": { "version": 0 } }));
+    let mut profiles = get_value_at_iter(root, ["tuning_profiles_impedance_geometric"])
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let mut index = index_by_string_field(&profiles, "profile_name");
+
+    for (name, profile_type, ohms) in targets {
+        let (profile_type, ohms) = (*profile_type, *ohms);
+        let profile =
+            upsert_object_by_string_field(&mut profiles, &mut index, "profile_name", name);
+        profile.insert("type".to_string(), Value::from(profile_type));
+        profile.insert("target_impedance".to_string(), Value::from(ohms));
+        // KiCad reads every one of these keys without a default.
+        for (key, default) in [
+            ("enable_time_domain_tuning", Value::Bool(false)),
+            ("layer_entries", json!([])),
+            ("via_prop_delay", Value::from(0)),
+            ("via_overrides", json!([])),
+        ] {
+            profile.entry(key.to_string()).or_insert(default);
+        }
+    }
+
+    set_value_at_iter(
+        root,
+        ["tuning_profiles_impedance_geometric"],
+        Value::Array(profiles),
     );
 }
 
@@ -933,6 +1018,123 @@ mod tests {
         assert_eq!(patterns[0]["pattern"], "LEGACY");
         assert_eq!(patterns[1]["pattern"], "USB_DN");
         assert_eq!(patterns[2]["pattern"], "USB_DP");
+    }
+
+    #[test]
+    fn writes_impedance_targets_and_tuning_profiles() {
+        let impedance =
+            |ohms: &str| json!({"nominal": ohms, "min": ohms, "max": ohms, "unit": "Ohms"});
+        let mut project = json!({
+            "net_settings": {
+                "classes": [
+                    // A target removed from the Zener class leaves the project too.
+                    {"name": "GBE_100", "differential_pair_impedance": 100.0, "tuning_profile": ""},
+                    // A profile the designer picked in KiCad stays assigned and gets the target.
+                    {"name": "PCIE_85", "tuning_profile": "PCIe stripline"}
+                ]
+            },
+            "tuning_profiles": {
+                "meta": {"version": 0},
+                "tuning_profiles_impedance_geometric": [{
+                    "profile_name": "USB2_90",
+                    "type": 0,
+                    "target_impedance": 45.0,
+                    "enable_time_domain_tuning": true,
+                    "layer_entries": [{"signal_layer": "F.Cu", "width": 120000}],
+                    "via_prop_delay": 0,
+                    "via_overrides": []
+                }]
+            }
+        });
+
+        let config: BoardConfig = serde_json::from_value(json!({
+            "design_rules": {
+                "netclasses": [
+                    {"name": "GBE_100"},
+                    {"name": "PCIE_85", "differential_pair_impedance": impedance("85")},
+                    {"name": "USB2_90", "differential_pair_impedance": impedance("90")},
+                    {
+                        "name": "SE_50",
+                        "single_ended_impedance": impedance("50"),
+                    },
+                    {
+                        "name": "BOTH",
+                        "single_ended_impedance": impedance("45"),
+                        "differential_pair_impedance": impedance("90.5"),
+                    }
+                ]
+            }
+        }))
+        .unwrap();
+
+        patch_project_value(&mut project, &config, &HashMap::new());
+
+        let classes = project["net_settings"]["classes"].as_array().unwrap();
+        let class = |name: &str| {
+            classes
+                .iter()
+                .find(|class| class["name"] == name)
+                .unwrap()
+                .as_object()
+                .unwrap()
+        };
+        assert!(!class("GBE_100").contains_key("differential_pair_impedance"));
+        assert_eq!(class("GBE_100")["tuning_profile"], "");
+        assert_eq!(class("PCIE_85")["differential_pair_impedance"], json!(85.0));
+        assert_eq!(class("PCIE_85")["tuning_profile"], "PCIe stripline");
+        assert_eq!(class("USB2_90")["differential_pair_impedance"], json!(90.0));
+        assert_eq!(class("USB2_90")["tuning_profile"], "USB2_90");
+        assert_eq!(class("SE_50")["single_ended_impedance"], json!(50.0));
+        assert!(!class("SE_50").contains_key("differential_pair_impedance"));
+        assert_eq!(class("BOTH")["single_ended_impedance"], json!(45.0));
+        assert_eq!(class("BOTH")["differential_pair_impedance"], json!(90.5));
+
+        assert_eq!(
+            project["tuning_profiles"]["tuning_profiles_impedance_geometric"],
+            json!([
+                {
+                    "profile_name": "USB2_90",
+                    "type": 1,
+                    "target_impedance": 90.0,
+                    "enable_time_domain_tuning": true,
+                    "layer_entries": [{"signal_layer": "F.Cu", "width": 120000}],
+                    "via_prop_delay": 0,
+                    "via_overrides": []
+                },
+                {
+                    "profile_name": "BOTH",
+                    "type": 1,
+                    "target_impedance": 90.5,
+                    "enable_time_domain_tuning": false,
+                    "layer_entries": [],
+                    "via_prop_delay": 0,
+                    "via_overrides": []
+                },
+                {
+                    "profile_name": "PCIe stripline",
+                    "type": 1,
+                    "target_impedance": 85.0,
+                    "enable_time_domain_tuning": false,
+                    "layer_entries": [],
+                    "via_prop_delay": 0,
+                    "via_overrides": []
+                },
+                {
+                    "profile_name": "SE_50",
+                    "type": 0,
+                    "target_impedance": 50.0,
+                    "enable_time_domain_tuning": false,
+                    "layer_entries": [],
+                    "via_prop_delay": 0,
+                    "via_overrides": []
+                }
+            ])
+        );
+
+        // Repeated runs are idempotent.
+        let once = project.clone();
+        patch_project_value(&mut project, &config, &HashMap::new());
+        assert_eq!(project, once);
     }
 
     #[test]
