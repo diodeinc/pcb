@@ -62,9 +62,16 @@ enum Commands {
     },
     /// Generate the test-fixture interposer board for a board-array panel
     Interposer {
-        /// Board-array IPC-2581 XML file (`board-array create` output)
+        /// Board-array IPC-2581 XML file (`board-array create` output), or a
+        /// board export with --single-board
         #[arg(value_hint = clap::ValueHint::FilePath)]
         input: PathBuf,
+        /// Test one singulated board in a nest instead of the panel: the
+        /// input's board, placed on the bed (face down when its test points
+        /// are on top), may overhang the bed along its pogo rows; the DUT
+        /// plate becomes the nest
+        #[arg(long)]
+        single_board: bool,
         /// Output `.kicad_pcb` path; a sibling `.kicad_pro` is written too, and a
         /// `.kicad_dru` on a bed with high voltage
         #[arg(short, long, value_hint = clap::ValueHint::FilePath)]
@@ -538,6 +545,7 @@ pub fn execute(args: Ipc2581Args, resolution: Resolution) -> anyhow::Result<()> 
         } => commands::bom::execute(&file, format, offline),
         Commands::Interposer {
             input,
+            single_board,
             output,
             fixture_map,
             dut_plate,
@@ -548,7 +556,13 @@ pub fn execute(args: Ipc2581Args, resolution: Resolution) -> anyhow::Result<()> 
             route,
             ipc,
         } => {
-            let (pcb, pro, rules) = pcb_interposer::generate(&input, layers, bed, interposer_id)?;
+            let mode = if single_board {
+                pcb_interposer::Mode::SingleBoard
+            } else {
+                pcb_interposer::Mode::Panel
+            };
+            let (pcb, pro, rules) =
+                pcb_interposer::generate(&input, mode, layers, bed, interposer_id)?;
             std::fs::write(&output, pcb).with_context(|| format!("write {}", output.display()))?;
             let pro_path = output.with_extension("kicad_pro");
             std::fs::write(&pro_path, pro)
@@ -564,13 +578,13 @@ pub fn execute(args: Ipc2581Args, resolution: Resolution) -> anyhow::Result<()> 
                 pro_path.display()
             );
             if let Some(plate_path) = dut_plate {
-                let plate = pcb_interposer::dut_plate(&input, bed, dut_plate_locators)?;
+                let plate = pcb_interposer::dut_plate(&input, mode, bed, dut_plate_locators)?;
                 std::fs::write(&plate_path, plate)
                     .with_context(|| format!("write {}", plate_path.display()))?;
                 println!("✓ Wrote DUT plate {}", plate_path.display());
             }
             if let Some(map_path) = fixture_map {
-                let map = pcb_interposer::fixture_map(&input, bed)?;
+                let map = pcb_interposer::fixture_map(&input, mode, bed)?;
                 std::fs::write(&map_path, map)
                     .with_context(|| format!("write {}", map_path.display()))?;
                 println!("✓ Wrote fixture map {}", map_path.display());

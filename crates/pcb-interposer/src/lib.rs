@@ -12,7 +12,9 @@
 //! folded-A7 tile's corner tooling, the fixture bed's mate lands on the
 //! bottom copper (the S13 constellation by default, see [`bed`]; its
 //! mate-detect pairs pre-shorted), and full-sheet GND pours. Pogo
-//! placement and routing are later, panel-specific passes.
+//! placement and routing are later, panel-specific passes. A single
+//! singulated board can stand in for the panel ([`single`]): the
+//! generator places it on the bed and the DUT plate nests it.
 
 // Use pipe-safe replacements for standard printing macros in CLI output paths.
 #[macro_use(eprintln)]
@@ -29,6 +31,7 @@ pub mod plan;
 pub mod plate;
 pub mod pogo;
 pub mod repair;
+pub mod single;
 pub mod stitch;
 
 use std::path::Path;
@@ -37,6 +40,15 @@ use anyhow::{Context, Result};
 
 pub use bed::Bed;
 pub use emit::Layers;
+
+/// What the interposer tests: a board-array panel, or one singulated
+/// board in a nest ([`single`]).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Mode {
+    #[default]
+    Panel,
+    SingleBoard,
+}
 
 /// Generate the interposer board for a panel file, returning the
 /// `.kicad_pcb` and `.kicad_pro` sources, and the `.kicad_dru` source on
@@ -48,11 +60,33 @@ pub use emit::Layers;
 /// read one.
 pub fn generate(
     panel_xml: &Path,
+    mode: Mode,
     layers: Layers,
     bed: Bed,
     interposer_id: Option<u16>,
 ) -> Result<(String, String, Option<String>)> {
-    let (panel, lands, plan) = build(panel_xml, bed)?;
+    let Built {
+        panel,
+        lands,
+        plan,
+        placement,
+        ..
+    } = build(panel_xml, mode, bed)?;
+    if let Some(placement) = placement {
+        eprintln!(
+            "note: board placed {} {}° at ({:.2}, {:.2}); interposer spans x {:.1}–{:.1} mm",
+            if placement.mirrored {
+                "face down (top probed),"
+            } else {
+                "bottom probed,"
+            },
+            u32::from(placement.quarter_turns) * 90,
+            placement.offset[0],
+            placement.offset[1],
+            panel.envelope.map_or(0.0, |e| e[0]),
+            panel.envelope.map_or(panel.width, |e| e[2]),
+        );
+    }
     let straps = bed.id_straps(&lands, interposer_id)?;
     if let Some(plan) = &plan
         && let Some(own) = plan.cells.first()
@@ -91,21 +125,38 @@ pub fn generate(
 
 /// Compute the fixture map for a panel file: which boards one insertion
 /// tests and which mate land carries which contact, as JSON.
-pub fn fixture_map(panel_xml: &Path, bed: Bed) -> Result<String> {
-    let (panel, lands, plan) = build(panel_xml, bed)?;
+pub fn fixture_map(panel_xml: &Path, mode: Mode, bed: Bed) -> Result<String> {
+    let Built {
+        panel,
+        lands,
+        plan,
+        placement,
+        ..
+    } = build(panel_xml, mode, bed)?;
     let plan = plan.context("panel has no ICT contacts to plan")?;
-    Ok(plan::to_json(&plan, &panel, &lands))
+    Ok(plan::to_json(&plan, &panel, &lands, placement.as_ref()))
 }
 
 /// Generate the DUT plate for a panel file, as OpenSCAD source: the
 /// printed slab between the interposer and the DUT panel (see [`plate`]).
-pub fn dut_plate(panel_xml: &Path, bed: Bed, locators: plate::Locators) -> Result<String> {
-    let (panel, _, plan) = build(panel_xml, bed)?;
+/// A single board always sits in a nest, whatever `locators` asks.
+pub fn dut_plate(
+    panel_xml: &Path,
+    mode: Mode,
+    bed: Bed,
+    locators: plate::Locators,
+) -> Result<String> {
+    let Built {
+        panel,
+        plan,
+        boards,
+        ..
+    } = build(panel_xml, mode, bed)?;
     let plan = plan.context("panel has no ICT contacts to plan")?;
-    let content = std::fs::read_to_string(panel_xml)
-        .with_context(|| format!("read panel {}", panel_xml.display()))?;
-    let ipc = ipc2581::Ipc2581::parse(&content).context("parse IPC-2581 panel")?;
-    let boards = contacts::board_outlines(&ipc, panel.height)?;
+    let locators = match mode {
+        Mode::Panel => locators,
+        Mode::SingleBoard => plate::Locators::Nest,
+    };
     plate::plate(&panel, bed, &plan, &boards, locators)
 }
 
@@ -126,20 +177,53 @@ fn pogo_keepouts(panel: &panel::Panel) -> Vec<([f64; 2], f64)> {
         .collect()
 }
 
-fn build(
-    panel_xml: &Path,
-    bed: Bed,
-) -> Result<(panel::Panel, Vec<pattern::Land>, Option<plan::Plan>)> {
+struct Built {
+    panel: panel::Panel,
+    lands: Vec<pattern::Land>,
+    plan: Option<plan::Plan>,
+    /// Board bounding boxes in the sheet frame.
+    boards: Vec<[f64; 4]>,
+    placement: Option<single::Placement>,
+}
+
+fn build(panel_xml: &Path, mode: Mode, bed: Bed) -> Result<Built> {
     let content = std::fs::read_to_string(panel_xml)
         .with_context(|| format!("read panel {}", panel_xml.display()))?;
     let ipc = ipc2581::Ipc2581::parse(&content).context("parse IPC-2581 panel")?;
-    let panel = bed.fit(panel::extract(&ipc)?);
+    let (panel, contacts, boards, placement) = match mode {
+        Mode::Panel => {
+            let panel = bed.fit(panel::extract(&ipc)?);
+            let contacts = contacts::extract_contacts(&ipc, panel.height)?;
+            let boards = contacts::board_outlines(&ipc, panel.height)?;
+            (panel, contacts, boards, None)
+        }
+        Mode::SingleBoard => {
+            let placed = single::place(&ipc, bed)?;
+            (
+                placed.panel,
+                placed.contacts,
+                vec![placed.board],
+                Some(placed.placement),
+            )
+        }
+    };
     let lands = bed.lands(panel.width, panel.height)?;
-    let contacts = contacts::extract_contacts(&ipc, panel.height)?;
     let plan = if contacts.is_empty() {
         None
     } else {
-        Some(plan::plan(contacts, &lands, &pogo_keepouts(&panel), bed)?)
+        Some(plan::plan(
+            contacts,
+            &lands,
+            &pogo_keepouts(&panel),
+            panel.envelope,
+            bed,
+        )?)
     };
-    Ok((panel, lands, plan))
+    Ok(Built {
+        panel,
+        lands,
+        plan,
+        boards,
+        placement,
+    })
 }

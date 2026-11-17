@@ -110,6 +110,7 @@ pub fn plan(
     contacts: Vec<PanelContact>,
     lands: &[Land],
     keepouts: &[([f64; 2], f64)],
+    envelope: Option<[f64; 4]>,
     bed: Bed,
 ) -> Result<Plan> {
     if contacts.is_empty() {
@@ -153,7 +154,7 @@ pub fn plan(
     let boards_total = contacts.iter().map(|c| c.board).max().unwrap_or(0) + 1;
     // A pogo's whole courtyard must sit inside the bed's envelope.
     let inside = |xy: [f64; 2]| {
-        bed.envelope().is_none_or(|[x0, y0, x1, y1]| {
+        envelope.is_none_or(|[x0, y0, x1, y1]| {
             let r = crate::pogo::COURTYARD_RADIUS_MM;
             xy[0] - r >= x0 && xy[0] + r <= x1 && xy[1] - r >= y0 && xy[1] + r <= y1
         })
@@ -747,7 +748,12 @@ fn hungarian(cost: &[Vec<i64>]) -> Vec<Option<usize>> {
 }
 
 /// Serialize a plan as the fixture-map JSON document.
-pub fn to_json(plan: &Plan, panel: &crate::panel::Panel, lands: &[Land]) -> String {
+pub fn to_json(
+    plan: &Plan,
+    panel: &crate::panel::Panel,
+    lands: &[Land],
+    placement: Option<&crate::single::Placement>,
+) -> String {
     let bindings: Vec<serde_json::Value> = plan
         .bindings
         .iter()
@@ -780,6 +786,13 @@ pub fn to_json(plan: &Plan, panel: &crate::panel::Panel, lands: &[Land]) -> Stri
         "boards_total": plan.boards_total,
         "boards_tested": plan.tested,
         "cells": plan.cells,
+        // A single board's frame on the sheet: sheet = R(quarter_turns ·
+        // 90°) · M · (x, -y) + offset, M negating x face down.
+        "placement": placement.map(|p| serde_json::json!({
+            "quarter_turns": p.quarter_turns,
+            "mirrored": p.mirrored,
+            "offset": p.offset,
+        })),
         "bindings": bindings,
         "dropped": plan.dropped.iter().map(|&contact| {
             let contact = &plan.contacts[contact];
@@ -821,7 +834,7 @@ mod tests {
                 xy: [32.0, 50.0],
             },
         ];
-        let plan = plan(contacts, &lands, &[], Bed::S13).expect("plans without panicking");
+        let plan = plan(contacts, &lands, &[], None, Bed::S13).expect("plans without panicking");
         assert_eq!(plan.bindings.len(), 2);
         for binding in &plan.bindings {
             // Both bind to ordinary LS lands.
@@ -846,6 +859,7 @@ mod tests {
             vec![contact([52.5, 35.7])],
             &lands,
             &[],
+            Bed::SwitchyardRev1.envelope(),
             Bed::SwitchyardRev1,
         )
         .unwrap_err()
@@ -856,6 +870,7 @@ mod tests {
             vec![contact([28.5, 28.0])],
             &lands,
             &[],
+            Bed::SwitchyardRev1.envelope(),
             Bed::SwitchyardRev1,
         )
         .unwrap_err()
@@ -868,6 +883,7 @@ mod tests {
                 vec![contact([52.5, 35.8])],
                 &lands,
                 &[],
+                Bed::SwitchyardRev1.envelope(),
                 Bed::SwitchyardRev1
             )
             .is_ok()
@@ -907,7 +923,14 @@ mod tests {
                 xy: [80.0 + i as f64, 50.0],
             })
             .collect();
-        let plan = plan(contacts, &lands, &[], Bed::SwitchyardRev1).unwrap();
+        let plan = plan(
+            contacts,
+            &lands,
+            &[],
+            Bed::SwitchyardRev1.envelope(),
+            Bed::SwitchyardRev1,
+        )
+        .unwrap();
         assert_eq!(plan.tested, vec![0]);
         assert_eq!(plan.cells, vec![vec![0]]);
         assert_eq!(plan.dropped.len(), 1);
@@ -987,7 +1010,14 @@ mod tests {
     #[test]
     fn switchyard_board_spans_cells() {
         let lands = Bed::SwitchyardRev1.lands(105.0, 74.0).unwrap();
-        let plan = plan(wide_board(8), &lands, &[], Bed::SwitchyardRev1).unwrap();
+        let plan = plan(
+            wide_board(8),
+            &lands,
+            &[],
+            Bed::SwitchyardRev1.envelope(),
+            Bed::SwitchyardRev1,
+        )
+        .unwrap();
         // Two USB pairs and five digital lines need two cells a board, so
         // eight cells test four of the eight boards.
         assert_eq!(plan.tested.len(), 4);

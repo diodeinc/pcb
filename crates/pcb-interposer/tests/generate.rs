@@ -162,7 +162,7 @@ fn generates_a_parseable_interposer() {
     let lands = pcb_interposer::pattern::oriented_s13(panel.width, panel.height);
     let contacts =
         pcb_interposer::contacts::extract_contacts(&ipc, panel.height).expect("contacts");
-    let plan = pcb_interposer::plan::plan(contacts, &lands, &[], Bed::S13).expect("plan");
+    let plan = pcb_interposer::plan::plan(contacts, &lands, &[], None, Bed::S13).expect("plan");
     let text = pcb_interposer::emit::board(&panel, &lands, Bed::S13, Some(&plan), &[], Layers::Two);
     let root = pcb_sexpr::parse(&text).expect("board parses");
     let SexprKind::List(items) = &root.kind else {
@@ -264,7 +264,7 @@ fn plans_the_fixture_map() {
     assert_eq!(tp1(0).xy[0], tp1(1).xy[0]);
     assert!((tp1(0).xy[1] - tp1(1).xy[1] - 40.0).abs() < 1e-9);
 
-    let plan = pcb_interposer::plan::plan(contacts, &lands, &[], Bed::S13).expect("plan");
+    let plan = pcb_interposer::plan::plan(contacts, &lands, &[], None, Bed::S13).expect("plan");
     assert_eq!(plan.boards_total, 2);
     assert_eq!(plan.tested, vec![0, 1]);
     // 12 contacts bound: 10 to lands, 2 gnd to the pour.
@@ -324,7 +324,7 @@ fn plans_the_fixture_map() {
     assert_eq!(class_of("B0.TP_SWDIO.TP"), None);
 
     // The JSON document is deterministic.
-    let json = pcb_interposer::plan::to_json(&plan, &panel, &lands);
+    let json = pcb_interposer::plan::to_json(&plan, &panel, &lands, None);
     let value: serde_json::Value = serde_json::from_str(&json).expect("valid json");
     assert_eq!(value["boards_total"], 2);
     assert_eq!(value["bindings"].as_array().unwrap().len(), 12);
@@ -365,6 +365,7 @@ fn switchyard_rev1_carries_its_alignment() {
         fids_top: Vec::new(),
         fids_bottom: Vec::new(),
         mouse_bites: Vec::new(),
+        envelope: None,
     };
     let bed = Bed::SwitchyardRev1;
     let panel = bed.fit(panel);
@@ -429,4 +430,154 @@ fn switchyard_rev1_carries_its_alignment() {
     pcb_sexpr::parse(&four).expect("board parses");
     assert_eq!(four.matches("(net \"ID7\")").count(), 4);
     assert_eq!(four.matches("(locked yes)").count(), 2);
+}
+
+/// A single board export: a 150 × 30 mm board probed on its top face,
+/// its test points spread wider (130 mm) than the Switchyard bed (95 mm),
+/// and more digital lines than one cell's lanes.
+fn single_board() -> String {
+    let roles = [
+        ("vtarget", 10.0, 5.0),
+        ("vusb", 25.0, 25.0),
+        ("gnd", 40.0, 5.0),
+        ("swclk", 60.0, 15.0),
+        ("swdio", 64.0, 15.0),
+        ("nrst", 68.0, 15.0),
+        ("ls", 80.0, 5.0),
+        ("ls", 100.0, 25.0),
+        ("ls", 120.0, 5.0),
+        ("ls", 140.0, 20.0),
+    ];
+    let mut bom = String::new();
+    let mut components = String::new();
+    for (i, (ict, x, y)) in roles.iter().enumerate() {
+        let n = i + 1;
+        bom += &format!(
+            r#"    <BomItem OEMDesignNumberRef="TP{n}" quantity="1" pinCount="1" category="ELECTRICAL">
+      <RefDes name="TP{n}" packageRef="TestPoint_ICT" populate="true" layerRef="TOP"/>
+      <Characteristics category="ELECTRICAL">
+        <Textual textualCharacteristicName="Ict" textualCharacteristicValue="{ict}"/>
+        <Textual textualCharacteristicName="Path" textualCharacteristicValue="TP{n}.TP"/>
+      </Characteristics>
+    </BomItem>
+"#
+        );
+        components += &format!(
+            r#"        <Component refDes="TP{n}" layerRef="TOP" part="TP{n}" mountType="SMT">
+          <Location x="{x}" y="{y}"/>
+        </Component>
+"#
+        );
+    }
+    format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
+  <Content roleRef="Owner">
+    <FunctionMode mode="FABRICATION"/>
+    <StepRef name="board"/>
+    <DictionaryStandard units="MILLIMETER"/>
+  </Content>
+  <Bom name="BOM_board">
+    <BomHeader assembly="board" revision="1.0">
+      <StepRef name="board"/>
+    </BomHeader>
+{bom}  </Bom>
+  <Ecad name="ecad">
+    <CadHeader units="MILLIMETER"/>
+    <CadData>
+      <Layer name="TOP" layerFunction="CONDUCTOR" side="TOP" polarity="POSITIVE"/>
+      <Layer name="BOTTOM" layerFunction="CONDUCTOR" side="BOTTOM" polarity="POSITIVE"/>
+      <Step name="board">
+        <Datum x="0.0" y="0.0"/>
+        <Profile>
+          <Polygon>
+            <PolyBegin x="0.0" y="0.0"/>
+            <PolyStepSegment x="150.0" y="0.0"/>
+            <PolyStepSegment x="150.0" y="30.0"/>
+            <PolyStepSegment x="0.0" y="30.0"/>
+            <PolyStepSegment x="0.0" y="0.0"/>
+          </Polygon>
+        </Profile>
+{components}      </Step>
+    </CadData>
+  </Ecad>
+</IPC-2581>"#
+    )
+}
+
+#[test]
+fn single_board_overhangs_the_bed_in_a_nest() {
+    let bed = Bed::SwitchyardRev1;
+    let ipc = ipc2581::Ipc2581::parse(&single_board()).expect("board fixture parses");
+    let placed = pcb_interposer::single::place(&ipc, bed).expect("the board places");
+    // Probed on top, so laid face down; its 130 mm of contacts run along
+    // the pogo rows (x), the only way past the bed's 64 mm across them.
+    assert!(placed.placement.mirrored);
+    assert_eq!(placed.placement.quarter_turns % 2, 0);
+    let [ex0, ey0, ex1, ey1] = placed.panel.envelope.expect("an envelope");
+    assert!(ex0 < 5.0 && ex1 > 100.0, "{ex0} {ex1}");
+    assert_eq!((ey0, ey1), (5.0, 69.0));
+    let reach = pcb_interposer::plate::nest_reach();
+    let [bx0, _, bx1, _] = placed.board;
+    assert!(ex0 <= bx0 - reach + 1e-9 && ex1 >= bx1 + reach - 1e-9);
+    let r = pcb_interposer::pogo::COURTYARD_RADIUS_MM;
+    for contact in &placed.contacts {
+        let [x, y] = contact.xy;
+        assert!(y - r >= ey0 - 1e-9 && y + r <= ey1 + 1e-9, "{contact:?}");
+        assert!(x >= bx0 && x <= bx1, "{contact:?}");
+        for feature in bed.alignment() {
+            let gap = (x - feature.at[0]).hypot(y - feature.at[1]);
+            assert!(gap >= feature.keepout_dia / 2.0 + r - 1e-9, "{contact:?}");
+        }
+    }
+    // Face down mirrors the pattern: TP1 (x 10) and TP10 (x 140) swap
+    // ends unless the board also turned half way.
+    let x_of = |refdes: &str| {
+        placed
+            .contacts
+            .iter()
+            .find(|c| c.refdes == refdes)
+            .map(|c| c.xy[0])
+            .unwrap()
+    };
+    let flipped = placed.placement.quarter_turns == 0;
+    assert_eq!(x_of("TP1") > x_of("TP10"), flipped);
+
+    let path = std::env::temp_dir().join(format!("single-board-{}.xml", std::process::id()));
+    std::fs::write(&path, single_board()).unwrap();
+    let mode = pcb_interposer::Mode::SingleBoard;
+    let map = pcb_interposer::fixture_map(&path, mode, bed).expect("fixture map");
+    let map: serde_json::Value = serde_json::from_str(&map).unwrap();
+    // Seven digital lines need two cells' S lanes.
+    assert_eq!(map["cells"][0].as_array().unwrap().len(), 2);
+    assert_eq!(map["dropped"].as_array().unwrap().len(), 0);
+    assert_eq!(map["placement"]["mirrored"], true);
+    let plate = pcb_interposer::dut_plate(&path, mode, bed, pcb_interposer::plate::Locators::Nubs)
+        .expect("plate");
+    assert!(plate.contains("// Nest:"));
+    assert!(!plate.contains("d1 = 2, d2 = 1.2"), "no nubs in a nest");
+    // The ears leave the overhanging ends for the long sides, over the bed.
+    assert!(plate.contains(
+        "ears = [[15.000, -1.000], [90.000, -1.000], [15.000, 75.000], [90.000, 75.000]];"
+    ));
+    let (pcb, _, _) =
+        pcb_interposer::generate(&path, mode, Layers::Four, bed, Some(433)).expect("interposer");
+    std::fs::remove_file(&path).ok();
+    pcb_sexpr::parse(&pcb).expect("interposer parses");
+}
+
+#[test]
+fn panel_probed_on_top_fails() {
+    let top = PANEL.replace(
+        r#"<Component refDes="TP3" layerRef="BOTTOM""#,
+        r#"<Component refDes="TP3" layerRef="TOP""#,
+    );
+    let ipc = ipc2581::Ipc2581::parse(&top).expect("panel fixture parses");
+    let err = pcb_interposer::contacts::extract_contacts(&ipc, 105.0)
+        .unwrap_err()
+        .to_string();
+    assert!(
+        err.contains("TP3") && err.contains("--single-board"),
+        "{err}"
+    );
 }
