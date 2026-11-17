@@ -207,9 +207,28 @@ struct OAuthRefreshResponse {
 
 fn oauth_client() -> Result<Client> {
     Ok(Client::builder()
+        .user_agent(concat!("diode-pcb/", env!("CARGO_PKG_VERSION")))
         .timeout(Duration::from_secs(30))
         .redirect(reqwest::redirect::Policy::none())
         .build()?)
+}
+
+/// A rejected refresh token never works again, so drop the login rather than resend it.
+/// The caller holds the auth lock.
+fn send_refresh(
+    ctx: &WorkspaceContext,
+    request: RequestBuilder,
+) -> Result<reqwest::blocking::Response> {
+    let response = request.send()?;
+    let status = response.status();
+    if matches!(status, StatusCode::BAD_REQUEST | StatusCode::UNAUTHORIZED) {
+        fs::remove_file(get_auth_file_path(ctx)?)?;
+        anyhow::bail!("Login expired ({status}). Run `pcb auth login` to authenticate.");
+    }
+    if !status.is_success() {
+        anyhow::bail!("Token refresh failed: {status}");
+    }
+    Ok(response)
 }
 
 fn refresh_tokens_with_context(ctx: &WorkspaceContext) -> Result<AuthTokens> {
@@ -227,17 +246,16 @@ fn refresh_tokens_with_context(ctx: &WorkspaceContext) -> Result<AuthTokens> {
                 .append_pair("refresh_token", &tokens.refresh_token)
                 .append_pair("client_id", client_id)
                 .finish();
-            let response = oauth_client()?
-                .post(token_endpoint)
-                .header(
-                    reqwest::header::CONTENT_TYPE,
-                    "application/x-www-form-urlencoded",
-                )
-                .body(body)
-                .send()?;
-            if !response.status().is_success() {
-                anyhow::bail!("Token refresh failed: {}", response.status());
-            }
+            let response = send_refresh(
+                ctx,
+                oauth_client()?
+                    .post(token_endpoint)
+                    .header(
+                        reqwest::header::CONTENT_TYPE,
+                        "application/x-www-form-urlencoded",
+                    )
+                    .body(body),
+            )?;
             let response: OAuthRefreshResponse = response.json()?;
             if response.expires_in <= 0 {
                 anyhow::bail!("Invalid token expiry");
@@ -257,15 +275,12 @@ fn refresh_tokens_with_context(ctx: &WorkspaceContext) -> Result<AuthTokens> {
         }
         (None, None) => {
             let url = format!("{}/api/auth/refresh", ctx.api_base_url());
-            let response = Client::new()
-                .post(&url)
-                .json(&RefreshRequest {
+            let response = send_refresh(
+                ctx,
+                oauth_client()?.post(&url).json(&RefreshRequest {
                     refresh_token: tokens.refresh_token.clone(),
-                })
-                .send()?;
-            if !response.status().is_success() {
-                anyhow::bail!("Token refresh failed: {}", response.status());
-            }
+                }),
+            )?;
             let response: RefreshResponse = response.json()?;
             AuthTokens {
                 access_token: response.access_token,
@@ -863,6 +878,38 @@ mod tests {
 
         assert_eq!(err.to_string(), NOT_AUTHENTICATED_MESSAGE);
         assert_eq!(refresh_calls.get(), 1);
+    }
+
+    #[test]
+    #[serial]
+    fn rejected_refresh_token_removes_login_and_is_not_retried() {
+        let (_tempdir, _guard, ctx) = isolated_context();
+        let server = httpmock::MockServer::start();
+        let token_endpoint = server.mock(|when, then| {
+            when.method(httpmock::Method::POST)
+                .path("/api/auth/oauth2/token")
+                .header_exists("user-agent");
+            then.status(400)
+                .json_body(serde_json::json!({ "error": "invalid_grant" }));
+        });
+        save_tokens(
+            &ctx,
+            "expired-token",
+            "dead-refresh-token",
+            unix_now() - 3600,
+            None,
+            Some(&server.url("/api/auth/oauth2/token")),
+            Some("cli-client"),
+        )
+        .unwrap();
+
+        for _ in 0..2 {
+            let err = get_valid_token_with_context(&ctx).unwrap_err();
+            assert_eq!(err.to_string(), NOT_AUTHENTICATED_MESSAGE);
+        }
+
+        token_endpoint.assert_calls(1);
+        assert!(load_auth(&ctx).unwrap().is_none());
     }
 
     #[test]
