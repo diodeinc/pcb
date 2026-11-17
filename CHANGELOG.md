@@ -20,6 +20,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - `pcb ipc interposer` fails, naming the contacts, when a panel's ICT test points are on its top face instead of probing a mirrored pattern.
 - On the Switchyard bed `pcb ipc interposer` fails, naming each contact, when a test point would put a pogo in the D1 dowel, D2 slot or M3 screw keep-out, instead of leaving that board untested.
 - `pcb ipc interposer --single-board` builds the interposer for one singulated board instead of a panel, from a board export or a panel export's board: it lays the board face down when its test points are on top, places it on the bed where its contacts clear the alignment features and lie nearest their lanes, lets it overhang the Switchyard bed along the pogo rows (growing the interposer and DUT plate to carry it), records the placement in the fixture map, and turns the DUT plate into a nest with the screw ears on its long sides.
+- `pcb ipc interposer` probes every test point with an `ict` role, warning once for each one not on the TestPoint ICT footprint, whose pad may be too small for a pogo; such test points were skipped silently.
 - TestPoint `ict="analog"` marks an analog-only contact, which the Switchyard bed keeps off its digital lanes.
 
 ### Changed

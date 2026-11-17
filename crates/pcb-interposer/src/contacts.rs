@@ -2,8 +2,9 @@
 //!
 //! The board-array file carries the board's components once (in the
 //! repeated board step) and the placement grid as step repeats; the BOM
-//! carries each component's `Ict` role; only `TestPoint_ICT`-footprint
-//! components qualify. This joins the three into one
+//! carries each component's `Ict` role. Every component with a role is
+//! probed; one not on the `TestPoint_ICT` footprint draws a warning, since
+//! its pad may be too small for a pogo. This joins the three into one
 //! contact list in the interposer's Y-down sheet frame — one entry per
 //! fixture-facing test point per board instance.
 
@@ -203,19 +204,38 @@ pub(crate) fn bom_roles(ipc: &Ipc2581) -> BTreeMap<String, (String, String)> {
         }
         let Some(ict) = ict else { continue };
         for ref_des in item.reference_designators() {
-            if !ref_des
-                .package_ref
-                .is_some_and(|package| is_ict_package(ipc.resolve(package)))
-            {
+            let refdes = ipc.resolve(ref_des.name).to_string();
+            if refdes.is_empty() {
                 continue;
             }
-            let refdes = ipc.resolve(ref_des.name).to_string();
-            if !refdes.is_empty() {
-                roles.insert(refdes, (ict.clone(), path.clone()));
+            let package = ref_des.package_ref.map(|package| ipc.resolve(package));
+            if !package.is_some_and(is_ict_package) && first_warning(&refdes, package) {
+                // Probe it anyway, but loudly: a pad not sized for a pogo
+                // may be missed once tolerances stack up.
+                eprintln!(
+                    "\x1b[1;31mWARNING:\x1b[0m {refdes} has ict role `{ict}` but footprint `{}`, \
+                     not the TestPoint ICT variant; probing it anyway, but its pad may be too \
+                     small for a pogo",
+                    package.unwrap_or("none")
+                );
             }
+            roles.insert(refdes, (ict.clone(), path.clone()));
         }
     }
     roles
+}
+
+/// Whether this is the first footprint warning for `refdes`: one run
+/// builds the interposer, its plate and its map from the same export, and
+/// each would otherwise repeat every warning.
+fn first_warning(refdes: &str, package: Option<&str>) -> bool {
+    use std::sync::{Mutex, OnceLock};
+    static WARNED: OnceLock<Mutex<std::collections::BTreeSet<(String, String)>>> = OnceLock::new();
+    WARNED
+        .get_or_init(Default::default)
+        .lock()
+        .map(|mut warned| warned.insert((refdes.to_string(), package.unwrap_or("").to_string())))
+        .unwrap_or(true)
 }
 
 /// The `TestPoint` ICT variant's footprint, allowing the `_<n>` suffix

@@ -452,9 +452,15 @@ fn single_board() -> String {
     let mut components = String::new();
     for (i, (ict, x, y)) in roles.iter().enumerate() {
         let n = i + 1;
+        // TP10 keeps its role on a plain pad footprint: still probed.
+        let package = if n == 10 {
+            "TestPoint_Pad_D1.0mm"
+        } else {
+            "TestPoint_ICT"
+        };
         bom += &format!(
             r#"    <BomItem OEMDesignNumberRef="TP{n}" quantity="1" pinCount="1" category="ELECTRICAL">
-      <RefDes name="TP{n}" packageRef="TestPoint_ICT" populate="true" layerRef="TOP"/>
+      <RefDes name="TP{n}" packageRef="{package}" populate="true" layerRef="TOP"/>
       <Characteristics category="ELECTRICAL">
         <Textual textualCharacteristicName="Ict" textualCharacteristicValue="{ict}"/>
         <Textual textualCharacteristicName="Path" textualCharacteristicValue="TP{n}.TP"/>
