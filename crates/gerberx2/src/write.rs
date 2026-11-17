@@ -37,6 +37,8 @@ impl AttributeValue {
 /// separator `,`, the XNC comment mark `;`, the escape character `\` itself,
 /// control characters and everything beyond ASCII are written as `\uXXXX`
 /// UTF-16 escapes, which is what the format specifies and what KiCad writes.
+/// `#`, `&`, `[` and `]` are legal but escaped too, because some CAM
+/// importers reject them in attribute values.
 /// The writers keep validation strict; source dialects pass free-form
 /// metadata through this encoding when lowering into writer IR.
 pub fn escape_attribute_field(field: &str) -> String {
@@ -45,7 +47,9 @@ pub fn escape_attribute_field(field: &str) -> String {
     }
     let mut escaped = String::with_capacity(field.len());
     for ch in field.chars() {
-        if matches!(ch, ' '..='~') && !matches!(ch, '\\' | '*' | '%' | ',' | ';') {
+        if matches!(ch, ' '..='~')
+            && !matches!(ch, '\\' | '*' | '%' | ',' | ';' | '#' | '&' | '[' | ']')
+        {
             escaped.push(ch);
         } else {
             for unit in ch.encode_utf16(&mut [0; 2]) {
@@ -924,6 +928,12 @@ mod tests {
             ("PWR RST-1", "PWR RST-1"),
             ("PWR_RST*,A%B;", "PWR_RST\\u002A\\u002CA\\u0025B\\u003B"),
             ("R\\E\\S", "R\\u005CE\\u005CS"),
+            (
+                "#FOO_EN&BAR.CH[A]",
+                "\\u0023FOO_EN\\u0026BAR.CH\\u005BA\\u005D",
+            ),
+            // A name spelled like an escape stays distinct from the name it spells.
+            ("CH\\u005BA", "CH\\u005Cu005BA"),
             ("\u{b5}C_RST\t", "\\u00B5C_RST\\u0009"),
             ("\u{1f600}", "\\uD83D\\uDE00"),
         ] {
