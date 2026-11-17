@@ -18,6 +18,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - `pcb ipc interposer --layers 4` on the Switchyard bed holds the 60 V exposed clearance (0.6 mm) on every net, pad and track instead of per item, with no `.kicad_dru` or DSN clearance classes; GND pads get no routing ring; a second attempt, only if the first leaves a gap, reserves a via site overlapping each GND pad instead.
 - `pcb ipc interposer --layers 4-signal` builds the 4-layer stackup with a GND plane on In1 and In2 left as a signal layer for routing.
 - `pcb ipc interposer --dut-plate <plate.scad>` writes the DUT plate as OpenSCAD: a printed slab on the interposer that stops the DUT panel at the pogos' working travel, seats on the bed's dowels, and locates the panel with tapered nubs in the channels between boards, or Ø2 mm dowel pins with `--dut-plate-locators dowels`. Its holes are drawn 0.5 mm over size for print shrinkage, with pogos too close for a printable wall sharing a slot. Four screw ears, placed by variables at the top of the file, and the bed's M3 clamp the plate and interposer to the bed.
+- On the Switchyard bed `pcb ipc interposer` fails, naming each contact, when a test point would put a pogo in the D1 dowel, D2 slot or M3 screw keep-out, instead of leaving that board untested.
 - TestPoint `ict="analog"` marks an analog-only contact, which the Switchyard bed keeps off its digital lanes.
 
 ## [0.4.103] - 2026-11-19

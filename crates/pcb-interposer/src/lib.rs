@@ -101,9 +101,10 @@ pub fn dut_plate(panel_xml: &Path, bed: Bed, locators: plate::Locators) -> Resul
 /// Fixed-feature disks a pogo pad must stay out of: tooling holes (the
 /// A7 tile's corners can sit under the board field on large sheets) and
 /// top-face fiducial mask openings, each grown by the pogo pad radius
-/// plus clearance, and the bed's alignment keep-outs, grown by the pogo
-/// radius alone (the keep-out is the margin).
-fn pogo_keepouts(panel: &panel::Panel, bed: Bed) -> Vec<([f64; 2], f64)> {
+/// plus clearance. A board with a contact in one is left untested; a
+/// contact in the bed's alignment or screw keep-outs fails the plan
+/// instead ([`plan::plan`]).
+fn pogo_keepouts(panel: &panel::Panel) -> Vec<([f64; 2], f64)> {
     let pogo = pogo::COURTYARD_RADIUS_MM;
     let clear = 0.5;
     panel
@@ -111,11 +112,6 @@ fn pogo_keepouts(panel: &panel::Panel, bed: Bed) -> Vec<([f64; 2], f64)> {
         .iter()
         .map(|(at, dia)| (*at, dia / 2.0 + pogo + clear))
         .chain(panel.fids_top.iter().map(|at| (*at, 1.0 + pogo + clear)))
-        .chain(
-            bed.alignment()
-                .into_iter()
-                .map(|alignment| (alignment.at, alignment.keepout_dia / 2.0 + pogo)),
-        )
         .collect()
 }
 
@@ -132,12 +128,7 @@ fn build(
     let plan = if contacts.is_empty() {
         None
     } else {
-        Some(plan::plan(
-            contacts,
-            &lands,
-            &pogo_keepouts(&panel, bed),
-            bed,
-        )?)
+        Some(plan::plan(contacts, &lands, &pogo_keepouts(&panel), bed)?)
     };
     Ok((panel, lands, plan))
 }
