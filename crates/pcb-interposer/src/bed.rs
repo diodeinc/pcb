@@ -43,6 +43,8 @@ pub struct Alignment {
     /// Drill extent along x and y.
     pub drill: [f64; 2],
     pub keepout_dia: f64,
+    /// A screw through it clamps the DUT plate and interposer to the bed.
+    pub clamps: bool,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -88,7 +90,8 @@ impl Bed {
         match self {
             Bed::S13 => Vec::new(),
             // Switchyard CR-17 (floorplan §2a): D1 locates, the D2 slot
-            // takes up x tolerance, the M3 clears the shroud screw. D1's
+            // takes up x tolerance, the M3 clears the shroud screw, which
+            // also clamps the middle of the DUT plate and interposer. D1's
             // +0.05/−0 tolerance is a fab note, not geometry.
             Bed::SwitchyardRev1 => vec![
                 Alignment {
@@ -96,18 +99,21 @@ impl Bed {
                     at: [28.5, 31.25],
                     drill: [3.05, 3.05],
                     keepout_dia: 6.0,
+                    clamps: false,
                 },
                 Alignment {
                     name: "D2",
                     at: [76.5, 31.25],
                     drill: [4.0, 3.05],
                     keepout_dia: 6.0,
+                    clamps: false,
                 },
                 Alignment {
                     name: "M3",
                     at: [52.5, 31.25],
                     drill: [3.4, 3.4],
                     keepout_dia: 6.0,
+                    clamps: true,
                 },
             ],
         }
