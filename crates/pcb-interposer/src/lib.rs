@@ -55,6 +55,17 @@ pub fn generate(
     let (panel, lands, plan) = build(panel_xml, bed)?;
     let straps = bed.id_straps(&lands, interposer_id)?;
     if let Some(plan) = &plan
+        && let Some(own) = plan.cells.first()
+        && own.len() > 1
+    {
+        eprintln!(
+            "note: each board needs {} bed cells; testing {} of {} boards",
+            own.len(),
+            plan.tested.len(),
+            plan.boards_total
+        );
+    }
+    if let Some(plan) = &plan
         && !plan.dropped.is_empty()
     {
         let names: Vec<String> = plan
