@@ -15,7 +15,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Fixed
 
-- `pcb layout` writes netclass impedance targets to the `.kicad_pro`: as `single_ended_impedance` / `differential_pair_impedance` on each netclass, and as a KiCad tuning profile assigned to the netclass, so the layout viewer and KiCad show them.
+- `pcb layout` writes netclass impedance targets to the `.kicad_pro`: as `single_ended_impedance` / `differential_pair_impedance` on each netclass, and as a KiCad tuning profile of the netclass's name assigned to it, so the layout viewer and KiCad show them. `pcb import` reads the targets back into the generated `NetClass`.
 - `pcb ipc2581 dfm check` measures a hole or slot drilled through several lands of one pad instead of reporting its rules as not evaluated.
 - `pcb ipc2581 assembly` links a hole to the termination of its own padstack, and no longer warns `ambiguous_hole_termination` when the terminations it overlaps are one pad.
 

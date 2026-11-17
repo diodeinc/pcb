@@ -75,6 +75,14 @@ pub fn render_imported_board(args: RenderImportedBoardArgs<'_>) -> String {
         args.stackup.is_some(),
         args.design_rules.is_some(),
     ));
+    if args.design_rules.is_some_and(|rules| {
+        rules.netclasses.iter().any(|netclass| {
+            netclass.single_ended_impedance.is_some()
+                || netclass.differential_pair_impedance.is_some()
+        })
+    }) {
+        out.push_str("load(\"@stdlib/units.zen\", \"Impedance\")\n\n");
+    }
 
     out.push_str(&render_imported_module_body(
         &[],
@@ -358,6 +366,20 @@ fn render_netclass_expr(netclass: &zen_stackup::NetClass) -> String {
         ("diff_pair_via_gap", netclass.diff_pair_via_gap),
     ] {
         push_opt_float_field(&mut parts, name, value);
+    }
+    for (name, ohms) in [
+        (
+            "single_ended_impedance",
+            netclass.single_ended_impedance_ohms(),
+        ),
+        (
+            "differential_pair_impedance",
+            netclass.differential_pair_impedance_ohms(),
+        ),
+    ] {
+        if let Some(ohms) = ohms {
+            parts.push(format!("{name} = Impedance({})", starlark::float(ohms)));
+        }
     }
     if let Some(priority) = netclass.priority {
         parts.push(format!("priority = {priority}"));
@@ -845,7 +867,11 @@ mod tests {
                 priority: Some(i32::MAX),
                 color: None,
                 single_ended_impedance: None,
-                differential_pair_impedance: None,
+                differential_pair_impedance: Some(pcb_sch::physical::PhysicalValue::new(
+                    90.0,
+                    0.0,
+                    pcb_sch::PhysicalUnit::Ohms,
+                )),
             }],
         };
 
@@ -875,6 +901,9 @@ mod tests {
             "predefined_sizes = PredefinedSizes(track_widths = [0.15, 0.2], via_dimensions = [ViaDimension(diameter = 0.5, drill = 0.3)])"
         ));
         assert!(out.contains("netclasses = ["));
+        assert!(out.contains("load(\"@stdlib/units.zen\", \"Impedance\")"));
+        assert!(out.contains("differential_pair_impedance = Impedance(90.0)"));
+        assert!(!out.contains("single_ended_impedance"));
 
         // Without source presets, explicit empty lists keep the stdlib base
         // presets from being merged in under the imported rules.

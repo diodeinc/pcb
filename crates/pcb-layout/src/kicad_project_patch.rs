@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use pcb_sch::{PhysicalUnit, physical::PhysicalValue};
 use pcb_zen_core::lang::stackup::{BoardConfig, DesignRules, NetClass};
 use serde_json::{Map, Value, json};
 use std::collections::HashMap;
@@ -293,11 +294,17 @@ fn extract_netclasses(project: &Value) -> Vec<NetClass> {
                 diff_pair_via_gap: class.get("diff_pair_via_gap").and_then(Value::as_f64),
                 priority,
                 color,
-                single_ended_impedance: None,
-                differential_pair_impedance: None,
+                single_ended_impedance: impedance(class, "single_ended_impedance"),
+                differential_pair_impedance: impedance(class, "differential_pair_impedance"),
             })
         })
         .collect()
+}
+
+/// A netclass impedance target pcb layout wrote, in ohms.
+fn impedance(class: &Value, key: &str) -> Option<PhysicalValue> {
+    let ohms = class.get(key).and_then(Value::as_f64)?;
+    (ohms.is_finite() && ohms > 0.0).then(|| PhysicalValue::new(ohms, 0.0, PhysicalUnit::Ohms))
 }
 
 fn patch_constraints(project: &mut Value, board_config: &BoardConfig) {
@@ -507,17 +514,17 @@ fn patch_netclasses(project: &mut Value, board_config: &BoardConfig) {
                     .single_ended_impedance_ohms()
                     .map(|ohms| (TUNING_PROFILE_SINGLE, ohms))
             });
+        // Each impedance class gets a profile of its own name, so classes with different targets
+        // never share one. Once the class loses its target, it no longer selects that profile.
+        let profile = obj.get("tuning_profile").and_then(Value::as_str);
         if let Some((profile_type, ohms)) = target {
-            // A profile the designer already chose for the class in KiCad gets the target;
-            // otherwise the class gets a profile of its own name.
-            let profile = obj
-                .get("tuning_profile")
-                .and_then(Value::as_str)
-                .filter(|profile| !profile.is_empty())
-                .unwrap_or(&netclass.name)
-                .to_string();
-            obj.insert("tuning_profile".to_string(), Value::String(profile.clone()));
-            tuning_profiles.push((profile, profile_type, ohms));
+            obj.insert(
+                "tuning_profile".to_string(),
+                Value::String(netclass.name.clone()),
+            );
+            tuning_profiles.push((netclass.name.clone(), profile_type, ohms));
+        } else if profile == Some(netclass.name.as_str()) {
+            obj.insert("tuning_profile".to_string(), Value::String(String::new()));
         }
     }
 
@@ -532,9 +539,9 @@ fn patch_netclasses(project: &mut Value, board_config: &BoardConfig) {
     }
 }
 
-/// Upsert the KiCad tuning profile of each impedance-controlled netclass. Only the type and
-/// target are Zener's; per-layer geometry, delays and via overrides that the designer set up in
-/// KiCad are kept. A new profile has no layer entries, so KiCad derives no routing or DRC rules
+/// Upsert the KiCad tuning profile of each impedance-controlled netclass, named after the class.
+/// Only the type and target are Zener's; per-layer geometry, delays and via overrides that the
+/// designer set up in KiCad are kept. A new profile has no layer entries, so KiCad derives no routing or DRC rules
 /// from it until the designer adds them.
 fn patch_tuning_profiles(project: &mut Value, targets: &[(String, i64, f64)]) {
     let root = ensure_object(project)
@@ -1027,15 +1034,27 @@ mod tests {
         let mut project = json!({
             "net_settings": {
                 "classes": [
-                    // A target removed from the Zener class leaves the project too.
-                    {"name": "GBE_100", "differential_pair_impedance": 100.0, "tuning_profile": ""},
-                    // A profile the designer picked in KiCad stays assigned and gets the target.
-                    {"name": "PCIE_85", "tuning_profile": "PCIe stripline"}
+                    // A class that lost its target since the last sync stops selecting its profile.
+                    {"name": "GBE_100", "differential_pair_impedance": 100.0, "tuning_profile": "GBE_100"},
+                    // Classes with different targets that shared one profile get one each,
+                    // and the shared profile keeps its target.
+                    {"name": "PCIE_85", "tuning_profile": "Shared"},
+                    {"name": "SE_50", "tuning_profile": "Shared"},
+                    // A class without a target keeps the profile the designer picked.
+                    {"name": "MANUAL", "tuning_profile": "Shared"}
                 ]
             },
             "tuning_profiles": {
                 "meta": {"version": 0},
                 "tuning_profiles_impedance_geometric": [{
+                    "profile_name": "Shared",
+                    "type": 1,
+                    "target_impedance": 77.0,
+                    "enable_time_domain_tuning": false,
+                    "layer_entries": [],
+                    "via_prop_delay": 0,
+                    "via_overrides": []
+                }, {
                     "profile_name": "USB2_90",
                     "type": 0,
                     "target_impedance": 45.0,
@@ -1051,6 +1070,7 @@ mod tests {
             "design_rules": {
                 "netclasses": [
                     {"name": "GBE_100"},
+                    {"name": "MANUAL"},
                     {"name": "PCIE_85", "differential_pair_impedance": impedance("85")},
                     {"name": "USB2_90", "differential_pair_impedance": impedance("90")},
                     {
@@ -1080,8 +1100,10 @@ mod tests {
         };
         assert!(!class("GBE_100").contains_key("differential_pair_impedance"));
         assert_eq!(class("GBE_100")["tuning_profile"], "");
+        assert_eq!(class("MANUAL")["tuning_profile"], "Shared");
         assert_eq!(class("PCIE_85")["differential_pair_impedance"], json!(85.0));
-        assert_eq!(class("PCIE_85")["tuning_profile"], "PCIe stripline");
+        assert_eq!(class("PCIE_85")["tuning_profile"], "PCIE_85");
+        assert_eq!(class("SE_50")["tuning_profile"], "SE_50");
         assert_eq!(class("USB2_90")["differential_pair_impedance"], json!(90.0));
         assert_eq!(class("USB2_90")["tuning_profile"], "USB2_90");
         assert_eq!(class("SE_50")["single_ended_impedance"], json!(50.0));
@@ -1092,6 +1114,15 @@ mod tests {
         assert_eq!(
             project["tuning_profiles"]["tuning_profiles_impedance_geometric"],
             json!([
+                {
+                    "profile_name": "Shared",
+                    "type": 1,
+                    "target_impedance": 77.0,
+                    "enable_time_domain_tuning": false,
+                    "layer_entries": [],
+                    "via_prop_delay": 0,
+                    "via_overrides": []
+                },
                 {
                     "profile_name": "USB2_90",
                     "type": 1,
@@ -1111,7 +1142,7 @@ mod tests {
                     "via_overrides": []
                 },
                 {
-                    "profile_name": "PCIe stripline",
+                    "profile_name": "PCIE_85",
                     "type": 1,
                     "target_impedance": 85.0,
                     "enable_time_domain_tuning": false,
@@ -1230,6 +1261,7 @@ mod tests {
                     {
                         "name": "USB",
                         "priority": 1,
+                        "differential_pair_impedance": 90.0,
                         "clearance": 0.18,
                         "track_width": 0.22,
                         "pcb_color": "rgb(0, 194, 0)"
@@ -1281,6 +1313,11 @@ mod tests {
             design_rules.netclasses[1].color.as_deref(),
             Some("rgb(0, 194, 0)")
         );
+        assert_eq!(
+            design_rules.netclasses[1].differential_pair_impedance_ohms(),
+            Some(90.0)
+        );
+        assert_eq!(design_rules.netclasses[1].single_ended_impedance, None);
     }
 
     #[test]
