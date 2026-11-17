@@ -29,6 +29,14 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 - `pcb ipc2581 dfm check` measures a hole or slot drilled through several lands of one pad instead of reporting its rules as not evaluated.
 - `pcb ipc2581 assembly` links a hole to the termination of its own padstack, and no longer warns `ambiguous_hole_termination` when the terminations it overlaps are one pad.
+- `pcb ipc interposer` USB pairs get the USB net class; its name pattern never matched the generated nets.
+- `pcb ipc interposer --route` keeps routed traces clear of every GND pad and its reserved escape via (and out of alignment keep-outs), so traces can no longer seal a GND pad off from the pour; it then prunes dead GND islands, bridges cut-off GND clusters, and reroutes (up to 3 attempts) when KiCad still finds connections missing.
+- `pcb ipc interposer --route` keeps traces off fiducials.
+- `pcb ipc interposer` pre-routes the Switchyard interposer-ID straps as locked tracks, one net in a lane just above the ID row and the other just below it, so the autorouter no longer fails on the long strap runs.
+- `pcb ipc interposer --route` keeps vias out of the board-edge clearance, and rips up and reroutes (up to 3 times) any net whose via FreeRouting set inside the 60 V clearance of a bare pad.
+- `pcb ipc interposer --route` drops GND vias FreeRouting sets inside the board-edge clearance, and gives each net class's vias its own clearance class so 60 V vias keep their distance from bare pads.
+- `pcb ipc interposer --route` bridges GND fill islands that reach a thermal-relief pad only at its spokes, and warns about any GND pad no via can reach instead of leaving it silently unconnected.
+- `pcb ipc interposer` no longer drills the panel's mouse-bite perforations into the interposer or keeps pogos clear of them.
 
 ## [0.4.102] - 2026-11-13
 
@@ -77,17 +85,8 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [0.4.98] - 2026-11-07
 
-||||||| parent of 7ddef42f (feat(interposer): add the Switchyard rev-1 bed)
 ### Fixed
 
-- `pcb ipc interposer` USB pairs get the USB net class; its name pattern never matched the generated nets.
-- `pcb ipc interposer --route` keeps routed traces clear of every GND pad and its reserved escape via (and out of alignment keep-outs), so traces can no longer seal a GND pad off from the pour; it then prunes dead GND islands, bridges cut-off GND clusters, and reroutes (up to 3 attempts) when KiCad still finds connections missing.
-- `pcb ipc interposer --route` keeps traces off fiducials.
-- `pcb ipc interposer` pre-routes the Switchyard interposer-ID straps as locked tracks, one net in a lane just above the ID row and the other just below it, so the autorouter no longer fails on the long strap runs.
-- `pcb ipc interposer --route` keeps vias out of the board-edge clearance, and rips up and reroutes (up to 3 times) any net whose via FreeRouting set inside the 60 V clearance of a bare pad.
-- `pcb ipc interposer --route` drops GND vias FreeRouting sets inside the board-edge clearance, and gives each net class's vias its own clearance class so 60 V vias keep their distance from bare pads.
-- `pcb ipc interposer --route` bridges GND fill islands that reach a thermal-relief pad only at its spokes, and warns about any GND pad no via can reach instead of leaving it silently unconnected.
-- `pcb ipc interposer` no longer drills the panel's mouse-bite perforations into the interposer or keeps pogos clear of them.
 - `json.encode` and `Board()` configs nested more than 32 levels deep now fail with an error instead of crashing.
 - `pcb import` reads the MPN from Altium's `Manufacturer Part` symbol field.
 - `pcb build --netlist` and the LSP's `zener/evaluate` return the netlist even when the build has errors; the build still fails.
