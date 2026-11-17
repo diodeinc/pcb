@@ -265,6 +265,7 @@ fn extract_predefined_sizes(project: &Value) -> Option<Value> {
 }
 
 fn extract_netclasses(project: &Value) -> Vec<NetClass> {
+    let targets = tuning_profile_targets(project);
     get_value_at_iter(project, "net_settings.classes".split('.'))
         .and_then(Value::as_array)
         .into_iter()
@@ -281,6 +282,17 @@ fn extract_netclasses(project: &Value) -> Vec<NetClass> {
                 .filter(|color| *color != DEFAULT_COLOR)
                 .map(ToString::to_string);
 
+            // KiCad keeps a class's impedance target in the tuning profile it selects.
+            let (single_ended_impedance, differential_pair_impedance) = match class
+                .get("tuning_profile")
+                .and_then(Value::as_str)
+                .and_then(|profile| targets.get(profile))
+            {
+                Some(&(TUNING_PROFILE_DIFFERENTIAL, ohms)) => (None, Some(ohms_value(ohms))),
+                Some(&(_, ohms)) => (Some(ohms_value(ohms)), None),
+                None => (None, None),
+            };
+
             Some(NetClass {
                 name,
                 clearance: class.get("clearance").and_then(Value::as_f64),
@@ -294,17 +306,38 @@ fn extract_netclasses(project: &Value) -> Vec<NetClass> {
                 diff_pair_via_gap: class.get("diff_pair_via_gap").and_then(Value::as_f64),
                 priority,
                 color,
-                single_ended_impedance: impedance(class, "single_ended_impedance"),
-                differential_pair_impedance: impedance(class, "differential_pair_impedance"),
+                single_ended_impedance,
+                differential_pair_impedance,
             })
         })
         .collect()
 }
 
-/// A netclass impedance target pcb layout wrote, in ohms.
-fn impedance(class: &Value, key: &str) -> Option<PhysicalValue> {
-    let ohms = class.get(key).and_then(Value::as_f64)?;
-    (ohms.is_finite() && ohms > 0.0).then(|| PhysicalValue::new(ohms, 0.0, PhysicalUnit::Ohms))
+fn ohms_value(ohms: f64) -> PhysicalValue {
+    PhysicalValue::new(ohms, 0.0, PhysicalUnit::Ohms)
+}
+
+/// The type and target of each KiCad tuning profile that sets a target impedance, by name.
+fn tuning_profile_targets(project: &Value) -> HashMap<String, (i64, f64)> {
+    get_value_at_iter(
+        project,
+        ["tuning_profiles", "tuning_profiles_impedance_geometric"],
+    )
+    .and_then(Value::as_array)
+    .into_iter()
+    .flatten()
+    .filter_map(|profile| {
+        let name = profile.get("profile_name")?.as_str()?;
+        let profile_type = profile.get("type").and_then(value_as_i64)?;
+        let ohms = profile.get("target_impedance")?.as_f64()?;
+        (matches!(
+            profile_type,
+            TUNING_PROFILE_SINGLE | TUNING_PROFILE_DIFFERENTIAL
+        ) && ohms.is_finite()
+            && ohms > 0.0)
+            .then(|| (name.to_string(), (profile_type, ohms)))
+    })
+    .collect()
 }
 
 fn patch_constraints(project: &mut Value, board_config: &BoardConfig) {
@@ -424,6 +457,7 @@ fn patch_netclasses(project: &mut Value, board_config: &BoardConfig) {
         .map(|max| max + 1)
         .unwrap_or(0);
     let mut tuning_profiles = Vec::new();
+    let profile_targets = tuning_profile_targets(project);
 
     for netclass in iter {
         let existing_idx = class_index.get(&netclass.name).copied();
@@ -488,25 +522,6 @@ fn patch_netclasses(project: &mut Value, board_config: &BoardConfig) {
         set_number_if_some(obj, "diff_pair_gap", netclass.diff_pair_gap);
         set_number_if_some(obj, "diff_pair_via_gap", netclass.diff_pair_via_gap);
 
-        // Not KiCad fields: Zener owns them, so a target removed from the class goes too.
-        let had_target = obj.contains_key("single_ended_impedance")
-            || obj.contains_key("differential_pair_impedance");
-        for (key, ohms) in [
-            (
-                "single_ended_impedance",
-                netclass.single_ended_impedance_ohms(),
-            ),
-            (
-                "differential_pair_impedance",
-                netclass.differential_pair_impedance_ohms(),
-            ),
-        ] {
-            match ohms {
-                Some(ohms) => obj.insert(key.to_string(), Value::from(ohms)),
-                None => obj.remove(key),
-            };
-        }
-
         // KiCad's tuning profile has one type, so a class with both targets gets the differential one.
         let target = netclass
             .differential_pair_impedance_ohms()
@@ -517,8 +532,9 @@ fn patch_netclasses(project: &mut Value, board_config: &BoardConfig) {
                     .map(|ohms| (TUNING_PROFILE_SINGLE, ohms))
             });
         // Each impedance class gets a profile of its own name, so classes with different targets
-        // never share one; a new one starts from the profile the class selected before. Once a
-        // target Zener wrote is removed, the class no longer selects that profile.
+        // never share one; a new one starts from the profile the class selected before. A class
+        // without a target stops selecting the profile of its name that sets one, since that is
+        // the profile a removed target was written to.
         let profile = obj
             .get("tuning_profile")
             .and_then(Value::as_str)
@@ -535,7 +551,9 @@ fn patch_netclasses(project: &mut Value, board_config: &BoardConfig) {
                 profile_type,
                 ohms,
             });
-        } else if had_target && profile.as_deref() == Some(netclass.name.as_str()) {
+        } else if profile.as_deref() == Some(netclass.name.as_str())
+            && profile_targets.contains_key(&netclass.name)
+        {
             obj.insert("tuning_profile".to_string(), Value::String(String::new()));
         }
     }
@@ -1062,14 +1080,14 @@ mod tests {
         let mut project = json!({
             "net_settings": {
                 "classes": [
-                    // A class that lost its target since the last sync stops selecting its profile.
-                    {"name": "GBE_100", "differential_pair_impedance": 100.0, "tuning_profile": "GBE_100"},
+                    // A class that lost its target stops selecting the profile of its name.
+                    {"name": "GBE_100", "tuning_profile": "GBE_100"},
                     // Classes with different targets that shared one profile get one each,
                     // and the shared profile keeps its target.
                     {"name": "PCIE_85", "tuning_profile": "Shared"},
                     {"name": "SE_50", "tuning_profile": "Shared"},
-                    // A class without a target keeps the profile the designer picked, even one
-                    // of its own name, since Zener never wrote a target for it.
+                    // A class without a target keeps any other profile the designer picked, and
+                    // one of its own name that sets no target, such as a delay-only one.
                     {"name": "MANUAL", "tuning_profile": "Shared"},
                     {"name": "NATIVE", "tuning_profile": "NATIVE"}
                 ]
@@ -1091,6 +1109,22 @@ mod tests {
                     "enable_time_domain_tuning": true,
                     "layer_entries": [{"signal_layer": "F.Cu", "width": 120000}],
                     "via_prop_delay": 0,
+                    "via_overrides": []
+                }, {
+                    "profile_name": "GBE_100",
+                    "type": 1,
+                    "target_impedance": 100.0,
+                    "enable_time_domain_tuning": false,
+                    "layer_entries": [],
+                    "via_prop_delay": 0,
+                    "via_overrides": []
+                }, {
+                    "profile_name": "NATIVE",
+                    "type": 0,
+                    "target_impedance": 0.0,
+                    "enable_time_domain_tuning": true,
+                    "layer_entries": [],
+                    "via_prop_delay": 3,
                     "via_overrides": []
                 }]
             }
@@ -1129,19 +1163,28 @@ mod tests {
                 .as_object()
                 .unwrap()
         };
-        assert!(!class("GBE_100").contains_key("differential_pair_impedance"));
+        // Targets live only in KiCad's own tuning profiles.
+        for class in classes {
+            assert!(
+                !class
+                    .as_object()
+                    .unwrap()
+                    .contains_key("single_ended_impedance")
+            );
+            assert!(
+                !class
+                    .as_object()
+                    .unwrap()
+                    .contains_key("differential_pair_impedance")
+            );
+        }
         assert_eq!(class("GBE_100")["tuning_profile"], "");
         assert_eq!(class("MANUAL")["tuning_profile"], "Shared");
         assert_eq!(class("NATIVE")["tuning_profile"], "NATIVE");
-        assert_eq!(class("PCIE_85")["differential_pair_impedance"], json!(85.0));
         assert_eq!(class("PCIE_85")["tuning_profile"], "PCIE_85");
         assert_eq!(class("SE_50")["tuning_profile"], "SE_50");
-        assert_eq!(class("USB2_90")["differential_pair_impedance"], json!(90.0));
         assert_eq!(class("USB2_90")["tuning_profile"], "USB2_90");
-        assert_eq!(class("SE_50")["single_ended_impedance"], json!(50.0));
-        assert!(!class("SE_50").contains_key("differential_pair_impedance"));
-        assert_eq!(class("BOTH")["single_ended_impedance"], json!(45.0));
-        assert_eq!(class("BOTH")["differential_pair_impedance"], json!(90.5));
+        assert_eq!(class("BOTH")["tuning_profile"], "BOTH");
 
         assert_eq!(
             project["tuning_profiles"]["tuning_profiles_impedance_geometric"],
@@ -1162,6 +1205,24 @@ mod tests {
                     "enable_time_domain_tuning": true,
                     "layer_entries": [{"signal_layer": "F.Cu", "width": 120000}],
                     "via_prop_delay": 0,
+                    "via_overrides": []
+                },
+                {
+                    "profile_name": "GBE_100",
+                    "type": 1,
+                    "target_impedance": 100.0,
+                    "enable_time_domain_tuning": false,
+                    "layer_entries": [],
+                    "via_prop_delay": 0,
+                    "via_overrides": []
+                },
+                {
+                    "profile_name": "NATIVE",
+                    "type": 0,
+                    "target_impedance": 0.0,
+                    "enable_time_domain_tuning": true,
+                    "layer_entries": [],
+                    "via_prop_delay": 3,
                     "via_overrides": []
                 },
                 {
@@ -1295,11 +1356,16 @@ mod tests {
                     {
                         "name": "USB",
                         "priority": 1,
-                        "differential_pair_impedance": 90.0,
+                        "tuning_profile": "USB",
                         "clearance": 0.18,
                         "track_width": 0.22,
                         "pcb_color": "rgb(0, 194, 0)"
                     }
+                ]
+            },
+            "tuning_profiles": {
+                "tuning_profiles_impedance_geometric": [
+                    {"profile_name": "USB", "type": 1, "target_impedance": 90.0}
                 ]
             }
         });
