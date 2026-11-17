@@ -42,6 +42,10 @@ pub struct Panel {
     /// Mouse-bite perforation centers: where the boards' break-away tabs
     /// bridge the channels around them.
     pub mouse_bites: Vec<[f64; 2]>,
+    /// The region `[x0, y0, x1, y1]` the interposer is cut to, where every
+    /// pogo must sit and the DUT plate covers, when the bed constrains it
+    /// ([`crate::bed::Bed::fit`]).
+    pub envelope: Option<[f64; 4]>,
 }
 
 /// One outline primitive. Arcs carry a KiCad-style mid point.
@@ -251,5 +255,6 @@ pub fn extract(ipc: &Ipc2581) -> Result<Panel> {
         fids_top,
         fids_bottom,
         mouse_bites,
+        envelope: None,
     })
 }

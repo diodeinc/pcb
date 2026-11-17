@@ -212,6 +212,7 @@ impl Bed {
         panel.holes.retain(|(at, _)| inside(at));
         panel.fids_top = self.fiducials();
         panel.fids_bottom.clear();
+        panel.envelope = Some([x0, y0, x1, y1]);
         panel
     }
 

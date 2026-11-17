@@ -12,7 +12,9 @@
 //! the top face into the routed channels around the boards, against the
 //! board edges and clear of the break-away tabs: printed tapered nubs, or
 //! short M2 dowel pins pressed into printed holes for interposers that
-//! see more insertions.
+//! see more insertions. A single board ([`crate::single`]) sits in a
+//! nest instead: a rim around its outline, notched for fingers on its
+//! long sides.
 //!
 //! The plate is printed, and printed holes come out small, so every
 //! clearance hole is drawn [`PRINT_ALLOWANCE_MM`] over what it must
@@ -22,7 +24,8 @@
 //! (Switchyard's M3) holds its middle down against the bed pogos, which a
 //! printed plate held at its ends alone would bow under; where the bed's screws land is
 //! not settled, so the ears' positions and heights are variables at the
-//! top of the file.
+//! top of the file. A plate that overhangs the bed along the pogo rows
+//! takes its ears on its long sides instead, over the bed.
 //!
 //! The plate is emitted as OpenSCAD source in its print orientation
 //! (top face up, Y up), so the part stays a readable, adjustable text
@@ -30,7 +33,7 @@
 
 use std::fmt::Write as _;
 
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 
 use crate::bed::Bed;
 use crate::panel::Panel;
@@ -45,6 +48,9 @@ pub enum Locators {
     Nubs,
     /// Ø2 mm dowel pins pressed into printed holes.
     Dowels,
+    /// A single board's nest: a rim around its outline, notched for
+    /// fingers on its long sides.
+    Nest,
 }
 
 impl std::str::FromStr for Locators {
@@ -98,6 +104,18 @@ const HOLE_MARGIN_MM: f64 = 0.4;
 const DOWEL_HOLE_DIA_MM: f64 = 1.9;
 const DOWEL_FLOOR_MM: f64 = 0.8;
 const DOWEL_LENGTHS_MM: [f64; 5] = [4.0, 5.0, 6.0, 8.0, 10.0];
+/// The nest's rim: its inside clears the board's outline by the edge gap
+/// plus the print allowance, and stands no taller than a locator.
+const NEST_GAP_MM: f64 = EDGE_GAP_MM + PRINT_ALLOWANCE_MM / 2.0;
+const NEST_WALL_MM: f64 = 2.0;
+const NEST_HEIGHT_MM: f64 = LOCATOR_HEIGHT_MM;
+const FINGER_NOTCH_MM: f64 = 15.0;
+
+/// How far past the board's outline the plate (and the interposer under
+/// it) must reach to carry a nest's rim.
+pub fn nest_reach() -> f64 {
+    NEST_GAP_MM + NEST_WALL_MM + PLATE_MARGIN_MM
+}
 
 /// The plate's thickness: the pogo tip height at working travel.
 pub fn thickness() -> f64 {
@@ -117,8 +135,8 @@ pub struct Locator {
 pub fn locators(panel: &Panel, bed: Bed, plan: &Plan, boards: &[[f64; 4]]) -> Vec<Locator> {
     let r = LOCATOR_DIA_MM / 2.0;
     let reach = r + EDGE_GAP_MM;
-    let [ex0, ey0, ex1, ey1] = bed
-        .envelope()
+    let [ex0, ey0, ex1, ey1] = panel
+        .envelope
         .unwrap_or([0.0, 0.0, panel.width, panel.height]);
     let pogos: Vec<[f64; 2]> = plan
         .bindings
@@ -209,12 +227,17 @@ pub fn plate(
         bail!("the {bed:?} bed has no alignment dowels to seat a DUT plate on");
     }
     let t = thickness();
-    let [x0, y0, x1, y1] = bed
-        .envelope()
+    let [x0, y0, x1, y1] = panel
+        .envelope
         .unwrap_or([0.0, 0.0, panel.width, panel.height]);
     // Print orientation: Y up.
     let up = |p: [f64; 2]| [p[0], panel.height - p[1]];
-    let located = locators(panel, bed, plan, boards);
+    let nest = style == Locators::Nest;
+    let located = if nest {
+        Vec::new()
+    } else {
+        locators(panel, bed, plan, boards)
+    };
     let mut sides: Vec<&str> = located.iter().map(|l| l.side).collect();
     sides.dedup();
 
@@ -230,7 +253,7 @@ pub fn plate(
         pogo::STROKE_MM / 2.0
     )
     .unwrap();
-    if sides.len() < 4 {
+    if !nest && sides.len() < 4 {
         writeln!(
             w,
             "// Warning: locators on {} side(s) only: {}.",
@@ -242,12 +265,31 @@ pub fn plate(
     writeln!(w, "$fn = 48;\nthickness = {t:.3};\n").unwrap();
     let [a, b] = up([x0, y1]);
     let [c, d] = up([x1, y0]);
-    let ears = [
-        [a - EAR_OUT_MM, b + EAR_IN_MM],
-        [a - EAR_OUT_MM, d - EAR_IN_MM],
-        [c + EAR_OUT_MM, b + EAR_IN_MM],
-        [c + EAR_OUT_MM, d - EAR_IN_MM],
-    ];
+    // Where the plate overhangs the bed along the pogo rows, its ends sit
+    // over nothing: the ears move to its long sides, over the bed.
+    let [bx0, _, bx1, _] = bed.envelope().unwrap_or([x0, y0, x1, y1]);
+    let overhangs = x0 < bx0 - 1e-6 || x1 > bx1 + 1e-6;
+    let (ears, web) = if overhangs {
+        (
+            [
+                [bx0 + EAR_IN_MM, b - EAR_OUT_MM],
+                [bx1 - EAR_IN_MM, b - EAR_OUT_MM],
+                [bx0 + EAR_IN_MM, d + EAR_OUT_MM],
+                [bx1 - EAR_IN_MM, d + EAR_OUT_MM],
+            ],
+            "[ear_d, 0.01, thickness]",
+        )
+    } else {
+        (
+            [
+                [a - EAR_OUT_MM, b + EAR_IN_MM],
+                [a - EAR_OUT_MM, d - EAR_IN_MM],
+                [c + EAR_OUT_MM, b + EAR_IN_MM],
+                [c + EAR_OUT_MM, d - EAR_IN_MM],
+            ],
+            "[0.01, ear_d, thickness]",
+        )
+    };
     writeln!(
         w,
         "// Screw ears fastening the plate and interposer to the bed. Placeholder\n\
@@ -284,7 +326,7 @@ pub fn plate(
         "    for (e = ears) {{\n      \
          hull() {{\n        \
          translate([e[0], e[1], 0]) cylinder(h = thickness, d = ear_d);\n        \
-         translate([min(max(e[0], {a:.3}), {c:.3}), min(max(e[1], {b:.3}), {d:.3}), thickness / 2]) cube([0.01, ear_d, thickness], center = true);\n      \
+         translate([min(max(e[0], {a:.3}), {c:.3}), min(max(e[1], {b:.3}), {d:.3}), thickness / 2]) cube({web}, center = true);\n      \
          }}\n      \
          translate([e[0], e[1], ear_bottom]) cylinder(h = ear_top - ear_bottom, d = ear_d);\n    \
          }}"
@@ -300,6 +342,51 @@ pub fn plate(
             )
             .unwrap();
         }
+    }
+    if nest {
+        let [nx0, ny0, nx1, ny1] = *boards.first().context("a nest needs the board's outline")?;
+        let g = NEST_GAP_MM;
+        let wall = NEST_WALL_MM;
+        let h = NEST_HEIGHT_MM;
+        let [ix, iy] = up([nx0 - g, ny1 + g]);
+        let (iw, ih) = (nx1 - nx0 + 2.0 * g, ny1 - ny0 + 2.0 * g);
+        let notch = if iw >= ih {
+            format!(
+                "translate([{:.3}, {:.3}, thickness - 1]) cube([{FINGER_NOTCH_MM}, {:.3}, {:.3}]);",
+                ix + iw / 2.0 - FINGER_NOTCH_MM / 2.0,
+                iy - wall - 1.0,
+                ih + 2.0 * wall + 2.0,
+                h + 2.0
+            )
+        } else {
+            format!(
+                "translate([{:.3}, {:.3}, thickness - 1]) cube([{:.3}, {FINGER_NOTCH_MM}, {:.3}]);",
+                ix - wall - 1.0,
+                iy + ih / 2.0 - FINGER_NOTCH_MM / 2.0,
+                iw + 2.0 * wall + 2.0,
+                h + 2.0
+            )
+        };
+        writeln!(
+            w,
+            "    // Nest: a rim around the board, notched for fingers on its long sides.\n    \
+             intersection() {{\n      \
+             translate([{a:.3}, {b:.3}, thickness]) cube([{:.3}, {:.3}, {h}]);\n      \
+             difference() {{\n        \
+             translate([{:.3}, {:.3}, thickness]) cube([{:.3}, {:.3}, {h}]);\n        \
+             translate([{ix:.3}, {iy:.3}, thickness - 1]) cube([{iw:.3}, {ih:.3}, {:.3}]);\n        \
+             {notch}\n      \
+             }}\n    \
+             }}",
+            x1 - x0,
+            y1 - y0,
+            ix - wall,
+            iy - wall,
+            iw + 2.0 * wall,
+            ih + 2.0 * wall,
+            h + 2.0,
+        )
+        .unwrap();
     }
     writeln!(w, "  }}").unwrap();
     writeln!(
@@ -424,6 +511,7 @@ mod tests {
             fids_top: Vec::new(),
             fids_bottom: Vec::new(),
             mouse_bites: vec![[24.0, 20.0]],
+            envelope: Bed::SwitchyardRev1.envelope(),
         }
     }
 

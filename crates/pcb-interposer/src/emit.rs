@@ -334,12 +334,26 @@ pub fn board(
                 thermal_gap: 0.3,
                 thermal_bridge_width: 0.4,
             },
-            polygon: vec![
-                Point::new(0.0, 0.0),
-                Point::new(panel.width, 0.0),
-                Point::new(panel.width, panel.height),
-                Point::new(0.0, panel.height),
-            ],
+            polygon: {
+                // The sheet, grown to an interposer that overhangs it.
+                let [x0, y0, x1, y1] = panel.envelope.map_or(
+                    [0.0, 0.0, panel.width, panel.height],
+                    |[x0, y0, x1, y1]| {
+                        [
+                            x0.min(0.0),
+                            y0.min(0.0),
+                            x1.max(panel.width),
+                            y1.max(panel.height),
+                        ]
+                    },
+                );
+                vec![
+                    Point::new(x0, y0),
+                    Point::new(x1, y0),
+                    Point::new(x1, y1),
+                    Point::new(x0, y1),
+                ]
+            },
         });
     }
 

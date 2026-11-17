@@ -11,7 +11,7 @@ use std::collections::BTreeMap;
 
 use anyhow::{Context, Result, bail};
 use ipc2581::Ipc2581;
-use ipc2581::types::{Step, StepRepeat};
+use ipc2581::types::{Component, LayerFunction, Side, Step, StepRepeat};
 
 use crate::pattern::Role;
 
@@ -33,7 +33,7 @@ pub struct PanelContact {
 /// Parse an `ict` role name into the fixture vocabulary. Low-speed debug
 /// roles collapse into [`Role::Ls`] (the contact keeps its `ict` name for
 /// beds that pin them); unknown names are `None`.
-fn parse_role(name: &str) -> Option<Role> {
+pub(crate) fn parse_role(name: &str) -> Option<Role> {
     Some(match name {
         "usb_dp" => Role::UsbDp,
         "usb_dm" => Role::UsbDm,
@@ -147,11 +147,39 @@ pub fn extract_contacts(ipc: &Ipc2581, sheet_height: f64) -> Result<Vec<PanelCon
     if unknown > 0 {
         eprintln!("warning: skipped {unknown} contacts with unrecognized ict roles");
     }
+    // The bed probes the panel's bottom face; a panel laid face down would
+    // need its tooling mirrored too.
+    let top: Vec<&str> = board_step
+        .components
+        .iter()
+        .filter(|component| component_side(ipc, component) == Some(Side::Top))
+        .filter_map(|component| component.ref_des.map(|r| ipc.resolve(r)))
+        .filter(|refdes| contacts.iter().any(|contact| contact.refdes == *refdes))
+        .collect();
+    if !top.is_empty() {
+        bail!(
+            "the panel's ICT contacts {} are on its top face; a panel fixture probes the bottom \
+             face (test one board face down with --single-board)",
+            top.join(", ")
+        );
+    }
     Ok(contacts)
 }
 
+/// The copper face a component is placed on, when its layer names one.
+pub(crate) fn component_side(ipc: &Ipc2581, component: &Component) -> Option<Side> {
+    let ecad = ipc.ecad()?;
+    ecad.cad_data
+        .layers
+        .iter()
+        .find(|layer| {
+            layer.name == component.layer_ref && layer.layer_function == LayerFunction::Conductor
+        })
+        .and_then(|layer| layer.side)
+}
+
 /// Designator → (`Ict` role name, zen path) from the BOM.
-fn bom_roles(ipc: &Ipc2581) -> BTreeMap<String, (String, String)> {
+pub(crate) fn bom_roles(ipc: &Ipc2581) -> BTreeMap<String, (String, String)> {
     let mut roles = BTreeMap::new();
     let Some(bom) = ipc.bom() else {
         return roles;
