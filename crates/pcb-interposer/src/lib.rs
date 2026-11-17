@@ -39,6 +39,7 @@ use std::path::Path;
 use anyhow::{Context, Result};
 
 pub use bed::Bed;
+pub use contacts::Footprints;
 pub use emit::Layers;
 
 /// What the interposer tests: a board-array panel, or one singulated
@@ -57,10 +58,11 @@ pub enum Mode {
 /// the top face for every tested contact, and nets bound on both ends —
 /// the unrouted airwires are the routing pass's specification.
 /// `interposer_id` is the number the bed's ID straps encode, for beds that
-/// read one.
+/// read one. `footprints` picks which role-tagged test points get a pogo.
 pub fn generate(
     panel_xml: &Path,
     mode: Mode,
+    footprints: Footprints,
     layers: Layers,
     bed: Bed,
     interposer_id: Option<u16>,
@@ -71,7 +73,7 @@ pub fn generate(
         plan,
         placement,
         ..
-    } = build(panel_xml, mode, bed)?;
+    } = build(panel_xml, mode, footprints, bed)?;
     if let Some(placement) = placement {
         eprintln!(
             "note: board placed {} {}° at ({:.2}, {:.2}); interposer spans x {:.1}–{:.1} mm",
@@ -125,14 +127,19 @@ pub fn generate(
 
 /// Compute the fixture map for a panel file: which boards one insertion
 /// tests and which mate land carries which contact, as JSON.
-pub fn fixture_map(panel_xml: &Path, mode: Mode, bed: Bed) -> Result<String> {
+pub fn fixture_map(
+    panel_xml: &Path,
+    mode: Mode,
+    footprints: Footprints,
+    bed: Bed,
+) -> Result<String> {
     let Built {
         panel,
         lands,
         plan,
         placement,
         ..
-    } = build(panel_xml, mode, bed)?;
+    } = build(panel_xml, mode, footprints, bed)?;
     let plan = plan.context("panel has no ICT contacts to plan")?;
     Ok(plan::to_json(&plan, &panel, &lands, placement.as_ref()))
 }
@@ -143,6 +150,7 @@ pub fn fixture_map(panel_xml: &Path, mode: Mode, bed: Bed) -> Result<String> {
 pub fn dut_plate(
     panel_xml: &Path,
     mode: Mode,
+    footprints: Footprints,
     bed: Bed,
     locators: plate::Locators,
 ) -> Result<String> {
@@ -151,7 +159,7 @@ pub fn dut_plate(
         plan,
         boards,
         ..
-    } = build(panel_xml, mode, bed)?;
+    } = build(panel_xml, mode, footprints, bed)?;
     let plan = plan.context("panel has no ICT contacts to plan")?;
     let locators = match mode {
         Mode::Panel => locators,
@@ -186,19 +194,19 @@ struct Built {
     placement: Option<single::Placement>,
 }
 
-fn build(panel_xml: &Path, mode: Mode, bed: Bed) -> Result<Built> {
+fn build(panel_xml: &Path, mode: Mode, footprints: Footprints, bed: Bed) -> Result<Built> {
     let content = std::fs::read_to_string(panel_xml)
         .with_context(|| format!("read panel {}", panel_xml.display()))?;
     let ipc = ipc2581::Ipc2581::parse(&content).context("parse IPC-2581 panel")?;
     let (panel, contacts, boards, placement) = match mode {
         Mode::Panel => {
             let panel = bed.fit(panel::extract(&ipc)?);
-            let contacts = contacts::extract_contacts(&ipc, panel.height)?;
+            let contacts = contacts::extract_contacts(&ipc, panel.height, footprints)?;
             let boards = contacts::board_outlines(&ipc, panel.height)?;
             (panel, contacts, boards, None)
         }
         Mode::SingleBoard => {
-            let placed = single::place(&ipc, bed)?;
+            let placed = single::place(&ipc, bed, footprints)?;
             (
                 placed.panel,
                 placed.contacts,

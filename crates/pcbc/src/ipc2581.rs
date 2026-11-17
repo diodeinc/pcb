@@ -72,6 +72,11 @@ enum Commands {
         /// plate becomes the nest
         #[arg(long)]
         single_board: bool,
+        /// Also put pogos on test points that have an `ict` role but not the
+        /// TestPoint ICT footprint (warned about either way); their pads may
+        /// be too small or too close together for a pogo
+        #[arg(long)]
+        probe_non_ict_footprints: bool,
         /// Output `.kicad_pcb` path; a sibling `.kicad_pro` is written too, and a
         /// `.kicad_dru` on a bed with high voltage
         #[arg(short, long, value_hint = clap::ValueHint::FilePath)]
@@ -546,6 +551,7 @@ pub fn execute(args: Ipc2581Args, resolution: Resolution) -> anyhow::Result<()> 
         Commands::Interposer {
             input,
             single_board,
+            probe_non_ict_footprints,
             output,
             fixture_map,
             dut_plate,
@@ -556,13 +562,18 @@ pub fn execute(args: Ipc2581Args, resolution: Resolution) -> anyhow::Result<()> 
             route,
             ipc,
         } => {
+            let footprints = if probe_non_ict_footprints {
+                pcb_interposer::Footprints::Any
+            } else {
+                pcb_interposer::Footprints::IctOnly
+            };
             let mode = if single_board {
                 pcb_interposer::Mode::SingleBoard
             } else {
                 pcb_interposer::Mode::Panel
             };
             let (pcb, pro, rules) =
-                pcb_interposer::generate(&input, mode, layers, bed, interposer_id)?;
+                pcb_interposer::generate(&input, mode, footprints, layers, bed, interposer_id)?;
             std::fs::write(&output, pcb).with_context(|| format!("write {}", output.display()))?;
             let pro_path = output.with_extension("kicad_pro");
             std::fs::write(&pro_path, pro)
@@ -578,13 +589,14 @@ pub fn execute(args: Ipc2581Args, resolution: Resolution) -> anyhow::Result<()> 
                 pro_path.display()
             );
             if let Some(plate_path) = dut_plate {
-                let plate = pcb_interposer::dut_plate(&input, mode, bed, dut_plate_locators)?;
+                let plate =
+                    pcb_interposer::dut_plate(&input, mode, footprints, bed, dut_plate_locators)?;
                 std::fs::write(&plate_path, plate)
                     .with_context(|| format!("write {}", plate_path.display()))?;
                 println!("✓ Wrote DUT plate {}", plate_path.display());
             }
             if let Some(map_path) = fixture_map {
-                let map = pcb_interposer::fixture_map(&input, mode, bed)?;
+                let map = pcb_interposer::fixture_map(&input, mode, footprints, bed)?;
                 std::fs::write(&map_path, map)
                     .with_context(|| format!("write {}", map_path.display()))?;
                 println!("✓ Wrote fixture map {}", map_path.display());

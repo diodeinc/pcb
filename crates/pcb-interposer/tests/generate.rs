@@ -1,6 +1,6 @@
 //! End-to-end: a board-array style panel in, a parseable interposer out.
 
-use pcb_interposer::{Bed, Layers};
+use pcb_interposer::{Bed, Footprints, Layers};
 use pcb_sexpr::SexprKind;
 
 /// A miniature "panel": A7-sized rounded-rect profile, two NPTH tooling
@@ -161,7 +161,8 @@ fn generates_a_parseable_interposer() {
 
     let lands = pcb_interposer::pattern::oriented_s13(panel.width, panel.height);
     let contacts =
-        pcb_interposer::contacts::extract_contacts(&ipc, panel.height).expect("contacts");
+        pcb_interposer::contacts::extract_contacts(&ipc, panel.height, Footprints::IctOnly)
+            .expect("contacts");
     let plan = pcb_interposer::plan::plan(contacts, &lands, &[], None, Bed::S13).expect("plan");
     let text = pcb_interposer::emit::board(&panel, &lands, Bed::S13, Some(&plan), &[], Layers::Two);
     let root = pcb_sexpr::parse(&text).expect("board parses");
@@ -251,7 +252,8 @@ fn plans_the_fixture_map() {
     let panel = pcb_interposer::panel::extract(&ipc).expect("panel extracts");
     let lands = pcb_interposer::pattern::oriented_s13(panel.width, panel.height);
     let contacts =
-        pcb_interposer::contacts::extract_contacts(&ipc, panel.height).expect("contacts");
+        pcb_interposer::contacts::extract_contacts(&ipc, panel.height, Footprints::IctOnly)
+            .expect("contacts");
     // 2 board instances × 6 marked components.
     assert_eq!(contacts.len(), 12);
     // Board 1 sits one grid pitch below board 0 in the Y-down frame.
@@ -515,7 +517,12 @@ fn single_board() -> String {
 fn single_board_overhangs_the_bed_in_a_nest() {
     let bed = Bed::SwitchyardRev1;
     let ipc = ipc2581::Ipc2581::parse(&single_board()).expect("board fixture parses");
-    let placed = pcb_interposer::single::place(&ipc, bed).expect("the board places");
+    let placed =
+        pcb_interposer::single::place(&ipc, bed, Footprints::Any).expect("the board places");
+    // TP10 sits on a plain pad footprint: probed only when asked.
+    let strict = pcb_interposer::single::place(&ipc, bed, Footprints::IctOnly).expect("places");
+    assert!(strict.contacts.iter().all(|c| c.refdes != "TP10"));
+    assert!(placed.contacts.iter().any(|c| c.refdes == "TP10"));
     // Probed on top, so laid face down; its 130 mm of contacts run along
     // the pogo rows (x), the only way past the bed's 64 mm across them.
     assert!(placed.placement.mirrored);
@@ -552,14 +559,20 @@ fn single_board_overhangs_the_bed_in_a_nest() {
     let path = std::env::temp_dir().join(format!("single-board-{}.xml", std::process::id()));
     std::fs::write(&path, single_board()).unwrap();
     let mode = pcb_interposer::Mode::SingleBoard;
-    let map = pcb_interposer::fixture_map(&path, mode, bed).expect("fixture map");
+    let map = pcb_interposer::fixture_map(&path, mode, Footprints::Any, bed).expect("fixture map");
     let map: serde_json::Value = serde_json::from_str(&map).unwrap();
     // Seven digital lines need two cells' S lanes.
     assert_eq!(map["cells"][0].as_array().unwrap().len(), 2);
     assert_eq!(map["dropped"].as_array().unwrap().len(), 0);
     assert_eq!(map["placement"]["mirrored"], true);
-    let plate = pcb_interposer::dut_plate(&path, mode, bed, pcb_interposer::plate::Locators::Nubs)
-        .expect("plate");
+    let plate = pcb_interposer::dut_plate(
+        &path,
+        mode,
+        Footprints::Any,
+        bed,
+        pcb_interposer::plate::Locators::Nubs,
+    )
+    .expect("plate");
     assert!(plate.contains("// Nest:"));
     assert!(!plate.contains("d1 = 2, d2 = 1.2"), "no nubs in a nest");
     // The ears leave the overhanging ends for the long sides, over the bed.
@@ -567,7 +580,8 @@ fn single_board_overhangs_the_bed_in_a_nest() {
         "ears = [[15.000, -1.000], [90.000, -1.000], [15.000, 75.000], [90.000, 75.000]];"
     ));
     let (pcb, _, _) =
-        pcb_interposer::generate(&path, mode, Layers::Four, bed, Some(433)).expect("interposer");
+        pcb_interposer::generate(&path, mode, Footprints::Any, Layers::Four, bed, Some(433))
+            .expect("interposer");
     std::fs::remove_file(&path).ok();
     pcb_sexpr::parse(&pcb).expect("interposer parses");
 }
@@ -579,7 +593,7 @@ fn panel_probed_on_top_fails() {
         r#"<Component refDes="TP3" layerRef="TOP""#,
     );
     let ipc = ipc2581::Ipc2581::parse(&top).expect("panel fixture parses");
-    let err = pcb_interposer::contacts::extract_contacts(&ipc, 105.0)
+    let err = pcb_interposer::contacts::extract_contacts(&ipc, 105.0, Footprints::IctOnly)
         .unwrap_err()
         .to_string();
     assert!(
