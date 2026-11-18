@@ -103,7 +103,7 @@ def _footprint(variant):
 
 def _keystone_mpn(variant: Variant, color: Color):
     series = int(variant.value.split("_")[1].split("-")[0])
-    return (
+    return str(
         series
         + {
             Color("Red"): 0,
@@ -119,7 +119,7 @@ if "Keystone" in variant.value:
     Component(
         name="TP",
         prefix="TP",
-        mpn=_keystone_mpn(variant, color),
+        part=builtin.Part(mpn=_keystone_mpn(variant, color), manufacturer="Keystone Electronics"),
         symbol=Symbol(_symbol(variant)),
         footprint=File(_footprint(variant)),
         properties=_properties(

@@ -12,9 +12,11 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 - `pcb bom` sends the signed-in user's token and the workspace named in `pcb.toml`, so workspace members also see their workspace's own stock. It still works without signing in.
 - `pcb bom` shows the selected source in its table and labels workspace-owned stock `Diode (Reserve)` in table and JSON output, distinct from shared `Diode` stock. Alternative stock counts keep these inventory pools separate.
+- `Component()` errors when `mpn` or `manufacturer` is not a string, instead of silently ignoring it.
 
 ### Fixed
 
+- stdlib `TestPoint` Keystone variants carry their Keystone Electronics part (5005–5009 by color), so boards that use them build instead of failing with missing part information.
 - When the API rejects a saved login's refresh token, `pcb` removes the login and asks you to run `pcb auth login`, instead of resending the dead token on every command.
 - `pcb layout` writes each netclass impedance target to the `.kicad_pro` as a KiCad tuning profile of the netclass's name, assigned to it, so KiCad and the layout viewer show it. A class with both targets gets the differential one. `pcb import` reads the targets back into the generated `NetClass`.
 - `pcb ipc2581 dfm check` measures a hole or slot drilled through several lands of one pad instead of reporting its rules as not evaluated.
