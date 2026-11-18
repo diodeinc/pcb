@@ -2065,6 +2065,14 @@ impl<'v> StarlarkValue<'v> for ComponentType {
 
             let part_from_kwarg = parse_optional_part(part_val)?;
 
+            for (kwarg, value) in [("mpn", mpn), ("manufacturer", manufacturer)] {
+                if let Some(v) = value.filter(|v| !v.is_none() && v.unpack_str().is_none()) {
+                    return Err(starlark::Error::new_other(anyhow!(
+                        "`{kwarg}` must be a string, got {}",
+                        v.get_type()
+                    )));
+                }
+            }
             let explicit_mpn = mpn.and_then(|v| v.unpack_str().and_then(non_empty_string));
             let explicit_manufacturer =
                 manufacturer.and_then(|v| v.unpack_str().and_then(non_empty_string));

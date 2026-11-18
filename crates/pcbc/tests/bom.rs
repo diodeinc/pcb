@@ -521,6 +521,29 @@ fn test_bom_skip_bom_filtering() {
 }
 
 #[test]
+fn test_bom_keystone_test_points_carry_part() {
+    // Keystone test points are real parts; bare-pad variants stay out of the BOM.
+    let output = Sandbox::new()
+        .write("pcb.toml", WORKSPACE_TOML)
+        .write(
+            "boards/TestPoints.zen",
+            r#"
+TestPoint = Module("@stdlib/generics/TestPoint.zen")
+
+TestPoint(name = "TP1", variant = "Keystone_5005-5009_Compact", color = "Red", P1 = Net("A"))
+TestPoint(name = "TP2", variant = "Keystone_5005-5009_Compact", color = "Yellow", P1 = Net("B"))
+TestPoint(name = "TP3", variant = "Pad_D1.0mm", P1 = Net("C"))
+"#,
+        )
+        .sync()
+        .snapshot_run(
+            "pcbc",
+            ["bom", "boards/TestPoints.zen", "--offline", "-f", "json"],
+        );
+    assert_snapshot!("bom_keystone_test_points_json", output);
+}
+
+#[test]
 fn test_bom_dnp_components() {
     // Test that DNP components appear in BOM (dnp is for assembly, not procurement)
     let output = Sandbox::new()

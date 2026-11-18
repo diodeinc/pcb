@@ -1,0 +1,41 @@
+---
+source: crates/pcbc/tests/bom.rs
+expression: output
+---
+Command: pcbc bom boards/TestPoints.zen --offline -f json
+Exit Code: 0
+
+--- STDOUT ---
+[
+  {
+    "designators": [
+      "TP1"
+    ],
+    "quantity": 1,
+    "members": [
+      {
+        "path": "TP1.TP",
+        "designator": "TP1",
+        "mpn": "5005",
+        "manufacturer": "Keystone Electronics",
+        "description": "test point"
+      }
+    ]
+  },
+  {
+    "designators": [
+      "TP2"
+    ],
+    "quantity": 1,
+    "members": [
+      {
+        "path": "TP2.TP",
+        "designator": "TP2",
+        "mpn": "5009",
+        "manufacturer": "Keystone Electronics",
+        "description": "test point"
+      }
+    ]
+  }
+]
+--- STDERR ---
