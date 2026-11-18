@@ -515,13 +515,14 @@ The bundled TOML files own the exact thresholds and source citations:
   depend on each layer's weight. Profiles also check board thickness, finish,
   soldermask color, and size; outer copper outside 1 oz or 2 oz fails support.
 - [`advanced`](../pdks/advanced.toml) is the standard kit loosened only where
-  a fine-line fab priced Diode designs without a manual quote: 2–8 copper
-  layers, through holes only, 3.6 mil copper spacing (warning below 5 mil,
-  where the price rises; 5 mil with 2 oz outer copper), 0.075 mm via rings
-  (warning below 0.125 mm, which needs the fab's engineering review), an 8.5
-  aspect ratio, tighter hole- and edge-to-copper clearance, ENIG or immersion
-  silver, and 0.5 oz or 1 oz inner copper. Every other limit is the standard
-  kit's.
+  a fine-line fab's instant quote priced tighter Diode designs: 2–8 copper
+  layers, 1 oz outer and 0.5 or 1 oz inner copper, through holes only,
+  0.091 mm copper spacing (warning below 5 mil), 0.074 mm via rings, an 8.5
+  aspect ratio, 0.136 mm NPTH-to-copper and 0.199 mm edge-to-copper
+  clearance, ENIG or immersion silver. Each minimum sits just below a value
+  the fab priced. 2 oz outer copper is unsupported: the fab quoted it
+  manually even at 6.3 mil spacing. Every other limit is the standard kit's,
+  not tested against this process.
 - [`ipc`](../pdks/ipc.toml) preserves Classes 1–3 crossed with Producibility
   Levels A–C as executable **partial Diode baselines**, not IPC profile matrices.
   Aspect-ratio, hole-to-copper, and hole/slot-to-edge limits vary by level, not

@@ -21,7 +21,7 @@ note = "Tighten weaker Diode limits to the most relaxed JLCPCB 1 oz values; pres
 [sources.autoquote-evidence]
 title = "Diode advanced-process quote evidence"
 url = "https://github.com/diodeinc/pcb/blob/main/crates/pcb-ipc2581-tools/docs/dfm.md"
-note = "Limits a fine-line fab priced without a manual quote on Diode designs: 3.6 mil copper spacing (5 mil with 2 oz outer copper), 0.075 mm via rings with engineering review, hole aspect ratio up to 8.5, copper 9.33 mil from plated holes, 5.39 mil from NPTHs and 7.85 mil from the routed edge, up to 8 copper layers, ENIG or immersion silver, green or black mask. 2.4 mil spacing, a 10.5 aspect ratio, blind vias and 10 layers were quoted manually, and HASL was refused on fine pads. Limits it did not exercise keep the standard kit's values."
+note = "What a fine-line fab's instant quote priced on 1 oz Diode designs, as it reported them: 3.6 mil copper spacing, 2.95 mil via rings with its engineering review, copper 5.39 mil from NPTHs and 7.85 mil from the routed edge, aspect ratio 8 (0.2 mm through 1.6 mm), up to 8 copper layers, 0.5 or 1 oz inner copper, ENIG or immersion silver, green or black mask. Each minimum is the 0.001 mm step below the reported value, so those designs pass. It quoted 2.4 mil spacing, a 10.5 aspect ratio, blind vias, 10 layers and 2 oz outer copper at 3.6 and 6.3 mil spacing manually, and refused HASL on fine pads. Every limit it did not exercise keeps the standard kit's value."
 
 [sources.diode-slot-guidance]
 title = "Diode slot copper guidance"
@@ -30,9 +30,9 @@ note = "Advisory: 0.40 mm slot clearance and 0.25 mm plated-slot enclosure. NPTH
 
 [profiles.advanced]
 name = "Diode advanced"
-description = "Rigid FR-4 at fine-line limits that quote without manual review: through holes only, 1 oz or 2 oz outer copper."
+description = "Rigid FR-4, 1 oz outer copper, through holes only: the standard limits loosened only where a fine-line fab's instant quote priced tighter designs."
 technologies = ["rigid"]
-coverage = ["Assembly readiness diagnostics", "2-8 copper layers", "through holes only, 8.5:1 aspect ratio", "3.6 mil copper spacing on 1 oz copper"]
+coverage = ["Assembly readiness diagnostics", "2-8 copper layers", "through holes only, 8.5:1 aspect ratio", "3.6 mil copper spacing, 1 oz outer copper"]
 source = "autoquote-evidence"
 
 [profiles.advanced.defaults]
@@ -43,7 +43,7 @@ inner_copper_weight = "0.5 oz"
 
 [profiles.advanced.support]
 copper_layers = { minimum = 2, maximum = 8 }
-outer_copper_weight = ["1 oz", "2 oz"]
+outer_copper_weight = ["1 oz"]
 
 [[rules.assembly.diagnostic]]
 id = "assembly.missing_population"
@@ -72,6 +72,7 @@ select = { diagnostic = "nonstandard_bottom_rotation" }
 [[rules.board.soldermask_color]]
 id = "board.soldermask_color"
 limit = { allowed = ["green", "black"] }
+source = "autoquote-evidence"
 
 [[rules.drilling.hole_diameter]]
 id = "drilling.minimum_via_hole_diameter"
@@ -97,7 +98,8 @@ select = { hole = "mouse_bite" }
 limit = { minimum = "15 mil" }
 source = "jlc-baseline"
 
-# Board thickness over finished diameter; 0.2 mm through 1.6 mm is 8.
+# Board thickness over finished diameter. 8 priced and 10.5 did not; 8.5
+# leaves room for a 1.6 mm board's stated thickness, as the quote estimator does.
 [[rules.drilling.hole_aspect_ratio]]
 id = "drilling.maximum_via_aspect_ratio"
 select = { hole = "via" }
@@ -159,8 +161,9 @@ source = "jlc-baseline"
 [[rules.copper.annular_ring]]
 id = "copper.minimum_via_annular_ring"
 select = { hole = "via" }
-# Below 0.125 mm the fab requires its engineering review, a flat charge.
-limit = { minimum = "0.075 mm", preferred = "0.125 mm" }
+# Priced at 2.95 mil with the fab's engineering review, which it also
+# required at 0.125 mm; Diode quotes always include the review.
+limit = { minimum = "0.074 mm" }
 source = "autoquote-evidence"
 
 [[rules.copper.annular_ring]]
@@ -178,14 +181,14 @@ source = "jlc-baseline"
 [[rules.copper.hole_clearance]]
 id = "copper.minimum_npth_hole_clearance"
 select = { hole = "npth" }
-limit = { minimum = "0.135 mm", preferred = "0.20 mm" }
+limit = { minimum = "0.136 mm", preferred = "0.20 mm" }
 source = "autoquote-evidence"
 
 [[rules.copper.hole_clearance]]
 id = "copper.minimum_pth_hole_clearance"
 select = { hole = "pth" }
-limit = { minimum = "0.23 mm", preferred = "0.35 mm" }
-source = "autoquote-evidence"
+limit = { minimum = "0.28 mm", preferred = "0.35 mm" }
+source = "jlc-baseline"
 
 [[rules.copper.feature_width]]
 id = "copper.minimum_feature_width"
@@ -197,15 +200,11 @@ id = "copper.plated_slot_enclosure"
 limit = { preferred = "0.25 mm" }
 source = "diode-slot-guidance"
 
-# Under 5 mil the fab prices the board 1.4 times higher, so it warns; with
-# 2 oz outer copper it quotes such spacing manually.
+# 3.6 mil cost 1.4 times a 6.3 mil design of the same order; where between
+# them the price rises is untested, so spacing warns below the standard 5 mil.
 [[rules.copper.clearance]]
 id = "copper.minimum_copper_clearance"
-cases = [
-  { id = "outer-1oz", when = { copper = { position = "outer", weight = "1 oz" } }, limit = { minimum = "3.6 mil", preferred = "5 mil" } },
-  { id = "outer-2oz", when = { copper = { position = "outer", weight = "2 oz" } }, limit = { minimum = "5 mil" } },
-  { id = "inner", when = { copper = { position = "inner" } }, limit = { minimum = "3.6 mil", preferred = "5 mil" } },
-]
+limit = { minimum = "0.091 mm", preferred = "5 mil" }
 source = "autoquote-evidence"
 
 [[rules.copper.slot_clearance]]
@@ -222,7 +221,7 @@ source = "diode-slot-guidance"
 
 [[rules.copper.board_edge_clearance]]
 id = "copper.minimum_board_edge_clearance"
-limit = { minimum = "0.19 mm", preferred = "15 mil" }
+limit = { minimum = "0.199 mm", preferred = "15 mil" }
 source = "autoquote-evidence"
 
 [[rules.copper.vscore_clearance]]
@@ -243,14 +242,14 @@ source = "jlc-baseline"
 [[rules.stackup.copper_weight]]
 id = "stackup.outer_copper_weight"
 select = { position = "outer" }
-limit = { allowed = ["1 oz", "2 oz"] }
-source = "jlc-baseline"
+limit = { allowed = ["1 oz"] }
+source = "autoquote-evidence"
 
 [[rules.stackup.copper_weight]]
 id = "stackup.inner_copper_weight"
 select = { position = "inner" }
 limit = { allowed = ["0.5 oz", "1 oz"] }
-source = "jlc-baseline"
+source = "autoquote-evidence"
 
 # HASL is refused on fine pads; tin, OSP and gold quote only at slower turns.
 [[rules.board.surface_finish]]
