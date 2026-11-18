@@ -56,15 +56,25 @@ pads = [
 ]
 vias = [item for item in board.GetTracks() if item.GetClass() == "PCB_VIA"]
 via_radius = max((via.GetWidth(pcbnew.F_Cu) // 2 for via in vias), default=0)
-inside = pcbnew.SHAPE_POLY_SET()
-board.GetBoardPolygonOutlines(inside, False)
-inside.Deflate(EDGE + via_radius - EPS, pcbnew.CORNER_STRATEGY_ROUND_ALL_CORNERS, pcbnew.FromMM(0.005))
+# Where a via of each radius may sit, inset from the outline by its own
+# radius: one inset for all would flag a small via by a big one's size.
+insides = {}
+
+
+def inside_for(radius):
+    if radius not in insides:
+        inside = pcbnew.SHAPE_POLY_SET()
+        board.GetBoardPolygonOutlines(inside, False)
+        inside.Deflate(EDGE + radius - EPS, pcbnew.CORNER_STRATEGY_ROUND_ALL_CORNERS, pcbnew.FromMM(0.005))
+        insides[radius] = inside
+    return insides[radius]
+
 
 bad_vias, bad_pads = [], []
 for via in vias:
     position = via.GetPosition()
     radius = via.GetWidth(pcbnew.F_Cu) // 2
-    bad = not inside.Collide(position)
+    bad = not inside_for(radius).Collide(position)
     for pad in pads:
         if not HOT or pad.GetNetCode() == via.GetNetCode() or not (hot(via) or hot(pad)):
             continue
