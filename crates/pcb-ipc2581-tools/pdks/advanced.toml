@@ -11,7 +11,7 @@ process = "Advanced"
 [sources.review-band-policy]
 title = "Diode dimensional review bands"
 url = "https://github.com/diodeinc/pcb/blob/main/crates/pcb-ipc2581-tools/docs/dfm.md"
-note = "Via drill diameter, via annular ring, NPTH-to-copper and copper-to-edge clearance allow a 0.01 mm review band below the existing target. PTH-to-PTH drill spacing warns below 0.45 mm and errors below 0.40 mm. This is Diode policy, not a manufacturer-qualified tolerance."
+note = "Via drill diameter allows a 0.01 mm review band below 0.20 mm. PTH-to-PTH drill spacing warns below 0.45 mm and errors below 0.40 mm. This is Diode policy, not a manufacturer-qualified tolerance."
 
 [sources.jlc-baseline]
 title = "JLCPCB baseline"
@@ -21,7 +21,7 @@ note = "Tighten weaker Diode limits to the most relaxed JLCPCB 1 oz values; pres
 [sources.autoquote-evidence]
 title = "Diode advanced-process quote evidence"
 url = "https://github.com/diodeinc/pcb/blob/main/crates/pcb-ipc2581-tools/docs/dfm.md"
-note = "What a fine-line fab's instant quote priced on 1 oz Diode designs, as it reported them: 3.6 mil copper spacing, 2.95 mil via rings with its engineering review, copper 5.39 mil from NPTHs and 7.85 mil from the routed edge, aspect ratio 8 (0.2 mm through 1.6 mm), up to 8 copper layers, 0.5 or 1 oz inner copper, ENIG or immersion silver, green or black mask. Each minimum is the 0.001 mm step below the reported value, so those designs pass. It quoted 2.4 mil spacing, a 10.5 aspect ratio, blind vias, 10 layers and 2 oz outer copper at 3.6 and 6.3 mil spacing manually, and refused HASL on fine pads. Every limit it did not exercise keeps the standard kit's value."
+note = "What a fine-line fab's instant quote priced on 1 oz Diode designs, as it reported them: 3.6 mil copper spacing, 2.95 mil via rings with its engineering review, copper 5.39 mil from NPTHs and 7.85 mil from the routed edge, aspect ratio 8 (0.2 mm through 1.6 mm), up to 8 copper layers, ENIG or immersion silver, green or black mask. Each loosened minimum is the 0.001 mm step below the reported value, so those designs pass. The aspect-ratio maximum, 8.5, is above the priced 8 and matches the quote estimator's cutoff; 8 to 8.5 is untested. It quoted 2.4 mil spacing, a 10.5 aspect ratio and 10 layers manually, and refused HASL on fine pads. It priced 2 oz outer copper on two designs but quoted a 6.3 mil design manually, so no safe spacing is known and 2 oz outer copper is left out. Every limit it did not exercise keeps the standard kit's value."
 
 [sources.diode-slot-guidance]
 title = "Diode slot copper guidance"
@@ -184,6 +184,8 @@ select = { hole = "npth" }
 limit = { minimum = "0.136 mm", preferred = "0.20 mm" }
 source = "autoquote-evidence"
 
+# A priced design had copper 9.33 mil from a plated hole, not stated as a via
+# or a PTH; untested for PTHs, so this stays at the standard value.
 [[rules.copper.hole_clearance]]
 id = "copper.minimum_pth_hole_clearance"
 select = { hole = "pth" }
@@ -248,8 +250,8 @@ source = "autoquote-evidence"
 [[rules.stackup.copper_weight]]
 id = "stackup.inner_copper_weight"
 select = { position = "inner" }
-limit = { allowed = ["0.5 oz", "1 oz"] }
-source = "autoquote-evidence"
+limit = { allowed = ["0.5 oz", "1 oz", "2 oz"] }
+source = "jlc-baseline"
 
 # HASL is refused on fine pads; tin, OSP and gold quote only at slower turns.
 [[rules.board.surface_finish]]
