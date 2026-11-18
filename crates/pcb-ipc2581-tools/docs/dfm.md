@@ -494,7 +494,7 @@ synchronizing it first, and checks the canonical board. Use `pcb ipc dfm check`
 to inspect existing manufacturing files.
 
 `--pdk` defaults to `standard` and accepts an exact built-in name or a TOML
-path. `standard`, `jlc`, `jlcpcb-1oz`, and `ipc-1a` through
+path. `standard`, `advanced`, `jlc`, `jlcpcb-1oz`, and `ipc-1a` through
 `ipc-3c` are bundled. `ipc` selects the opinionated Class 2 / Producibility Level B default.
 Use `./standard` to select a same-named file. Both sources use the same parser
 and checks. `--layout-target` accepts
@@ -514,6 +514,14 @@ The bundled TOML files own the exact thresholds and source citations:
   outer copper weight; `jlcpcb-1oz` fixes `one-ounce`. Track width and spacing
   depend on each layer's weight. Profiles also check board thickness, finish,
   soldermask color, and size; outer copper outside 1 oz or 2 oz fails support.
+- [`advanced`](../pdks/advanced.toml) is the standard kit loosened only where
+  a fine-line fab priced Diode designs without a manual quote: 2–8 copper
+  layers, through holes only, 3.6 mil copper spacing (warning below 5 mil,
+  where the price rises; 5 mil with 2 oz outer copper), 0.075 mm via rings
+  (warning below 0.125 mm, which needs the fab's engineering review), an 8.5
+  aspect ratio, tighter hole- and edge-to-copper clearance, ENIG or immersion
+  silver, and 0.5 oz or 1 oz inner copper. Every other limit is the standard
+  kit's.
 - [`ipc`](../pdks/ipc.toml) preserves Classes 1–3 crossed with Producibility
   Levels A–C as executable **partial Diode baselines**, not IPC profile matrices.
   Aspect-ratio, hole-to-copper, and hole/slot-to-edge limits vary by level, not

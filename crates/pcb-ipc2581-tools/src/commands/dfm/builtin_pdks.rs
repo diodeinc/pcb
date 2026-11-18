@@ -10,6 +10,7 @@ pub struct BuiltinPdk {
 const STANDARD: &str = include_str!("../../../pdks/standard.toml");
 const IPC: &str = include_str!("../../../pdks/ipc.toml");
 const JLCPCB: &str = include_str!("../../../pdks/jlcpcb.toml");
+const ADVANCED: &str = include_str!("../../../pdks/advanced.toml");
 
 macro_rules! builtin {
     ($name:literal, $profile:literal, $source:expr) => {
@@ -30,6 +31,7 @@ macro_rules! builtin {
 
 pub(super) const BUILTIN_PDKS: &[BuiltinPdk] = &[
     builtin!("standard", STANDARD),
+    builtin!("advanced", ADVANCED),
     builtin!("jlcpcb-1oz", "one-ounce", JLCPCB),
     builtin!("jlc", JLCPCB),
     builtin!("ipc", "2b", IPC),
