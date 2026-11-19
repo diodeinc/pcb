@@ -16,6 +16,8 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Fixed
 
+- Gerber X2 attribute values escape `#`, `&`, `[` and `]` as `\uXXXX`, so net and component names containing them stay readable to CAM systems.
+- Gerber filled regions sit on a 1 µm grid, so CAM systems that read coordinates at a coarser resolution (such as ODB++/Genesis at 2.5 nm) no longer see self-intersecting polygons and refuse to import plane layers. Region edges can sit up to 0.5 µm from the traces and pads they meet.
 - stdlib `TestPoint` Keystone variants carry their Keystone Electronics part (5005–5009 by color), so boards that use them build instead of failing with missing part information.
 - When the API rejects a saved login's refresh token, `pcb` removes the login and asks you to run `pcb auth login`, instead of resending the dead token on every command.
 - `pcb layout` writes each netclass impedance target to the `.kicad_pro` as a KiCad tuning profile of the netclass's name, assigned to it, so KiCad and the layout viewer show it. A class with both targets gets the differential one. `pcb import` reads the targets back into the generated `NetClass`.
