@@ -8,6 +8,8 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+## [0.4.103] - 2026-11-19
+
 ### Changed
 
 - `pcb bom` sends the signed-in user's token and the workspace named in `pcb.toml`, so workspace members also see their workspace's own stock. It still works without signing in.
@@ -2633,7 +2635,8 @@ Tvs(package="DO-214AA", direction="Unidirectional", reverse_standoff_voltage="24
 - Error on invalid type passed to `io()`
 - Format the auto-generated component .zen files
 
-[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.4.102...HEAD
+[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.4.103...HEAD
+[0.4.103]: https://github.com/diodeinc/pcb/compare/v0.4.102...v0.4.103
 [0.4.102]: https://github.com/diodeinc/pcb/compare/v0.4.101...v0.4.102
 [0.4.101]: https://github.com/diodeinc/pcb/compare/v0.4.100...v0.4.101
 [0.4.100]: https://github.com/diodeinc/pcb/compare/v0.4.99...v0.4.100
