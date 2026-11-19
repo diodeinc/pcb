@@ -23,6 +23,11 @@ use pcb_ir::geom::{
 
 use crate::write::DEFAULT_GRID_MM;
 const GERBER_OUTLINE_MAX_VERTICES: usize = 5000;
+/// Regions are regularized on a 1 um grid, coarser than the 1 nm coordinate
+/// grid: a contour that is simple only at 1 nm comes within a few nm of itself
+/// and turns self-intersecting in CAM systems with a coarser internal
+/// resolution (ODB++/Genesis: 2.5 nm). The Gerber spec asks for 1 um.
+const REGION_GRID_MM: f64 = 0.001;
 
 /// Gerber file-level attributes carried as artwork layer metadata.
 #[derive(Debug, Clone, Default)]
@@ -764,11 +769,11 @@ fn prepare_on_grid(
     // The grid overlay is the only regularization: it resolves the fill rule
     // on the coordinates the file will actually carry.
     let (rings, uncertainty_mm) = region::flatten_within(payloads, accuracy)?;
-    accuracy.check(uncertainty_mm + region::grid_rounding_error(DEFAULT_GRID_MM))?;
+    accuracy.check(uncertainty_mm + region::grid_rounding_error(REGION_GRID_MM))?;
     region::decompose_on_grid(
         rings,
         fill_rule,
-        DEFAULT_GRID_MM,
+        REGION_GRID_MM,
         GERBER_OUTLINE_MAX_VERTICES,
     )
     .map_err(|error| GerberError::InvalidStructure(error.to_string()))
@@ -1036,24 +1041,23 @@ mod tests {
     }
 
     #[test]
-    fn regions_and_draws_preserve_the_same_output_coordinates() {
-        // Independent nanometre expectations, including signed ties and both
-        // sides of a rounding boundary. Whole-grid translations retain width.
-        for (source, expected) in [
-            (102.290499, 102290499_i64),
-            (-102.290499, -102290499),
-            (1.00000049, 1000000),
-            (1.0000005, 1000001),
-            (1.00000051, 1000001),
-            (-1.00000049, -1000000),
-            (-1.0000005, -1000000),
-            (-1.00000051, -1000001),
+    fn regions_snap_to_the_region_grid_and_draws_keep_output_precision() {
+        // Independent expectations on both sides of a rounding boundary.
+        // Regions land on whole micrometres; draws keep the nanometre output
+        // grid. Whole-grid translations retain width.
+        for (source, expected_um, expected) in [
+            (102.290499, 102290_i64, 102290499_i64),
+            (-102.290499, -102290, -102290499),
+            (1.0004, 1000, 1000400),
+            (1.0006, 1001, 1000600),
+            (-1.0004, -1000, -1000400),
+            (-1.0006, -1001, -1000600),
         ] {
             for translation in [-1_i64, 0, 1] {
-                let x = source + translation as f64 * 1e-6;
-                let expected = expected + translation;
+                let x = source + translation as f64 * 1e-3;
+                let expected_um = expected_um + translation;
                 let rings = prepare_on_grid(
-                    &[rect_payload(x, x, x + 0.000003, x + 0.000007)],
+                    &[rect_payload(x, x, x + 0.003, x + 0.007)],
                     FillRule::NonZero,
                     GeometryAccuracy::default(),
                 )
@@ -1064,16 +1068,14 @@ mod tests {
                     .map(|p| ((p[0] * 1e6).round() as i64, (p[1] * 1e6).round() as i64))
                     .collect();
                 actual.sort();
+                let e = expected_um * 1000;
                 assert_eq!(
                     actual,
-                    [
-                        (expected, expected),
-                        (expected, expected + 7),
-                        (expected + 3, expected),
-                        (expected + 3, expected + 7),
-                    ],
+                    [(e, e), (e, e + 7000), (e + 3000, e), (e + 3000, e + 7000)],
                     "source {source}, translation {translation}"
                 );
+                let x = source + translation as f64 * 1e-6;
+                let expected = expected + translation;
                 let layer = GerberLayer {
                     apertures: vec![WriterAperture {
                         code: 10,
@@ -1109,11 +1111,7 @@ mod tests {
     #[test]
     fn grid_preparation_rejects_subgrid_budgets() {
         let contour = rect_payload(0.0001, 0.0001, 0.0002, 0.0002);
-        for (budget, accepted) in [
-            (0.0000001, false),
-            (0.0000007075, false),
-            (0.000000708, true),
-        ] {
+        for (budget, accepted) in [(0.0001, false), (0.0007075, false), (0.000708, true)] {
             assert_eq!(
                 prepare_on_grid(
                     std::slice::from_ref(&contour),
@@ -1186,7 +1184,8 @@ mod tests {
         .unwrap();
         assert_eq!(
             bounds(&translated),
-            [100_001.000_3, -10_000.000_2, 100_002.000_3, -9_999.500_2]
+            // Region contours carry whole micrometres.
+            [100_001.0, -10_000.0, 100_002.0, -9_999.5]
         );
 
         // A region carries the source aperture function directly.
@@ -1779,19 +1778,19 @@ mod tests {
         for (offset, reflected) in [
             (0.0, false),
             (0.0, true),
-            (0.0000005, false),
-            (-0.0000005, false),
-            (0.0000005, true),
+            (0.0005, false),
+            (-0.0005, false),
+            (0.0005, true),
         ] {
             let map =
                 |x: f64, y: f64| Point::new((if reflected { -x } else { x }) + offset, y + offset);
             let hole = [
                 map(-2.0, -2.0),
                 map(2.0, -2.0),
-                map(0.0000004, 0.0),
+                map(0.0004, 0.0),
                 map(2.0, 2.0),
                 map(-2.0, 2.0),
-                map(-0.0000004, 0.0),
+                map(-0.0004, 0.0),
             ];
             let (rings, layer) = even_odd_region_layer(&[
                 polygon_payload([
@@ -1803,8 +1802,8 @@ mod tests {
                 polygon_payload(hole),
             ]);
             // Two triangles of base 4 and height 2 when the neck collapses;
-            // at a half-grid offset the neck remains one nanometre wide.
-            let expected_area = if offset == 0.0 { 92.0 } else { 91.999998 };
+            // at a half-grid offset the neck remains one micrometre wide.
+            let expected_area = if offset == 0.0 { 92.0 } else { 91.998 };
             let area: f64 = rings
                 .iter()
                 .map(|ring| region::ring_signed_area(ring).abs())
