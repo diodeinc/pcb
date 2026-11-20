@@ -1,0 +1,22 @@
+"""Filter without Project(): its sheet comes from the KiCad organization alone."""
+
+Resistor = Module("@stdlib/generics/Resistor.zen")
+Leg = Module("sheetless_leg.zen")
+
+resistance = config("resistance", str)
+extended = config("extended", bool, default=False)
+swapped = config("swapped", bool, default=False)
+bridged = config("bridged", bool, default=False)
+INPUT = io("INPUT", Net, direction="input")
+OUTPUT = io("OUTPUT", Net, direction="output")
+EXTRA = io("EXTRA", Net, optional=True)
+
+Resistor(name="R1_ALT" if swapped else "R1", value=resistance, package="0402", P1=INPUT, P2=OUTPUT)
+
+if extended:
+    TAP = Net("TAP")
+    Resistor(name="R2", value="10kohms", package="0402", P1=OUTPUT, P2=TAP)
+    Leg(name="LEG", A=TAP, B=INPUT)
+
+if bridged:
+    Resistor(name="R4", value="1kohms", package="0402", P1=EXTRA, P2=OUTPUT)

@@ -1991,3 +1991,159 @@ fn refreshes_placed_pin_instances_from_the_netlist_symbol_definition() {
             .is_equivalent()
     );
 }
+
+/// ENG-3839, ENG-3828, ENG-3497, ENG-3302, ENG-3050, ENG-2843, ENG-2616: a
+/// module instance without `Project()` (a `schematic="collapse"` module or an
+/// imported sheet module) can live on its own KiCad sheet. Its new parts, the
+/// parts of new nested modules and a swapped part belong on that sheet,
+/// connected through the sheet's existing hierarchical labels.
+#[test]
+fn apply_places_new_and_swapped_module_parts_on_the_module_sheet() {
+    let workspace = tempfile::tempdir().unwrap();
+    let project_dir = workspace.path().join("hardware");
+    // Generate one child sheet per filter, then drop `Project()` from the
+    // module: the sheets are now plain KiCad organization.
+    let created = apply_linked_schematic(&linked_hierarchy_fixture(&project_dir))
+        .unwrap()
+        .unwrap();
+    let root_file = created.root_schematic.clone();
+    let root_source = fs::read_to_string(&root_file).unwrap();
+    let netlist = linked_fixture_project(&project_dir, "hierarchy", "sheetless_root.zen");
+
+    let applied = apply_linked_schematic(&netlist).unwrap().unwrap();
+
+    assert!(applied.changed);
+    assert_eq!(
+        fs::read_to_string(&root_file).unwrap(),
+        root_source,
+        "the root sheet gains no parts, labels or power symbols"
+    );
+    let project = KicadProject::load(&applied.project_file).unwrap();
+    let root = &project.document.pages[0];
+    for (file_name, expected) in [
+        (
+            "FILTER_A.kicad_sch",
+            &["FILTER_A.LEG.R.R", "FILTER_A.R1.R", "FILTER_A.R2.R"][..],
+        ),
+        ("FILTER_B.kicad_sch", &["FILTER_B.R1_ALT.R"][..]),
+    ] {
+        let sheet_id = root
+            .items
+            .iter()
+            .find_map(|item| match item {
+                SchItem::Sheet(sheet) if sheet.file_name() == file_name => Some(&sheet.id),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("root keeps the {file_name} sheet"));
+        let instance_path = format!("/{}/{sheet_id}", root.id);
+        let page = project
+            .document
+            .pages
+            .iter()
+            .find(|page| page.file_name.as_deref() == Some(file_name))
+            .unwrap();
+        let symbols = page
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                SchItem::Symbol(symbol) => Some(symbol),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        let mut paths = symbols
+            .iter()
+            .filter_map(|symbol| symbol.field_value("Path"))
+            .collect::<Vec<_>>();
+        paths.sort();
+        assert_eq!(paths, expected, "managed symbols on {file_name}");
+        assert_eq!(
+            symbols.len(),
+            expected.len(),
+            "no power symbols on {file_name}"
+        );
+        for symbol in symbols {
+            assert_eq!(
+                symbol
+                    .instances
+                    .iter()
+                    .map(|instance| instance.path.as_str())
+                    .collect::<Vec<_>>(),
+                [instance_path.as_str()],
+                "{:?} is annotated for its child sheet",
+                symbol.field_value("Path")
+            );
+        }
+    }
+    assert!(
+        project
+            .document
+            .pages
+            .iter()
+            .flat_map(|page| &page.items)
+            .all(|item| !matches!(
+                item,
+                SchItem::Label(Label {
+                    kind: LabelKind::Global { .. },
+                    ..
+                })
+            )),
+        "existing hierarchical labels carry the module's nets"
+    );
+    assert!(!apply_linked_schematic(&netlist).unwrap().unwrap().changed);
+}
+
+/// A part added on a module sheet may use a net that none of the sheet's pins
+/// carry (a new module io, ENG-3839). Until the sheet interface grows that pin,
+/// a global label joins the net, and on a sheet that already exposes the net
+/// through a hierarchical label the new pin takes both.
+#[test]
+fn apply_bridges_a_net_the_module_sheet_does_not_expose() {
+    let workspace = tempfile::tempdir().unwrap();
+    let project_dir = workspace.path().join("hardware");
+    let created = apply_linked_schematic(&linked_hierarchy_fixture(&project_dir))
+        .unwrap()
+        .unwrap();
+    let root_source = fs::read_to_string(&created.root_schematic).unwrap();
+    let netlist = linked_fixture_project(&project_dir, "hierarchy", "sheetless_new_io_root.zen");
+
+    assert!(apply_linked_schematic(&netlist).unwrap().unwrap().changed);
+
+    assert_eq!(
+        fs::read_to_string(&created.root_schematic).unwrap(),
+        root_source
+    );
+    let project = KicadProject::load(&created.project_file).unwrap();
+    let page = |file_name: &str| {
+        project
+            .document
+            .pages
+            .iter()
+            .find(|page| page.file_name.as_deref() == Some(file_name))
+            .unwrap()
+    };
+    assert!(page("FILTER_A.kicad_sch").items.iter().any(|item| matches!(
+        item,
+        SchItem::Symbol(symbol) if symbol.field_value("Path") == Some("FILTER_A.R4.R")
+    )));
+    let global_labels = project
+        .document
+        .pages
+        .iter()
+        .flat_map(|page| {
+            page.items.iter().filter_map(move |item| match item {
+                SchItem::Label(label) if matches!(label.kind, LabelKind::Global { .. }) => {
+                    Some((page.file_name.as_deref().unwrap(), label.text.as_str()))
+                }
+                _ => None,
+            })
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        global_labels,
+        [
+            ("FILTER_A.kicad_sch", "SINK"),
+            ("FILTER_B.kicad_sch", "SINK")
+        ]
+    );
+    assert!(!apply_linked_schematic(&netlist).unwrap().unwrap().changed);
+}
