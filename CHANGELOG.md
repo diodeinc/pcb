@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added
+
+- `advanced` DFM PDK (`pcb dfm --pdk advanced`) for 1-8 layer, 1 oz, through-hole boards that a fine-line fab prices without a manual quote: 0.091 mm copper spacing, 0.074 mm via rings, 6 mil plated holes, 4 mil traces and an 8.5 aspect ratio.
+
 ## [0.4.103] - 2026-11-19
 
 ### Changed

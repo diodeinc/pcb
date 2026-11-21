@@ -1,0 +1,288 @@
+schema_version = 2
+default_profile = "advanced"
+
+[pdk]
+id = "advanced"
+name = "Advanced"
+revision = "autoquote-2026-11-21"
+manufacturer = "Diode"
+process = "Advanced"
+
+[sources.autoquote-evidence]
+title = "Diode advanced-process quote evidence"
+url = "https://github.com/diodeinc/pcb/blob/main/crates/pcb-ipc2581-tools/docs/dfm.md"
+note = "What a fine-line fab's instant quote priced on 1 oz Diode designs, as it reported them: 3.6 mil copper spacing, 2.95 mil via rings with its engineering review, copper 5.39 mil from NPTHs and 7.85 mil from the routed edge, aspect ratio 8 (0.2 mm through 1.6 mm), up to 8 copper layers, ENIG or immersion silver, green or black mask. Each loosened minimum is the 0.001 mm step below the reported value, so those designs pass. The aspect-ratio maximum, 8.5, is above the priced 8 and matches the quote estimator's cutoff; 8 to 8.5 is untested. It quoted 2.4 mil spacing, a 10.5 aspect ratio and 10 layers manually, and refused HASL on fine pads. It priced 2 oz outer copper on two designs and quoted two others manually, so no safe spacing is known and 2 oz outer copper is left out."
+
+[sources.fab-capability]
+title = "Diode advanced-process published capability"
+url = "https://github.com/diodeinc/pcb/blob/main/crates/pcb-ipc2581-tools/docs/dfm.md"
+note = "Where the quotes did not exercise a limit, the fab's published standard capability: 6 mil finished plated holes, an 8 mil smallest drill, 5 mil annular ring for plated holes, 8 mil plated hole to copper, trace and space of 4 mil on 1 oz outer, 3.5 mil on 0.5 oz inner, 5 mil on 1 oz inner and 6/8 mil on 2 oz inner copper, 15 mil copper to V-score, 0.100 in tab-rout spacing, 0.5-2 oz inner copper, and an 18 x 24 in largest panel. Finished board thickness is a range per layer count, which this schema cannot state, so it is not checked."
+
+[sources.review-band-policy]
+title = "Diode dimensional review bands"
+url = "https://github.com/diodeinc/pcb/blob/main/crates/pcb-ipc2581-tools/docs/dfm.md"
+note = "PTH-to-PTH drill spacing warns below 0.45 mm and errors below 0.40 mm. This is Diode policy, not a manufacturer-qualified tolerance."
+
+[sources.jlc-baseline]
+title = "JLCPCB baseline"
+url = "https://github.com/diodeinc/pcb/blob/main/crates/pcb-ipc2581-tools/pdks/jlcpcb.toml"
+note = "The standard kit's value, kept where this process publishes no limit of its own."
+
+[sources.diode-slot-guidance]
+title = "Diode slot copper guidance"
+url = "https://github.com/diodeinc/pcb/blob/main/crates/pcb-ipc2581-tools/docs/dfm.md"
+note = "Advisory: 0.40 mm slot clearance and 0.25 mm plated-slot enclosure. NPTH slots also require 0.20 mm clearance."
+
+[profiles.advanced]
+name = "Diode advanced"
+description = "Rigid FR-4, 1 oz outer copper, through holes only, at the limits a fine-line fab's instant quote prices."
+technologies = ["rigid"]
+coverage = ["Assembly readiness diagnostics", "1-8 copper layers", "through holes only, 8.5:1 aspect ratio", "3.6 mil copper spacing, 1 oz outer copper"]
+source = "autoquote-evidence"
+
+[profiles.advanced.defaults]
+material = "FR-4"
+board_thickness = "1.6 mm"
+outer_copper_weight = "1 oz"
+inner_copper_weight = "0.5 oz"
+
+# Odd and single-layer counts quote at the next even layer count.
+[profiles.advanced.support]
+copper_layers = { minimum = 1, maximum = 8 }
+outer_copper_weight = ["1 oz"]
+
+[[rules.assembly.diagnostic]]
+id = "assembly.missing_population"
+select = { diagnostic = "missing_population" }
+
+[[rules.assembly.diagnostic]]
+id = "assembly.conflicting_population"
+select = { diagnostic = "conflicting_population" }
+
+[[rules.assembly.diagnostic]]
+id = "assembly.missing_reference_designator"
+select = { diagnostic = "missing_reference_designator" }
+
+[[rules.assembly.diagnostic]]
+id = "assembly.missing_package"
+select = { diagnostic = "missing_package" }
+
+[[rules.assembly.diagnostic]]
+id = "assembly.missing_physical_terminations"
+select = { diagnostic = "missing_physical_terminations" }
+
+[[rules.assembly.diagnostic]]
+id = "assembly.nonstandard_bottom_rotation"
+select = { diagnostic = "nonstandard_bottom_rotation" }
+
+[[rules.board.soldermask_color]]
+id = "board.soldermask_color"
+limit = { allowed = ["green", "black"] }
+source = "autoquote-evidence"
+
+# The aspect ratio below sets the smallest plated hole for each thickness:
+# 0.19 mm at 1.6 mm. The 0.2 mm holes the quotes priced pass both.
+[[rules.drilling.hole_diameter]]
+id = "drilling.minimum_via_hole_diameter"
+select = { hole = "via" }
+limit = { minimum = "6 mil" }
+source = "fab-capability"
+
+[[rules.drilling.hole_diameter]]
+id = "drilling.minimum_pth_hole_diameter"
+select = { hole = "pth" }
+limit = { minimum = "6 mil" }
+source = "fab-capability"
+
+[[rules.drilling.hole_diameter]]
+id = "drilling.minimum_npth_hole_diameter"
+select = { hole = "npth" }
+limit = { minimum = "8 mil" }
+source = "fab-capability"
+
+[[rules.drilling.hole_diameter]]
+id = "drilling.minimum_mouse_bite_hole_diameter"
+select = { hole = "mouse_bite" }
+limit = { minimum = "8 mil" }
+source = "fab-capability"
+
+# Board thickness over finished diameter. 8 priced and 10.5 did not; 8.5
+# leaves room for a 1.6 mm board's stated thickness, as the quote estimator does.
+[[rules.drilling.hole_aspect_ratio]]
+id = "drilling.maximum_via_aspect_ratio"
+select = { hole = "via" }
+limit = { maximum = 8.5 }
+source = "autoquote-evidence"
+
+[[rules.drilling.hole_aspect_ratio]]
+id = "drilling.maximum_pth_aspect_ratio"
+select = { hole = "pth" }
+limit = { maximum = 8.5 }
+source = "autoquote-evidence"
+
+[[rules.drilling.slot_width]]
+id = "drilling.minimum_slot_width"
+select = { plating = "plated" }
+limit = { minimum = "0.5 mm", preferred = "0.6 mm" }
+source = "jlc-baseline"
+
+[[rules.drilling.slot_width]]
+id = "drilling.minimum_slot_width.nonplated"
+select = { plating = "nonplated" }
+limit = { minimum = "1.0 mm" }
+source = "jlc-baseline"
+
+[[rules.drilling.hole_to_hole_clearance]]
+id = "drilling.minimum_hole_to_hole_clearance.via_via"
+select = { first_hole = "via", second_hole = "via" }
+limit = { minimum = "10 mil" }
+source = "jlc-baseline"
+
+[[rules.drilling.hole_to_hole_clearance]]
+id = "drilling.minimum_hole_to_hole_clearance.via_pth"
+select = { first_hole = "via", second_hole = "pth" }
+limit = { minimum = "10 mil", preferred = "0.45 mm" }
+source = "jlc-baseline"
+
+[[rules.drilling.hole_to_hole_clearance]]
+id = "drilling.minimum_hole_to_hole_clearance.via_npth"
+select = { first_hole = "via", second_hole = "npth" }
+limit = { minimum = "10 mil", preferred = "0.45 mm" }
+source = "jlc-baseline"
+
+[[rules.drilling.hole_to_hole_clearance]]
+id = "drilling.minimum_hole_to_hole_clearance.pth_pth"
+select = { first_hole = "pth", second_hole = "pth" }
+limit = { minimum = "0.40 mm", preferred = "0.45 mm" }
+source = "review-band-policy"
+
+[[rules.drilling.hole_to_hole_clearance]]
+id = "drilling.minimum_hole_to_hole_clearance.pth_npth"
+select = { first_hole = "pth", second_hole = "npth" }
+limit = { minimum = "10 mil", preferred = "0.45 mm" }
+source = "jlc-baseline"
+
+[[rules.drilling.hole_to_hole_clearance]]
+id = "drilling.minimum_hole_to_hole_clearance.npth_npth"
+select = { first_hole = "npth", second_hole = "npth" }
+limit = { minimum = "10 mil", preferred = "0.45 mm" }
+source = "jlc-baseline"
+
+# Priced at 2.95 mil with the fab's engineering review, which it also
+# required at 0.125 mm; Diode quotes always include the review.
+[[rules.copper.annular_ring]]
+id = "copper.minimum_via_annular_ring"
+select = { hole = "via" }
+limit = { minimum = "0.074 mm" }
+source = "autoquote-evidence"
+
+[[rules.copper.annular_ring]]
+id = "copper.minimum_pth_annular_ring"
+select = { hole = "pth" }
+limit = { minimum = "5 mil" }
+source = "fab-capability"
+
+# The published 8 mil is every plated hole's; a priced design had
+# copper 9.33 mil from a plated hole.
+[[rules.copper.hole_clearance]]
+id = "copper.minimum_via_hole_clearance"
+select = { hole = "via" }
+limit = { minimum = "8 mil" }
+source = "fab-capability"
+
+[[rules.copper.hole_clearance]]
+id = "copper.minimum_npth_hole_clearance"
+select = { hole = "npth" }
+limit = { minimum = "0.136 mm", preferred = "0.20 mm" }
+source = "autoquote-evidence"
+
+[[rules.copper.hole_clearance]]
+id = "copper.minimum_pth_hole_clearance"
+select = { hole = "pth" }
+limit = { minimum = "8 mil" }
+source = "fab-capability"
+
+# Track width and spacing depend on each layer's own finished copper weight.
+[[rules.copper.feature_width]]
+id = "copper.minimum_feature_width"
+cases = [
+  { id = "outer", when = { copper = { position = "outer" } }, limit = { minimum = "4 mil" } },
+  { id = "inner-half-oz", when = { copper = { position = "inner", weight = "0.5 oz" } }, limit = { minimum = "3.5 mil" } },
+  { id = "inner-1oz", when = { copper = { position = "inner", weight = "1 oz" } }, limit = { minimum = "5 mil" } },
+  { id = "inner-2oz", when = { copper = { position = "inner", weight = "2 oz" } }, limit = { minimum = "6 mil" } },
+]
+source = "fab-capability"
+
+[[rules.copper.plated_slot_enclosure]]
+id = "copper.plated_slot_enclosure"
+limit = { preferred = "0.25 mm" }
+source = "diode-slot-guidance"
+
+# 3.6 mil priced on 1 oz outer and 0.5 oz inner copper at 1.4 times a 6.3 mil
+# design of the same order; where between them the price rises is untested,
+# so spacing warns below 5 mil. Heavier inner copper keeps its published space.
+[[rules.copper.clearance]]
+id = "copper.minimum_copper_clearance"
+cases = [
+  { id = "outer", when = { copper = { position = "outer" } }, limit = { minimum = "0.091 mm", preferred = "5 mil" } },
+  { id = "inner-half-oz", when = { copper = { position = "inner", weight = "0.5 oz" } }, limit = { minimum = "0.091 mm", preferred = "5 mil" } },
+  { id = "inner-1oz", when = { copper = { position = "inner", weight = "1 oz" } }, limit = { minimum = "5 mil" } },
+  { id = "inner-2oz", when = { copper = { position = "inner", weight = "2 oz" } }, limit = { minimum = "8 mil" } },
+]
+source = "autoquote-evidence"
+
+[[rules.copper.slot_clearance]]
+id = "copper.plated_slot_clearance"
+select = { plating = "plated" }
+limit = { preferred = "0.40 mm" }
+source = "diode-slot-guidance"
+
+[[rules.copper.slot_clearance]]
+id = "copper.nonplated_slot_clearance"
+select = { plating = "nonplated" }
+limit = { minimum = "0.20 mm", preferred = "0.40 mm" }
+source = "diode-slot-guidance"
+
+[[rules.copper.board_edge_clearance]]
+id = "copper.minimum_board_edge_clearance"
+limit = { minimum = "0.199 mm", preferred = "15 mil" }
+source = "autoquote-evidence"
+
+[[rules.copper.vscore_clearance]]
+id = "copper.minimum_vscore_to_copper_clearance"
+limit = { minimum = "15 mil" }
+source = "fab-capability"
+
+[[rules.soldermask.web]]
+id = "soldermask.minimum_web"
+limit = { preferred = "4 mil" }
+source = "jlc-baseline"
+
+[[rules.stackup.copper_weight]]
+id = "stackup.outer_copper_weight"
+select = { position = "outer" }
+limit = { allowed = ["1 oz"] }
+source = "autoquote-evidence"
+
+[[rules.stackup.copper_weight]]
+id = "stackup.inner_copper_weight"
+select = { position = "inner" }
+limit = { allowed = ["0.5 oz", "1 oz", "2 oz"] }
+source = "fab-capability"
+
+# HASL is refused on fine pads; tin, OSP and gold quote only at slower turns.
+[[rules.board.surface_finish]]
+id = "board.surface_finish"
+limit = { allowed = ["enig", "immersion_silver"] }
+source = "autoquote-evidence"
+
+# A board no larger than the largest panel, long side to long side.
+[[rules.board.size]]
+id = "board.size"
+limit = { maximum = ["609.6 mm", "457.2 mm"] }
+source = "fab-capability"
+
+[[rules.panelization.board_spacing]]
+id = "panelization.minimum_board_array_spacing"
+limit = { minimum = "100 mil" }
+source = "fab-capability"

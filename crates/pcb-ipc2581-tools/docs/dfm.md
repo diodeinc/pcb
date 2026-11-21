@@ -494,7 +494,7 @@ synchronizing it first, and checks the canonical board. Use `pcb ipc dfm check`
 to inspect existing manufacturing files.
 
 `--pdk` defaults to `standard` and accepts an exact built-in name or a TOML
-path. `standard`, `jlc`, `jlcpcb-1oz`, and `ipc-1a` through
+path. `standard`, `advanced`, `jlc`, `jlcpcb-1oz`, and `ipc-1a` through
 `ipc-3c` are bundled. `ipc` selects the opinionated Class 2 / Producibility Level B default.
 Use `./standard` to select a same-named file. Both sources use the same parser
 and checks. `--layout-target` accepts
@@ -514,6 +514,22 @@ The bundled TOML files own the exact thresholds and source citations:
   outer copper weight; `jlcpcb-1oz` fixes `one-ounce`. Track width and spacing
   depend on each layer's weight. Profiles also check board thickness, finish,
   soldermask color, and size; outer copper outside 1 oz or 2 oz fails support.
+- [`advanced`](../pdks/advanced.toml) covers rigid boards a fine-line fab's
+  instant quote prices: 1–8 copper layers, 1 oz outer and 0.5–2 oz inner
+  copper, through holes only, ENIG or immersion silver, green or black mask.
+  Where those quotes priced a tighter design, its minimum sits just below that
+  design's value: 0.091 mm copper spacing on 1 oz outer and ½ oz inner copper
+  (warning below 5 mil, where the price rises), 0.074 mm via rings, 0.136 mm
+  NPTH-to-copper and 0.199 mm edge-to-copper clearance, and an 8.5 aspect
+  ratio (8 priced; 8.5 is the quote estimator's cutoff). Elsewhere it takes
+  the fab's published capability: 6 mil plated holes, 5 mil PTH rings, 8 mil
+  plated-hole-to-copper, trace width and heavier inner spacing by copper
+  weight, 15 mil V-score clearance and 100 mil array spacing. 2 oz outer
+  copper is left out: the fab priced it on two designs and quoted two
+  manually, so no safe spacing is known. Board thickness is not checked, since
+  the fab publishes a range per layer count rather than nominal values. Slot,
+  hole-to-hole and soldermask limits, which the fab does not publish, are the
+  standard kit's.
 - [`ipc`](../pdks/ipc.toml) preserves Classes 1–3 crossed with Producibility
   Levels A–C as executable **partial Diode baselines**, not IPC profile matrices.
   Aspect-ratio, hole-to-copper, and hole/slot-to-edge limits vary by level, not
