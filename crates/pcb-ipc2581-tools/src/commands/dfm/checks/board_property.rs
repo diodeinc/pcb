@@ -18,10 +18,12 @@ use crate::accessors::{ColorInfo, format_ounces, nominal_copper_weight};
 use crate::commands::dfm::design::Design;
 use crate::commands::dfm::pdk::{
     CopperWeight, LayerPosition, Length, PartialDepth, SoldermaskColor, StackupBuild,
-    StackupTemplate, SurfaceFinish,
+    StackupTemplate, SurfaceFinish, ThicknessLimit,
 };
 use crate::commands::dfm::report::{LayerRef, RuleStatus, Subject};
-use crate::commands::dfm::rules::{Allowed, Rule, RuleKind, position_label};
+use crate::commands::dfm::rules::{
+    Allowed, Conditions, LimitValue, Rule, RuleKind, position_label,
+};
 use crate::layers;
 use pcb_ir::geom::dfm::COMPARISON_EPSILON_MM;
 
@@ -105,9 +107,14 @@ pub(super) fn evaluate(rule: &Rule, design: &Design) -> Result<Evaluation, Unjud
             });
             Ok(judged(1, nonconforming))
         }
-        (RuleKind::DielectricGaps, Allowed::StackupTemplates { tolerance, builds }) => {
-            dielectric_gaps(tolerance, builds, design)
-        }
+        (
+            RuleKind::DielectricGaps,
+            Allowed::StackupTemplates {
+                tolerance,
+                builds,
+                thickness,
+            },
+        ) => dielectric_gaps(tolerance, builds, thickness, design),
         (RuleKind::DrillSpans, Allowed::DrillSpans(allowed)) => {
             drill_spans(allowed, &allowed_text, design)
         }
@@ -216,10 +223,13 @@ fn copper_weight(
 type Gap = (String, f64);
 
 /// The design's build among `builds` and its dielectric gaps: its layer
-/// count, the listed thickness nearest its finished thickness, and the one
-/// standard weight of its outer and of its inner layers.
+/// count, the one standard weight of its outer and of its inner layers, and
+/// the listed thickness nearest its finished thickness among those whose
+/// tolerance under the applicable board-thickness limit admits it (with no
+/// limit, the nearest).
 fn stackup_build<'a>(
     builds: &'a [StackupBuild],
+    thickness_limits: &[(Conditions, ThicknessLimit)],
     design: &Design,
 ) -> Result<(&'a StackupBuild, Vec<Gap>), Unjudged> {
     let stackup = design
@@ -254,36 +264,45 @@ fn stackup_build<'a>(
     let shared = |weights: &[Option<f64>]| weights.iter().all(|weight| *weight == weights[0]);
     let off = |build: &&StackupBuild| (build.board_thickness.millimeters() - thickness).abs();
     let best = builds.iter().map(off).fold(f64::INFINITY, f64::min);
-    // The listed thicknesses nearest the board's: one, or two equally near.
-    let nearest = builds
+    let limit = thickness_limits
         .iter()
-        .copied()
-        .filter(|build| off(build) <= best + COMPARISON_EPSILON_MM)
-        .collect::<Vec<&StackupBuild>>();
-    // Of those, the thicker: thickness tolerances grow with the nominal, so
-    // it is the one a board-thickness rule accepts.
-    let thicker = |left: &&StackupBuild, right: &&StackupBuild| {
-        let mm = |build: &&StackupBuild| build.board_thickness.millimeters();
-        mm(left).total_cmp(&mm(right))
+        .find(|(conditions, _)| conditions.applies_to_design(design))
+        .map(|(_, limit)| limit);
+    let admits = |build: &&StackupBuild| match limit {
+        Some(limit) => {
+            let nominal = build.board_thickness.millimeters();
+            off(build) <= limit.tolerance_mm(nominal) + COMPARISON_EPSILON_MM
+        }
+        None => off(build) <= best + COMPARISON_EPSILON_MM,
     };
-    let build = nearest
+    // The nearest, and of two equally near the thicker.
+    let nearer = |left: &&StackupBuild, right: &&StackupBuild| {
+        let mm = |build: &&StackupBuild| build.board_thickness.millimeters();
+        if (off(left) - off(right)).abs() <= COMPARISON_EPSILON_MM {
+            mm(right).total_cmp(&mm(left))
+        } else {
+            off(left).total_cmp(&off(right))
+        }
+    };
+    let build = builds
         .iter()
         .copied()
         .filter(|build| {
-            shared(&outer)
+            admits(build)
+                && shared(&outer)
                 && shared(&inner)
                 && outer[0] == Some(build.outer_copper_weight.ounces())
                 && inner.first().copied().flatten() == Some(build.inner_copper_weight.ounces())
         })
-        .max_by(thicker);
+        .min_by(nearer);
     // No template: the process combination is unmodelled, not violated.
     let Some(build) = build else {
         return Err(incomplete(format!(
             "no stackup template exists for a {layers}-layer {} build with these copper weights; the process combination needs qualification",
-            nearest
+            builds
                 .iter()
                 .copied()
-                .max_by(thicker)
+                .min_by(nearer)
                 .expect("builds are not empty")
                 .board_thickness
                 .original()
@@ -296,11 +315,17 @@ fn stackup_build<'a>(
 /// to its dielectric gaps, the default on a tie. `None` when the PDK models
 /// no template for its build.
 pub(in crate::commands::dfm) fn stackup_template<'a>(
-    builds: &'a [StackupBuild],
+    rules: &'a [Rule],
     design: &Design,
 ) -> Option<(&'a StackupBuild, &'a StackupTemplate)> {
     design.stackup.as_ref()?;
-    let (build, gaps) = stackup_build(builds, design).ok()?;
+    let (builds, thickness) = rules.iter().find_map(|rule| match &rule.limit {
+        LimitValue::Allowed(Allowed::StackupTemplates {
+            builds, thickness, ..
+        }) if rule.conditions.applies_to_design(design) => Some((builds, thickness)),
+        _ => None,
+    })?;
+    let (build, gaps) = stackup_build(builds, thickness, design).ok()?;
     Some((build, closest_template(build, &gaps)))
 }
 
@@ -309,9 +334,10 @@ pub(in crate::commands::dfm) fn stackup_template<'a>(
 fn dielectric_gaps(
     tolerance: &Length,
     builds: &[StackupBuild],
+    thickness: &[(Conditions, ThicknessLimit)],
     design: &Design,
 ) -> Result<Evaluation, Unjudged> {
-    let (build, gaps) = stackup_build(builds, design)?;
+    let (build, gaps) = stackup_build(builds, thickness, design)?;
     let stackup = design
         .stackup
         .as_ref()

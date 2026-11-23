@@ -158,7 +158,7 @@ fn check_with_scene(
     let checked = checked?;
     let passes = passes?;
     let summary = summarize(&checked);
-    let stackup_template = checks::stackup_template(&pdk.stackup_builds, &designs[0])
+    let stackup_template = checks::stackup_template(&rules, &designs[0])
         .map(|(build, template)| report::ReportStackupTemplate::new(build, template));
     let layout = designs[0].report_layout();
     let frames = checked
@@ -2186,44 +2186,47 @@ templates = [
             ),
             (1.8, 1.0, 0.5)
         );
-        // Halfway between two builds, the thicker: only its tolerance fits.
+        // A board-thickness rule admits a build only within its tolerance.
         let build = &pdk[pdk.find("[[stackup_builds]]").unwrap()..];
-        let thick = |mm: &str| {
-            build.replace(
-                r#"board_thickness = "1.6 mm""#,
-                &format!(r#"board_thickness = "{mm} mm""#),
-            )
+        let thick = |mm: &str, outer: &str| {
+            build
+                .replace(
+                    r#"board_thickness = "1.6 mm""#,
+                    &format!(r#"board_thickness = "{mm} mm""#),
+                )
+                .replace(
+                    r#"outer_copper_weight = "1 oz""#,
+                    &format!(r#"outer_copper_weight = "{outer}""#),
+                )
         };
-        let two_builds = format!(
-            "{}{}\n{}",
-            &pdk[..pdk.find("[[stackup_builds]]").unwrap()],
-            thick("2.0"),
-            thick("2.5")
-        );
-        let build_mm = |board: &str| {
+        let builds_mm = |builds: &[(&str, &str)], board: &str| {
+            let pdk = format!(
+                r#"{}[[rules.stackup.board_thickness]]
+id = "thickness"
+limit = {{ nominal = ["2.0 mm", "2.5 mm", "3.0 mm"], tolerance = "0.1 mm", tolerance_percent = 10 }}
+
+{}"#,
+                &pdk[..pdk.find("[[stackup_builds]]").unwrap()],
+                builds
+                    .iter()
+                    .map(|(mm, outer)| thick(mm, outer))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            );
             let xml = stacked_board("0.035", "0.0152", &["0.1", "1.265", "0.15"], board);
-            check_with_pdk(&xml, LayoutTarget::Board, &two_builds)
+            check_with_pdk(&xml, LayoutTarget::Board, &pdk)
                 .stackup_template
-                .unwrap()
-                .board_thickness_mm
+                .map(|selected| selected.board_thickness_mm)
         };
-        assert_eq!(build_mm("2.25"), 2.5);
-        assert_eq!(build_mm("2.24"), 2.0);
-        // Unless only the thinner one has the board's copper weights.
-        let two_builds = two_builds.replacen(
-            r#"board_thickness = "2.5 mm"
-outer_copper_weight = "1 oz""#,
-            r#"board_thickness = "2.5 mm"
-outer_copper_weight = "2 oz""#,
-            1,
-        );
-        let xml = stacked_board("0.035", "0.0152", &["0.1", "1.265", "0.15"], "2.25");
-        let selected = check_with_pdk(&xml, LayoutTarget::Board, &two_builds)
-            .stackup_template
-            .unwrap();
+        // 2.25 mm is outside 2.0 mm's ± 0.2 mm and inside 2.5 mm's ± 0.25 mm.
+        let both = [("2.0", "1 oz"), ("2.5", "1 oz")];
+        assert_eq!(builds_mm(&both, "2.25"), Some(2.5));
+        assert_eq!(builds_mm(&both, "2.2"), Some(2.0));
+        assert_eq!(builds_mm(&[("2.0", "1 oz"), ("2.5", "2 oz")], "2.25"), None);
+        // 2.75 mm fits 2.5 mm's tolerance, so a copper match there counts.
         assert_eq!(
-            (selected.board_thickness_mm, selected.outer_copper_oz),
-            (2.0, 1.0)
+            builds_mm(&[("2.5", "1 oz"), ("3.0", "2 oz")], "2.75"),
+            Some(2.5)
         );
         // A saved report records the same selection.
         #[cfg(feature = "cli")]
