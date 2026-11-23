@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, HashSet};
 
 use anyhow::{Result, bail};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::accessors::nominal_copper_weight;
 
@@ -299,13 +299,19 @@ pub struct StackupBuild {
     pub templates: Vec<StackupTemplate>,
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct StackupTemplate {
     pub name: String,
+    /// The fab's identifier for ordering this template.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub code: Option<String>,
     /// The fab uses this template when an order names none.
     #[serde(default)]
     pub default: bool,
+    /// The fab charges a fixed fee to laminate this template.
+    #[serde(default)]
+    pub lamination_fee: bool,
     /// Dielectric thickness between each pair of adjacent copper layers,
     /// top to bottom.
     pub dielectric_gaps_mm: Vec<f64>,

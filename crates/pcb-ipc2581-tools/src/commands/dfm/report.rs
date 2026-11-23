@@ -3,7 +3,7 @@ use pcb_ir::geom::{BBox, Point, dist};
 use serde::ser::SerializeStruct;
 use serde::{Serialize, Serializer};
 
-use super::pdk::{CopperWeight, Pdk};
+use super::pdk::{CopperWeight, Pdk, StackupTemplate};
 use super::rules::{LimitValue, Rule, RuleKind};
 
 pub const REPORT_SCHEMA_VERSION: u32 = 3;
@@ -22,6 +22,9 @@ pub struct DfmReport {
     pub layout: LayoutContext,
     pub summary: Summary,
     pub rules: Vec<RuleResult>,
+    /// The PDK's stackup template the fab builds the board on, when it models
+    /// one for the board's build: the closest to its dielectric gaps.
+    pub stackup_template: Option<StackupTemplate>,
     /// The Steps the layout places, the layout root first. Each is checked
     /// once, in its own coordinates, wherever and however often it is placed.
     pub frames: Vec<Frame>,
@@ -43,6 +46,8 @@ pub struct ReportSummary<'a> {
     pub layout_target: &'static str,
     pub summary: &'a Summary,
     pub rules: &'a [RuleResult],
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stackup_template: Option<&'a StackupTemplate>,
 }
 
 impl DfmReport {
@@ -57,6 +62,7 @@ impl DfmReport {
             layout_target: self.layout_target,
             summary: &self.summary,
             rules: &self.rules,
+            stackup_template: self.stackup_template.as_ref(),
         }
     }
 }
