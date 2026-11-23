@@ -282,6 +282,7 @@ impl<'a> Writer<'a> {
             ("tool", text(&report.tool)),
             ("input", text(&report.input)),
             ("pdk", text(&report.pdk)),
+            ("stackup_template", text(&report.stackup_template)),
             ("layout_target", text(&report.layout_target)),
             ("coordinate_system", text(&report.coordinate_system)),
             ("layout", text(&report.layout)),

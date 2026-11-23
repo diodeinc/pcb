@@ -2166,6 +2166,29 @@ templates = [
             Some("B")
         );
         assert_eq!(template("0.07", &["0.21", "1.065", "0.21"]), None);
+        // A saved report records the same selection.
+        #[cfg(feature = "cli")]
+        {
+            let xml = stacked_board("0.035", "0.0152", &["0.1", "1.265", "0.15"], "1.6");
+            let database =
+                store::database(&check_with_pdk(&xml, LayoutTarget::Board, &pdk)).unwrap();
+            let saved: String = rusqlite::Connection::open_in_memory()
+                .and_then(|mut connection| {
+                    connection.deserialize_read_exact(
+                        "main",
+                        database.as_slice(),
+                        database.len(),
+                        true,
+                    )?;
+                    connection.query_row(
+                        "SELECT value ->> '$.name' FROM report WHERE key = 'stackup_template'",
+                        [],
+                        |row| row.get(0),
+                    )
+                })
+                .unwrap();
+            assert_eq!(saved, "B");
+        }
         assert_eq!(template("0.035", &["1.5"]), None);
         let mismatch = "dielectric gaps match no stackup template for the 4-layer 1.6 mm, 1 oz outer / 0.5 oz inner build within ± 0.025 mm; closest is B: L3–L4 is 0.1500 mm, template 0.1200 mm; the build's default is A";
         assert_eq!(check("0.035", &["0.1", "1.265", "0.15"]), fail(mismatch));
