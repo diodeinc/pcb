@@ -21,7 +21,7 @@ use serde_json::json;
 
 use crate::accessors::{
     ColorInfo, DrillHoleType, DrillStats, IpcAccessor, StackupLayerType, castellations,
-    drill_stats, nominal_copper_weight, via_profiles,
+    drill_stats, via_profiles,
 };
 #[cfg(feature = "cli")]
 use crate::utils::{file as file_utils, units};
@@ -899,12 +899,8 @@ pub fn info_json(
             },
             "outer_copper_oz": stackup_details.outer_copper_oz,
             "inner_copper_oz": stackup_details.inner_copper_oz,
-            "outer_copper_nominal_oz": stackup_details
-                .outer_copper_oz
-                .and_then(|oz| nominal_copper_weight(oz, true)),
-            "inner_copper_nominal_oz": stackup_details
-                .inner_copper_oz
-                .and_then(|oz| nominal_copper_weight(oz, false)),
+            "outer_copper_nominal_oz": stackup_details.outer_copper_nominal_oz,
+            "inner_copper_nominal_oz": stackup_details.inner_copper_nominal_oz,
             "layers": layers,
         });
     }
