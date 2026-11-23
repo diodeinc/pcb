@@ -275,22 +275,21 @@ impl<'a> Writer<'a> {
             .scene
             .as_ref()
             .context("a DFM database needs the report's scene")?;
-        let metadata = [
-            ("schema_version", text(&report.schema_version)),
-            ("generated_at", text(&report.generated_at)),
-            ("verdict", text(&report.verdict)),
-            ("tool", text(&report.tool)),
-            ("input", text(&report.input)),
-            ("pdk", text(&report.pdk)),
-            ("layout_target", text(&report.layout_target)),
-            ("coordinate_system", text(&report.coordinate_system)),
-            ("layout", text(&report.layout)),
-            ("summary", text(&report.summary)),
-            ("frames", text(&report.frames)),
-            ("scene", text(&json!({ "bounds": scene.bounds }))),
+        // Every printed summary field but the rules, which get their own
+        // table, then what only the database holds.
+        let serde_json::Value::Object(printed) = serde_json::to_value(report.summary_record())?
+        else {
+            unreachable!("a report summary serializes as an object");
+        };
+        let saved = [
+            ("coordinate_system", json!(report.coordinate_system)),
+            ("layout", json!(report.layout)),
+            ("frames", json!(report.frames)),
+            ("scene", json!({ "bounds": scene.bounds })),
         ];
-        for (key, value) in metadata {
-            self.report.execute(params![key, value])?;
+        let printed = printed.into_iter().filter(|(key, _)| key != "rules");
+        for (key, value) in printed.chain(saved.map(|(key, value)| (key.to_owned(), value))) {
+            self.report.execute(params![key, text(&value)])?;
         }
         let mut rules = HashMap::new();
         for (rule, id) in report.rules.iter().zip(0_i64..) {

@@ -10,6 +10,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Added
 
+- DFM reports name the PDK stackup template the fab builds the board on, as `stackup_template`: the closest to its dielectric gaps, including when a `PROPOSED` stackup matches none. The JLCPCB PDK's templates carry JLCPCB's order `code` and `lamination_fee` flag, refreshed from JLCPCB.
 - `advanced` DFM PDK (`pcb dfm --pdk advanced`) for 1-8 layer, 1 oz, through-hole boards that a fine-line fab prices without a manual quote: 0.091 mm copper spacing, 0.074 mm via rings, 6 mil plated holes, 4 mil traces and an 8.5 aspect ratio.
 
 ### Fixed

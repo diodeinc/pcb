@@ -117,7 +117,10 @@ def templates(build: Build, listed: list[dict]) -> list[dict]:
         if known is None or (template["defaultFlag"] and not known["default"]):
             kept[key] = {
                 "name": template["templateName"],
+                "code": template["impedanceTemplateCode"],
                 "default": template["defaultFlag"],
+                "fee": (template.get("pricePanelFixedFeeVO") or {}).get("fixedFeeFlag")
+                is True,
                 "gaps": gaps,
             }
     return sorted(kept.values(), key=lambda t: (not t["default"], t["name"], t["gaps"]))
@@ -148,9 +151,10 @@ def render(builds: list[tuple[Build, list[dict]]]) -> str:
         ]
         for template in found:
             default = ", default = true" if template["default"] else ""
+            fee = ", lamination_fee = true" if template["fee"] else ""
             gaps = ", ".join(number(gap) for gap in template["gaps"])
             lines.append(
-                f'  {{ name = "{template["name"]}"{default}, dielectric_gaps_mm = [{gaps}] }},'
+                f'  {{ name = "{template["name"]}", code = "{template["code"]}"{default}{fee}, dielectric_gaps_mm = [{gaps}] }},'
             )
         lines.append("]")
     return "\n".join(lines) + "\n"

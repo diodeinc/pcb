@@ -636,8 +636,8 @@ source label.
 ## Summary
 
 The summary is a JSON object with `schema_version`, `generated_at`, `verdict`
-(`pass` or `fail`), `tool`, `input`, `pdk`, `layout_target`, `summary`, and
-`rules`, each as described for the [report](#report-database). It holds no
+(`pass` or `fail`), `tool`, `input`, `pdk`, `stackup_template`, `layout_target`,
+`summary`, and `rules`, each as described for the [report](#report-database). It holds no
 findings or geometry.
 
 - `input`: original IPC input path, SHA-256, and byte size; see
@@ -668,7 +668,7 @@ subject, role, note and shape is stored once and referred to by id.
 
 | Table | One row per | Columns |
 | --- | --- | --- |
-| `report` | report-level record | `key`, JSON `value`: `schema_version`, `generated_at`, `verdict`, `tool`, `input`, `pdk`, `layout_target`, `coordinate_system`, `layout`, `summary`, `frames`, `scene` (its `bounds`) |
+| `report` | report-level record | `key`, JSON `value`: `schema_version`, `generated_at`, `verdict`, `tool`, `input`, `pdk`, `stackup_template` (the stackup template the fab builds the board on, or null when the PDK has none for its build), `layout_target`, `coordinate_system`, `layout`, `summary`, `frames`, `scene` (its `bounds`) |
 | `rules` | lowered rule | `rule_id`, `title`, `finding_title`, `severity`, `tier`, `status`, `comparison`, `limit_value`, `limit_unit`, `limit_pdk_value`, `subject`, `quantity`, `method`, `checked`, `finding_count`, `skip_reason`, JSON `assumptions` and `view` |
 | `unresolved` | measurement below a limit by less than its uncertainty | `rule`, `frame`, `actual_mm`, `uncertainty_mm`, `x`, `y`, JSON layer names |
 | `findings` | violation | `finding_id`, `rule`, `frame`, JSON `measurement`, `message`, location `x`, `y`, bounds `min_x` … `max_y`, `layers`, `subjects` |

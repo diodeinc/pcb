@@ -158,6 +158,7 @@ fn check_with_scene(
     let checked = checked?;
     let passes = passes?;
     let summary = summarize(&checked);
+    let stackup_template = checks::stackup_template(&pdk.stackup_builds, &designs[0]).cloned();
     let layout = designs[0].report_layout();
     let frames = checked
         .frames
@@ -195,6 +196,7 @@ fn check_with_scene(
         },
         summary,
         rules: checked.rules,
+        stackup_template,
         frames,
         findings: checked.findings,
         scene,
@@ -2133,6 +2135,13 @@ templates = [
             judged(&check_with_pdk(&xml, LayoutTarget::Board, &pdk), "gaps")
         };
         let check = |outer: &str, gaps: &[&str]| judge(outer, gaps, "SPECIFIED");
+        // The template the report says the fab builds the board on.
+        let template = |outer: &str, gaps: &[&str]| {
+            let xml = stacked_board(outer, "0.0152", gaps, "1.6");
+            check_with_pdk(&xml, LayoutTarget::Board, &pdk)
+                .stackup_template
+                .map(|template| template.name)
+        };
         let fail = |message: &str| ("Fail".to_owned(), Some(message.to_owned()));
         let incomplete = |message: &str| ("Incomplete".to_owned(), Some(message.to_owned()));
 
@@ -2147,6 +2156,40 @@ templates = [
 
         assert_eq!(check("0.035", &["0.21", "1.065", "0.21"]).0, "Pass");
         assert_eq!(check("0.035", &["0.1", "1.265", "0.144"]).0, "Pass");
+        assert_eq!(
+            template("0.035", &["0.21", "1.065", "0.21"]).as_deref(),
+            Some("A")
+        );
+        // A stackup no template matches is built on the closest one.
+        assert_eq!(
+            template("0.035", &["0.1", "1.265", "0.15"]).as_deref(),
+            Some("B")
+        );
+        assert_eq!(template("0.07", &["0.21", "1.065", "0.21"]), None);
+        // A saved report records the same selection.
+        #[cfg(feature = "cli")]
+        {
+            let xml = stacked_board("0.035", "0.0152", &["0.1", "1.265", "0.15"], "1.6");
+            let database =
+                store::database(&check_with_pdk(&xml, LayoutTarget::Board, &pdk)).unwrap();
+            let saved: String = rusqlite::Connection::open_in_memory()
+                .and_then(|mut connection| {
+                    connection.deserialize_read_exact(
+                        "main",
+                        database.as_slice(),
+                        database.len(),
+                        true,
+                    )?;
+                    connection.query_row(
+                        "SELECT value ->> '$.name' FROM report WHERE key = 'stackup_template'",
+                        [],
+                        |row| row.get(0),
+                    )
+                })
+                .unwrap();
+            assert_eq!(saved, "B");
+        }
+        assert_eq!(template("0.035", &["1.5"]), None);
         let mismatch = "dielectric gaps match no stackup template for the 4-layer 1.6 mm, 1 oz outer / 0.5 oz inner build within ± 0.025 mm; closest is B: L3–L4 is 0.1500 mm, template 0.1200 mm; the build's default is A";
         assert_eq!(check("0.035", &["0.1", "1.265", "0.15"]), fail(mismatch));
         for status in ["PROPOSED", "APPROVED"] {

@@ -18,6 +18,7 @@ mod annular_ring;
 mod assembly;
 mod board_array_spacing;
 mod board_property;
+pub(super) use board_property::stackup_template;
 mod copper_clearance;
 mod drilled_board_edge_clearance;
 mod hole_aspect_ratio;
