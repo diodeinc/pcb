@@ -2209,6 +2209,22 @@ templates = [
         };
         assert_eq!(build_mm("2.25"), 2.5);
         assert_eq!(build_mm("2.24"), 2.0);
+        // Unless only the thinner one has the board's copper weights.
+        let two_builds = two_builds.replacen(
+            r#"board_thickness = "2.5 mm"
+outer_copper_weight = "1 oz""#,
+            r#"board_thickness = "2.5 mm"
+outer_copper_weight = "2 oz""#,
+            1,
+        );
+        let xml = stacked_board("0.035", "0.0152", &["0.1", "1.265", "0.15"], "2.25");
+        let selected = check_with_pdk(&xml, LayoutTarget::Board, &two_builds)
+            .stackup_template
+            .unwrap();
+        assert_eq!(
+            (selected.board_thickness_mm, selected.outer_copper_oz),
+            (2.0, 1.0)
+        );
         // A saved report records the same selection.
         #[cfg(feature = "cli")]
         {

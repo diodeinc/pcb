@@ -253,33 +253,40 @@ fn stackup_build<'a>(
     }
     let shared = |weights: &[Option<f64>]| weights.iter().all(|weight| *weight == weights[0]);
     let off = |build: &&StackupBuild| (build.board_thickness.millimeters() - thickness).abs();
-    // Between two equally near builds, the thicker: thickness tolerances
-    // grow with the nominal, so it is the one a board-thickness rule accepts.
+    let best = builds.iter().map(off).fold(f64::INFINITY, f64::min);
+    // The listed thicknesses nearest the board's: one, or two equally near.
     let nearest = builds
         .iter()
-        .min_by(|left, right| {
-            let (left_off, right_off) = (off(left), off(right));
-            if (left_off - right_off).abs() <= COMPARISON_EPSILON_MM {
-                let mm = |build: &&&StackupBuild| build.board_thickness.millimeters();
-                mm(right).total_cmp(&mm(left))
-            } else {
-                left_off.total_cmp(&right_off)
-            }
+        .copied()
+        .filter(|build| off(&build) <= best + COMPARISON_EPSILON_MM)
+        .collect::<Vec<&StackupBuild>>();
+    // Of those, the thicker: thickness tolerances grow with the nominal, so
+    // it is the one a board-thickness rule accepts.
+    let thicker = |left: &&StackupBuild, right: &&StackupBuild| {
+        let mm = |build: &&StackupBuild| build.board_thickness.millimeters();
+        mm(left).total_cmp(&mm(right))
+    };
+    let build = nearest
+        .iter()
+        .copied()
+        .filter(|build| {
+            shared(&outer)
+                && shared(&inner)
+                && outer[0] == Some(build.outer_copper_weight.ounces())
+                && inner.first().copied().flatten() == Some(build.inner_copper_weight.ounces())
         })
-        .map(|build| build.board_thickness.clone())
-        .expect("builds are not empty");
-    let build = builds.into_iter().find(|build| {
-        build.board_thickness == nearest
-            && shared(&outer)
-            && shared(&inner)
-            && outer[0] == Some(build.outer_copper_weight.ounces())
-            && inner.first().copied().flatten() == Some(build.inner_copper_weight.ounces())
-    });
+        .max_by(thicker);
     // No template: the process combination is unmodelled, not violated.
     let Some(build) = build else {
         return Err(incomplete(format!(
             "no stackup template exists for a {layers}-layer {} build with these copper weights; the process combination needs qualification",
-            nearest.original()
+            nearest
+                .iter()
+                .copied()
+                .max_by(thicker)
+                .expect("builds are not empty")
+                .board_thickness
+                .original()
         )));
     };
     Ok((build, gaps))
