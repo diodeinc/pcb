@@ -88,6 +88,27 @@ for net, pins in re.findall(r"\(net (" + TOKEN + r")\s+\(pins ([^)]*)\)", src):
         pin_class.setdefault(ref, []).append((num, cls))
 
 
+# Pins on no net (an unused bed land, a fiducial) are still bare pads:
+# they take the default class's pad class, so a high-voltage track keeps
+# the exposed clearance from them too, as the board's rules require.
+image_pins = {}
+for m in re.finditer(r"\(image (" + TOKEN + r")", src):
+    body = src[m.start() : block_end(m.start())]
+    nums = re.findall(r"\(pin (?:" + TOKEN + r")\s+(?:\(rotate [^)]*\)\s+)?(" + TOKEN + r")\s", body)
+    image_pins[m.group(1).strip('"')] = [n.strip('"') for n in nums]
+ref_image = {}
+for m in re.finditer(r"\(component (" + TOKEN + r")", src):
+    body = src[m.start() : block_end(m.start())]
+    for ref in re.findall(r"\(place (" + TOKEN + r")", body):
+        ref_image[ref.strip('"')] = m.group(1).strip('"')
+if default is not None:
+    for ref, image in ref_image.items():
+        have = {num for num, _ in pin_class.get(ref, [])}
+        for num in image_pins.get(image, []):
+            if num not in have:
+                pin_class.setdefault(ref, []).append((num, default))
+
+
 def place(m):
     extra = "".join(f" (pin {num} (clearance_class {cls}))" for num, cls in pin_class.get(m.group(1).strip('"'), []))
     return m.group(0)[:-1] + extra + ")"
