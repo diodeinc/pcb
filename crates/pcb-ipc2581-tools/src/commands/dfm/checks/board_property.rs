@@ -264,16 +264,24 @@ fn stackup_build<'a>(
     let shared = |weights: &[Option<f64>]| weights.iter().all(|weight| *weight == weights[0]);
     let off = |build: &&StackupBuild| (build.board_thickness.millimeters() - thickness).abs();
     let best = builds.iter().map(off).fold(f64::INFINITY, f64::min);
-    let limit = thickness_limits
+    let limits = thickness_limits
         .iter()
-        .find(|(conditions, _)| conditions.applies_to_design(design))
-        .map(|(_, limit)| limit);
-    let admits = |build: &&StackupBuild| match limit {
-        Some(limit) => {
-            let nominal = build.board_thickness.millimeters();
-            off(build) <= limit.tolerance_mm(nominal) + COMPARISON_EPSILON_MM
+        .filter(|(conditions, _)| conditions.applies_to_design(design))
+        .map(|(_, limit)| limit)
+        .collect::<Vec<_>>();
+    // A build every applicable limit lists, within its tolerance there.
+    let admits = |build: &&StackupBuild| {
+        let nominal = build.board_thickness.millimeters();
+        if limits.is_empty() {
+            return off(build) <= best + COMPARISON_EPSILON_MM;
         }
-        None => off(build) <= best + COMPARISON_EPSILON_MM,
+        limits.iter().all(|limit| {
+            limit
+                .nominal
+                .iter()
+                .any(|listed| (listed.millimeters() - nominal).abs() <= COMPARISON_EPSILON_MM)
+                && off(build) <= limit.tolerance_mm(nominal) + COMPARISON_EPSILON_MM
+        })
     };
     // The nearest, and of two equally near the thicker.
     let nearer = |left: &&StackupBuild, right: &&StackupBuild| {

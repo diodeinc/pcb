@@ -2228,6 +2228,8 @@ limit = {{ nominal = ["2.0 mm", "2.5 mm", "3.0 mm"], tolerance = "0.1 mm", toler
             builds_mm(&[("2.5", "1 oz"), ("3.0", "2 oz")], "2.75"),
             Some(2.5)
         );
+        // A build the thickness rule doesn't list never qualifies.
+        assert_eq!(builds_mm(&[("2.0", "2 oz"), ("2.2", "1 oz")], "2.1"), None);
         // A saved report records the same selection.
         #[cfg(feature = "cli")]
         {
