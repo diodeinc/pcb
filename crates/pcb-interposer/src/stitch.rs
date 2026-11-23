@@ -233,7 +233,16 @@ for zone in board.Zones():
         for layer in (pcbnew.F_Cu, pcbnew.B_Cu):
             if zone.IsOnLayer(layer):
                 gnd_fills[layer] = zone.GetFilledPolysList(layer)
-def in_pad_via(x, y, top):
+def in_pad_via(x, y, top, radius):
+    # A GND via already inside the pad (the router's, a stitch or an
+    # earlier rescue) bridges it.
+    vias = [
+        (track.GetPosition().x, track.GetPosition().y)
+        for track in board.GetTracks()
+        if track.Type() == pcbnew.PCB_VIA_T and track.GetNetCode() == gnd
+    ]
+    if any((ox - x) ** 2 + (oy - y) ** 2 < radius * radius for ox, oy in vias + accepted):
+        return
     # In-pad candidates: the via clears this face inside its own pad, but
     # each spot must clear the opposite face's copper and keep its own
     # distance from every already-placed via.
@@ -271,7 +280,7 @@ for x, y, top, radius in gnd_pads:
     # orphan's nearest fill sits a full thermal gap further out.
     touched = fill.Collide(pcbnew.VECTOR2I(x, y), radius + pcbnew.FromMM(0.05))
     if not touched:
-        in_pad_via(x, y, top)
+        in_pad_via(x, y, top, radius)
 
 for zone in board.Zones():
     if zone.GetNetCode() != gnd:
@@ -287,7 +296,7 @@ for zone in board.Zones():
             # A thermal-relief pad's center sits in its own fill cutout;
             # the island reaches it only at the spokes, on the pad's rim.
             pads_in = [
-                (x, y, top)
+                (x, y, top, radius)
                 for x, y, top, radius in gnd_pads
                 if top == on_top
                 and island.Collide(pcbnew.VECTOR2I(x, y), radius + pcbnew.FromMM(0.05))
@@ -321,12 +330,21 @@ for zone in board.Zones():
 if rescued and not filler.Fill(board.Zones()):
     sys.exit("Failed to refill zones after rescue vias")
 
+# An inner GND plane ties every GND via to every other.
+inner_planes = any(
+    zone.GetNetCode() == gnd
+    and (zone.IsOnLayer(pcbnew.In1_Cu) or zone.IsOnLayer(pcbnew.In2_Cu))
+    for zone in board.Zones()
+)
+
+
 def gnd_clusters():
     """Group the GND fill islands of both faces into connected clusters:
     vias join the islands they sit in, pads the islands they touch, and a
-    via inside a pad joins that pad's islands. Returns the island map, the
-    union-find root lookup, each GND via with its islands, and each GND
-    pad with its islands."""
+    via inside a pad joins that pad's islands; over an inner GND plane all
+    vias join one another. Returns the island map, the union-find root
+    lookup, each GND via with its islands, and each GND pad with its
+    islands."""
     nodes = {}
     for zone in board.Zones():
         if zone.GetNetCode() != gnd:
@@ -364,6 +382,7 @@ def gnd_clusters():
         join(touching)
         pad_nodes.append(((x, y, top, radius), touching))
     via_nodes = []
+    plane = []
     for track in board.GetTracks():
         if track.Type() != pcbnew.PCB_VIA_T or track.GetNetCode() != gnd:
             continue
@@ -372,6 +391,11 @@ def gnd_clusters():
         for (x, y, _, radius), pad_touching in pad_nodes:
             if (x - at.x) ** 2 + (y - at.y) ** 2 < radius * radius:
                 touching += pad_touching
+        if inner_planes and touching:
+            if plane:
+                touching = touching + plane
+            else:
+                plane.append(touching[0])
         join(touching)
         via_nodes.append((track, touching))
     return nodes, find, via_nodes, pad_nodes
