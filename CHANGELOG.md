@@ -12,6 +12,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 - `advanced` DFM PDK (`pcb dfm --pdk advanced`) for 1-8 layer, 1 oz, through-hole boards that a fine-line fab prices without a manual quote: 0.091 mm copper spacing, 0.074 mm via rings, 6 mil plated holes, 4 mil traces and an 8.5 aspect ratio.
 
+### Fixed
+
+- `pcb ipc info` reports `outer_copper_nominal_oz` and `inner_copper_nominal_oz` only when every layer names that standard weight, as DFM judges each layer. A 30 µm and a 29 µm inner layer no longer report 1 oz.
+
 ## [0.4.103] - 2026-11-19
 
 ### Changed

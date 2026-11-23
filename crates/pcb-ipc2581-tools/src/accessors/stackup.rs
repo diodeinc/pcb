@@ -25,6 +25,10 @@ pub struct StackupDetails {
     pub outer_copper_oz: Option<f64>,
     /// Copper weight shared by the internal conductors, in oz/ft².
     pub inner_copper_oz: Option<f64>,
+    /// The standard weight every top and bottom conductor names, in oz/ft².
+    pub outer_copper_nominal_oz: Option<f64>,
+    /// The standard weight every internal conductor names, in oz/ft².
+    pub inner_copper_nominal_oz: Option<f64>,
 }
 
 impl StackupDetails {
@@ -50,6 +54,23 @@ fn uniform_copper_oz(conductors: &[(Option<Side>, Option<f64>)], sides: &[Side])
     let first = weights.next()??;
     weights
         .all(|ounces| ounces.is_some_and(|ounces| (ounces - first).abs() < 0.03))
+        .then_some(first)
+}
+
+/// The standard weight every conductor on the given sides names, judged
+/// layer by layer as DFM judges them; `None` unless they all name one.
+fn standard_copper_oz(
+    conductors: &[(Option<Side>, Option<f64>)],
+    sides: &[Side],
+    outer: bool,
+) -> Option<f64> {
+    let mut weights = conductors
+        .iter()
+        .filter(|(side, _)| side.is_some_and(|side| sides.contains(&side)))
+        .map(|&(_, ounces)| ounces.and_then(|ounces| nominal_copper_weight(ounces, outer)));
+    let first = weights.next()??;
+    weights
+        .all(|nominal| nominal == Some(first))
         .then_some(first)
 }
 
@@ -455,6 +476,12 @@ impl<'a> IpcAccessor<'a> {
             surface_finish,
             outer_copper_oz: uniform_copper_oz(&conductors, &[Side::Top, Side::Bottom]),
             inner_copper_oz: uniform_copper_oz(&conductors, &[Side::Internal]),
+            outer_copper_nominal_oz: standard_copper_oz(
+                &conductors,
+                &[Side::Top, Side::Bottom],
+                true,
+            ),
+            inner_copper_nominal_oz: standard_copper_oz(&conductors, &[Side::Internal], false),
         })
     }
 
@@ -813,5 +840,27 @@ mod tests {
             None
         );
         assert_eq!(uniform_copper_oz(&conductors, &[Side::Internal]), None);
+    }
+
+    #[test]
+    fn standard_copper_needs_every_conductor_to_name_it() {
+        // 0.862 oz names 1 oz; 0.833 oz names none, though within 0.03 oz.
+        for weights in [[0.862, 0.833], [0.833, 0.862]] {
+            let conductors = weights.map(|ounces| (Some(Side::Internal), Some(ounces)));
+            assert!(uniform_copper_oz(&conductors, &[Side::Internal]).is_some());
+            assert_eq!(
+                standard_copper_oz(&conductors, &[Side::Internal], false),
+                None
+            );
+        }
+        let conductors = [
+            (Some(Side::Internal), Some(0.862)),
+            (Some(Side::Internal), Some(1.05)),
+        ];
+        assert_eq!(
+            standard_copper_oz(&conductors, &[Side::Internal], false),
+            Some(1.0)
+        );
+        assert_eq!(standard_copper_oz(&conductors, &[Side::Top], true), None);
     }
 }
