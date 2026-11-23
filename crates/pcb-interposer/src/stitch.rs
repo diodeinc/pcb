@@ -45,7 +45,7 @@ ENVELOPE_EXTRA = pcbnew.FromMM(0.02)
 PITCH = pcbnew.FromMM(2.54)
 MIN_SEP = pcbnew.FromMM(1.8)
 # Copper-to-edge clearance + via radius.
-EDGE_KEEPIN = pcbnew.FromMM(0.65)
+EDGE_KEEPIN = pcbnew.FromMM(0.75)
 RING_INSET = pcbnew.FromMM(1.0)
 
 board = pcbnew.LoadBoard(board_path)

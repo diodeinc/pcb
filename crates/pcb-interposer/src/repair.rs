@@ -31,7 +31,7 @@ board = pcbnew.LoadBoard(board_path)
 gnd = board.FindNet("GND").GetNetCode()
 EXPOSED = pcbnew.FromMM(float(exposed)) if exposed else 0
 HOT = set(hot_names.split(",")) if exposed else set()
-EDGE = pcbnew.FromMM(0.3)
+EDGE = pcbnew.FromMM(0.4)
 # A guard ring this much wider than the rule, so the rerouted via is not
 # set right at its edge again.
 MARGIN = pcbnew.FromMM(0.1)

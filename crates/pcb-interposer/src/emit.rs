@@ -74,8 +74,9 @@ const STRAP_TRACK_MM: f64 = 0.25;
 /// A strap lane's gap to the lands it passes: Default clearance plus a
 /// hair, or the board's uniform clearance.
 const STRAP_GAP_MM: f64 = 0.25;
-/// Copper-to-edge clearance (the project's `min_copper_edge_clearance`).
-const EDGE_CLEARANCE_MM: f64 = 0.3;
+/// Copper-to-edge clearance (the project's `min_copper_edge_clearance`),
+/// clear of the standard PDK's 0.381 mm preferred minimum.
+const EDGE_CLEARANCE_MM: f64 = 0.4;
 
 /// The ID straps' fixed routes, as (lane y, (net, land x positions)): the
 /// strap nets' lands share one row, and the two nets' terminals
@@ -630,7 +631,7 @@ pub fn project(bed: Bed, plan: Option<&Plan>, layers: Layers) -> String {
                     "max_error": 0.005,
                     "min_clearance": 0.1,
                     "min_connection": 0.0,
-                    "min_copper_edge_clearance": 0.3,
+                    "min_copper_edge_clearance": EDGE_CLEARANCE_MM,
                     "min_hole_clearance": 0.25,
                     "min_hole_to_hole": 0.25,
                     "min_microvia_diameter": 0.2,

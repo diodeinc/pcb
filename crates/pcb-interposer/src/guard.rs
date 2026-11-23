@@ -65,7 +65,7 @@ SITE_GUARD = VIA_RADIUS + CLEARANCE + pcbnew.FromMM(0.3)
 CORRIDOR = pcbnew.FromMM(0.25) + 2 * CLEARANCE + pcbnew.FromMM(0.2)
 SITE_REACH = pcbnew.FromMM(4.0)
 SITE_STEP = pcbnew.FromMM(0.25)
-EDGE_KEEPIN = pcbnew.FromMM(0.65)
+EDGE_KEEPIN = pcbnew.FromMM(0.75)
 # Half the widest track (Power, 0.8 mm) plus a hair: the notch a guard
 # leaves around a foreign pad so any track can still end at its center.
 NOTCH_TRACK = pcbnew.FromMM(0.45)
