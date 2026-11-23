@@ -10,12 +10,11 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Added
 
-- A DFM report's `stackup_template` names the build it belongs to, as `board_thickness_mm`, `outer_copper_oz` and `inner_copper_oz`, so an order can name the same build as the template.
+- DFM `stackup_template` includes its build: `board_thickness_mm`, `outer_copper_oz`, `inner_copper_oz`.
 
 ### Fixed
 
-- The JLCPCB PDK lists stackup templates only for builds its board-thickness rule allows. DFM named `JLC061811-2116` from a 1.8 mm six-layer build for a board its thickness rule judged as 2.0 mm; it dropped 11 such builds (1.8 mm, and 2.5 mm and up below 12 layers).
-- DFM picks a board's stackup build only among those whose nominal thickness admits the board under the PDK's board-thickness rule, nearest first. It no longer names a template from a build outside its own thickness tolerance.
+- DFM picks a stackup template only from a build the PDK's board-thickness rule allows for the board. The JLCPCB PDK drops 11 builds that rule rejects.
 
 ## [0.4.104] - 2026-11-23
 
