@@ -1,6 +1,6 @@
 //! End-to-end: a board-array style panel in, a parseable interposer out.
 
-use pcb_interposer::{Bed, Footprints, Layers};
+use pcb_interposer::{Bed, CellUse, Footprints, Layers};
 use pcb_sexpr::SexprKind;
 
 /// A miniature "panel": A7-sized rounded-rect profile, two NPTH tooling
@@ -163,7 +163,15 @@ fn generates_a_parseable_interposer() {
     let contacts =
         pcb_interposer::contacts::extract_contacts(&ipc, panel.height, Footprints::IctOnly)
             .expect("contacts");
-    let plan = pcb_interposer::plan::plan(contacts, &lands, &[], None, Bed::S13).expect("plan");
+    let plan = pcb_interposer::plan::plan(
+        contacts,
+        &lands,
+        &[],
+        None,
+        Bed::S13,
+        pcb_interposer::CellUse::Split,
+    )
+    .expect("plan");
     let text = pcb_interposer::emit::board(&panel, &lands, Bed::S13, Some(&plan), &[], Layers::Two);
     let root = pcb_sexpr::parse(&text).expect("board parses");
     let SexprKind::List(items) = &root.kind else {
@@ -267,7 +275,15 @@ fn plans_the_fixture_map() {
     assert_eq!(tp1(0).xy[0], tp1(1).xy[0]);
     assert!((tp1(0).xy[1] - tp1(1).xy[1] - 40.0).abs() < 1e-9);
 
-    let plan = pcb_interposer::plan::plan(contacts, &lands, &[], None, Bed::S13).expect("plan");
+    let plan = pcb_interposer::plan::plan(
+        contacts,
+        &lands,
+        &[],
+        None,
+        Bed::S13,
+        pcb_interposer::CellUse::Split,
+    )
+    .expect("plan");
     assert_eq!(plan.boards_total, 2);
     assert_eq!(plan.tested, vec![0, 1]);
     // 12 contacts bound: 10 to lands, 2 gnd to the pour.
@@ -561,15 +577,29 @@ fn single_board_overhangs_the_bed_in_a_nest() {
     let path = std::env::temp_dir().join(format!("single-board-{}.xml", std::process::id()));
     std::fs::write(&path, single_board()).unwrap();
     let mode = pcb_interposer::Mode::SingleBoard;
-    let map = pcb_interposer::fixture_map(&path, mode, Footprints::Any, Layers::Four, bed)
-        .expect("fixture map");
+    let map = pcb_interposer::fixture_map(
+        &path,
+        mode,
+        Footprints::Any,
+        Layers::Four,
+        bed,
+        CellUse::Split,
+    )
+    .expect("fixture map");
     let map: serde_json::Value = serde_json::from_str(&map).unwrap();
     // Seven digital lines need two cells' S lanes.
     assert_eq!(map["cells"][0].as_array().unwrap().len(), 2);
     assert_eq!(map["dropped"].as_array().unwrap().len(), 0);
     assert_eq!(map["placement"]["mirrored"], true);
-    let files =
-        pcb_interposer::fixture(&path, mode, Footprints::Any, Layers::Four, bed).expect("fixture");
+    let files = pcb_interposer::fixture(
+        &path,
+        mode,
+        Footprints::Any,
+        Layers::Four,
+        bed,
+        CellUse::Split,
+    )
+    .expect("fixture");
     // A single board sits in a nest, between five sunk screw heads and
     // over two blind dowel sockets.
     assert!(files.shroud.contains("// Nest:"));
@@ -579,9 +609,16 @@ fn single_board_overhangs_the_bed_in_a_nest() {
     assert!(files.bom.contains("M3 × 0.5 × 25 mm"));
     let relief: serde_json::Value = serde_json::from_str(&files.relief).unwrap();
     assert_eq!(relief["reliefs_required"], 0);
-    let (pcb, _, _) =
-        pcb_interposer::generate(&path, mode, Footprints::Any, Layers::Four, bed, Some(433))
-            .expect("interposer");
+    let (pcb, _, _) = pcb_interposer::generate(
+        &path,
+        mode,
+        Footprints::Any,
+        Layers::Four,
+        bed,
+        CellUse::Split,
+        Some(433),
+    )
+    .expect("interposer");
     std::fs::remove_file(&path).ok();
     pcb_sexpr::parse(&pcb).expect("interposer parses");
 }
@@ -720,8 +757,15 @@ fn bench_panel_locates_on_its_own_tooling() {
     // The board-array generator's own tooling cannot take Ø2 m6 pins: the
     // rail holes are Ø2.0, the corner holes sit on MH1–MH4.
     std::fs::write(&path, bench_panel(2.0)).unwrap();
-    let files = pcb_interposer::fixture(&path, mode, Footprints::IctOnly, Layers::Four, bed)
-        .expect("fixture");
+    let files = pcb_interposer::fixture(
+        &path,
+        mode,
+        Footprints::IctOnly,
+        Layers::Four,
+        bed,
+        CellUse::Split,
+    )
+    .expect("fixture");
     assert!(
         files.bom.contains("no pair of the panel's tooling holes"),
         "{}",
@@ -741,8 +785,15 @@ fn bench_panel_locates_on_its_own_tooling() {
     // Ø2.1 rail holes take them, 70 mm apart; the pins reach down into
     // drilled reliefs in the interposer and stop short of its underside.
     std::fs::write(&path, bench_panel(2.1)).unwrap();
-    let files = pcb_interposer::fixture(&path, mode, Footprints::IctOnly, Layers::Four, bed)
-        .expect("fixture");
+    let files = pcb_interposer::fixture(
+        &path,
+        mode,
+        Footprints::IctOnly,
+        Layers::Four,
+        bed,
+        CellUse::Split,
+    )
+    .expect("fixture");
     // The shroud's y is 74 − Switchyard y, which is the panel's own y.
     assert!(files.shroud.contains("DUT locating pins"), "{}", files.bom);
     assert!(
@@ -771,6 +822,7 @@ fn bench_panel_locates_on_its_own_tooling() {
         Footprints::IctOnly,
         Layers::Four,
         bed,
+        CellUse::Split,
         Some(433),
     )
     .expect("interposer");

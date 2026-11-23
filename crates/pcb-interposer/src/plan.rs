@@ -35,10 +35,13 @@
 //! cells: as many as its signal contacts (USB, digital, analog) need
 //! against one cell's lanes, so a wide board halves (or worse) the
 //! boards one insertion tests. Board copies are matched to cells by the
-//! same Hungarian solve over centroid distances. The board's supplies
-//! and SWD use only its primary cell, the one nearest those contacts: a
-//! DUT's VTarget or VUSB pads are one DUT net, and binding them to two
-//! cells would tie two tester supplies together. Each USB pair (a DP and
+//! same Hungarian solve over centroid distances. A board's VTarget
+//! contacts land in one of its cells, its VLogic contacts in one, and
+//! its SWD pair on one cell's S0 and S1 — each group on the cell its
+//! lands are cheapest to reach from ([`CellUse::Split`]), or all three
+//! on one primary cell ([`CellUse::Primary`]). A DUT's VTarget or VUSB
+//! pads are one DUT net, and binding them to two cells would tie two
+//! tester supplies together. Each USB pair (a DP and
 //! its nearest DM) stays inside one cell. Every contact takes a land of
 //! its own role — digital roles never reach the analog-only lands — and
 //! a contact with no free land of its role is dropped, not failed. A
@@ -70,7 +73,8 @@ pub struct Plan {
     pub boards_total: u32,
     /// Board instance indices one fixture insertion tests.
     pub tested: Vec<u32>,
-    /// Per tested board, the bed cells it spans, primary first; empty on
+    /// Per tested board, the bed cells it spans, the cheapest for its
+    /// supplies and SWD together first; empty on
     /// beds without cells.
     pub cells: Vec<Vec<u32>>,
     pub contacts: Vec<PanelContact>,
@@ -83,6 +87,26 @@ pub struct Plan {
     /// board draws its current through all of them in parallel
     /// ([`parallel_vtarget`]). (land index, net name).
     pub paralleled: Vec<(usize, String)>,
+}
+
+/// Where a board spanning several Switchyard cells lands its supplies
+/// and SWD.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum CellUse {
+    /// VTarget, VLogic and the SWD pair each on whichever of the board's
+    /// cells is cheapest for that group alone.
+    #[default]
+    Split,
+    /// All three on one primary cell, the cheapest for them together.
+    Primary,
+}
+
+/// The contacts that move as one when choosing a board's cells.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Group {
+    Vtarget,
+    Vusb,
+    Swd,
 }
 
 /// Slot kinds a demand can occupy.
@@ -117,6 +141,7 @@ pub fn plan(
     keepouts: &[([f64; 2], f64)],
     envelope: Option<[f64; 4]>,
     bed: Bed,
+    cell_use: CellUse,
 ) -> Result<Plan> {
     if contacts.is_empty() {
         bail!("panel has no ICT contacts; mark test points with the TestPoint `ict` config");
@@ -189,7 +214,7 @@ pub fn plan(
             let (tested, bindings, dropped) = by_kind(&contacts, lands, &valid)?;
             (tested, Vec::new(), bindings, dropped)
         }
-        Bed::SwitchyardRev1 => by_cell(&contacts, lands, &valid),
+        Bed::SwitchyardRev1 => by_cell(&contacts, lands, &valid, cell_use),
     };
     for (index, contact) in contacts.iter().enumerate() {
         if contact.role == Role::Gnd && tested.contains(&contact.board) {
@@ -322,17 +347,19 @@ fn by_kind(
 
 /// Switchyard: each tested board takes `span` whole cells (blocks with
 /// Vtarget lands), as many as its signal contacts need, board copies
-/// matched to cells by centroid distance. The board's supplies and SWD
-/// use only its primary cell, the one nearest those contacts, so the
-/// DUT never ties two cells' supplies together; a USB pair stays inside
-/// one cell. Every contact takes a land of its own role, SWCLK and SWDIO
-/// the primary's S0 and S1; a contact whose role has no free land left
-/// is dropped. Returns the tested boards, their cells (primary first),
-/// their non-GND bindings, and the dropped contacts.
+/// matched to cells by centroid distance. Each supply reaches one cell's
+/// supply lands only, so the DUT never ties two cells' supplies
+/// together, and SWCLK and SWDIO take one cell's S0 and S1; `cell_use`
+/// picks those cells ([`CellUse`]). A USB pair stays inside one cell.
+/// Every contact takes a land of its own role; a contact whose role has
+/// no free land left is dropped. Returns the tested boards, their cells
+/// (cheapest for the supplies and SWD together first), their non-GND
+/// bindings, and the dropped contacts.
 fn by_cell(
     contacts: &[PanelContact],
     lands: &[Land],
     valid: &[u32],
+    cell_use: CellUse,
 ) -> (Vec<u32>, Vec<Vec<u32>>, Vec<Binding>, Vec<usize>) {
     let mut cells: Vec<u32> = lands
         .iter()
@@ -354,7 +381,6 @@ fn by_cell(
             .collect()
     };
     let board_at = |board: u32| centroid(board_contacts(board).iter().map(|&c| contacts[c].xy));
-    let supply = |role: Role| matches!(role, Role::Vtarget | Role::Vusb);
 
     // The cells are alike and the boards one design, so one board's
     // signal counts against one cell's lanes size every board's span.
@@ -408,12 +434,12 @@ fn by_cell(
         let mut own: Vec<usize> = (i * span..(i + 1) * span)
             .map(|row| matching[row].expect("square matching is total"))
             .collect();
-        // The primary is the cell whose own lands the anchors (supplies
-        // and SWD) reach most cheaply, each in its track's copper: a
-        // VTarget contact runs to the middle of the cell's VTarget lands
-        // (it feeds both) in the wide power track, VLogic to the cell's
-        // VL land, SWCLK and SWDIO to its S0 and S1.
-        let anchor_cost = |j: usize| -> i64 {
+        // Each anchor group (the board's VTarget contacts, its VLogic
+        // contacts, its SWD pair) costs, per cell, the reach to that
+        // cell's own lands in the group's track copper: VTarget to the
+        // middle of the cell's VTarget lands (it feeds both) in the wide
+        // power track, VLogic to the VL land, SWCLK and SWDIO to S0 and S1.
+        let group_cost = |j: usize, group: Group| -> i64 {
             let cell = cells[j];
             let at = |pick: &dyn Fn(&Land) -> bool| -> Option<[f64; 2]> {
                 let points: Vec<[f64; 2]> = cell_lands(cell)
@@ -426,30 +452,47 @@ fn by_cell(
             mine.iter()
                 .filter_map(|&c| {
                     let contact = &contacts[c];
-                    let (target, weight) = match (contact.role, contact.ict.as_str()) {
-                        (Role::Vtarget, _) => (at(&|l| l.role == Role::Vtarget), VTARGET_WEIGHT),
-                        (Role::Vusb, _) => (at(&|l| l.role == Role::Vusb), 1.0),
-                        (_, "swclk") => (at(&|l| l.label == "S0"), 1.0),
-                        (_, "swdio") => (at(&|l| l.label == "S1"), 1.0),
+                    let (target, weight) = match (group, contact.role, contact.ict.as_str()) {
+                        (Group::Vtarget, Role::Vtarget, _) => {
+                            (at(&|l| l.role == Role::Vtarget), VTARGET_WEIGHT)
+                        }
+                        (Group::Vusb, Role::Vusb, _) => (at(&|l| l.role == Role::Vusb), 1.0),
+                        (Group::Swd, _, "swclk") => (at(&|l| l.label == "S0"), 1.0),
+                        (Group::Swd, _, "swdio") => (at(&|l| l.label == "S1"), 1.0),
                         _ => return None,
                     };
                     target.map(|t| (weight * cost_of(contact.xy, t) as f64) as i64)
                 })
                 .sum()
         };
-        own.sort_by_key(|&j| {
-            (
-                anchor_cost(j),
-                cost_of(board_at(board), cell_at[j]),
-                cells[j],
-            )
-        });
+        let groups = [Group::Vtarget, Group::Vusb, Group::Swd];
+        let all_cost = |j: usize| groups.iter().map(|&g| group_cost(j, g)).sum::<i64>();
+        own.sort_by_key(|&j| (all_cost(j), cost_of(board_at(board), cell_at[j]), cells[j]));
+        // With a primary cell every group takes the cheapest cell for all
+        // of them together; split, each group takes its own cheapest.
+        let home = |group: Group| -> u32 {
+            if cell_use == CellUse::Primary {
+                return cells[own[0]];
+            }
+            let best = own
+                .iter()
+                .copied()
+                .min_by_key(|&j| (group_cost(j, group), all_cost(j), cells[j]))
+                .expect("a board has a cell");
+            cells[best]
+        };
+        let [vt_home, vl_home, swd_home] = groups.map(home);
         let own: Vec<u32> = own.into_iter().map(|j| cells[j]).collect();
-        let primary = own[0];
+        // A board's supplies are one DUT net each: they reach one cell's
+        // supply lands only, so no two tester supplies are tied together.
         let mut free: Vec<usize> = own
             .iter()
             .flat_map(|&cell| cell_lands(cell))
-            .filter(|&l| lands[l].block == primary || !supply(lands[l].role))
+            .filter(|&l| match lands[l].role {
+                Role::Vtarget => lands[l].block == vt_home,
+                Role::Vusb => lands[l].block == vl_home,
+                _ => true,
+            })
             .collect();
 
         // The cell's VTarget lands are one bed net, so the board's
@@ -475,7 +518,7 @@ fn by_cell(
             let land = free
                 .iter()
                 .copied()
-                .find(|&l| lands[l].block == primary && lands[l].label == label);
+                .find(|&l| lands[l].block == swd_home && lands[l].label == label);
             if let (Some(contact), Some(land)) = (contact, land) {
                 bind(take(&mut mine, contact), take(&mut free, land));
             }
@@ -590,7 +633,7 @@ fn distance(a: [f64; 2], b: [f64; 2]) -> f64 {
 }
 
 /// How much more a millimetre of VTarget track costs than one of signal
-/// track when choosing a board's primary cell: their width ratio, since
+/// track when choosing a board's cells: their width ratio, since
 /// the wide track takes that much more routing room.
 const VTARGET_WEIGHT: f64 = crate::emit::POWER_TRACK_MM / crate::emit::SIGNAL_TRACK_MM;
 
@@ -914,7 +957,8 @@ mod tests {
                 xy: [32.0, 50.0],
             },
         ];
-        let plan = plan(contacts, &lands, &[], None, Bed::S13).expect("plans without panicking");
+        let plan = plan(contacts, &lands, &[], None, Bed::S13, CellUse::Split)
+            .expect("plans without panicking");
         assert_eq!(plan.bindings.len(), 2);
         for binding in &plan.bindings {
             // Both bind to ordinary LS lands.
@@ -941,6 +985,7 @@ mod tests {
             &[],
             Bed::SwitchyardRev1.envelope(),
             Bed::SwitchyardRev1,
+            CellUse::Split,
         )
         .unwrap_err()
         .to_string();
@@ -952,6 +997,7 @@ mod tests {
             &[],
             Bed::SwitchyardRev1.envelope(),
             Bed::SwitchyardRev1,
+            CellUse::Split,
         )
         .unwrap_err()
         .to_string();
@@ -964,7 +1010,8 @@ mod tests {
                 &lands,
                 &[],
                 Bed::SwitchyardRev1.envelope(),
-                Bed::SwitchyardRev1
+                Bed::SwitchyardRev1,
+                CellUse::Split,
             )
             .is_ok()
         );
@@ -1009,6 +1056,7 @@ mod tests {
             &[],
             Bed::SwitchyardRev1.envelope(),
             Bed::SwitchyardRev1,
+            CellUse::Split,
         )
         .unwrap();
         assert_eq!(plan.tested, vec![0]);
@@ -1047,10 +1095,8 @@ mod tests {
 
     /// fynkit-label: one VTarget test point 7 mm from cell 6's VT lands,
     /// SWD 5–6 mm from cell 4's S0/S1, five digital contacts so the board
-    /// spans both. The primary follows the wide VTarget track to cell 6,
-    /// and its single VTarget contact feeds both of the cell's VT lands.
-    #[test]
-    fn switchyard_primary_follows_vtarget_and_parallels_both_lands() {
+    /// spans both.
+    fn fynkit(cell_use: CellUse) -> (Plan, Vec<Land>) {
         let lands = Bed::SwitchyardRev1.lands(105.0, 74.0).unwrap();
         let contacts: Vec<PanelContact> = [
             ("vtarget", Role::Vtarget, [13.75, 62.2]),
@@ -1078,9 +1124,23 @@ mod tests {
             &[],
             Bed::SwitchyardRev1.envelope(),
             Bed::SwitchyardRev1,
+            cell_use,
         )
         .unwrap();
-        assert_eq!(plan.cells, vec![vec![6, 4]]);
+        (plan, lands)
+    }
+
+    fn cell_of(plan: &Plan, lands: &[Land], ict: &str) -> u32 {
+        let binding = plan
+            .bindings
+            .iter()
+            .find(|b| plan.contacts[b.contact].ict == ict)
+            .unwrap();
+        lands[binding.land.unwrap()].block
+    }
+
+    /// The single VTarget contact feeds both of its cell's VT lands.
+    fn assert_vtarget_paralleled(plan: &Plan, lands: &[Land], cell: u32) {
         let vt: Vec<usize> = plan
             .bindings
             .iter()
@@ -1089,9 +1149,28 @@ mod tests {
             .chain(plan.paralleled.iter().map(|(land, _)| *land))
             .collect();
         assert_eq!(vt.len(), 2);
-        assert!(vt.iter().all(|&l| lands[l].block == 6 && lands[l].role == Role::Vtarget));
+        assert!(
+            vt.iter()
+                .all(|&l| lands[l].block == cell && lands[l].role == Role::Vtarget)
+        );
         assert!(plan.paralleled.iter().all(|(_, net)| net == "B0.VTARGET"));
         assert!(plan.dropped.is_empty());
+    }
+
+    #[test]
+    fn switchyard_split_cells_put_each_group_nearest() {
+        let (plan, lands) = fynkit(CellUse::Split);
+        assert_vtarget_paralleled(&plan, &lands, 6);
+        assert_eq!(cell_of(&plan, &lands, "swclk"), 4);
+        assert_eq!(cell_of(&plan, &lands, "swdio"), 4);
+    }
+
+    #[test]
+    fn switchyard_primary_cell_follows_the_vtarget_track() {
+        let (plan, lands) = fynkit(CellUse::Primary);
+        assert_eq!(plan.cells, vec![vec![6, 4]]);
+        assert_vtarget_paralleled(&plan, &lands, 6);
+        assert_eq!(cell_of(&plan, &lands, "swclk"), 6);
     }
 
     /// A board with more signals than one cell's lanes, repeated on a
@@ -1145,6 +1224,7 @@ mod tests {
             &[],
             Bed::SwitchyardRev1.envelope(),
             Bed::SwitchyardRev1,
+            CellUse::Primary,
         )
         .unwrap();
         // Two USB pairs and five digital lines need two cells a board, so

@@ -44,6 +44,7 @@ use anyhow::{Context, Result};
 pub use bed::Bed;
 pub use contacts::Footprints;
 pub use emit::Layers;
+pub use plan::CellUse;
 
 /// What the interposer tests: a board-array panel, or one singulated
 /// board in a nest ([`single`]).
@@ -68,6 +69,7 @@ pub fn generate(
     footprints: Footprints,
     layers: Layers,
     bed: Bed,
+    cell_use: CellUse,
     interposer_id: Option<u16>,
 ) -> Result<(String, String, Option<String>)> {
     let Built {
@@ -77,7 +79,7 @@ pub fn generate(
         placement,
         fixture,
         ..
-    } = build(panel_xml, mode, footprints, bed, layers)?;
+    } = build(panel_xml, mode, footprints, bed, layers, cell_use)?;
     if let Some(fixture) = &fixture {
         for issue in &fixture.issues {
             eprintln!("\x1b[1;31mWARNING:\x1b[0m {issue}");
@@ -142,6 +144,7 @@ pub fn fixture_map(
     footprints: Footprints,
     layers: Layers,
     bed: Bed,
+    cell_use: CellUse,
 ) -> Result<String> {
     let Built {
         panel,
@@ -149,7 +152,7 @@ pub fn fixture_map(
         plan,
         placement,
         ..
-    } = build(panel_xml, mode, footprints, bed, layers)?;
+    } = build(panel_xml, mode, footprints, bed, layers, cell_use)?;
     let plan = plan.context("panel has no ICT contacts to plan")?;
     Ok(plan::to_json(&plan, &panel, &lands, placement.as_ref()))
 }
@@ -173,6 +176,7 @@ pub fn fixture(
     footprints: Footprints,
     layers: Layers,
     bed: Bed,
+    cell_use: CellUse,
 ) -> Result<FixtureFiles> {
     let Built {
         panel,
@@ -180,7 +184,7 @@ pub fn fixture(
         boards,
         fixture,
         ..
-    } = build(panel_xml, mode, footprints, bed, layers)?;
+    } = build(panel_xml, mode, footprints, bed, layers, cell_use)?;
     let plan = plan.context("panel has no ICT contacts to plan")?;
     let fixture =
         fixture.with_context(|| format!("the {bed:?} bed has no stack dowels for a shroud"))?;
@@ -257,6 +261,7 @@ fn build(
     footprints: Footprints,
     bed: Bed,
     layers: Layers,
+    cell_use: CellUse,
 ) -> Result<Built> {
     let content = std::fs::read_to_string(panel_xml)
         .with_context(|| format!("read panel {}", panel_xml.display()))?;
@@ -313,6 +318,7 @@ fn build(
             &pogo_keepouts(&panel),
             panel.envelope,
             bed,
+            cell_use,
         )?)
     };
     let fixture = match (&plan, bed.alignment().is_empty()) {

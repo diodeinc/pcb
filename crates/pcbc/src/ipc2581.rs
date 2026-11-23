@@ -104,6 +104,11 @@ enum Commands {
         /// Fixture bed the bottom lands mate: s13 or switchyard-rev1
         #[arg(long, default_value = "s13")]
         bed: pcb_interposer::Bed,
+        /// On switchyard-rev1, keep a board that spans several cells on one
+        /// primary cell for VTarget, VLogic and SWD together, instead of
+        /// putting each on whichever of its cells is nearest
+        #[arg(long)]
+        primary_cell: bool,
         /// Interposer number (1-1023) the bed's ID straps encode; required by switchyard-rev1
         #[arg(long)]
         interposer_id: Option<u16>,
@@ -563,10 +568,16 @@ pub fn execute(args: Ipc2581Args, resolution: Resolution) -> anyhow::Result<()> 
             fixture_bom,
             layers,
             bed,
+            primary_cell,
             interposer_id,
             route,
             ipc,
         } => {
+            let cell_use = if primary_cell {
+                pcb_interposer::CellUse::Primary
+            } else {
+                pcb_interposer::CellUse::Split
+            };
             let footprints = if probe_non_ict_footprints {
                 pcb_interposer::Footprints::Any
             } else {
@@ -577,8 +588,15 @@ pub fn execute(args: Ipc2581Args, resolution: Resolution) -> anyhow::Result<()> 
             } else {
                 pcb_interposer::Mode::Panel
             };
-            let (pcb, pro, rules) =
-                pcb_interposer::generate(&input, mode, footprints, layers, bed, interposer_id)?;
+            let (pcb, pro, rules) = pcb_interposer::generate(
+                &input,
+                mode,
+                footprints,
+                layers,
+                bed,
+                cell_use,
+                interposer_id,
+            )?;
             std::fs::write(&output, pcb).with_context(|| format!("write {}", output.display()))?;
             let pro_path = output.with_extension("kicad_pro");
             std::fs::write(&pro_path, pro)
@@ -594,7 +612,8 @@ pub fn execute(args: Ipc2581Args, resolution: Resolution) -> anyhow::Result<()> 
                 pro_path.display()
             );
             if upper_shroud.is_some() || lower_relief.is_some() || fixture_bom.is_some() {
-                let files = pcb_interposer::fixture(&input, mode, footprints, layers, bed)?;
+                let files =
+                    pcb_interposer::fixture(&input, mode, footprints, layers, bed, cell_use)?;
                 for (path, text, what) in [
                     (upper_shroud, files.shroud, "upper shroud"),
                     (lower_relief, files.relief, "lower-shroud relief map"),
@@ -608,7 +627,8 @@ pub fn execute(args: Ipc2581Args, resolution: Resolution) -> anyhow::Result<()> 
                 }
             }
             if let Some(map_path) = fixture_map {
-                let map = pcb_interposer::fixture_map(&input, mode, footprints, layers, bed)?;
+                let map =
+                    pcb_interposer::fixture_map(&input, mode, footprints, layers, bed, cell_use)?;
                 std::fs::write(&map_path, map)
                     .with_context(|| format!("write {}", map_path.display()))?;
                 println!("✓ Wrote fixture map {}", map_path.display());
