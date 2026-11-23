@@ -190,6 +190,9 @@ pub fn board(
             }
             contact_nets.push((binding.contact, net));
         }
+        for (land, net) in &plan.paralleled {
+            land_nets.insert(*land, (doc.net(net), net.clone()));
+        }
     }
 
     for outline in &panel.outline {
@@ -266,6 +269,47 @@ pub fn board(
             uuid: uuids.next_uuid(),
             locked: true,
         });
+    }
+    // A paralleled VTarget land ties to its bound neighbor on this face,
+    // where the straight run between them crosses no other land.
+    let power_gap = layers
+        .uniform_clearance(bed)
+        .or(bed.hv_clearance().map(|hv| hv.coated))
+        .unwrap_or(0.2);
+    if let Some(plan) = plan {
+        for (land, net) in &plan.paralleled {
+            let from = lands[*land].xy;
+            let partner = plan
+                .bindings
+                .iter()
+                .filter_map(|binding| binding.land)
+                .filter(|&other| {
+                    lands[other].block == lands[*land].block && land_nets[&other].1 == *net
+                })
+                .min_by(|&a, &b| {
+                    let d = |l: usize| (lands[l].xy[0] - from[0]).hypot(lands[l].xy[1] - from[1]);
+                    d(a).total_cmp(&d(b))
+                });
+            let Some(partner) = partner else { continue };
+            let to = lands[partner].xy;
+            let clear = lands.iter().enumerate().all(|(index, other)| {
+                index == *land
+                    || index == partner
+                    || segment_distance(other.xy, from, to)
+                        >= land_dia / 2.0 + POWER_TRACK_MM / 2.0 + power_gap
+            });
+            if clear {
+                doc.segments.push(Segment {
+                    start: Point::new(from[0], from[1]),
+                    end: Point::new(to[0], to[1]),
+                    width: POWER_TRACK_MM,
+                    layer: "B.Cu".into(),
+                    net: land_nets[land].0,
+                    uuid: uuids.next_uuid(),
+                    locked: true,
+                });
+            }
+        }
     }
     for (lane, (net, ends)) in strap_lanes(
         panel,
@@ -584,10 +628,25 @@ fn land_footprint(
     }
 }
 
+/// Distance from `p` to the segment `a`–`b`.
+fn segment_distance(p: [f64; 2], a: [f64; 2], b: [f64; 2]) -> f64 {
+    let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
+    let len2 = dx * dx + dy * dy;
+    let t = if len2 > 0.0 {
+        (((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / len2).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    (a[0] + t * dx - p[0]).hypot(a[1] + t * dy - p[1])
+}
+
 /// VTarget track width. A board draws up to 3 A over its two VTarget
 /// contacts; 0.8 mm of 1 oz outer copper carries ~2 A at a 10 °C rise
 /// (IPC-2221).
-const POWER_TRACK_MM: f64 = 0.8;
+pub(crate) const POWER_TRACK_MM: f64 = 0.8;
+
+/// Default signal track width.
+pub(crate) const SIGNAL_TRACK_MM: f64 = 0.25;
 
 /// The sibling `.kicad_pro`: design rules the later routing passes are
 /// built for, so every interposer artifact carries one consistent rule
@@ -612,7 +671,7 @@ pub fn project(bed: Bed, plan: Option<&Plan>, layers: Layers) -> String {
         })
     };
     let mut classes = vec![
-        class("Default", uniform.unwrap_or(0.2), 0.25),
+        class("Default", uniform.unwrap_or(0.2), SIGNAL_TRACK_MM),
         class("Power", clearance.unwrap_or(0.2), POWER_TRACK_MM),
         // FS USB is electrically short here; at the uniform clearance a
         // 0.25 mm pair routes as easily as any signal.

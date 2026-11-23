@@ -183,8 +183,9 @@ fn generates_a_parseable_interposer() {
     assert_eq!(count("zone"), 2);
     // Stitch vias are the route step's job; the emitted board has none.
     assert_eq!(count("via"), 0);
-    // The four corner mate-detect pairs come pre-shorted.
-    assert_eq!(count("segment"), 4);
+    // The four corner mate-detect pairs come pre-shorted, and each
+    // board's one VTarget contact ties its bank's second land in.
+    assert_eq!(count("segment"), 6);
     assert_eq!(
         text.matches("\"DETECT_").count(),
         12,

@@ -78,6 +78,11 @@ pub struct Plan {
     /// Contacts of tested boards that found no land (indices into
     /// `contacts`).
     pub dropped: Vec<usize>,
+    /// Lands bound to a net with no contact of their own: every VTarget
+    /// land of a block one of the board's VTarget contacts uses, so the
+    /// board draws its current through all of them in parallel
+    /// ([`parallel_vtarget`]). (land index, net name).
+    pub paralleled: Vec<(usize, String)>,
 }
 
 /// Slot kinds a demand can occupy.
@@ -196,6 +201,7 @@ pub fn plan(
         }
     }
     bindings.sort_by_key(|binding| binding.contact);
+    let paralleled = parallel_vtarget(&contacts, &bindings, lands);
 
     Ok(Plan {
         boards_total,
@@ -204,7 +210,39 @@ pub fn plan(
         contacts,
         bindings,
         dropped,
+        paralleled,
     })
+}
+
+/// The VTarget lands no contact took, in each block where one did, bound
+/// to that land's net. A block's VTarget lands are one supply on the bed
+/// (a Switchyard cell's two VT pogos, an S13 PWR bank), so a board with a
+/// single VTarget test point still feeds through both pogos.
+fn parallel_vtarget(
+    contacts: &[PanelContact],
+    bindings: &[Binding],
+    lands: &[Land],
+) -> Vec<(usize, String)> {
+    let mut used: Vec<(u32, &str)> = Vec::new();
+    for binding in bindings {
+        if contacts[binding.contact].role != Role::Vtarget {
+            continue;
+        }
+        if let Some(land) = binding.land
+            && !used.iter().any(|&(block, _)| block == lands[land].block)
+        {
+            used.push((lands[land].block, binding.net.as_str()));
+        }
+    }
+    let bound: Vec<usize> = bindings.iter().filter_map(|binding| binding.land).collect();
+    (0..lands.len())
+        .filter(|&land| lands[land].role == Role::Vtarget && !bound.contains(&land))
+        .filter_map(|land| {
+            used.iter()
+                .find(|&&(block, _)| block == lands[land].block)
+                .map(|&(_, net)| (land, net.to_string()))
+        })
+        .collect()
 }
 
 /// `testable` of the valid boards, spread evenly across the sheet.
@@ -317,9 +355,6 @@ fn by_cell(
     };
     let board_at = |board: u32| centroid(board_contacts(board).iter().map(|&c| contacts[c].xy));
     let supply = |role: Role| matches!(role, Role::Vtarget | Role::Vusb);
-    let anchors = |contact: &PanelContact| {
-        supply(contact.role) || matches!(contact.ict.as_str(), "swclk" | "swdio")
-    };
 
     // The cells are alike and the boards one design, so one board's
     // signal counts against one cell's lanes size every board's span.
@@ -370,20 +405,45 @@ fn by_cell(
             .into_iter()
             .filter(|&c| contacts[c].role != Role::Gnd)
             .collect();
-        let anchor: Vec<[f64; 2]> = mine
-            .iter()
-            .filter(|&&c| anchors(&contacts[c]))
-            .map(|&c| contacts[c].xy)
-            .collect();
-        let anchor = if anchor.is_empty() {
-            board_at(board)
-        } else {
-            centroid(anchor.into_iter())
-        };
         let mut own: Vec<usize> = (i * span..(i + 1) * span)
             .map(|row| matching[row].expect("square matching is total"))
             .collect();
-        own.sort_by_key(|&j| (cost_of(anchor, cell_at[j]), cells[j]));
+        // The primary is the cell whose own lands the anchors (supplies
+        // and SWD) reach most cheaply, each in its track's copper: a
+        // VTarget contact runs to the middle of the cell's VTarget lands
+        // (it feeds both) in the wide power track, VLogic to the cell's
+        // VL land, SWCLK and SWDIO to its S0 and S1.
+        let anchor_cost = |j: usize| -> i64 {
+            let cell = cells[j];
+            let at = |pick: &dyn Fn(&Land) -> bool| -> Option<[f64; 2]> {
+                let points: Vec<[f64; 2]> = cell_lands(cell)
+                    .into_iter()
+                    .filter(|&l| pick(&lands[l]))
+                    .map(|l| lands[l].xy)
+                    .collect();
+                (!points.is_empty()).then(|| centroid(points.into_iter()))
+            };
+            mine.iter()
+                .filter_map(|&c| {
+                    let contact = &contacts[c];
+                    let (target, weight) = match (contact.role, contact.ict.as_str()) {
+                        (Role::Vtarget, _) => (at(&|l| l.role == Role::Vtarget), VTARGET_WEIGHT),
+                        (Role::Vusb, _) => (at(&|l| l.role == Role::Vusb), 1.0),
+                        (_, "swclk") => (at(&|l| l.label == "S0"), 1.0),
+                        (_, "swdio") => (at(&|l| l.label == "S1"), 1.0),
+                        _ => return None,
+                    };
+                    target.map(|t| (weight * cost_of(contact.xy, t) as f64) as i64)
+                })
+                .sum()
+        };
+        own.sort_by_key(|&j| {
+            (
+                anchor_cost(j),
+                cost_of(board_at(board), cell_at[j]),
+                cells[j],
+            )
+        });
         let own: Vec<u32> = own.into_iter().map(|j| cells[j]).collect();
         let primary = own[0];
         let mut free: Vec<usize> = own
@@ -528,6 +588,11 @@ fn by_cell(
 fn distance(a: [f64; 2], b: [f64; 2]) -> f64 {
     ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2)).sqrt()
 }
+
+/// How much more a millimetre of VTarget track costs than one of signal
+/// track when choosing a board's primary cell: their width ratio, since
+/// the wide track takes that much more routing room.
+const VTARGET_WEIGHT: f64 = crate::emit::POWER_TRACK_MM / crate::emit::SIGNAL_TRACK_MM;
 
 /// Integer matching cost: distance in µm.
 fn cost_of(a: [f64; 2], b: [f64; 2]) -> i64 {
@@ -794,6 +859,21 @@ pub fn to_json(
             "offset": p.offset,
         })),
         "bindings": bindings,
+        // VTarget lands fed in parallel with a bound one, no contact of
+        // their own.
+        "paralleled": plan.paralleled.iter().map(|(index, net)| {
+            let land = &lands[*index];
+            serde_json::json!({
+                "net": net,
+                "land": {
+                    "index": index,
+                    "x": land.xy[0],
+                    "y": land.xy[1],
+                    "role": land.role.name(),
+                    "block": land.block,
+                },
+            })
+        }).collect::<Vec<_>>(),
         "dropped": plan.dropped.iter().map(|&contact| {
             let contact = &plan.contacts[contact];
             serde_json::json!({
@@ -963,6 +1043,55 @@ mod tests {
                 Some(land) => assert_eq!(lands[land].role, contact.role),
             }
         }
+    }
+
+    /// fynkit-label: one VTarget test point 7 mm from cell 6's VT lands,
+    /// SWD 5–6 mm from cell 4's S0/S1, five digital contacts so the board
+    /// spans both. The primary follows the wide VTarget track to cell 6,
+    /// and its single VTarget contact feeds both of the cell's VT lands.
+    #[test]
+    fn switchyard_primary_follows_vtarget_and_parallels_both_lands() {
+        let lands = Bed::SwitchyardRev1.lands(105.0, 74.0).unwrap();
+        let contacts: Vec<PanelContact> = [
+            ("vtarget", Role::Vtarget, [13.75, 62.2]),
+            ("gnd", Role::Gnd, [13.75, 58.8]),
+            ("swclk", Role::Ls, [42.85, 41.0]),
+            ("swdio", Role::Ls, [43.65, 45.4]),
+            ("nrst", Role::Ls, [40.45, 45.5]),
+            ("ls", Role::Ls, [29.05, 49.9]),
+            ("ls", Role::Ls, [50.45, 54.7]),
+        ]
+        .iter()
+        .enumerate()
+        .map(|(i, &(ict, role, xy))| PanelContact {
+            board: 0,
+            refdes: format!("TP{}", i + 1),
+            path: format!("TP{}.TP", i + 1),
+            role,
+            ict: ict.into(),
+            xy,
+        })
+        .collect();
+        let plan = plan(
+            contacts,
+            &lands,
+            &[],
+            Bed::SwitchyardRev1.envelope(),
+            Bed::SwitchyardRev1,
+        )
+        .unwrap();
+        assert_eq!(plan.cells, vec![vec![6, 4]]);
+        let vt: Vec<usize> = plan
+            .bindings
+            .iter()
+            .filter(|b| plan.contacts[b.contact].role == Role::Vtarget)
+            .filter_map(|b| b.land)
+            .chain(plan.paralleled.iter().map(|(land, _)| *land))
+            .collect();
+        assert_eq!(vt.len(), 2);
+        assert!(vt.iter().all(|&l| lands[l].block == 6 && lands[l].role == Role::Vtarget));
+        assert!(plan.paralleled.iter().all(|(_, net)| net == "B0.VTARGET"));
+        assert!(plan.dropped.is_empty());
     }
 
     /// A board with more signals than one cell's lanes, repeated on a
