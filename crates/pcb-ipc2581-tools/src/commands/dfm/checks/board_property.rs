@@ -258,7 +258,7 @@ fn stackup_build<'a>(
     let nearest = builds
         .iter()
         .copied()
-        .filter(|build| off(&build) <= best + COMPARISON_EPSILON_MM)
+        .filter(|build| off(build) <= best + COMPARISON_EPSILON_MM)
         .collect::<Vec<&StackupBuild>>();
     // Of those, the thicker: thickness tolerances grow with the nominal, so
     // it is the one a board-thickness rule accepts.
