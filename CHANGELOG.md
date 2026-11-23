@@ -8,6 +8,8 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+## [0.4.104] - 2026-11-23
+
 ### Added
 
 - DFM reports name the PDK stackup template the fab builds the board on, as `stackup_template`: the closest to its dielectric gaps, including when a `PROPOSED` stackup matches none. The JLCPCB PDK's templates carry JLCPCB's order `code` and `lamination_fee` flag, refreshed from JLCPCB.
@@ -2644,7 +2646,8 @@ Tvs(package="DO-214AA", direction="Unidirectional", reverse_standoff_voltage="24
 - Error on invalid type passed to `io()`
 - Format the auto-generated component .zen files
 
-[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.4.103...HEAD
+[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.4.104...HEAD
+[0.4.104]: https://github.com/diodeinc/pcb/compare/v0.4.103...v0.4.104
 [0.4.103]: https://github.com/diodeinc/pcb/compare/v0.4.102...v0.4.103
 [0.4.102]: https://github.com/diodeinc/pcb/compare/v0.4.101...v0.4.102
 [0.4.101]: https://github.com/diodeinc/pcb/compare/v0.4.100...v0.4.101
