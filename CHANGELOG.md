@@ -8,6 +8,14 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added
+
+- DFM `stackup_template` includes its build: `board_thickness_mm`, `outer_copper_oz`, `inner_copper_oz`.
+
+### Fixed
+
+- DFM picks a stackup template only from a build the PDK's board-thickness rule allows for the board. The JLCPCB PDK drops 11 builds that rule rejects.
+
 ## [0.4.104] - 2026-11-23
 
 ### Added

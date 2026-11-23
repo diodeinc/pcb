@@ -123,6 +123,9 @@ pub(super) enum Allowed {
     StackupTemplates {
         tolerance: Length,
         builds: Vec<StackupBuild>,
+        /// The board-thickness limits and where each applies: a build is
+        /// the board's only when its nominal thickness admits the board.
+        thickness: Vec<(Conditions, ThicknessLimit)>,
     },
     DrillSpans(Vec<PartialDepth>),
     EvenCopperLayers,
@@ -1051,6 +1054,15 @@ pub(super) fn lower(pdk: &Pdk, selected_profile: Option<&str>) -> Result<Vec<Rul
             |limit| Allowed::CopperWeights(limit.allowed.clone()),
         ));
     }
+    let thickness = rules
+        .iter()
+        .filter_map(|rule| match &rule.limit {
+            LimitValue::Allowed(Allowed::Thickness(limit)) => {
+                Some((rule.conditions.clone(), limit.clone()))
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
     for rule in &stackup.dielectric_gaps {
         rules.extend(lower_property(
             (&rule.metadata, rule.limit.as_ref(), &rule.cases),
@@ -1060,6 +1072,7 @@ pub(super) fn lower(pdk: &Pdk, selected_profile: Option<&str>) -> Result<Vec<Rul
             |limit| Allowed::StackupTemplates {
                 tolerance: limit.tolerance.clone(),
                 builds: pdk.stackup_builds.clone(),
+                thickness: thickness.clone(),
             },
         ));
     }

@@ -3,7 +3,7 @@ use pcb_ir::geom::{BBox, Point, dist};
 use serde::ser::SerializeStruct;
 use serde::{Serialize, Serializer};
 
-use super::pdk::{CopperWeight, Pdk, StackupTemplate};
+use super::pdk::{CopperWeight, Pdk, StackupBuild, StackupTemplate};
 use super::rules::{LimitValue, Rule, RuleKind};
 
 pub const REPORT_SCHEMA_VERSION: u32 = 3;
@@ -24,7 +24,7 @@ pub struct DfmReport {
     pub rules: Vec<RuleResult>,
     /// The PDK's stackup template the fab builds the board on, when it models
     /// one for the board's build: the closest to its dielectric gaps.
-    pub stackup_template: Option<StackupTemplate>,
+    pub stackup_template: Option<ReportStackupTemplate>,
     /// The Steps the layout places, the layout root first. Each is checked
     /// once, in its own coordinates, wherever and however often it is placed.
     pub frames: Vec<Frame>,
@@ -46,7 +46,29 @@ pub struct ReportSummary<'a> {
     pub layout_target: &'static str,
     pub summary: &'a Summary,
     pub rules: &'a [RuleResult],
-    pub stackup_template: Option<&'a StackupTemplate>,
+    pub stackup_template: Option<&'a ReportStackupTemplate>,
+}
+
+/// A stackup template with the build it belongs to. The fab orders the two
+/// together, so an order names this build, not one rounded separately.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct ReportStackupTemplate {
+    #[serde(flatten)]
+    pub template: StackupTemplate,
+    pub board_thickness_mm: f64,
+    pub outer_copper_oz: f64,
+    pub inner_copper_oz: f64,
+}
+
+impl ReportStackupTemplate {
+    pub fn new(build: &StackupBuild, template: &StackupTemplate) -> Self {
+        Self {
+            template: template.clone(),
+            board_thickness_mm: build.board_thickness.millimeters(),
+            outer_copper_oz: build.outer_copper_weight.ounces(),
+            inner_copper_oz: build.inner_copper_weight.ounces(),
+        }
+    }
 }
 
 impl DfmReport {
