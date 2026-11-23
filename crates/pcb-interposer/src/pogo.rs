@@ -70,6 +70,22 @@ impl PogoTemplate {
                 bail!("footprint template pad {index} has no (layers …) list");
             }
         }
+        // An assembly BOM keys a line on the value, so the instance's
+        // value is the exact part number when the template names one,
+        // not the footprint's family name.
+        let property = |body: &str, key: &str| -> Option<(usize, usize, String)> {
+            let open = format!("(property \"{key}\" \"");
+            let start = body.find(&open)? + open.len();
+            let len = body[start..].find('"')?;
+            Some((start, len, body[start..start + len].to_string()))
+        };
+        let mut body = body;
+        if let (Some((start, len, _)), Some((_, _, mpn))) =
+            (property(&body, "Value"), property(&body, "Mpn"))
+            && !mpn.is_empty()
+        {
+            body.replace_range(start..start + len, &mpn);
+        }
         Ok(Self {
             body,
             header: format!("(footprint \"{LIB_NICKNAME}:{name}\""),
@@ -151,6 +167,7 @@ mod tests {
         assert!(text.starts_with("(footprint \"Interposer:806-22-001-30-0xx191\"\n"));
         assert!(text.contains("(at 12.5 30)"));
         assert!(text.contains("(property \"Reference\" \"P7\""));
+        assert!(text.contains("(property \"Value\" \"806-22-001-30-012191\""));
         assert!(text.contains("(net \"B0.TP_X.TP\")"));
         // File-only header lines are stripped; the embedded STEP model
         // rides along verbatim.

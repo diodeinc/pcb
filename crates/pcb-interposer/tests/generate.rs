@@ -177,6 +177,10 @@ fn generates_a_parseable_interposer() {
     let SexprKind::List(items) = &root.kind else {
         panic!("root is a list");
     };
+    // The bed's pogos land on bare bottom copper: ENIG, on two layers too.
+    assert!(text.contains("(copper_finish \"ENIG\")"));
+    // The assembly BOM line names the exact pogo part.
+    assert!(text.contains("(property \"Value\" \"806-22-001-30-012191\""));
     let count = |name: &str| {
         items
             .iter()

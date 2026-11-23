@@ -140,13 +140,17 @@ const SIGNAL_INNER: &str = "In2.Cu";
 /// The finished interposer's thickness: the 2-layer default, or the
 /// 4-layer stackup's sum.
 pub fn thickness(layers: Layers) -> f64 {
+    stackup(layers)
+        .layers
+        .iter()
+        .filter_map(|l| l.thickness)
+        .sum()
+}
+
+fn stackup(layers: Layers) -> Stackup {
     match layers {
-        Layers::Two => Document::two_layer().thickness_mm,
-        Layers::Four | Layers::FourSignal => base_4l_stackup()
-            .layers
-            .iter()
-            .filter_map(|l| l.thickness)
-            .sum(),
+        Layers::Two => base_2l_stackup(),
+        Layers::Four | Layers::FourSignal => base_4l_stackup(),
     }
 }
 
@@ -161,18 +165,17 @@ pub fn board(
     layers: Layers,
 ) -> String {
     let land_dia = bed.land_dia();
-    let mut doc = match layers {
-        Layers::Two => Document::two_layer(),
-        Layers::Four | Layers::FourSignal => {
-            let stackup = base_4l_stackup();
-            Document {
-                thickness_mm: stackup.layers.iter().filter_map(|l| l.thickness).sum(),
-                setup: Setup {
-                    stackup: Some(stackup),
-                    ..Setup::default()
-                },
-                ..Document::four_layer()
-            }
+    // Both stackups name ENIG: the bed's pogos land on the bottom lands,
+    // and a HASL dome would rock them.
+    let mut doc = Document {
+        thickness_mm: thickness(layers),
+        setup: Setup {
+            stackup: Some(stackup(layers)),
+            ..Setup::default()
+        },
+        ..match layers {
+            Layers::Two => Document::two_layer(),
+            Layers::Four | Layers::FourSignal => Document::four_layer(),
         }
     };
     doc.generator = "pcb-interposer".into();
@@ -416,6 +419,25 @@ pub fn board(
     }
 
     pcb_ir::dialects::kicad::write(&doc)
+}
+
+/// The stdlib's `BASE_2L_STACKUP` (`lib/std/board_config.zen`): 1.6 mm,
+/// 1 oz copper, ENIG instead of its HASL.
+fn base_2l_stackup() -> Stackup {
+    Stackup {
+        layers: vec![
+            StackupLayer::technical("F.SilkS", "Top Silk Screen", Some("White"), None),
+            StackupLayer::technical("F.Paste", "Top Solder Paste", None, None),
+            StackupLayer::technical("F.Mask", "Top Solder Mask", Some("Black"), None),
+            StackupLayer::copper("F.Cu", 0.035),
+            StackupLayer::dielectric(1, "core", 1.53, "FR4-Core", 4.5, 0.02),
+            StackupLayer::copper("B.Cu", 0.035),
+            StackupLayer::technical("B.Mask", "Bottom Solder Mask", Some("Black"), None),
+            StackupLayer::technical("B.Paste", "Bottom Solder Paste", None, None),
+            StackupLayer::technical("B.SilkS", "Bottom Silk Screen", Some("White"), None),
+        ],
+        copper_finish: Some("ENIG".into()),
+    }
 }
 
 /// The stdlib's `BASE_4L_STACKUP` (`lib/std/board_config.zen`): 1.6 mm,
