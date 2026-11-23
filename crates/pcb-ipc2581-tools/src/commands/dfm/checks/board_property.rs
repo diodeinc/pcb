@@ -281,10 +281,10 @@ fn stackup_build<'a>(
 pub(in crate::commands::dfm) fn stackup_template<'a>(
     builds: &'a [StackupBuild],
     design: &Design,
-) -> Option<&'a StackupTemplate> {
+) -> Option<(&'a StackupBuild, &'a StackupTemplate)> {
     design.stackup.as_ref()?;
     let (build, gaps) = stackup_build(builds, design).ok()?;
-    Some(closest_template(build, &gaps))
+    Some((build, closest_template(build, &gaps)))
 }
 
 /// Whether some template of the stackup's build has every gap within

@@ -158,7 +158,8 @@ fn check_with_scene(
     let checked = checked?;
     let passes = passes?;
     let summary = summarize(&checked);
-    let stackup_template = checks::stackup_template(&pdk.stackup_builds, &designs[0]).cloned();
+    let stackup_template = checks::stackup_template(&pdk.stackup_builds, &designs[0])
+        .map(|(build, template)| report::ReportStackupTemplate::new(build, template));
     let layout = designs[0].report_layout();
     let frames = checked
         .frames
@@ -2140,7 +2141,7 @@ templates = [
             let xml = stacked_board(outer, "0.0152", gaps, "1.6");
             check_with_pdk(&xml, LayoutTarget::Board, &pdk)
                 .stackup_template
-                .map(|template| template.name)
+                .map(|selected| selected.template.name)
         };
         let fail = |message: &str| ("Fail".to_owned(), Some(message.to_owned()));
         let incomplete = |message: &str| ("Incomplete".to_owned(), Some(message.to_owned()));
@@ -2166,6 +2167,25 @@ templates = [
             Some("B")
         );
         assert_eq!(template("0.07", &["0.21", "1.065", "0.21"]), None);
+        // The selection names its build: the listed thickness, not the board's.
+        let selected = check_with_pdk(
+            &stacked_board("0.035", "0.0152", &["0.1", "1.265", "0.15"], "1.6"),
+            LayoutTarget::Board,
+            &pdk.replace(
+                r#"board_thickness = "1.6 mm""#,
+                r#"board_thickness = "1.8 mm""#,
+            ),
+        )
+        .stackup_template
+        .unwrap();
+        assert_eq!(
+            (
+                selected.board_thickness_mm,
+                selected.outer_copper_oz,
+                selected.inner_copper_oz
+            ),
+            (1.8, 1.0, 0.5)
+        );
         // A saved report records the same selection.
         #[cfg(feature = "cli")]
         {

@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added
+
+- A DFM report's `stackup_template` names the build it belongs to, as `board_thickness_mm`, `outer_copper_oz` and `inner_copper_oz`, so an order can name the same build as the template.
+
 ## [0.4.104] - 2026-11-23
 
 ### Added
