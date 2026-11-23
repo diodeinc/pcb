@@ -8,6 +8,8 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+## [0.4.105] - 2026-11-23
+
 ### Added
 
 - DFM `stackup_template` includes its build: `board_thickness_mm`, `outer_copper_oz`, `inner_copper_oz`.
@@ -2654,7 +2656,8 @@ Tvs(package="DO-214AA", direction="Unidirectional", reverse_standoff_voltage="24
 - Error on invalid type passed to `io()`
 - Format the auto-generated component .zen files
 
-[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.4.104...HEAD
+[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.4.105...HEAD
+[0.4.105]: https://github.com/diodeinc/pcb/compare/v0.4.104...v0.4.105
 [0.4.104]: https://github.com/diodeinc/pcb/compare/v0.4.103...v0.4.104
 [0.4.103]: https://github.com/diodeinc/pcb/compare/v0.4.102...v0.4.103
 [0.4.102]: https://github.com/diodeinc/pcb/compare/v0.4.101...v0.4.102
