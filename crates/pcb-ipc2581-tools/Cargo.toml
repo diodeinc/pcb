@@ -34,6 +34,7 @@ chrono = { workspace = true }
 clap = { workspace = true, optional = true }
 colored = { workspace = true, optional = true }
 comfy-table = { workspace = true, optional = true }
+datamatrix = { workspace = true }
 ipc2581 = { workspace = true }
 gerberx2 = { workspace = true }
 hex = { workspace = true }
@@ -41,6 +42,7 @@ jiff = { workspace = true, features = ["js"] }
 log = { workspace = true }
 minijinja = { workspace = true }
 natord = { workspace = true }
+newstroke = { workspace = true }
 pcb-ir = { workspace = true }
 pdf-writer = { workspace = true, optional = true }
 rusqlite = { workspace = true, optional = true, features = ["serialize"] }

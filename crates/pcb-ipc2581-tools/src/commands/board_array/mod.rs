@@ -199,6 +199,11 @@ impl BoardArrayPanelizationMode {
 struct BoardArrayGeneratedGeometry {
     layers: Vec<GeneratedLayer>,
     layer_features: Vec<(GeneratedFeatureScope, GeneratedLayerFeature)>,
+    /// Array features drawn over the copper balance instead of clearing it,
+    /// by layer: legend ink.
+    overlays: Vec<(String, Vec<SetFeature>)>,
+    /// Areas the copper balance stays out of.
+    balance_keepouts: Vec<balance::BalanceKeepout>,
     user_entries: Vec<crate::copper_balance::BalanceVoidTemplate>,
 }
 
@@ -264,11 +269,19 @@ pub fn execute_auto(
     sheet: Option<AutoSheetSize>,
     balance_copper: bool,
     separation: Separation,
+    rail_art: Option<&ArrayLabels>,
     resolution: Resolution,
 ) -> Result<()> {
     let content = file_utils::load_ipc_file(input)?;
-    create_auto_board_array(&content, sheet, balance_copper, separation, resolution)?
-        .write(output, "board array")
+    create_auto_board_array(
+        &content,
+        sheet,
+        balance_copper,
+        separation,
+        rail_art,
+        resolution,
+    )?
+    .write(output, "board array")
 }
 
 /// Create a manually configured board array and return its balance accounting.
@@ -292,17 +305,30 @@ pub fn create_board_array(
 }
 
 /// Create an automatically sized board array and return its balance accounting.
+///
+/// A mouse-bite array given `rail_art` carries artwork in its frame, with
+/// whichever of the labels are set.
 pub fn create_auto_board_array(
     xml: &str,
     sheet: Option<AutoSheetSize>,
     balance_copper: bool,
     separation: Separation,
+    rail_art: Option<&ArrayLabels>,
     resolution: Resolution,
 ) -> Result<PanelCreation> {
     let ipc = Ipc2581::parse(xml).context("Failed to parse IPC-2581 input")?;
     let board = primary_board_layout(&ipc)?;
     let (options, panelization) = auto_board_array_options(&ipc, board, sheet, resolution)?;
-    let spec = build_board_array_spec(&ipc, board, &options, panelization, separation, resolution)?;
+    let mut spec =
+        build_board_array_spec(&ipc, board, &options, panelization, separation, resolution)?;
+    if let Some(labels) = rail_art {
+        ensure!(
+            separation == Separation::MouseBite,
+            "rail artwork is drawn on mouse-bite arrays only"
+        );
+        rail_art::add_rail_art(&mut spec, &ipc, xml, labels, resolution)
+            .context("cannot draw board-array rail artwork")?;
+    }
     write_board_array_creation(xml, spec, balance_copper, resolution)
 }
 
@@ -478,6 +504,7 @@ fn write_board_array_creation(
         let balance = balance::generate_automatic_board_array_copper_balance(
             &provisional,
             resolution.tolerance_mm,
+            &spec.generated_geometry.balance_keepouts,
         )?;
         copper_balance = Some(balance.report());
         let (templates, features) = balance::generated_features(balance);
@@ -487,6 +514,11 @@ fn write_board_array_creation(
                 .into_iter()
                 .map(|feature| (GeneratedFeatureScope::Array, feature)),
         );
+    }
+    // Drawn over whatever the balance left there.
+    for (layer, features) in std::mem::take(&mut spec.generated_geometry.overlays) {
+        spec.generated_geometry
+            .add_layer_feature(GeneratedFeatureScope::Array, &layer, features);
     }
     Ok(PanelCreation {
         xml: finished_board_array_xml(&doc, &spec)?,
@@ -916,10 +948,15 @@ fn content_layer_refs(
         .layer_features
         .iter()
         .map(|(_, layer_feature)| &*layer_feature.layer_name);
+    let overlays = generated_geometry
+        .overlays
+        .iter()
+        .map(|(layer, _)| &**layer);
     source
         .filter(|name| !removed_layer_names.iter().any(|removed| removed == name))
         .chain(layers)
         .chain(drawn)
+        .chain(overlays)
         .filter(|name| seen.insert(*name))
         .map(str::to_string)
         .collect()
@@ -967,6 +1004,7 @@ fn reserve_unique_name(used_names: &mut HashSet<String>, base: &str) -> String {
 }
 
 pub mod balance;
+mod rail_art;
 mod tooling;
 mod vcut;
 pub(crate) mod xml;
@@ -974,6 +1012,7 @@ pub(crate) mod xml;
 #[cfg(test)]
 mod tests;
 
+pub use rail_art::ArrayLabels;
 use tooling::*;
 use vcut::*;
 use xml::*;

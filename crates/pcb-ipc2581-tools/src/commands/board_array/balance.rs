@@ -36,10 +36,12 @@ use crate::ipc2581::Ipc2581;
 /// rails, V-scores, tooling holes, and fiducials participate in safe-region
 /// discovery while balance copper itself does not. Balance geometry is
 /// prepared to the profile's own accuracy; `tolerance_mm` only sets which
-/// features are significant.
+/// features are significant. No copper is generated in `keepouts`, beyond
+/// what the array itself keeps clear.
 pub fn generate_automatic_board_array_copper_balance(
     ipc: &Ipc2581,
     tolerance_mm: f64,
+    keepouts: &[BalanceKeepout],
 ) -> Result<CopperBalancePlan> {
     let resolution = Resolution::new(tolerance_mm, DenseCopperBalanceProfile::V1.accuracy);
     let imported = import_design(ipc, resolution)?;
@@ -84,6 +86,15 @@ pub fn generate_automatic_board_array_copper_balance(
     for ((layer, layer_name), frame) in copper_layers.iter().zip(&layer_names).zip(&frame) {
         let mut input = collection.input_for_layer(layer.name)?;
         input.support_features = input.support_features.union(frame)?;
+        for keepout in keepouts
+            .iter()
+            .filter(|keepout| keepout.layer.as_ref().is_none_or(|name| name == layer_name))
+        {
+            // A keepout takes the solve's budget, not the one it was drawn to.
+            input.support_features = input
+                .support_features
+                .union(&keepout.area.clone().rebudget(resolution.accuracy)?)?;
+        }
         let shared = inputs.iter().position(|(_, earlier)| {
             earlier.support_features.rings == input.support_features.rings
         });
@@ -120,6 +131,14 @@ pub fn generate_automatic_board_array_copper_balance(
         stack_weights.is_some(),
         prepared,
     )
+}
+
+/// An area the copper balance generates nothing in.
+#[derive(Debug, Clone)]
+pub struct BalanceKeepout {
+    /// The copper layer kept clear; every layer when `None`.
+    pub layer: Option<String>,
+    pub area: ContourSet,
 }
 
 /// The existing copper of each named layer inside `panel`, one layer per

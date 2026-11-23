@@ -19,7 +19,7 @@ use pcb_ir::import::ipc2581::{GeometryDocument, ImportedDesign, LayerId};
 use crate::accessors::{
     BoardArrayGridInfo, ColorInfo, IpcAccessor, StackupDetails, StackupLayerInfo, StackupLayerType,
 };
-use crate::layers::{ir_side, is_copper, layer_role};
+use crate::layers::{copper_order, ir_side, is_copper, layer_role};
 
 pub struct Source<'a> {
     ipc: &'a Ipc2581,
@@ -80,51 +80,6 @@ pub fn mm_fine(value: f64) -> String {
 
 pub fn size_mm(bounds: BBox) -> String {
     format!("{} × {} mm", mm(bounds.width()), mm(bounds.height()))
-}
-
-/// Copper layers top to bottom: as the stackup orders them, else as declared.
-pub fn copper_order(imported: &ImportedDesign) -> Vec<Symbol> {
-    let mut copper = imported
-        .layer_definitions
-        .iter()
-        .filter(|layer| is_copper(layer.layer_function))
-        .map(|layer| layer.name)
-        .collect::<Vec<_>>();
-    let side = |name: Symbol| {
-        let mut layers = imported.layer_definitions.iter();
-        match layers
-            .find(|layer| layer.name == name)
-            .map(|layer| ir_side(layer.side))
-        {
-            Some(Side::Top) => 0,
-            Some(Side::Bottom) => 2,
-            _ => 1,
-        }
-    };
-    copper.sort_by_key(|name| side(*name));
-    let Some(stackup) = imported.stackups.first() else {
-        return copper;
-    };
-    // A sequence orders the stack only when every layer has its own.
-    let mut stack = stackup.layers.iter().collect::<Vec<_>>();
-    let numbers = stack
-        .iter()
-        .filter_map(|layer| layer.layer_number)
-        .collect::<HashSet<_>>();
-    if numbers.len() == stack.len() {
-        stack.sort_by_key(|layer| layer.layer_number);
-    }
-    let place = |name: Symbol| {
-        let name = imported.resolve(name);
-        stack
-            .iter()
-            .position(|layer| imported.resolve(layer.layer_ref) == name)
-    };
-    // A stackup that leaves a copper layer out orders none of them.
-    if copper.iter().all(|name| place(*name).is_some()) {
-        copper.sort_by_key(|name| place(*name));
-    }
-    copper
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]

@@ -11,7 +11,7 @@ pub const AUTO_SHEETS: [AutoSheetSize; 5] = [
     AutoSheetSize::A3,
 ];
 const AUTO_MIN_EDGE_RAIL_MM: f64 = 5.0;
-const AUTO_MAX_GRID_COUNT: u32 = 10;
+pub(crate) const AUTO_MAX_GRID_COUNT: u32 = 10;
 
 #[cfg_attr(feature = "cli", derive(clap::ValueEnum))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
