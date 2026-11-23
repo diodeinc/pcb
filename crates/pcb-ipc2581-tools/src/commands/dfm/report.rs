@@ -46,7 +46,6 @@ pub struct ReportSummary<'a> {
     pub layout_target: &'static str,
     pub summary: &'a Summary,
     pub rules: &'a [RuleResult],
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub stackup_template: Option<&'a StackupTemplate>,
 }
 

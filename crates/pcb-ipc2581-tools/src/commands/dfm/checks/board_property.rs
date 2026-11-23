@@ -212,13 +212,8 @@ fn copper_weight(
     Ok(evaluation)
 }
 
-/// Match the stackup's copper-to-copper dielectric gaps against the
-/// templates of its build: its layer count, the listed thickness nearest its
-/// finished thickness, and the one standard weight of its outer and of its
-/// inner layers. It conforms when some template has every gap within
-/// `tolerance`.
-/// Dielectric gaps, top to bottom, each labelled "upper–lower".
-type Gaps = Vec<(String, f64)>;
+/// A dielectric gap, labelled "upper–lower".
+type Gap = (String, f64);
 
 /// The design's build among `builds` and its dielectric gaps: its layer
 /// count, the listed thickness nearest its finished thickness, and the one
@@ -226,7 +221,7 @@ type Gaps = Vec<(String, f64)>;
 fn stackup_build<'a>(
     builds: &'a [StackupBuild],
     design: &Design,
-) -> Result<(&'a StackupBuild, Gaps), Unjudged> {
+) -> Result<(&'a StackupBuild, Vec<Gap>), Unjudged> {
     let stackup = design
         .stackup
         .as_ref()
@@ -292,6 +287,8 @@ pub(in crate::commands::dfm) fn stackup_template<'a>(
     Some(closest_template(build, &gaps))
 }
 
+/// Whether some template of the stackup's build has every gap within
+/// `tolerance`.
 fn dielectric_gaps(
     tolerance: &Length,
     builds: &[StackupBuild],
@@ -327,7 +324,7 @@ fn dielectric_gaps(
 
 /// The template of `build` whose worst gap is closest to the design's, the
 /// default on a tie.
-fn closest_template<'a>(build: &'a StackupBuild, gaps: &[(String, f64)]) -> &'a StackupTemplate {
+fn closest_template<'a>(build: &'a StackupBuild, gaps: &[Gap]) -> &'a StackupTemplate {
     let off = |expected: &[f64]| {
         let pairs = gaps.iter().zip(expected);
         pairs
@@ -348,7 +345,7 @@ fn closest_template<'a>(build: &'a StackupBuild, gaps: &[(String, f64)]) -> &'a 
 /// Why no template of `build` has every gap within `tolerance`, naming the
 /// closest (the default on a tie) and its gaps outside tolerance, worst
 /// first; `None` if some template matches.
-fn mismatch(build: &StackupBuild, gaps: &[(String, f64)], tolerance: &Length) -> Option<String> {
+fn mismatch(build: &StackupBuild, gaps: &[Gap], tolerance: &Length) -> Option<String> {
     let closest = closest_template(build, gaps);
     let limit = tolerance.millimeters() + COMPARISON_EPSILON_MM;
     let mut outside = gaps
