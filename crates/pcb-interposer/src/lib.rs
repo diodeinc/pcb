@@ -14,7 +14,9 @@
 //! mate-detect pairs pre-shorted), and full-sheet GND pours. Pogo
 //! placement and routing are later, panel-specific passes. A single
 //! singulated board can stand in for the panel ([`single`]): the
-//! generator places it on the bed and the DUT plate nests it.
+//! generator places it on the bed and the upper shroud nests it. On
+//! Switchyard's bench the fixture's printed upper shroud, the lower
+//! shroud's relief map and the hardware list come from [`shroud`].
 
 // Use pipe-safe replacements for standard printing macros in CLI output paths.
 #[macro_use(eprintln)]
@@ -26,11 +28,12 @@ pub mod dsn;
 pub mod emit;
 pub mod guard;
 pub mod panel;
+pub mod parts;
 pub mod pattern;
 pub mod plan;
-pub mod plate;
 pub mod pogo;
 pub mod repair;
+pub mod shroud;
 pub mod single;
 pub mod stitch;
 
@@ -72,8 +75,14 @@ pub fn generate(
         lands,
         plan,
         placement,
+        fixture,
         ..
-    } = build(panel_xml, mode, footprints, bed)?;
+    } = build(panel_xml, mode, footprints, bed, layers)?;
+    if let Some(fixture) = &fixture {
+        for issue in &fixture.issues {
+            eprintln!("\x1b[1;31mWARNING:\x1b[0m {issue}");
+        }
+    }
     if let Some(placement) = placement {
         eprintln!(
             "note: board placed {} {}° at ({:.2}, {:.2}); interposer spans x {:.1}–{:.1} mm",
@@ -131,6 +140,7 @@ pub fn fixture_map(
     panel_xml: &Path,
     mode: Mode,
     footprints: Footprints,
+    layers: Layers,
     bed: Bed,
 ) -> Result<String> {
     let Built {
@@ -139,33 +149,61 @@ pub fn fixture_map(
         plan,
         placement,
         ..
-    } = build(panel_xml, mode, footprints, bed)?;
+    } = build(panel_xml, mode, footprints, bed, layers)?;
     let plan = plan.context("panel has no ICT contacts to plan")?;
     Ok(plan::to_json(&plan, &panel, &lands, placement.as_ref()))
 }
 
-/// Generate the DUT plate for a panel file, as OpenSCAD source: the
-/// printed slab between the interposer and the DUT panel (see [`plate`]).
-/// A single board always sits in a nest, whatever `locators` asks.
-pub fn dut_plate(
+/// The bench fixture's printed and bought parts for a panel file, on a
+/// bed with stack dowels ([`shroud`]).
+pub struct FixtureFiles {
+    /// The upper shroud, as OpenSCAD source.
+    pub shroud: String,
+    /// The lower shroud's relief map, as JSON.
+    pub relief: String,
+    /// The fixture BOM and stack report, as Markdown.
+    pub bom: String,
+}
+
+/// Generate the bench fixture's upper shroud, lower-shroud relief map and
+/// BOM for a panel file.
+pub fn fixture(
     panel_xml: &Path,
     mode: Mode,
     footprints: Footprints,
+    layers: Layers,
     bed: Bed,
-    locators: plate::Locators,
-) -> Result<String> {
+) -> Result<FixtureFiles> {
     let Built {
         panel,
         plan,
         boards,
+        fixture,
         ..
-    } = build(panel_xml, mode, footprints, bed)?;
+    } = build(panel_xml, mode, footprints, bed, layers)?;
     let plan = plan.context("panel has no ICT contacts to plan")?;
-    let locators = match mode {
-        Mode::Panel => locators,
-        Mode::SingleBoard => plate::Locators::Nest,
-    };
-    plate::plate(&panel, bed, &plan, &boards, locators)
+    let fixture =
+        fixture.with_context(|| format!("the {bed:?} bed has no stack dowels for a shroud"))?;
+    let shroud = shroud::scad(&shroud::Shroud {
+        panel: &panel,
+        bed,
+        plan: &plan,
+        boards: &boards,
+        parts: &fixture.parts,
+        locating: &fixture.locating,
+        stack: &fixture.stack,
+        dut: fixture.dut,
+    })?;
+    Ok(FixtureFiles {
+        shroud,
+        relief: shroud::relief_map(&fixture.stack, &fixture.locating),
+        bom: shroud::bom(
+            &fixture.stack,
+            &fixture.locating,
+            plan.bindings.len(),
+            &fixture.issues,
+        ),
+    })
 }
 
 /// Fixed-feature disks a pogo pad must stay out of: tooling holes (the
@@ -192,26 +230,76 @@ struct Built {
     /// Board bounding boxes in the sheet frame.
     boards: Vec<[f64; 4]>,
     placement: Option<single::Placement>,
+    fixture: Option<Fixture>,
 }
 
-fn build(panel_xml: &Path, mode: Mode, footprints: Footprints, bed: Bed) -> Result<Built> {
+/// The bench fixture around the interposer, on a bed with stack dowels.
+struct Fixture {
+    stack: shroud::Stack,
+    parts: Vec<parts::Part>,
+    locating: shroud::Locating,
+    /// The DUT's thickness.
+    dut: f64,
+    issues: Vec<String>,
+}
+
+/// The DUT's finished thickness, from its stackup.
+fn dut_thickness(ipc: &ipc2581::Ipc2581) -> f64 {
+    ipc.ecad()
+        .and_then(|ecad| ecad.cad_data.stackups.first())
+        .and_then(|stackup| stackup.overall_thickness)
+        .unwrap_or(1.6)
+}
+
+fn build(
+    panel_xml: &Path,
+    mode: Mode,
+    footprints: Footprints,
+    bed: Bed,
+    layers: Layers,
+) -> Result<Built> {
     let content = std::fs::read_to_string(panel_xml)
         .with_context(|| format!("read panel {}", panel_xml.display()))?;
     let ipc = ipc2581::Ipc2581::parse(&content).context("parse IPC-2581 panel")?;
-    let (panel, contacts, boards, placement) = match mode {
+    let (mut panel, contacts, boards, placement, tooling, parts) = match mode {
         Mode::Panel => {
-            let panel = bed.fit(panel::extract(&ipc)?);
+            let raw = panel::extract(&ipc)?;
+            let tooling = raw.holes.clone();
+            let panel = bed.fit(raw);
             let contacts = contacts::extract_contacts(&ipc, panel.height, footprints)?;
             let boards = contacts::board_outlines(&ipc, panel.height)?;
-            (panel, contacts, boards, None)
+            let (step, offsets) = contacts::board_instances(&ipc)?;
+            let height = panel.height;
+            let mut parts = Vec::new();
+            for (board, [dx, dy]) in offsets.into_iter().enumerate() {
+                let place = move |[x, y]: [f64; 2]| [x + dx, height - (y + dy)];
+                parts.extend(parts::probed_parts(
+                    &ipc,
+                    step,
+                    ipc2581::types::Side::Bottom,
+                    &[(board as u32, &place)],
+                )?);
+            }
+            (panel, contacts, boards, None, tooling, parts)
         }
         Mode::SingleBoard => {
             let placed = single::place(&ipc, bed, footprints)?;
+            let placement = placed.placement;
+            let place = move |p: [f64; 2]| placement.apply(p);
+            let side = if placement.mirrored {
+                ipc2581::types::Side::Top
+            } else {
+                ipc2581::types::Side::Bottom
+            };
+            let parts =
+                parts::probed_parts(&ipc, parts::component_step(&ipc)?, side, &[(0, &place)])?;
             (
                 placed.panel,
                 placed.contacts,
                 vec![placed.board],
                 Some(placed.placement),
+                Vec::new(),
+                parts,
             )
         }
     };
@@ -227,11 +315,60 @@ fn build(panel_xml: &Path, mode: Mode, footprints: Footprints, bed: Bed) -> Resu
             bed,
         )?)
     };
+    let fixture = match (&plan, bed.alignment().is_empty()) {
+        (Some(plan), false) => {
+            let dut = dut_thickness(&ipc);
+            let stack = shroud::stack(emit::thickness(layers), dut)?;
+            let pogos: Vec<[f64; 2]> = plan
+                .bindings
+                .iter()
+                .map(|binding| plan.contacts[binding.contact].xy)
+                .collect();
+            let footprint = shroud::footprint(&panel, bed);
+            let locating = match mode {
+                Mode::SingleBoard => shroud::Locating::Nest,
+                Mode::Panel => {
+                    shroud::choose_pins(&tooling, footprint, bed, &pogos, &parts, &lands)
+                }
+            };
+            let mut issues = shroud::part_conflicts(bed, &parts);
+            match &locating {
+                shroud::Locating::Pins(pins) => {
+                    if stack.pin.is_none() {
+                        issues.push(
+                            "no stock DUT pin reaches the DUT before the pogos do".to_string(),
+                        );
+                    }
+                    // The pins reach down into the interposer.
+                    for pin in pins {
+                        panel.holes.push((pin.at, shroud::PIN_RELIEF_MM));
+                    }
+                }
+                shroud::Locating::Missing(why) => {
+                    issues.push(format!(
+                        "no pair of the panel's tooling holes can take the DUT's Ø2 locating \
+                         pins; choose tooling positions by hand:\n    {}",
+                        why.join("\n    ")
+                    ));
+                }
+                shroud::Locating::Nest => {}
+            }
+            Some(Fixture {
+                stack,
+                parts,
+                locating,
+                dut,
+                issues,
+            })
+        }
+        _ => None,
+    };
     Ok(Built {
         panel,
         lands,
         plan,
         boards,
         placement,
+        fixture,
     })
 }

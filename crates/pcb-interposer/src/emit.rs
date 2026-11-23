@@ -137,6 +137,19 @@ fn strap_lanes<'a>(
 /// face's pogo field.
 const SIGNAL_INNER: &str = "In2.Cu";
 
+/// The finished interposer's thickness: the 2-layer default, or the
+/// 4-layer stackup's sum.
+pub fn thickness(layers: Layers) -> f64 {
+    match layers {
+        Layers::Two => Document::two_layer().thickness_mm,
+        Layers::Four | Layers::FourSignal => base_4l_stackup()
+            .layers
+            .iter()
+            .filter_map(|l| l.thickness)
+            .sum(),
+    }
+}
+
 /// Build the `.kicad_pcb` source for `bed`'s lands and alignment;
 /// `straps` nets the bed's ID lands, as (land index, net).
 pub fn board(

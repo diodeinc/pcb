@@ -83,6 +83,22 @@ fn board_grid(ipc: &Ipc2581) -> Result<(&StepRepeat, &StepRepeat, &Step)> {
     Ok((grid, offset, board_step))
 }
 
+/// The panel's board step and each board instance's offset from it, in
+/// grid order (the board frame is Y-up, as the file has it).
+pub(crate) fn board_instances(ipc: &Ipc2581) -> Result<(&Step, Vec<[f64; 2]>)> {
+    let (grid, offset, board_step) = board_grid(ipc)?;
+    let mut offsets = Vec::new();
+    for j in 0..grid.ny.max(1) {
+        for i in 0..grid.nx.max(1) {
+            offsets.push([
+                offset.x + grid.x + i as f64 * grid.dx,
+                offset.y + grid.y + j as f64 * grid.dy,
+            ]);
+        }
+    }
+    Ok((board_step, offsets))
+}
+
 /// Every board instance's bounding box `[x0, y0, x1, y1]` in the Y-down
 /// sheet frame, in grid order.
 pub fn board_outlines(ipc: &Ipc2581, sheet_height: f64) -> Result<Vec<[f64; 4]>> {

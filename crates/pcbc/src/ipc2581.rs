@@ -68,8 +68,8 @@ enum Commands {
         input: PathBuf,
         /// Test one singulated board in a nest instead of the panel: the
         /// input's board, placed on the bed (face down when its test points
-        /// are on top), may overhang the bed along its pogo rows; the DUT
-        /// plate becomes the nest
+        /// are on top), may overhang the bed along its pogo rows; the upper
+        /// shroud nests it
         #[arg(long)]
         single_board: bool,
         /// Also put pogos on test points that have an `ict` role but not the
@@ -84,14 +84,18 @@ enum Commands {
         /// Also write the fixture map (tested boards + contact→land bindings) as JSON
         #[arg(long, value_hint = clap::ValueHint::FilePath)]
         fixture_map: Option<PathBuf>,
-        /// Also write the DUT plate, the printed slab between the interposer and the
-        /// DUT panel, as OpenSCAD source (beds with alignment dowels)
+        /// Also write the upper shroud, the stiff printed part between the
+        /// interposer and the DUT, as OpenSCAD source (beds with stack dowels);
+        /// `-D 'part="assembly"'` renders the assembled stack
         #[arg(long, value_hint = clap::ValueHint::FilePath)]
-        dut_plate: Option<PathBuf>,
-        /// How the DUT plate locates the DUT panel: printed nubs, or Ø2 mm dowel pins
-        /// for interposers that see more insertions
-        #[arg(long, default_value = "nubs")]
-        dut_plate_locators: pcb_interposer::plate::Locators,
+        upper_shroud: Option<PathBuf>,
+        /// Also write the lower shroud's relief map: what reaches below the
+        /// interposer, where, and how deep a relief it needs, as JSON
+        #[arg(long, value_hint = clap::ValueHint::FilePath)]
+        lower_relief: Option<PathBuf>,
+        /// Also write the fixture BOM and stack report as Markdown
+        #[arg(long, value_hint = clap::ValueHint::FilePath)]
+        fixture_bom: Option<PathBuf>,
         /// Copper layers, 2, 4 or 4-signal; 4 adds two inner GND planes and, on a
         /// bed with high voltage, holds its exposed clearance on every net;
         /// 4-signal a GND plane (In1) and a signal layer (In2)
@@ -554,8 +558,9 @@ pub fn execute(args: Ipc2581Args, resolution: Resolution) -> anyhow::Result<()> 
             probe_non_ict_footprints,
             output,
             fixture_map,
-            dut_plate,
-            dut_plate_locators,
+            upper_shroud,
+            lower_relief,
+            fixture_bom,
             layers,
             bed,
             interposer_id,
@@ -588,15 +593,22 @@ pub fn execute(args: Ipc2581Args, resolution: Resolution) -> anyhow::Result<()> 
                 output.display(),
                 pro_path.display()
             );
-            if let Some(plate_path) = dut_plate {
-                let plate =
-                    pcb_interposer::dut_plate(&input, mode, footprints, bed, dut_plate_locators)?;
-                std::fs::write(&plate_path, plate)
-                    .with_context(|| format!("write {}", plate_path.display()))?;
-                println!("✓ Wrote DUT plate {}", plate_path.display());
+            if upper_shroud.is_some() || lower_relief.is_some() || fixture_bom.is_some() {
+                let files = pcb_interposer::fixture(&input, mode, footprints, layers, bed)?;
+                for (path, text, what) in [
+                    (upper_shroud, files.shroud, "upper shroud"),
+                    (lower_relief, files.relief, "lower-shroud relief map"),
+                    (fixture_bom, files.bom, "fixture BOM"),
+                ] {
+                    if let Some(path) = path {
+                        std::fs::write(&path, text)
+                            .with_context(|| format!("write {}", path.display()))?;
+                        println!("✓ Wrote {what} {}", path.display());
+                    }
+                }
             }
             if let Some(map_path) = fixture_map {
-                let map = pcb_interposer::fixture_map(&input, mode, footprints, bed)?;
+                let map = pcb_interposer::fixture_map(&input, mode, footprints, layers, bed)?;
                 std::fs::write(&map_path, map)
                     .with_context(|| format!("write {}", map_path.display()))?;
                 println!("✓ Wrote fixture map {}", map_path.display());

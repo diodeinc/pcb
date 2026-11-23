@@ -251,7 +251,7 @@ pub fn place(ipc: &Ipc2581, bed: Bed, footprints: Footprints) -> Result<Placed> 
         [f64::MAX, f64::MAX, f64::MIN, f64::MIN],
         |[a, b, c, d], p| [a.min(p[0]), b.min(p[1]), c.max(p[0]), d.max(p[1])],
     );
-    let reach = crate::plate::nest_reach();
+    let reach = crate::shroud::nest_reach();
     let envelope = [
         ex0.min(board[0] - reach),
         ey0,

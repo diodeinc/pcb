@@ -853,7 +853,7 @@ mod tests {
             ict: "swdio".into(),
             xy,
         };
-        // The M3 screw at (52.5, 31.25): Ø6 keep-out plus the pogo's
+        // The MH7 screw at (52.5, 31.25): Ø6 keep-out plus the pogo's
         // 1.5 mm courtyard.
         let err = plan(
             vec![contact([52.5, 35.7])],
@@ -865,7 +865,7 @@ mod tests {
         .unwrap_err()
         .to_string();
         assert!(err.contains("board 2 TP7 (TP_SWDIO.TP)"), "{err}");
-        assert!(err.contains("M3 screw hole"), "{err}");
+        assert!(err.contains("MH7 screw hole"), "{err}");
         let err = plan(
             vec![contact([28.5, 28.0])],
             &lands,
@@ -875,7 +875,7 @@ mod tests {
         )
         .unwrap_err()
         .to_string();
-        assert!(err.contains("D1 alignment hole"), "{err}");
+        assert!(err.contains("DW1 alignment hole"), "{err}");
         // Clear of every feature: plans (the contact is just untested
         // where no cell takes it).
         assert!(

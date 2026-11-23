@@ -371,7 +371,7 @@ fn switchyard_rev1_carries_its_alignment() {
     };
     let bed = Bed::SwitchyardRev1;
     let panel = bed.fit(panel);
-    // Cut to the conveyor envelope, with its own three fiducials.
+    // Cut to the bench interposer zone, with its own three fiducials.
     assert_eq!(panel.outline.len(), 4);
     assert_eq!(panel.fids_top.len(), 3);
     let lands = bed.lands(panel.width, panel.height).expect("rev-1 lands");
@@ -387,16 +387,17 @@ fn switchyard_rev1_carries_its_alignment() {
     assert!(text.contains("(start 26.5 68.375)\n\t\t(end 83.5 68.375)"));
     assert_eq!(text.matches("(locked yes)").count(), 2 + 4 + 1 + 2 + 1);
     pcb_sexpr::parse(&text).expect("board parses");
-    // D1 and the M3 are round, D2 a slot along x; each keeps copper
-    // outside its Ø6 keep-out.
-    assert_eq!(text.matches("Interposer:Alignment_").count(), 3);
+    // DW1 and the five M3 clearances are round, DW2 a slot along x; each
+    // keeps copper outside its Ø6 keep-out.
+    assert_eq!(text.matches("Interposer:Alignment_").count(), 7);
+    assert_eq!(text.matches("(drill 3.4)").count(), 5);
     assert!(text.contains("(drill 3.05)"));
     assert!(text.contains("(drill oval 4 3.05)"));
     assert!(text.contains("(drill 3.4)"));
     assert!(text.contains("(clearance 1.475)"));
     assert!(text.contains("(clearance 1.3)"));
     assert_eq!(text.matches("Interposer:Mate_Pad_D2mm").count(), 128);
-    assert!(text.contains("(start 5 5)\n\t\t(end 100 5)"));
+    assert!(text.contains("(start 0 0)\n\t\t(end 105 0)"));
 
     // VTarget and the signal lanes may carry 60 V: their classes keep the
     // coated 0.13 mm, and the custom rules 0.6 mm at bare pads.
@@ -416,8 +417,8 @@ fn switchyard_rev1_carries_its_alignment() {
     assert!(pcb_interposer::emit::rules(Bed::S13, Layers::Two).is_none());
 
     // Over two inner GND planes every class keeps the exposed 0.6 mm, so
-    // no custom rules; the strap lanes no longer fit above the edge and
-    // the straps are left to the router.
+    // no custom rules; the bench zone's edge at y 74 still leaves room for
+    // the strap lanes at that clearance.
     assert_eq!(Layers::Four.uniform_clearance(bed), Some(0.6));
     assert_eq!(Layers::Four.uniform_clearance(Bed::S13), None);
     assert_eq!(Layers::FourSignal.uniform_clearance(bed), None);
@@ -430,8 +431,8 @@ fn switchyard_rev1_carries_its_alignment() {
     assert!(pcb_interposer::emit::rules(bed, Layers::Four).is_none());
     let four = pcb_interposer::emit::board(&panel, &lands, bed, None, &straps, Layers::Four);
     pcb_sexpr::parse(&four).expect("board parses");
-    assert_eq!(four.matches("(net \"ID7\")").count(), 4);
-    assert_eq!(four.matches("(locked yes)").count(), 2);
+    assert_eq!(four.matches("(net \"ID7\")").count(), 4 + 4 + 1);
+    assert_eq!(four.matches("(locked yes)").count(), 2 + 4 + 1 + 2 + 1);
 }
 
 /// A single board export: a 150 × 30 mm board probed on its top face,
@@ -528,9 +529,9 @@ fn single_board_overhangs_the_bed_in_a_nest() {
     assert!(placed.placement.mirrored);
     assert_eq!(placed.placement.quarter_turns % 2, 0);
     let [ex0, ey0, ex1, ey1] = placed.panel.envelope.expect("an envelope");
-    assert!(ex0 < 5.0 && ex1 > 100.0, "{ex0} {ex1}");
-    assert_eq!((ey0, ey1), (5.0, 69.0));
-    let reach = pcb_interposer::plate::nest_reach();
+    assert!(ex0 < 0.0 && ex1 > 105.0, "{ex0} {ex1}");
+    assert_eq!((ey0, ey1), (0.0, 74.0));
+    let reach = pcb_interposer::shroud::nest_reach();
     let [bx0, _, bx1, _] = placed.board;
     assert!(ex0 <= bx0 - reach + 1e-9 && ex1 >= bx1 + reach - 1e-9);
     let r = pcb_interposer::pogo::COURTYARD_RADIUS_MM;
@@ -559,26 +560,24 @@ fn single_board_overhangs_the_bed_in_a_nest() {
     let path = std::env::temp_dir().join(format!("single-board-{}.xml", std::process::id()));
     std::fs::write(&path, single_board()).unwrap();
     let mode = pcb_interposer::Mode::SingleBoard;
-    let map = pcb_interposer::fixture_map(&path, mode, Footprints::Any, bed).expect("fixture map");
+    let map = pcb_interposer::fixture_map(&path, mode, Footprints::Any, Layers::Four, bed)
+        .expect("fixture map");
     let map: serde_json::Value = serde_json::from_str(&map).unwrap();
     // Seven digital lines need two cells' S lanes.
     assert_eq!(map["cells"][0].as_array().unwrap().len(), 2);
     assert_eq!(map["dropped"].as_array().unwrap().len(), 0);
     assert_eq!(map["placement"]["mirrored"], true);
-    let plate = pcb_interposer::dut_plate(
-        &path,
-        mode,
-        Footprints::Any,
-        bed,
-        pcb_interposer::plate::Locators::Nubs,
-    )
-    .expect("plate");
-    assert!(plate.contains("// Nest:"));
-    assert!(!plate.contains("d1 = 2, d2 = 1.2"), "no nubs in a nest");
-    // The ears leave the overhanging ends for the long sides, over the bed.
-    assert!(plate.contains(
-        "ears = [[15.000, -1.000], [90.000, -1.000], [15.000, 75.000], [90.000, 75.000]];"
-    ));
+    let files =
+        pcb_interposer::fixture(&path, mode, Footprints::Any, Layers::Four, bed).expect("fixture");
+    // A single board sits in a nest, between five sunk screw heads and
+    // over two blind dowel sockets.
+    assert!(files.shroud.contains("// Nest:"));
+    assert_eq!(files.shroud.matches("M3 clearance").count(), 5);
+    assert!(files.shroud.contains("// DW1 round"));
+    assert!(files.shroud.contains("// DW2 slot, 4.55 x 3.65 along X"));
+    assert!(files.bom.contains("M3 × 0.5 × 25 mm"));
+    let relief: serde_json::Value = serde_json::from_str(&files.relief).unwrap();
+    assert_eq!(relief["reliefs_required"], 0);
     let (pcb, _, _) =
         pcb_interposer::generate(&path, mode, Footprints::Any, Layers::Four, bed, Some(433))
             .expect("interposer");
@@ -600,4 +599,181 @@ fn panel_probed_on_top_fails() {
         err.contains("TP3") && err.contains("--single-board"),
         "{err}"
     );
+}
+
+/// A landscape A7 panel on Switchyard's bench: two 30 × 20 mm boards with
+/// five test points each on the bottom face, one resistor whose outline
+/// reaches into DW1's keep-out, and the board-array generator's tooling:
+/// Ø2.1 corner holes 3 mm in, and Ø`rail` rail holes 2.5 mm from the edge.
+fn bench_panel(rail: f64) -> String {
+    let roles = ["vtarget", "gnd", "ls", "ls", "vusb"];
+    let mut bom = String::new();
+    let mut components = String::new();
+    for (k, role) in roles.iter().enumerate() {
+        let n = k + 1;
+        bom.push_str(&format!(
+            r#"    <BomItem OEMDesignNumberRef="TP{n}" quantity="1" pinCount="1" category="ELECTRICAL">
+      <RefDes name="TP{n}" packageRef="TestPoint_ICT" populate="true" layerRef="BOTTOM"/>
+      <Characteristics category="ELECTRICAL">
+        <Textual textualCharacteristicName="Ict" textualCharacteristicValue="{role}"/>
+      </Characteristics>
+    </BomItem>
+"#
+        ));
+        components.push_str(&format!(
+            r#"        <Component refDes="TP{n}" packageRef="TestPoint_ICT" layerRef="BOTTOM" part="TP{n}" mountType="SMT">
+          <Location x="{}" y="15.0"/>
+        </Component>
+"#,
+            4.0 + 4.0 * k as f64
+        ));
+    }
+    format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
+  <Content roleRef="Owner">
+    <FunctionMode mode="FABRICATION"/>
+    <StepRef name="array"/>
+    <DictionaryStandard units="MILLIMETER"/>
+  </Content>
+  <Bom name="BOM_board">
+    <BomHeader assembly="board" revision="1.0">
+      <StepRef name="array"/>
+    </BomHeader>
+{bom}  </Bom>
+  <Ecad name="ecad">
+    <CadHeader units="MILLIMETER"/>
+    <CadData>
+      <Layer name="TOP" layerFunction="CONDUCTOR" side="TOP" polarity="POSITIVE"/>
+      <Layer name="BOTTOM" layerFunction="CONDUCTOR" side="BOTTOM" polarity="POSITIVE"/>
+      <Layer name="Board_Array_Drill" layerFunction="DRILL" polarity="POSITIVE"/>
+      <Stackup name="stackup" overallThickness="1.6" tolPlus="0.0" tolMinus="0.0">
+        <StackupGroup name="group" thickness="1.6" tolPlus="0.0" tolMinus="0.0"/>
+      </Stackup>
+      <Step name="layout">
+        <Datum x="0.0" y="0.0"/>
+        <Package name="R_0402" type="OTHER">
+          <Outline>
+            <Polygon>
+              <PolyBegin x="-1.0" y="-0.5"/>
+              <PolyStepSegment x="1.0" y="-0.5"/>
+              <PolyStepSegment x="1.0" y="0.5"/>
+              <PolyStepSegment x="-1.0" y="0.5"/>
+              <PolyStepSegment x="-1.0" y="-0.5"/>
+            </Polygon>
+            <LineDesc lineEnd="ROUND" lineWidth="0.05"/>
+          </Outline>
+        </Package>
+        <Profile>
+          <Polygon>
+            <PolyBegin x="0.0" y="0.0"/>
+            <PolyStepSegment x="30.0" y="0.0"/>
+            <PolyStepSegment x="30.0" y="20.0"/>
+            <PolyStepSegment x="0.0" y="20.0"/>
+            <PolyStepSegment x="0.0" y="0.0"/>
+          </Polygon>
+        </Profile>
+{components}        <Component refDes="R1" packageRef="R_0402" layerRef="BOTTOM" part="R1" mountType="SMT">
+          <Location x="13.0" y="4.0"/>
+        </Component>
+      </Step>
+      <Step name="board_cell">
+        <Datum x="0.0" y="0.0"/>
+        <StepRepeat stepRef="layout" x="0.0" y="0.0" nx="1" ny="1" dx="0" dy="0" angle="0.00" mirror="false"/>
+      </Step>
+      <Step name="array">
+        <Datum x="0.0" y="0.0"/>
+        <StepRepeat stepRef="board_cell" x="15.0" y="40.0" nx="2" ny="1" dx="45.0" dy="0" angle="0.00" mirror="false"/>
+        <Profile>
+          <Polygon>
+            <PolyBegin x="0.0" y="0.0"/>
+            <PolyStepSegment x="105.0" y="0.0"/>
+            <PolyStepSegment x="105.0" y="74.0"/>
+            <PolyStepSegment x="0.0" y="74.0"/>
+            <PolyStepSegment x="0.0" y="0.0"/>
+          </Polygon>
+        </Profile>
+        <LayerFeature layerRef="Board_Array_Drill">
+          <Set polarity="POSITIVE">
+            <Hole name="c0" type="CIRCLE" diameter="2.1" platingStatus="NONPLATED" plusTol="0" minusTol="0" x="3.0" y="3.0"/>
+            <Hole name="c1" type="CIRCLE" diameter="2.1" platingStatus="NONPLATED" plusTol="0" minusTol="0" x="102.0" y="3.0"/>
+            <Hole name="c2" type="CIRCLE" diameter="2.1" platingStatus="NONPLATED" plusTol="0" minusTol="0" x="102.0" y="71.0"/>
+            <Hole name="c3" type="CIRCLE" diameter="2.1" platingStatus="NONPLATED" plusTol="0" minusTol="0" x="3.0" y="71.0"/>
+            <Hole name="r0" type="CIRCLE" diameter="{rail}" platingStatus="NONPLATED" plusTol="0" minusTol="0" x="17.5" y="2.5"/>
+            <Hole name="r1" type="CIRCLE" diameter="{rail}" platingStatus="NONPLATED" plusTol="0" minusTol="0" x="87.5" y="71.5"/>
+          </Set>
+        </LayerFeature>
+      </Step>
+    </CadData>
+  </Ecad>
+</IPC-2581>"#
+    )
+}
+
+#[test]
+fn bench_panel_locates_on_its_own_tooling() {
+    let bed = Bed::SwitchyardRev1;
+    let mode = pcb_interposer::Mode::Panel;
+    let path = std::env::temp_dir().join(format!("bench-panel-{}.xml", std::process::id()));
+
+    // The board-array generator's own tooling cannot take Ø2 m6 pins: the
+    // rail holes are Ø2.0, the corner holes sit on MH1–MH4.
+    std::fs::write(&path, bench_panel(2.0)).unwrap();
+    let files = pcb_interposer::fixture(&path, mode, Footprints::IctOnly, Layers::Four, bed)
+        .expect("fixture");
+    assert!(
+        files.bom.contains("no pair of the panel's tooling holes"),
+        "{}",
+        files.bom
+    );
+    assert!(files.bom.contains("too small for a Ø2 m6 pin"));
+    assert!(files.bom.contains("from MH3"));
+    assert!(!files.shroud.contains("DUT locating pins"));
+    // R1 on the first board reaches into DW1's keep-out.
+    assert!(
+        files.bom.contains("DUT part B0.R1 reaches within"),
+        "{}",
+        files.bom
+    );
+    assert_eq!(files.shroud.matches("polygon([").count(), 2);
+
+    // Ø2.1 rail holes take them, 70 mm apart; the pins reach down into
+    // drilled reliefs in the interposer and stop short of its underside.
+    std::fs::write(&path, bench_panel(2.1)).unwrap();
+    let files = pcb_interposer::fixture(&path, mode, Footprints::IctOnly, Layers::Four, bed)
+        .expect("fixture");
+    // The shroud's y is 74 − Switchyard y, which is the panel's own y.
+    assert!(files.shroud.contains("DUT locating pins"), "{}", files.bom);
+    assert!(
+        files
+            .shroud
+            .contains("translate([17.500, 2.500, -1]) cylinder(h = thickness + 2, d = 2.40);")
+    );
+    assert!(
+        files
+            .shroud
+            .contains("translate([87.500, 71.500, -1]) cylinder(h = thickness + 2, d = 2.40);")
+    );
+    assert!(
+        files
+            .bom
+            .contains("(17.500, 71.500) in the panel's Ø2.10 tooling hole")
+    );
+    assert!(files.bom.contains("Ø2 m6 × 10 mm"));
+    let relief: serde_json::Value = serde_json::from_str(&files.relief).unwrap();
+    assert_eq!(relief["features"].as_array().unwrap().len(), 2);
+    assert_eq!(relief["reliefs_required"], 0);
+    assert_eq!(relief["features"][0]["protrusion_mm"], -0.3);
+    let (pcb, _, _) = pcb_interposer::generate(
+        &path,
+        mode,
+        Footprints::IctOnly,
+        Layers::Four,
+        bed,
+        Some(433),
+    )
+    .expect("interposer");
+    std::fs::remove_file(&path).ok();
+    pcb_sexpr::parse(&pcb).expect("interposer parses");
+    assert_eq!(pcb.matches("(drill 2.2)").count(), 2);
 }

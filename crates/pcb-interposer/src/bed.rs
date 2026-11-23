@@ -8,9 +8,11 @@
 //!   origin, so the table is the sheet frame as is. Eight 14-pin cells,
 //!   one per DUT, plus a sense row: two detect pairs, interposer-ID straps
 //!   and grounds. Each board takes one whole cell ([`crate::plan`]). The
-//!   bed registers the interposer on two dowels and a shroud screw
-//!   ([`Bed::alignment`]), so the interposer is cut to the bed's conveyor
-//!   envelope rather than the panel's outline ([`Bed::fit`]).
+//!   bench fixture registers the interposer on two stack dowels and
+//!   clamps it with five M3 screws ([`Bed::alignment`]), so the interposer
+//!   is cut to the bench interposer zone rather than the panel's outline
+//!   ([`Bed::fit`]). The 95 × 64 mm conveyor inset is a separate,
+//!   production target this bed does not build.
 
 use anyhow::{Context, Result, bail};
 
@@ -89,33 +91,37 @@ impl Bed {
     pub fn alignment(self) -> Vec<Alignment> {
         match self {
             Bed::S13 => Vec::new(),
-            // Switchyard CR-17 (floorplan §2a): D1 locates, the D2 slot
-            // takes up x tolerance, the M3 clears the shroud screw, which
-            // also clamps the middle of the DUT plate and interposer. D1's
-            // +0.05/−0 tolerance is a fab note, not geometry.
-            Bed::SwitchyardRev1 => vec![
-                Alignment {
-                    name: "D1",
-                    at: [28.5, 31.25],
-                    drill: [3.05, 3.05],
+            // Switchyard CR-17 and the rev-1 bench stack (mechanical/README.md
+            // at f90ab8c): the Ø3 m6 stack dowels locate on DW1 and slide in
+            // the DW2 slot along x; five M3 screws through MH1–MH4 and MH7
+            // clamp the upper shroud, interposer and lower shroud to the
+            // backplate. DW1's +0.05/−0 tolerance is a fab note, not
+            // geometry.
+            Bed::SwitchyardRev1 => {
+                let dowel = |name, at, drill| Alignment {
+                    name,
+                    at,
+                    drill,
                     keepout_dia: 6.0,
                     clamps: false,
-                },
-                Alignment {
-                    name: "D2",
-                    at: [76.5, 31.25],
-                    drill: [4.0, 3.05],
-                    keepout_dia: 6.0,
-                    clamps: false,
-                },
-                Alignment {
-                    name: "M3",
-                    at: [52.5, 31.25],
+                };
+                let screw = |name, at| Alignment {
+                    name,
+                    at,
                     drill: [3.4, 3.4],
                     keepout_dia: 6.0,
                     clamps: true,
-                },
-            ],
+                };
+                vec![
+                    dowel("DW1", [28.5, 31.25], [3.05, 3.05]),
+                    dowel("DW2", [76.5, 31.25], [4.0, 3.05]),
+                    screw("MH7", [52.5, 31.25]),
+                    screw("MH1", [3.2, 3.2]),
+                    screw("MH2", [101.8, 3.2]),
+                    screw("MH3", [3.2, 70.8]),
+                    screw("MH4", [101.8, 70.8]),
+                ]
+            }
         }
     }
 
@@ -182,26 +188,26 @@ impl Bed {
     }
 
     /// The region (x0, y0, x1, y1) the interposer must fit inside, when
-    /// the bed constrains it: Switchyard's conveyor (D12) passes x 5–100,
-    /// y 5–69, and CR-17 puts the outline, pogos, dowels and fiducials
-    /// inside it.
+    /// the bed constrains it: Switchyard's bench interposer zone, the
+    /// 105 × 74 mm landscape A7 at the board's joint edge, which carries
+    /// the corner screws.
     pub fn envelope(self) -> Option<[f64; 4]> {
         match self {
             Bed::S13 => None,
-            Bed::SwitchyardRev1 => Some([5.0, 5.0, 100.0, 69.0]),
+            Bed::SwitchyardRev1 => Some([0.0, 0.0, 105.0, 74.0]),
         }
     }
 
     /// Fit the panel's features to the bed. A bed with an envelope cuts the
-    /// interposer to it: the outline becomes the envelope, panel holes and
-    /// fiducials outside it go (the bed registers on its own alignment),
+    /// interposer to it: the outline becomes the envelope, the panel's
+    /// holes and fiducials go (the bed registers on its own alignment, and
+    /// the DUT's tooling pins get their own reliefs, [`crate::shroud`]),
     /// and the bed's own top fiducials replace them. The bottom face
     /// carries no assembled parts, so it gets none.
     pub fn fit(self, mut panel: Panel) -> Panel {
         let Some([x0, y0, x1, y1]) = self.envelope() else {
             return panel;
         };
-        let inside = |p: &[f64; 2]| p[0] >= x0 && p[0] <= x1 && p[1] >= y0 && p[1] <= y1;
         let corners = [[x0, y0], [x1, y0], [x1, y1], [x0, y1]];
         panel.outline = (0..4)
             .map(|i| Outline::Line {
@@ -209,7 +215,7 @@ impl Bed {
                 end: corners[(i + 1) % 4],
             })
             .collect();
-        panel.holes.retain(|(at, _)| inside(at));
+        panel.holes.clear();
         panel.fids_top = self.fiducials();
         panel.fids_bottom.clear();
         panel.envelope = Some([x0, y0, x1, y1]);
