@@ -253,9 +253,19 @@ fn stackup_build<'a>(
     }
     let shared = |weights: &[Option<f64>]| weights.iter().all(|weight| *weight == weights[0]);
     let off = |build: &&StackupBuild| (build.board_thickness.millimeters() - thickness).abs();
+    // Between two equally near builds, the thicker: thickness tolerances
+    // grow with the nominal, so it is the one a board-thickness rule accepts.
     let nearest = builds
         .iter()
-        .min_by(|left, right| off(left).total_cmp(&off(right)))
+        .min_by(|left, right| {
+            let (left_off, right_off) = (off(left), off(right));
+            if (left_off - right_off).abs() <= COMPARISON_EPSILON_MM {
+                let mm = |build: &&&StackupBuild| build.board_thickness.millimeters();
+                mm(right).total_cmp(&mm(left))
+            } else {
+                left_off.total_cmp(&right_off)
+            }
+        })
         .map(|build| build.board_thickness.clone())
         .expect("builds are not empty");
     let build = builds.into_iter().find(|build| {

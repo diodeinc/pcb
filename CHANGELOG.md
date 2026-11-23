@@ -15,6 +15,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ### Fixed
 
 - The JLCPCB PDK lists stackup templates only for builds its board-thickness rule allows. DFM named `JLC061811-2116` from a 1.8 mm six-layer build for a board its thickness rule judged as 2.0 mm; it dropped 11 such builds (1.8 mm, and 2.5 mm and up below 12 layers).
+- A board halfway between two of a PDK's stackup builds gets the thicker build's template, whose larger thickness tolerance fits it, rather than the first listed.
 
 ## [0.4.104] - 2026-11-23
 

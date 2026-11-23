@@ -2186,6 +2186,29 @@ templates = [
             ),
             (1.8, 1.0, 0.5)
         );
+        // Halfway between two builds, the thicker: only its tolerance fits.
+        let build = &pdk[pdk.find("[[stackup_builds]]").unwrap()..];
+        let thick = |mm: &str| {
+            build.replace(
+                r#"board_thickness = "1.6 mm""#,
+                &format!(r#"board_thickness = "{mm} mm""#),
+            )
+        };
+        let two_builds = format!(
+            "{}{}\n{}",
+            &pdk[..pdk.find("[[stackup_builds]]").unwrap()],
+            thick("2.0"),
+            thick("2.5")
+        );
+        let build_mm = |board: &str| {
+            let xml = stacked_board("0.035", "0.0152", &["0.1", "1.265", "0.15"], board);
+            check_with_pdk(&xml, LayoutTarget::Board, &two_builds)
+                .stackup_template
+                .unwrap()
+                .board_thickness_mm
+        };
+        assert_eq!(build_mm("2.25"), 2.5);
+        assert_eq!(build_mm("2.24"), 2.0);
         // A saved report records the same selection.
         #[cfg(feature = "cli")]
         {
