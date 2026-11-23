@@ -749,15 +749,6 @@ templates = [
 ]
 
 [[stackup_builds]]
-copper_layers = 4
-board_thickness = "2.5 mm"
-outer_copper_weight = "2 oz"
-inner_copper_weight = "2 oz"
-templates = [
-  { name = "JLC042522-7628", code = "202403230235061852", lamination_fee = true, dielectric_gaps_mm = [0.4395, 1.36, 0.4395] },
-]
-
-[[stackup_builds]]
 copper_layers = 6
 board_thickness = "0.6 mm"
 outer_copper_weight = "1 oz"
@@ -1078,15 +1069,6 @@ templates = [
 
 [[stackup_builds]]
 copper_layers = 6
-board_thickness = "1.8 mm"
-outer_copper_weight = "1 oz"
-inner_copper_weight = "1 oz"
-templates = [
-  { name = "JLC061811-2116", code = "202604301047287213", lamination_fee = true, dielectric_gaps_mm = [0.109, 0.1, 1.203, 0.1, 0.109] },
-]
-
-[[stackup_builds]]
-copper_layers = 6
 board_thickness = "2.0 mm"
 outer_copper_weight = "1 oz"
 inner_copper_weight = "0.5 oz"
@@ -1168,15 +1150,6 @@ templates = [
   { name = "JLC062022-2116", code = "202305250703081194", lamination_fee = true, dielectric_gaps_mm = [0.3015, 0.35, 0.311, 0.35, 0.3015] },
   { name = "JLC062022-2116A", code = "202407151029202012", lamination_fee = true, dielectric_gaps_mm = [0.3505, 0.3, 0.32, 0.3, 0.3505] },
   { name = "JLC062022-7628", code = "202306090342141252", dielectric_gaps_mm = [0.3555, 0.3, 0.325, 0.3, 0.3555] },
-]
-
-[[stackup_builds]]
-copper_layers = 6
-board_thickness = "3.0 mm"
-outer_copper_weight = "1 oz"
-inner_copper_weight = "1 oz"
-templates = [
-  { name = "JLC063011-3313", code = "202404030552181882", lamination_fee = true, dielectric_gaps_mm = [0.092, 1.23, 0.184, 1.23, 0.092] },
 ]
 
 [[stackup_builds]]
@@ -1476,25 +1449,6 @@ templates = [
 ]
 
 [[stackup_builds]]
-copper_layers = 8
-board_thickness = "2.5 mm"
-outer_copper_weight = "1 oz"
-inner_copper_weight = "1 oz"
-templates = [
-  { name = "JLC082511-7628", code = "202310240929141562", default = true, dielectric_gaps_mm = [0.421, 0.2, 0.406, 0.2, 0.406, 0.2, 0.421] },
-  { name = "JLC082511-2116", code = "202310241028191535", dielectric_gaps_mm = [0.233, 0.45, 0.218, 0.45, 0.218, 0.45, 0.233] },
-]
-
-[[stackup_builds]]
-copper_layers = 8
-board_thickness = "3.0 mm"
-outer_copper_weight = "1 oz"
-inner_copper_weight = "1 oz"
-templates = [
-  { name = "JLC083011-7628", code = "202312210403451632", lamination_fee = true, dielectric_gaps_mm = [0.421, 0.35, 0.406, 0.35, 0.406, 0.35, 0.421] },
-]
-
-[[stackup_builds]]
 copper_layers = 10
 board_thickness = "0.8 mm"
 outer_copper_weight = "1 oz"
@@ -1700,60 +1654,6 @@ outer_copper_weight = "2 oz"
 inner_copper_weight = "2 oz"
 templates = [
   { name = "JLC102022-1080", code = "202310251114041553", lamination_fee = true, dielectric_gaps_mm = [0.1415, 0.1, 0.238, 0.1, 0.238, 0.1, 0.238, 0.1, 0.1415] },
-]
-
-[[stackup_builds]]
-copper_layers = 10
-board_thickness = "2.5 mm"
-outer_copper_weight = "1 oz"
-inner_copper_weight = "0.5 oz"
-templates = [
-  { name = "JLC10251H-7628", code = "202309261047171459", default = true, dielectric_gaps_mm = [0.2084, 0.3, 0.2388, 0.3, 0.2388, 0.3, 0.2388, 0.3, 0.2084] },
-]
-
-[[stackup_builds]]
-copper_layers = 10
-board_thickness = "2.5 mm"
-outer_copper_weight = "1 oz"
-inner_copper_weight = "1 oz"
-templates = [
-  { name = "JLC102511-2116", code = "202309261010341477", default = true, lamination_fee = true, dielectric_gaps_mm = [0.239, 0.25, 0.224, 0.25, 0.224, 0.25, 0.224, 0.25, 0.239] },
-]
-
-[[stackup_builds]]
-copper_layers = 10
-board_thickness = "2.5 mm"
-outer_copper_weight = "2 oz"
-inner_copper_weight = "0.5 oz"
-templates = [
-  { name = "JLC10252H-7628A", code = "202309261051411478", default = true, dielectric_gaps_mm = [0.2084, 0.3, 0.2084, 0.3, 0.2084, 0.3, 0.2084, 0.3, 0.2084] },
-]
-
-[[stackup_builds]]
-copper_layers = 10
-board_thickness = "2.5 mm"
-outer_copper_weight = "2 oz"
-inner_copper_weight = "1 oz"
-templates = [
-  { name = "JLC102521-2116A", code = "202309261056101470", default = true, dielectric_gaps_mm = [0.239, 0.25, 0.224, 0.25, 0.224, 0.25, 0.224, 0.25, 0.239] },
-]
-
-[[stackup_builds]]
-copper_layers = 10
-board_thickness = "2.5 mm"
-outer_copper_weight = "2 oz"
-inner_copper_weight = "2 oz"
-templates = [
-  { name = "JLC102522-2116", code = "202403060914101765", dielectric_gaps_mm = [0.3505, 0.1, 0.238, 0.1, 0.32, 0.1, 0.238, 0.1, 0.3505] },
-]
-
-[[stackup_builds]]
-copper_layers = 10
-board_thickness = "3.0 mm"
-outer_copper_weight = "2 oz"
-inner_copper_weight = "2 oz"
-templates = [
-  { name = "JLC103022-2116", code = "202403060942501757", dielectric_gaps_mm = [0.3095, 0.3, 0.197, 0.3, 0.197, 0.3, 0.197, 0.3, 0.3095] },
 ]
 
 [[stackup_builds]]
