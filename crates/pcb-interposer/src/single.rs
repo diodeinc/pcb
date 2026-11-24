@@ -12,9 +12,10 @@
 //! The interposer grows along the rows only as far as its pogos need
 //! ([`POGO_EDGE_MM`] past the outermost); the printed upper shroud grows
 //! to carry the rest of the board and its nest. Among the
-//! placements that fit, it takes the one with the shortest total distance
-//! from each contact to the nearest bed land of its role, then the one
-//! nearest the bed's center.
+//! placements that fit, it takes the one whose interposer overhangs the
+//! bed zone least, then the one with the shortest total distance from each
+//! contact to the nearest bed land of its role, then the one nearest the
+//! bed's center.
 
 use anyhow::{Context, Result, bail};
 use ipc2581::Ipc2581;
@@ -172,7 +173,7 @@ pub fn place(ipc: &Ipc2581, bed: Bed, footprints: Footprints) -> Result<Placed> 
     let center = [(ex0 + ex1) / 2.0, (ey0 + ey1) / 2.0];
     let um = |d: f64| (d * 1000.0).round() as i64;
 
-    let mut best: Option<((i64, i64), Placement)> = None;
+    let mut best: Option<((i64, i64, i64), Placement)> = None;
     for quarter_turns in 0..4u8 {
         let pts: Vec<[f64; 2]> = found
             .iter()
@@ -219,7 +220,12 @@ pub fn place(ipc: &Ipc2581, bed: Bed, footprints: Footprints) -> Result<Placed> 
                             .min_by(f64::total_cmp)
                     })
                     .sum();
+                // Interposer past the bed zone is board area bought for
+                // every fixture; a few mm of track are not.
+                let overhang = (ex0 - (lo_x + offset[0] - POGO_EDGE_MM)).max(0.0)
+                    + (hi_x + offset[0] + POGO_EDGE_MM - ex1).max(0.0);
                 let score = (
+                    um(overhang),
                     um(wire),
                     um(distance(at([mid_x, (lo_y + hi_y) / 2.0]), center)),
                 );
