@@ -112,6 +112,9 @@ enum Commands {
         /// Interposer number (1-1023) the bed's ID straps encode; required by switchyard-rev1
         #[arg(long)]
         interposer_id: Option<u16>,
+        /// Order number to derive the interposer number from instead (a 10-bit check of it, not the number itself)
+        #[arg(long, conflicts_with = "interposer_id")]
+        order: Option<String>,
         /// Auto-route the interposer with FreeRouting (requires Java 25+)
         #[arg(long)]
         route: bool,
@@ -570,9 +573,21 @@ pub fn execute(args: Ipc2581Args, resolution: Resolution) -> anyhow::Result<()> 
             bed,
             primary_cell,
             interposer_id,
+            order,
             route,
             ipc,
         } => {
+            let interposer_id = match order {
+                Some(order) => {
+                    let id = pcb_interposer::bed::order_id(&order)?;
+                    println!(
+                        "Interposer ID {id} checks order {}",
+                        order.trim().to_ascii_uppercase()
+                    );
+                    Some(id)
+                }
+                None => interposer_id,
+            };
             let cell_use = if primary_cell {
                 pcb_interposer::CellUse::Primary
             } else {

@@ -252,6 +252,29 @@ impl Bed {
 
 /// Interposer `number`'s six ID digits, ID1 first: five base-4 digits and
 /// the check digit.
+/// The interposer number an order number straps: the CRC-16/CCITT-FALSE
+/// of its characters (letters upper-cased), folded into 1–1023. The
+/// straps hold ten bits, so they check an order number rather than spell
+/// it: two orders share a number about once in a thousand pairs.
+pub fn order_id(order: &str) -> Result<u16> {
+    let order = order.trim().to_ascii_uppercase();
+    if order.is_empty() || !order.bytes().all(|b| b.is_ascii_alphanumeric()) {
+        bail!("order number {order:?} is not letters and digits");
+    }
+    let mut crc: u16 = 0xFFFF;
+    for byte in order.bytes() {
+        crc ^= u16::from(byte) << 8;
+        for _ in 0..8 {
+            crc = if crc & 0x8000 != 0 {
+                (crc << 1) ^ 0x1021
+            } else {
+                crc << 1
+            };
+        }
+    }
+    Ok(crc % 1023 + 1)
+}
+
 pub fn id_digits(number: u16) -> Result<[u8; 6]> {
     if !(1..=1023).contains(&number) {
         bail!(
@@ -352,6 +375,16 @@ mod tests {
             assert!((5.0..=69.0).contains(&land.xy[1]), "{land:?}");
         }
         assert!(Bed::SwitchyardRev1.lands(74.0, 105.0).is_err());
+    }
+
+    #[test]
+    fn order_numbers_fold_into_the_strap_range() {
+        // CRC-16/CCITT-FALSE("123456789") = 0x29B1.
+        assert_eq!(order_id("123456789").unwrap(), 0x29B1 % 1023 + 1);
+        assert_eq!(order_id("bcxc5").unwrap(), order_id(" BCXC5 ").unwrap());
+        assert!((1..=1023).contains(&order_id("BCXC5").unwrap()));
+        assert!(order_id("BC-C5").is_err());
+        assert!(order_id("").is_err());
     }
 
     #[test]
