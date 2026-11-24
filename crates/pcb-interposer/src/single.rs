@@ -8,8 +8,10 @@
 //! face, tries the four quarter turns, and slides it over the bed in
 //! [`STEP_MM`] steps. A placement fits when every pogo sits inside the
 //! bed's envelope across the pogo rows and clear of the bed's alignment
-//! features and fiducials; along the rows the board may overhang the bed,
-//! and the interposer and plate grow to carry it and its nest. Among the
+//! features and fiducials; along the rows the board may overhang the bed.
+//! The interposer grows along the rows only as far as its pogos need
+//! ([`POGO_EDGE_MM`] past the outermost); the printed upper shroud grows
+//! to carry the rest of the board and its nest. Among the
 //! placements that fit, it takes the one with the shortest total distance
 //! from each contact to the nearest bed land of its role, then the one
 //! nearest the bed's center.
@@ -25,6 +27,10 @@ use crate::pattern::{A7_H, A7_W, Role};
 
 /// Placement search resolution.
 pub const STEP_MM: f64 = 0.5;
+
+/// How far past a pogo's center the interposer reaches where it overhangs
+/// the bed: the pad, its routing ring and the GND pour's stitching around it.
+pub const POGO_EDGE_MM: f64 = 5.0;
 
 /// How the board's own frame maps onto the bed's sheet frame (Y down):
 /// `sheet = R(quarter_turns · 90°) · M · (x, -y) + offset`, where `(x, y)`
@@ -49,7 +55,7 @@ impl Placement {
 #[derive(Debug)]
 pub struct Placed {
     /// The interposer's fixed features: the bed's envelope, grown along
-    /// the pogo rows to carry the board and its nest.
+    /// the pogo rows to carry pogos placed past it.
     pub panel: Panel,
     pub contacts: Vec<PanelContact>,
     /// The board's bounding box in the sheet frame.
@@ -251,11 +257,13 @@ pub fn place(ipc: &Ipc2581, bed: Bed, footprints: Footprints) -> Result<Placed> 
         [f64::MAX, f64::MAX, f64::MIN, f64::MIN],
         |[a, b, c, d], p| [a.min(p[0]), b.min(p[1]), c.max(p[0]), d.max(p[1])],
     );
-    let reach = crate::shroud::nest_reach();
+    let (lo, hi) = contacts.iter().fold((f64::MAX, f64::MIN), |(lo, hi), c| {
+        (lo.min(c.xy[0]), hi.max(c.xy[0]))
+    });
     let envelope = [
-        ex0.min(board[0] - reach),
+        ex0.min(lo - POGO_EDGE_MM),
         ey0,
-        ex1.max(board[2] + reach),
+        ex1.max(hi + POGO_EDGE_MM),
         ey1,
     ];
     let [x0, y0, x1, y1] = envelope;

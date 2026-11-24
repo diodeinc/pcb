@@ -331,7 +331,7 @@ fn build(
                 .iter()
                 .map(|binding| plan.contacts[binding.contact].xy)
                 .collect();
-            let footprint = shroud::footprint(&panel, bed);
+            let footprint = shroud::footprint(&panel, bed, None);
             let locating = match mode {
                 Mode::SingleBoard => shroud::Locating::Nest,
                 Mode::Panel => {

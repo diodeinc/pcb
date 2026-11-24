@@ -127,8 +127,8 @@ const NEST_HEIGHT_MM: f64 = 1.2;
 const NEST_MARGIN_MM: f64 = 1.0;
 const FINGER_NOTCH_MM: f64 = 15.0;
 
-/// How far past the board's outline the shroud (and the interposer under
-/// it) must reach to carry a nest's rim.
+/// How far past the board's outline the shroud must reach to carry a
+/// nest's rim.
 pub fn nest_reach() -> f64 {
     NEST_GAP_MM + NEST_WALL_MM + NEST_MARGIN_MM
 }
@@ -271,12 +271,18 @@ const COUNTERBORE_WALL_MM: f64 = 1.2;
 
 /// The shroud's footprint `[x0, y0, x1, y1]`: the interposer's, grown on
 /// any side where a screw-head counterbore would break out of it (the
-/// bench's corner screws sit 3.2 mm in from the zone's edges).
-pub fn footprint(panel: &Panel, bed: Bed) -> [f64; 4] {
+/// bench's corner screws sit 3.2 mm in from the zone's edges), and along
+/// the pogo rows to carry a single board's `nest` (its outline) past the
+/// interposer's ends. Across the rows the shroud keeps to the bed.
+pub fn footprint(panel: &Panel, bed: Bed, nest: Option<[f64; 4]>) -> [f64; 4] {
     let [mut x0, mut y0, mut x1, mut y1] =
         panel
             .envelope
             .unwrap_or([0.0, 0.0, panel.width, panel.height]);
+    if let Some([nx0, _, nx1, _]) = nest {
+        x0 = x0.min(nx0 - nest_reach());
+        x1 = x1.max(nx1 + nest_reach());
+    }
     let reach = counterbore_radius() + PRINT_ALLOWANCE_MM / 2.0 + COUNTERBORE_WALL_MM;
     for screw in bed.alignment().iter().filter(|a| a.clamps) {
         let [x, y] = screw.at;
@@ -462,6 +468,15 @@ pub struct Shroud<'a> {
     pub dut: f64,
 }
 
+impl Shroud<'_> {
+    /// The board outline a nest rims, for a single board.
+    fn nest(&self) -> Option<[f64; 4]> {
+        (*self.locating == Locating::Nest)
+            .then(|| self.boards.first().copied())
+            .flatten()
+    }
+}
+
 /// The shroud's OpenSCAD source.
 pub fn scad(s: &Shroud) -> Result<String> {
     if s.bed.alignment().is_empty() {
@@ -472,7 +487,7 @@ pub fn scad(s: &Shroud) -> Result<String> {
     }
     let st = s.stack;
     let t = st.shroud;
-    let [x0, y0, x1, y1] = footprint(s.panel, s.bed);
+    let [x0, y0, x1, y1] = footprint(s.panel, s.bed, s.nest());
     let h = s.panel.height;
     let up = |p: [f64; 2]| [p[0], h - p[1]];
     let a = |v: f64| v + PRINT_ALLOWANCE_MM;
@@ -655,7 +670,7 @@ fn nest(w: &mut String, s: &Shroud, up: impl Fn([f64; 2]) -> [f64; 2]) -> Result
     let Some(&[nx0, ny0, nx1, ny1]) = s.boards.first() else {
         bail!("a nest needs the board's outline");
     };
-    let [x0, y0, x1, y1] = footprint(s.panel, s.bed);
+    let [x0, y0, x1, y1] = footprint(s.panel, s.bed, s.nest());
     let [a, b] = up([x0, y1]);
     let g = NEST_GAP_MM;
     let wall = NEST_WALL_MM;

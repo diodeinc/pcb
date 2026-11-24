@@ -552,9 +552,22 @@ fn single_board_overhangs_the_bed_in_a_nest() {
     let [ex0, ey0, ex1, ey1] = placed.panel.envelope.expect("an envelope");
     assert!(ex0 < 0.0 && ex1 > 105.0, "{ex0} {ex1}");
     assert_eq!((ey0, ey1), (0.0, 74.0));
+    // The interposer reaches just past the outermost pogos; the shroud
+    // carries the rest of the board and its nest.
+    let edge = pcb_interposer::single::POGO_EDGE_MM;
+    let (lo, hi) = placed
+        .contacts
+        .iter()
+        .fold((f64::MAX, f64::MIN), |(lo, hi), c| {
+            (lo.min(c.xy[0]), hi.max(c.xy[0]))
+        });
+    assert!((ex0 - (lo - edge).min(0.0)).abs() < 1e-9, "{ex0} {lo}");
+    assert!((ex1 - (hi + edge).max(105.0)).abs() < 1e-9, "{ex1} {hi}");
     let reach = pcb_interposer::shroud::nest_reach();
     let [bx0, _, bx1, _] = placed.board;
-    assert!(ex0 <= bx0 - reach + 1e-9 && ex1 >= bx1 + reach - 1e-9);
+    let [sx0, _, sx1, _] =
+        pcb_interposer::shroud::footprint(&placed.panel, bed, Some(placed.board));
+    assert!(sx0 <= bx0 - reach + 1e-9 && sx1 >= bx1 + reach - 1e-9);
     let r = pcb_interposer::pogo::COURTYARD_RADIUS_MM;
     for contact in &placed.contacts {
         let [x, y] = contact.xy;
