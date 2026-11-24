@@ -136,6 +136,20 @@ pub fn extract_contacts(
     let (grid, offset, board_step) = board_grid(ipc)?;
 
     let roles = bom_roles(ipc, footprints);
+    let points: Vec<(&str, [f64; 2], bool)> = board_step
+        .components
+        .iter()
+        .filter_map(|component| {
+            let refdes = ipc.resolve(component.ref_des?);
+            let role = roles.get(refdes)?;
+            Some((
+                refdes,
+                [component.location.x, component.location.y],
+                role.fitted,
+            ))
+        })
+        .collect();
+    let dropped = crowded(&points);
     let mut contacts = Vec::new();
     let mut unknown = 0usize;
     for j in 0..grid.ny.max(1) {
@@ -146,9 +160,12 @@ pub fn extract_contacts(
                     continue;
                 };
                 let refdes = ipc.resolve(ref_des).to_string();
-                let Some((ict, path)) = roles.get(&refdes) else {
+                let Some(BomRole { ict, path, .. }) = roles.get(&refdes) else {
                     continue;
                 };
+                if dropped.contains(&refdes) {
+                    continue;
+                }
                 let Some(role) = parse_role(ict) else {
                     unknown += 1;
                     continue;
@@ -210,13 +227,19 @@ pub enum Footprints {
     Any,
 }
 
-/// Designator → (`Ict` role name, zen path) from the BOM, for the test
-/// points `footprints` admits. Each test point with a role on another
-/// footprint draws a warning either way.
-pub(crate) fn bom_roles(
-    ipc: &Ipc2581,
-    footprints: Footprints,
-) -> BTreeMap<String, (String, String)> {
+/// A test point's BOM role: its `Ict` name, zen path, and whether it sits
+/// on the TestPoint ICT footprint.
+#[derive(Debug, Clone)]
+pub(crate) struct BomRole {
+    pub ict: String,
+    pub path: String,
+    pub fitted: bool,
+}
+
+/// Designator → role from the BOM, for the test points `footprints`
+/// admits. Each test point with a role on another footprint draws a
+/// warning either way.
+pub(crate) fn bom_roles(ipc: &Ipc2581, footprints: Footprints) -> BTreeMap<String, BomRole> {
     let mut roles = BTreeMap::new();
     let Some(bom) = ipc.bom() else {
         return roles;
@@ -245,7 +268,8 @@ pub(crate) fn bom_roles(
                 continue;
             }
             let package = ref_des.package_ref.map(|package| ipc.resolve(package));
-            if !package.is_some_and(is_ict_package) {
+            let fitted = package.is_some_and(is_ict_package);
+            if !fitted {
                 // Loudly either way: a pad not sized for a pogo may be
                 // missed once tolerances stack up, or crowd its neighbours.
                 if first_warning(&refdes, package) {
@@ -267,10 +291,73 @@ pub(crate) fn bom_roles(
                     continue;
                 }
             }
-            roles.insert(refdes, (ict.clone(), path.clone()));
+            roles.insert(
+                refdes,
+                BomRole {
+                    ict: ict.clone(),
+                    path: path.clone(),
+                    fitted,
+                },
+            );
         }
     }
     roles
+}
+
+/// The pitch two pogos need: their courtyards may touch, not overlap.
+pub const MIN_POGO_PITCH_MM: f64 = 2.0 * crate::pogo::COURTYARD_RADIUS_MM;
+
+/// The test points off the ICT footprint to leave unprobed because a pogo
+/// on them would crowd another contact: closer than
+/// [`MIN_POGO_PITCH_MM`], centre to centre, in the board's own frame.
+/// ICT-footprint points always keep theirs; the rest are admitted fewest
+/// conflicts first (then by designator), each only if it clears every
+/// point already admitted. Each one dropped draws a warning.
+pub(crate) fn crowded(points: &[(&str, [f64; 2], bool)]) -> std::collections::BTreeSet<String> {
+    let near =
+        |a: [f64; 2], b: [f64; 2]| (a[0] - b[0]).hypot(a[1] - b[1]) < MIN_POGO_PITCH_MM - 1e-6;
+    let mut kept: Vec<(&str, [f64; 2])> = points
+        .iter()
+        .filter(|(_, _, fitted)| *fitted)
+        .map(|(refdes, at, _)| (*refdes, *at))
+        .collect();
+    let mut loose: Vec<(usize, &str, [f64; 2])> = points
+        .iter()
+        .filter(|(_, _, fitted)| !*fitted)
+        .map(|(refdes, at, _)| {
+            let conflicts = points
+                .iter()
+                .filter(|(other, at2, _)| other != refdes && near(*at, *at2))
+                .count();
+            (conflicts, *refdes, *at)
+        })
+        .collect();
+    loose.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| natural(a.1).cmp(&natural(b.1))));
+    let mut dropped = std::collections::BTreeSet::new();
+    for (_, refdes, at) in loose {
+        if let Some((other, at2)) = kept.iter().find(|(_, at2)| near(at, *at2)) {
+            eprintln!(
+                "\x1b[1;31mWARNING:\x1b[0m {refdes} not probed: {:.2} mm from {other}, under the \
+                 {MIN_POGO_PITCH_MM:.1} mm pogo pitch",
+                (at[0] - at2[0]).hypot(at[1] - at2[1])
+            );
+            dropped.insert(refdes.to_string());
+        } else {
+            kept.push((refdes, at));
+        }
+    }
+    dropped
+}
+
+/// A designator's sort key: its letters, then its number.
+fn natural(refdes: &str) -> (String, u64) {
+    let split = refdes
+        .find(|c: char| c.is_ascii_digit())
+        .unwrap_or(refdes.len());
+    (
+        refdes[..split].to_string(),
+        refdes[split..].parse().unwrap_or(0),
+    )
 }
 
 /// Whether this is the first footprint warning for `refdes`: one run
@@ -297,5 +384,37 @@ fn is_ict_package(name: &str) -> bool {
             .strip_prefix('_')
             .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit())),
         None => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn crowded_pads_yield_to_ict_footprints_and_to_each_other() {
+        // TP1 is the ICT footprint; TP2 sits 2.5 mm from it, so it goes.
+        // TP3 and TP4 are 2.2 mm apart, clear of TP1: TP4 also crowds TP5,
+        // so TP3 (one conflict) is admitted first and TP4 goes; TP5, 3 mm
+        // from TP4 and clear of the rest, stays.
+        let points = [
+            ("TP1", [0.0, 0.0], true),
+            ("TP2", [2.5, 0.0], false),
+            ("TP3", [10.0, 0.0], false),
+            ("TP4", [12.2, 0.0], false),
+            ("TP5", [14.0, 0.0], false),
+        ];
+        let dropped: Vec<String> = crowded(&points).into_iter().collect();
+        assert_eq!(dropped, ["TP2", "TP4"]);
+    }
+
+    #[test]
+    fn spaced_pads_and_crowded_ict_footprints_are_all_kept() {
+        let points = [
+            ("TP1", [0.0, 0.0], true),
+            ("TP2", [2.0, 0.0], true),
+            ("TP3", [5.0, 0.0], false),
+        ];
+        assert!(crowded(&points).is_empty());
     }
 }

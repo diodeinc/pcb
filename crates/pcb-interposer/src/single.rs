@@ -22,7 +22,9 @@ use ipc2581::Ipc2581;
 use ipc2581::types::Side;
 
 use crate::bed::Bed;
-use crate::contacts::{Footprints, PanelContact, bom_roles, component_side, parse_role};
+use crate::contacts::{
+    BomRole, Footprints, PanelContact, bom_roles, component_side, crowded, parse_role,
+};
 use crate::panel::{Outline, Panel};
 use crate::pattern::{A7_H, A7_W, Role};
 
@@ -114,6 +116,20 @@ pub fn place(ipc: &Ipc2581, bed: Bed, footprints: Footprints) -> Result<Placed> 
     };
 
     let roles = bom_roles(ipc, footprints);
+    let points: Vec<(&str, [f64; 2], bool)> = board
+        .components
+        .iter()
+        .filter_map(|component| {
+            let refdes = ipc.resolve(component.ref_des?);
+            let role = roles.get(refdes)?;
+            Some((
+                refdes,
+                [component.location.x, component.location.y],
+                role.fitted,
+            ))
+        })
+        .collect();
+    let dropped = crowded(&points);
     let mut found: Vec<(PanelContact, [f64; 2])> = Vec::new();
     let mut sides: Vec<(String, Option<Side>)> = Vec::new();
     for component in &board.components {
@@ -121,9 +137,12 @@ pub fn place(ipc: &Ipc2581, bed: Bed, footprints: Footprints) -> Result<Placed> 
             continue;
         };
         let refdes = ipc.resolve(ref_des).to_string();
-        let Some((ict, path)) = roles.get(&refdes) else {
+        let Some(BomRole { ict, path, .. }) = roles.get(&refdes) else {
             continue;
         };
+        if dropped.contains(&refdes) {
+            continue;
+        }
         let Some(role) = parse_role(ict) else {
             eprintln!("warning: skipped {refdes}: unrecognized ict role {ict}");
             continue;
