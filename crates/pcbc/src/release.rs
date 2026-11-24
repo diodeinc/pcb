@@ -167,17 +167,35 @@ fn execute_tasks(info: &ReleaseInfo, tasks: &[(&str, TaskFn)], start_time: Insta
     Ok(())
 }
 
-/// Unsuppressed errors, `sch` / `sch.*` diagnostics and missing part information
-/// block a board release and a package publish.
+/// Unsuppressed errors and unsuppressed `sch` / `sch.*` diagnostics block a
+/// board release and a package publish.
 pub(crate) fn blocks_release(diagnostic: &pcb_zen_core::Diagnostic) -> bool {
-    !diagnostic.suppressed
-        && (diagnostic.is_error() || diagnostic.has_kind("sch") || missing_part_info(diagnostic))
+    !diagnostic.suppressed && (diagnostic.is_error() || diagnostic.has_kind("sch"))
 }
 
-/// A BOM part without a manufacturer or MPN: a build warning, so the design
-/// still renders, but a release error.
-fn missing_part_info(diagnostic: &pcb_zen_core::Diagnostic) -> bool {
-    diagnostic.has_kind("bom.unspecified") || diagnostic.has_kind("bom.underspecified")
+/// A BOM part without a manufacturer or MPN is a build warning, so the design
+/// still renders, but a release error. Run before suppression, so `-S warnings`
+/// cannot release an incomplete BOM; suppressing the kind itself still does.
+pub(crate) struct PromoteMissingPartInfo;
+
+impl DiagnosticsPass for PromoteMissingPartInfo {
+    fn apply(&self, diagnostics: &mut Diagnostics) {
+        for diagnostic in &mut diagnostics.diagnostics {
+            if diagnostic.has_kind("bom.unspecified") || diagnostic.has_kind("bom.underspecified") {
+                diagnostic.severity = starlark::errors::EvalSeverity::Error;
+            }
+        }
+    }
+}
+
+/// Build passes for a release or package publish.
+pub(crate) fn release_build_passes(suppress: &[String]) -> Vec<Box<dyn DiagnosticsPass>> {
+    let mut passes: Vec<Box<dyn DiagnosticsPass>> = vec![Box::new(PromoteMissingPartInfo)];
+    passes.extend(crate::build::create_diagnostics_processing_passes(
+        suppress,
+        &[],
+    ));
+    passes
 }
 
 fn release_blocked(diagnostics: &Diagnostics) -> bool {
@@ -197,11 +215,7 @@ fn release_diagnostics(
             let mut report =
                 pcb_zen_core::diagnostics::DiagnosticReport::from_diagnostic(diagnostic);
             // Release gating uses the outer severity, not the nested cause's.
-            report.severity = if missing_part_info(diagnostic) {
-                starlark::errors::EvalSeverity::Error
-            } else {
-                diagnostic.severity
-            };
+            report.severity = diagnostic.severity;
             report.location = report.location.replace(&staged_src, &workspace_root);
             report.body = report.body.replace(&staged_src, &workspace_root);
             for frame in &mut report.stack {
@@ -833,7 +847,7 @@ fn validate_build(
         let mut has_warnings = false;
 
         // Export diagnostics to JSON for release artifacts
-        let mut passes = crate::build::create_diagnostics_processing_passes(&info.suppress, &[]);
+        let mut passes = release_build_passes(&info.suppress);
         if !info.quiet {
             passes.push(Box::new(RenderBuildErrorsPass));
         }
@@ -1161,23 +1175,22 @@ mod tests {
         );
         assert!(findings[0].suppressed);
 
-        // Missing part information is a build warning but a release error.
-        let unspecified = Diagnostic::categorized(
-            "board.zen",
-            "Component 'TP1' is missing part information",
-            "bom.unspecified",
-            Warning,
-        );
-        let diagnostics = Diagnostics {
-            diagnostics: vec![unspecified],
+        // Missing part information is a build warning but a release error,
+        // which `-S warnings` does not suppress and its kind does.
+        let unspecified = || Diagnostics {
+            diagnostics: vec![Diagnostic::categorized(
+                "board.zen",
+                "Component 'TP1' is missing part information",
+                "bom.unspecified",
+                Warning,
+            )],
         };
+        let mut diagnostics = unspecified();
+        diagnostics.apply_passes(&release_build_passes(&["warnings".to_string()]));
         assert!(release_blocked(&diagnostics));
-        let findings =
-            release_diagnostics(&diagnostics, Path::new("/repo"), Path::new("/tmp/release"));
-        assert_eq!(
-            serde_json::to_value(&findings[0]).unwrap()["severity"],
-            "error"
-        );
+        let mut diagnostics = unspecified();
+        diagnostics.apply_passes(&release_build_passes(&["bom.unspecified".to_string()]));
+        assert!(!release_blocked(&diagnostics));
     }
 
     #[test]
