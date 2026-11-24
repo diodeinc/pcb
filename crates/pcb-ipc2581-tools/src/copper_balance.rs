@@ -508,7 +508,7 @@ pub fn physical_copper_stack_weights(ipc: &Ipc2581) -> Option<HashMap<String, f6
 
 /// Convert one positive plane or boundary-web region to IPC contours. Voids
 /// are emitted separately as negative dictionary instances.
-fn ipc_region_features(region: &ContourSet) -> Result<Vec<SetFeature>> {
+pub(crate) fn ipc_region_features(region: &ContourSet) -> Result<Vec<SetFeature>> {
     simplify_shapes(region.rings.clone(), FillRule::NonZero)
         .into_iter()
         .map(|shape| {

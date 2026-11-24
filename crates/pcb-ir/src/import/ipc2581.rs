@@ -37,5 +37,6 @@ mod specs;
 #[cfg(test)]
 mod tests;
 
+pub use self::primitives::polygon_contour;
 use self::{append::*, primitives::*, specs::*};
 pub use self::{copper_balance::*, design::*, exporter::*, features::*, intent::*, layout::*};

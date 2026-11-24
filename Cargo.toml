@@ -73,6 +73,7 @@ inquire = "0.9"
 itertools = "0.15"
 heck = "0.5.0"
 hex = "0.4"
+datamatrix = "0.3.3"
 # Tests match HTTP requests, not cookies; omit the cookie header/SHA-1 stack.
 httpmock = { version = "0.9", default-features = false }
 libm = { version = "0.2.16", default-features = false }

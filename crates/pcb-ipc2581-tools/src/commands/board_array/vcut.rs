@@ -62,7 +62,7 @@ pub(super) fn add_vcut_lines(
     generated_geometry.add_layer_feature(GeneratedFeatureScope::Array, &layer_name, callouts);
 }
 
-fn solid_line_feature(start: Point, end: Point, line_width: f64) -> SetFeature {
+pub(super) fn solid_line_feature(start: Point, end: Point, line_width: f64) -> SetFeature {
     let point = |point: Point| IpcPoint {
         x: point.x,
         y: point.y,

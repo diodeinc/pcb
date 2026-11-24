@@ -88,7 +88,15 @@ fn create_board_array_xml(xml: &str, options: &BoardArrayCreateOptions) -> Resul
 }
 
 fn create_auto_board_array_xml(xml: &str, sheet: Option<AutoSheetSize>) -> Result<String> {
-    Ok(create_auto_board_array(xml, sheet, false, Separation::VScore, Resolution::default())?.xml)
+    Ok(create_auto_board_array(
+        xml,
+        sheet,
+        false,
+        Separation::VScore,
+        None,
+        Resolution::default(),
+    )?
+    .xml)
 }
 
 fn manual_spec(
@@ -266,7 +274,7 @@ fn board_array_balancing_solves_every_copper_layer() {
         create_auto_board_array_xml(&two_layer_board_xml(), Some(AutoSheetSize::A7)).unwrap();
     let provisional = Ipc2581::parse(&provisional_xml).unwrap();
     let balance =
-        generate_automatic_board_array_copper_balance(&provisional, resolution.tolerance_mm)
+        generate_automatic_board_array_copper_balance(&provisional, resolution.tolerance_mm, &[])
             .unwrap();
 
     assert!(balance.panel_area_mm2 > 0.0);
@@ -325,6 +333,7 @@ fn board_array_creation_reports_and_emits_the_balance() {
         Some(AutoSheetSize::A7),
         true,
         Separation::VScore,
+        None,
         resolution,
     )
     .unwrap();
@@ -334,6 +343,7 @@ fn board_array_creation_reports_and_emits_the_balance() {
         Some(AutoSheetSize::A7),
         true,
         Separation::VScore,
+        None,
         resolution.with_accuracy(pcb_ir::geom::GeometryAccuracy::micrometres(30)),
     )
     .unwrap();
@@ -585,6 +595,7 @@ fn auto_orientation_preserves_packing_and_all_layer_geometry() {
                 Some(sheet),
                 balanced,
                 separation,
+                None,
                 Resolution::default(),
             )
             .unwrap();
@@ -2466,4 +2477,338 @@ fn corners_hold_a_board_its_straight_sites_cannot() {
     )
     .unwrap();
     assert!(creation.warnings.is_empty(), "{:?}", creation.warnings);
+}
+
+const LEGEND_LAYERS: &str = r#"  <Layer name="F.Silk" layerFunction="SILKSCREEN" side="TOP" polarity="POSITIVE"/>
+  <Layer name="B.Silk" layerFunction="SILKSCREEN" side="BOTTOM" polarity="POSITIVE"/>"#;
+
+/// A board from the origin with copper, mask and legend on both sides and
+/// one TOP trace.
+fn board_fixture_with_legend_mm(width_mm: f64, height_mm: f64) -> String {
+    board_fixture(
+        &format!("{SURFACE_LAYERS}\n{LEGEND_LAYERS}"),
+        "",
+        &rectangle(0.0, 0.0, width_mm, height_mm),
+        &line_feature("TOP", (1.0, 2.0), (width_mm - 1.0, height_mm - 2.0), 0.8),
+    )
+}
+
+fn order_labels() -> ArrayLabels {
+    ArrayLabels {
+        part: Some("PCB-ETMK3".to_string()),
+        order: Some("DO-RVX0Y".to_string()),
+        run: Some("DN-4K2PQ".to_string()),
+    }
+}
+
+/// An automatic mouse-bite array of `xml` on `sheet` with rail artwork, and
+/// how many of its generated features are tooling, not artwork.
+fn rail_art_spec(xml: &str, sheet: AutoSheetSize, labels: &ArrayLabels) -> (BoardArraySpec, usize) {
+    let resolution = Resolution::default();
+    let ipc = Ipc2581::parse(xml).unwrap();
+    let root = primary_board_layout(&ipc).unwrap();
+    let (options, panelization) =
+        auto_board_array_options(&ipc, root, Some(sheet), resolution).unwrap();
+    let mut spec = build_board_array_spec(
+        &ipc,
+        root,
+        &options,
+        panelization,
+        Separation::MouseBite,
+        resolution,
+    )
+    .unwrap();
+    let tooling = spec.generated_geometry.layer_features.len();
+    rail_art::add_rail_art(&mut spec, &ipc, xml, labels, resolution).unwrap();
+    (spec, tooling)
+}
+
+/// The bounds of a generated line or contour, ink included.
+fn drawn_bounds(feature: &SetFeature) -> Option<BBox> {
+    use ipc2581::types::primitives::{UserPrimitive, UserShapeType};
+    match feature {
+        SetFeature::Stroke(Stroke {
+            path: StrokePath::Line(line),
+            line_desc: Some(LineDescGroup::Inline(pen)),
+        }) => Some(
+            BBox::spanning(
+                Point::new(line.start.x, line.start.y),
+                Point::new(line.end.x, line.end.y),
+            )
+            .expand(pen.line_width / 2.0),
+        ),
+        SetFeature::UserPrimitive(feature) => {
+            let UserPrimitive::UserSpecial(special) = &feature.primitive;
+            let UserShapeType::Contour(contour) = &special.shapes[0].shape else {
+                return None;
+            };
+            Some(polygon_bounds(&contour.polygon))
+        }
+        _ => None,
+    }
+}
+
+fn polygon_bounds(polygon: &Polygon) -> BBox {
+    let mut bounds = BBox::empty();
+    for point in polygon.points() {
+        bounds.include_point(Point::new(point.x, point.y));
+    }
+    bounds
+}
+
+/// Rail artwork is drawn on whatever the frame has left: on every sheet, in
+/// both packing orientations, with and without order labels, none of it
+/// reaches the array edge, a routed slot, a hole or a fiducial's mask
+/// opening, and its copper and mask openings stay in the outer 5 mm.
+#[test]
+fn rail_art_keeps_to_the_frame_and_clear_of_tooling() {
+    use AutoSheetSize::{A4, A5, A6, A7};
+    for (board, sheet, labels) in [
+        ((40.0, 30.0), A7, order_labels()),
+        ((40.0, 30.0), A6, order_labels()),
+        ((40.0, 30.0), A5, ArrayLabels::default()),
+        ((40.0, 30.0), A4, order_labels()),
+        ((13.0, 10.0), A7, order_labels()),
+        ((13.0, 10.0), A6, ArrayLabels::default()),
+        ((60.0, 18.0), A5, order_labels()),
+    ] {
+        let case = format!("{board:?} on {}", sheet.name());
+        let xml = board_fixture_with_legend_mm(board.0, board.1);
+        let (spec, tooling) = rail_art_spec(&xml, sheet, &labels);
+        let (tooling, art) = spec.generated_geometry.layer_features.split_at(tooling);
+
+        let grid = spec.grid;
+        let cells = (0..grid.rows)
+            .flat_map(|row| (0..grid.columns).map(move |column| (column, row)))
+            .map(|(column, row)| {
+                Point::new(
+                    spec.edge_rail_mm.left + f64::from(column) * grid.pitch_x_mm,
+                    spec.edge_rail_mm.bottom + f64::from(row) * grid.pitch_y_mm,
+                )
+            })
+            .collect::<Vec<_>>();
+        // Hole edges, and the mask openings of each side's fiducials.
+        let mut holes = Vec::new();
+        let mut openings = Vec::new();
+        for (scope, layer_feature) in tooling {
+            let origins = match scope {
+                GeneratedFeatureScope::Array => vec![Point::new(0.0, 0.0)],
+                GeneratedFeatureScope::BoardCell => cells.clone(),
+            };
+            for (feature, origin) in layer_feature
+                .features
+                .iter()
+                .flat_map(|feature| origins.iter().map(move |origin| (feature, *origin)))
+            {
+                match feature {
+                    SetFeature::Hole(hole) => holes.push((
+                        Point::new(hole.x + origin.x, hole.y + origin.y),
+                        hole.diameter / 2.0,
+                    )),
+                    SetFeature::Fiducial(fiducial)
+                        if layer_feature.layer_name.ends_with("Mask") =>
+                    {
+                        openings.push((
+                            layer_feature.layer_name.starts_with('F'),
+                            Point::new(
+                                fiducial.location.x + origin.x,
+                                fiducial.location.y + origin.y,
+                            ),
+                        ))
+                    }
+                    _ => {}
+                }
+            }
+        }
+        assert!(!holes.is_empty() && openings.len() >= 8, "{case}");
+        let slots = spec
+            .profile_cutouts
+            .iter()
+            .map(polygon_bounds)
+            .collect::<Vec<_>>();
+
+        let art = art
+            .iter()
+            .map(|(_, layer_feature)| (&layer_feature.layer_name, &layer_feature.features))
+            .chain(
+                spec.generated_geometry
+                    .overlays
+                    .iter()
+                    .map(|(layer, features)| (layer, features)),
+            )
+            .flat_map(|(layer, features)| {
+                features
+                    .iter()
+                    .map(move |feature| (layer.as_str(), feature))
+            })
+            .collect::<Vec<_>>();
+        for silk in ["F.Silk", "B.Silk"] {
+            let drawn = art.iter().filter(|(layer, _)| *layer == silk).count();
+            assert!(drawn > 100, "{case}: {drawn} features on {silk}");
+        }
+        let (width, height) = (grid.array_width_mm, grid.array_height_mm);
+        let sheet_inside =
+            BBox::new(Point::new(0.8, 0.8), Point::new(width - 0.8, height - 0.8)).expand(1e-6);
+        let inside_band = BBox::new(Point::new(5.0, 5.0), Point::new(width - 5.0, height - 5.0));
+        let distance = |bounds: BBox, point: Point| bounds.distance_to(BBox::from_point(point));
+        // Each side keeps room for a serial number the size of its Data
+        // Matrix: solid copper with no ink and no mask opening on it.
+        for (copper, side) in [("TOP", 'F'), ("BOTTOM", 'B')] {
+            let blank = art
+                .iter()
+                .filter(|(layer, _)| *layer == copper)
+                .filter_map(|(_, feature)| drawn_bounds(feature))
+                .find(|bounds| {
+                    let (long, short) = (
+                        bounds.width().max(bounds.height()),
+                        bounds.width().min(bounds.height()),
+                    );
+                    (long - 11.4).abs() < 1e-3 && (short - 4.2).abs() < 1e-3
+                })
+                .unwrap_or_else(|| panic!("{case}: no serial blank on {copper}"));
+            for (layer, feature) in &art {
+                // Legend and mask layers are named for their side.
+                let over = layer.starts_with(side) && *layer != copper;
+                assert!(
+                    !over || !drawn_bounds(feature).unwrap().intersects(blank),
+                    "{case}: {layer} artwork on the serial blank at {blank:?}"
+                );
+            }
+        }
+        for (layer, feature) in art {
+            let bounds = drawn_bounds(feature).unwrap();
+            let what = format!("{case}: {layer} artwork at {bounds:?}");
+            assert!(
+                sheet_inside.contains_point(bounds.min) && sheet_inside.contains_point(bounds.max),
+                "{what} reaches the array edge"
+            );
+            assert!(
+                slots.iter().all(|slot| !bounds.intersects(*slot)),
+                "{what} crosses a routed slot"
+            );
+            assert!(
+                holes
+                    .iter()
+                    .all(|&(center, radius)| distance(bounds, center) >= radius + 0.2),
+                "{what} is on a hole"
+            );
+            let top = layer.starts_with('F') || layer == "TOP";
+            assert!(
+                openings
+                    .iter()
+                    .filter(|(top_side, _)| *top_side == top)
+                    .all(|&(_, center)| distance(bounds, center) >= 1.0 + 0.15),
+                "{what} is on a fiducial's mask opening"
+            );
+            if !layer.ends_with("Silk") {
+                assert!(
+                    !bounds.expand(-1e-6).intersects(inside_band),
+                    "{what} leaves the outer 5 mm"
+                );
+            }
+        }
+    }
+}
+
+/// Artwork through creation itself: the labelled array validates, balances
+/// around the artwork and carries legend ink on both sides; what cannot be
+/// drawn or printed is refused, and a board without legend layers is
+/// panelized without artwork.
+#[test]
+fn auto_mouse_bite_arrays_carry_rail_art_when_asked() {
+    let resolution = Resolution::default();
+    let input = board_fixture_with_legend_mm(13.0, 10.0);
+    let create = |xml: &str, balance, separation, labels: Option<&ArrayLabels>| {
+        create_auto_board_array(
+            xml,
+            Some(AutoSheetSize::A7),
+            balance,
+            separation,
+            labels,
+            resolution,
+        )
+    };
+    let legend_features = |xml: &str| {
+        // On whichever step holds the array's own features: the array, or
+        // the packed array under one emitted turned.
+        let ipc = Ipc2581::parse(xml).unwrap();
+        let steps = &ipc.ecad().unwrap().cad_data.steps;
+        steps
+            .iter()
+            .flat_map(|step| &step.layer_features)
+            .filter(|layer_feature| ipc.resolve(layer_feature.layer_ref).ends_with("Silk"))
+            .count()
+    };
+
+    let plain = create(&input, false, Separation::MouseBite, None).unwrap();
+    assert_eq!(legend_features(&plain.xml), 0);
+    let labels = order_labels();
+    let labelled = create(&input, true, Separation::MouseBite, Some(&labels)).unwrap();
+    assert_eq!(legend_features(&labelled.xml), 2);
+    assert!(labelled.copper_balance.is_some());
+    Ipc2581::parse(&labelled.xml).unwrap();
+
+    let error = create(&input, false, Separation::VScore, Some(&labels)).unwrap_err();
+    assert!(error.to_string().contains("mouse-bite"), "{error}");
+    let unprintable = ArrayLabels {
+        order: Some("DO 1".to_string()),
+        ..ArrayLabels::default()
+    };
+    let error = create(&input, false, Separation::MouseBite, Some(&unprintable)).unwrap_err();
+    assert!(format!("{error:#}").contains("order label"), "{error:#}");
+
+    let bare = board_fixture_with_top_line_mm();
+    let bare = create(&bare, false, Separation::MouseBite, Some(&labels)).unwrap();
+    assert!(!bare.xml.contains("Silk"));
+}
+
+/// The layer ladder numbers copper as it is stacked, not as it is declared:
+/// with BOTTOM declared second and stacked fourth, the numerals still step
+/// one cell at a time from TOP through GND and PWR to BOTTOM.
+#[test]
+fn rail_art_layer_ladder_follows_the_stackup() {
+    let layers = format!(
+        r#"{SURFACE_LAYERS}
+  <Layer name="GND" layerFunction="SIGNAL" side="INTERNAL" polarity="POSITIVE"/>
+  <Layer name="PWR" layerFunction="SIGNAL" side="INTERNAL" polarity="POSITIVE"/>
+{LEGEND_LAYERS}
+  <Stackup name="Primary" overallThickness="1.6">
+    <StackupGroup name="Primary_Group">
+      <StackupLayer layerOrGroupRef="TOP" thickness="0.035" sequence="1"/>
+      <StackupLayer layerOrGroupRef="GND" thickness="0.035" sequence="2"/>
+      <StackupLayer layerOrGroupRef="PWR" thickness="0.035" sequence="3"/>
+      <StackupLayer layerOrGroupRef="BOTTOM" thickness="0.035" sequence="4"/>
+    </StackupGroup>
+  </Stackup>"#
+    );
+    let xml = board_fixture(&layers, "", &rectangle(0.0, 0.0, 40.0, 30.0), "");
+    let (spec, _) = rail_art_spec(&xml, AutoSheetSize::A5, &order_labels());
+
+    // The only copper drawn with a pen is the ladder's numerals.
+    let numeral = |layer: &str| {
+        let mut bounds = BBox::empty();
+        for (_, layer_feature) in &spec.generated_geometry.layer_features {
+            if layer_feature.layer_name != layer {
+                continue;
+            }
+            for feature in &layer_feature.features {
+                if matches!(feature, SetFeature::Stroke(_)) {
+                    bounds = bounds.union(drawn_bounds(feature).unwrap());
+                }
+            }
+        }
+        assert!(!bounds.is_empty(), "no numeral on {layer}");
+        bounds.center()
+    };
+    let centers = ["TOP", "GND", "PWR", "BOTTOM"].map(numeral);
+    // One 1.7 mm cell along the rail each time; a numeral's ink may sit a
+    // hair off the others across it.
+    let first = centers[1] - centers[0];
+    for pair in centers.windows(2) {
+        let step = pair[1] - pair[0];
+        assert!(
+            (step.x.hypot(step.y) - 1.7).abs() < 0.05 && step.x * first.x + step.y * first.y > 0.0,
+            "{centers:?}"
+        );
+    }
 }

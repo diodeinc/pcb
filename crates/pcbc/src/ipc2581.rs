@@ -355,7 +355,7 @@ enum BoardArrayCommands {
         #[arg(long, conflicts_with = "mouse_bite_placement")]
         v_score: bool,
         /// Analyze where mouse-bite tabs would go on the board: writes JSON, not a panel.
-        #[arg(long, conflicts_with_all = ["auto", "sheet", "columns", "rows", "board_margin", "edge_rail", "copper_balance", "no_copper_balance"])]
+        #[arg(long, conflicts_with_all = ["auto", "sheet", "columns", "rows", "board_margin", "edge_rail", "copper_balance", "no_copper_balance", "part", "order", "run", "no_rail_art"])]
         mouse_bite_placement: bool,
         /// Choose the smallest fitting A-series board array automatically.
         #[arg(long)]
@@ -377,6 +377,18 @@ enum BoardArrayCommands {
         edge_rail: Vec<f64>,
         #[command(flatten)]
         copper_balance: CopperBalanceArgs,
+        /// Bare-board part number, printed and encoded in the rail artwork of an automatic mouse-bite array.
+        #[arg(long)]
+        part: Option<String>,
+        /// Order number for the rail artwork.
+        #[arg(long)]
+        order: Option<String>,
+        /// Production run for the rail artwork.
+        #[arg(long)]
+        run: Option<String>,
+        /// Leave the frame of an automatic mouse-bite array without artwork.
+        #[arg(long)]
+        no_rail_art: bool,
         /// Output IPC-2581 XML (placement JSON with --mouse-bite-placement), or '-' for stdout
         #[arg(short, long, value_hint = clap::ValueHint::AnyPath)]
         output: PathBuf,
@@ -636,6 +648,10 @@ pub fn execute(args: Ipc2581Args, resolution: Resolution) -> anyhow::Result<()> 
                 board_margin,
                 edge_rail,
                 copper_balance,
+                part,
+                order,
+                run,
+                no_rail_art,
                 output,
             } => {
                 if mouse_bite_placement {
@@ -647,7 +663,16 @@ pub fn execute(args: Ipc2581Args, resolution: Resolution) -> anyhow::Result<()> 
                     commands::board_array::Separation::MouseBite
                 };
                 let copper_balance = copper_balance.resolve(true);
-                if auto || sheet.is_some() {
+                let labels = commands::board_array::ArrayLabels { part, order, run };
+                let automatic = auto || sheet.is_some();
+                let rail_art = (automatic && !v_score && !no_rail_art).then_some(&labels);
+                if labels != Default::default() && rail_art.is_none() {
+                    anyhow::bail!(
+                        "--part, --order and --run label rail artwork, which only an automatic \
+                         mouse-bite array without --no-rail-art carries"
+                    );
+                }
+                if automatic {
                     if columns.is_some()
                         || rows.is_some()
                         || !board_margin.is_empty()
@@ -663,6 +688,7 @@ pub fn execute(args: Ipc2581Args, resolution: Resolution) -> anyhow::Result<()> 
                         sheet,
                         copper_balance,
                         separation,
+                        rail_art,
                         resolution,
                     )
                 } else {

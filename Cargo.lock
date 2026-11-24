@@ -1133,6 +1133,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "datamatrix"
+version = "0.3.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b2d3882a013aca40e2e24f0e454ef7a581a50c603d67eded130013ab641a289d"
+dependencies = [
+ "arrayvec",
+ "flagset",
+]
+
+[[package]]
 name = "debugserver-types"
 version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1482,6 +1492,12 @@ name = "fixedbitset"
 version = "0.5.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5905ec755cc8386d7928353e4d356d2be3e89e81e5ca01fe630a1ca4d08dc175"
+
+[[package]]
+name = "flagset"
+version = "0.4.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b7ac824320a75a52197e8f2d787f6a38b6718bb6897a35142d749af3c0e8f4fe"
 
 [[package]]
 name = "flate2"
@@ -3688,6 +3704,7 @@ dependencies = [
  "clap",
  "colored",
  "comfy-table",
+ "datamatrix",
  "gerberx2",
  "hex",
  "ipc2581",
@@ -3695,6 +3712,7 @@ dependencies = [
  "log",
  "minijinja",
  "natord",
+ "newstroke",
  "pcb-diode-api",
  "pcb-ir",
  "pcb-sch",

@@ -15,8 +15,7 @@ use pcb_ir::import::ipc2581::{ImportedDesign, LayerId};
 use pcb_ir::render::LayerStyle;
 
 use super::data::{
-    ArrayData, DrillTool, FabLayer, Hit, Source, copper_order, micrometres, mm, mm_fine,
-    span_layers,
+    ArrayData, DrillTool, FabLayer, Hit, Source, micrometres, mm, mm_fine, span_layers,
 };
 use super::pdf::{Align, Canvas, Fonts, INK, Pen, TextStyle, Weight};
 use super::sheet::{BODY, HAIR, HEADING, HEAVY, LABEL, MEDIUM, THIN};
@@ -531,7 +530,7 @@ pub fn layer_view(
     // An opening images only on its own layer, so drills and routs are laid
     // over copper.
     if let Some(this) = layer.number.filter(|_| layer.role == LayerRole::Copper) {
-        let copper = copper_order(imported);
+        let copper = crate::layers::copper_order(imported);
         for (index, drill) in imported.layer_definitions.iter().enumerate() {
             if !matches!(
                 drill.layer_function,

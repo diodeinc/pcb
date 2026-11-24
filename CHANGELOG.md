@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added
+
+- `pcb ipc board-array create --auto` draws rail artwork in the frame of a mouse-bite array, on both sides: the Diode mark, a Data Matrix and title block (`--part`, `--order`, `--run`, the `pcb` version and a hash of the board file), the sheet and side, row and column labels beside every board, and fabrication coupons. `--no-rail-art` leaves the frame bare.
+
 ## [0.4.105] - 2026-11-23
 
 ### Added

@@ -608,7 +608,8 @@ pub(super) fn arc_step(
     }
 }
 
-pub(super) fn polygon_contour(polygon: &ipc2581::types::Polygon) -> ContourBuf {
+/// A polygon as a closed contour.
+pub fn polygon_contour(polygon: &ipc2581::types::Polygon) -> ContourBuf {
     let mut cmds = poly_step_commands(polygon);
     cmds.push(PathCmd::close());
     ContourBuf::new(cmds).with_consistent_arcs()
