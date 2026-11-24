@@ -221,11 +221,14 @@ pub fn place(ipc: &Ipc2581, bed: Bed, footprints: Footprints) -> Result<Placed> 
                     })
                     .sum();
                 // Interposer past the bed zone is board area bought for
-                // every fixture; a few mm of track are not.
+                // every fixture; a few mm of track are not. Counted in
+                // whole millimetres: less than one buys nothing, and the
+                // shorter tracks it gives up can be what routes on two
+                // layers.
                 let overhang = (ex0 - (lo_x + offset[0] - POGO_EDGE_MM)).max(0.0)
                     + (hi_x + offset[0] + POGO_EDGE_MM - ex1).max(0.0);
                 let score = (
-                    um(overhang),
+                    overhang.floor() as i64,
                     um(wire),
                     um(distance(at([mid_x, (lo_y + hi_y) / 2.0]), center)),
                 );
