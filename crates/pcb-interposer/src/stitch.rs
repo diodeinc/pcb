@@ -102,7 +102,7 @@ for footprint in board.GetFootprints():
             add(pad, layer, obstacles)
             add(pad, layer, layer_obstacles[layer])
         elif layer == pcbnew.B_Cu:
-            gnd_land_centers.append((pad.GetPosition().x, pad.GetPosition().y))
+            gnd_land_centers.append((pad.GetPosition().x, pad.GetPosition().y, pad.GetSize().x // 2))
 
 obstacles.Simplify()
 envelope.Simplify()
@@ -159,13 +159,25 @@ def place(x, y):
     return False
 
 
-# A via in each GND mate land (same net, pressure contact — no solder)
+# A via at each GND mate land (same net, pressure contact — no solder)
 # guarantees its pour pocket bridges the faces even where routed traces
-# and neighboring lands squeeze out every contour candidate.
+# and neighboring lands squeeze out every contour candidate. It sits on
+# the land's rim, its copper lapping the land's and its hole under the
+# mask, so the bed's pogo tip lands on unbroken gold; across the land
+# rows first, where the neighboring lands leave room. A land with no
+# clear rim site takes the via at its center.
+RIM_LAP = pcbnew.FromMM(0.05)
+RIM_DIRECTIONS = [(0, -1), (0, 1), (-1, -1), (1, -1), (-1, 1), (1, 1), (-1, 0), (1, 0)]
 for x, y in escape_sites:
     place(x, y)
-for x, y in gnd_land_centers:
-    place(x, y)
+for x, y, radius in gnd_land_centers:
+    reach = radius + VIA_RADIUS - RIM_LAP
+    rim = (
+        (round(x + reach * dx / math.hypot(dx, dy)), round(y + reach * dy / math.hypot(dx, dy)))
+        for dx, dy in RIM_DIRECTIONS
+    )
+    if not any(place(rx, ry) for rx, ry in rim):
+        place(x, y)
 for chain in chains(envelope):
     for x, y in samples(chain):
         place(x, y)
@@ -234,14 +246,14 @@ for zone in board.Zones():
             if zone.IsOnLayer(layer):
                 gnd_fills[layer] = zone.GetFilledPolysList(layer)
 def in_pad_via(x, y, top, radius):
-    # A GND via already inside the pad (the router's, a stitch or an
-    # earlier rescue) bridges it.
+    # A GND via whose copper already laps the pad (the router's, a stitch
+    # or an earlier rescue) bridges it.
     vias = [
         (track.GetPosition().x, track.GetPosition().y)
         for track in board.GetTracks()
         if track.Type() == pcbnew.PCB_VIA_T and track.GetNetCode() == gnd
     ]
-    if any((ox - x) ** 2 + (oy - y) ** 2 < radius * radius for ox, oy in vias + accepted):
+    if any((ox - x) ** 2 + (oy - y) ** 2 < (radius + VIA_RADIUS) ** 2 for ox, oy in vias + accepted):
         return
     # In-pad candidates: the via clears this face inside its own pad, but
     # each spot must clear the opposite face's copper and keep its own
@@ -341,7 +353,7 @@ inner_planes = any(
 def gnd_clusters():
     """Group the GND fill islands of both faces into connected clusters:
     vias join the islands they sit in, pads the islands they touch, and a
-    via inside a pad joins that pad's islands; over an inner GND plane all
+    via lapping a pad joins that pad's islands; over an inner GND plane all
     vias join one another. Returns the island map, the union-find root
     lookup, each GND via with its islands, and each GND pad with its
     islands."""
@@ -389,7 +401,7 @@ def gnd_clusters():
         at = track.GetPosition()
         touching = islands_at(at, pcbnew.F_Cu) + islands_at(at, pcbnew.B_Cu)
         for (x, y, _, radius), pad_touching in pad_nodes:
-            if (x - at.x) ** 2 + (y - at.y) ** 2 < radius * radius:
+            if (x - at.x) ** 2 + (y - at.y) ** 2 < (radius + VIA_RADIUS) ** 2:
                 touching += pad_touching
         if inner_planes and touching:
             if plane:

@@ -45,6 +45,9 @@ pub struct Alignment {
     /// Drill extent along x and y.
     pub drill: [f64; 2],
     pub keepout_dia: f64,
+    /// How far the finished drill may run over and under its size; zero
+    /// leaves it to the fabricator's standard.
+    pub tolerance: [f64; 2],
     /// A screw through it clamps the DUT plate and interposer to the bed.
     pub clamps: bool,
 }
@@ -95,14 +98,16 @@ impl Bed {
             // at f90ab8c): the Ø3 m6 stack dowels locate on DW1 and slide in
             // the DW2 slot along x; five M3 screws through MH1–MH4 and MH7
             // clamp the upper shroud, interposer and lower shroud to the
-            // backplate. DW1's +0.05/−0 tolerance is a fab note, not
-            // geometry.
+            // backplate. A dowel hole finished under size binds on its
+            // pin, so both hold +0.05/−0, which the manufacturing export
+            // states ([`crate::tolerance`]).
             Bed::SwitchyardRev1 => {
                 let dowel = |name, at, drill| Alignment {
                     name,
                     at,
                     drill,
                     keepout_dia: 6.0,
+                    tolerance: [0.05, 0.0],
                     clamps: false,
                 };
                 let screw = |name, at| Alignment {
@@ -110,6 +115,7 @@ impl Bed {
                     at,
                     drill: [3.4, 3.4],
                     keepout_dia: 6.0,
+                    tolerance: [0.0, 0.0],
                     clamps: true,
                 };
                 vec![

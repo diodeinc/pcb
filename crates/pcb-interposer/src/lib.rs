@@ -36,6 +36,7 @@ pub mod repair;
 pub mod shroud;
 pub mod single;
 pub mod stitch;
+pub mod tolerance;
 
 use std::path::Path;
 

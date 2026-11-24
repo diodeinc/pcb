@@ -980,6 +980,61 @@ pub fn design_date(source: &Source<'_>) -> Option<String> {
     (!day.is_empty()).then(|| day.to_string())
 }
 
+/// A note for each hole and slot size the design data holds to a
+/// tolerance of its own, smallest first. A drill file carries sizes
+/// alone, so the drawing is where the fabricator reads these.
+fn hole_tolerances(source: &Source<'_>) -> Vec<String> {
+    use ipc2581::types::{PlatingStatus, SetFeature, SlotShape, StandardPrimitive};
+    let Some(step) = source.accessor.board_step() else {
+        return Vec::new();
+    };
+    let kind = |plating: PlatingStatus| match plating {
+        PlatingStatus::NonPlated => "NPTH",
+        PlatingStatus::Via => "VIA",
+        _ => "PTH",
+    };
+    let mut held = BTreeMap::new();
+    for feature in step.layer_features.iter().flat_map(|layer| &layer.features) {
+        let (size, name, plating, plus, minus) = match feature {
+            SetFeature::Hole(hole) => (
+                (micrometres(hole.diameter), 0),
+                format!("Ø{}", mm_fine(hole.diameter)),
+                hole.plating_status,
+                hole.plus_tol,
+                hole.minus_tol,
+            ),
+            SetFeature::Slot(slot) => {
+                let SlotShape::Primitive(StandardPrimitive::Oval(oval)) = &slot.shape else {
+                    continue;
+                };
+                let size = oval.shape.size;
+                let (width, length) = (size.width.min(size.height), size.width.max(size.height));
+                (
+                    (micrometres(width), micrometres(length)),
+                    format!("SLOT {} × {}", mm_fine(width), mm_fine(length)),
+                    slot.plating_status,
+                    slot.plus_tol,
+                    slot.minus_tol,
+                )
+            }
+            _ => continue,
+        };
+        if micrometres(plus) == 0 && micrometres(minus) == 0 {
+            continue;
+        }
+        let key = (size, kind(plating), micrometres(plus), micrometres(minus));
+        held.entry(key).or_insert_with(|| {
+            format!(
+                "{name} {}: FINISHED SIZE +{} / \u{2212}{} mm.",
+                kind(plating),
+                mm_fine(plus),
+                mm_fine(minus)
+            )
+        });
+    }
+    held.into_values().collect()
+}
+
 pub fn notes(source: &Source<'_>, array: Option<&ArrayData>) -> Vec<String> {
     // A board built on polyimide is a flexible one, bought to its own standard.
     let materials = source.accessor.material_info();
@@ -997,6 +1052,7 @@ pub fn notes(source: &Source<'_>, array: Option<&ArrayData>) -> Vec<String> {
         "100 % ELECTRICAL TEST AGAINST THE NETLIST.".to_string(),
         "DO NOT ADD OR REMOVE COPPER WITHOUT APPROVAL.".to_string(),
     ];
+    notes.extend(hole_tolerances(source));
     if let Some(array) = array {
         notes.push(if array.scores.is_empty() {
             "DELIVER AS ARRAY PER THE ARRAY SHEET. DO NOT MOVE OR ADD TABS.".to_string()

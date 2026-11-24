@@ -760,6 +760,8 @@ pub fn execute(args: Ipc2581Args, resolution: Resolution) -> anyhow::Result<()> 
                     .arg(output.to_string_lossy())
                     .run()
                     .context("export interposer IPC-2581")?;
+                pcb_interposer::tolerance::hold(&ipc_path, bed)
+                    .context("state the alignment holes' tolerances")?;
                 println!("✓ Wrote IPC-2581 {}", ipc_path.display());
             }
             Ok(())

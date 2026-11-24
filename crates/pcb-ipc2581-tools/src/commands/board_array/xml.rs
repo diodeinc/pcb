@@ -434,6 +434,8 @@ pub(super) fn round_nonplated_hole_features(
         shape: ipc2581::types::HoleShape::Circle,
         diameter: diameter_mm,
         plating_status: PlatingStatus::NonPlated,
+        plus_tol: 0.0,
+        minus_tol: 0.0,
         xform: None,
         spec_refs: Vec::new(),
         x,

@@ -421,3 +421,34 @@ fn perforations_are_rows_and_holes_apart_are_tooling() {
     assert!(rows.is_empty());
     assert_eq!(apart.len(), 5);
 }
+
+#[test]
+fn a_hole_held_to_its_own_tolerance_is_noted() {
+    with_source(BOARD, |source| {
+        let notes = data::notes(source, None);
+        assert!(!notes.iter().any(|note| note.contains("FINISHED SIZE")));
+    });
+    let held = BOARD
+        .replace(
+            r#"name="M1" diameter="3.2" platingStatus="NONPLATED" plusTol="0" minusTol="0""#,
+            r#"name="M1" diameter="3.2" platingStatus="NONPLATED" plusTol="0.05" minusTol="0""#,
+        )
+        .replace(
+            r#"name="S1" platingStatus="PLATED" plusTol="0" minusTol="0""#,
+            r#"name="S1" platingStatus="PLATED" plusTol="0.05" minusTol="0.025""#,
+        );
+    with_source(&held, |source| {
+        let notes = data::notes(source, None);
+        let held: Vec<&String> = notes
+            .iter()
+            .filter(|note| note.contains("FINISHED SIZE"))
+            .collect();
+        assert_eq!(
+            held,
+            [
+                "SLOT 0.80 × 2.40 PTH: FINISHED SIZE +0.05 / \u{2212}0.025 mm.",
+                "Ø3.20 NPTH: FINISHED SIZE +0.05 / \u{2212}0.00 mm.",
+            ]
+        );
+    });
+}

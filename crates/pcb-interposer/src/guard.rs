@@ -11,9 +11,11 @@
 //! a neighboring foreign pad. A ring is not enough where foreign pads
 //! leave the pad no via site of its own (a land under a signal pogo):
 //! routed traces around the ring can still seal it. So every GND pad also
-//! gets an escape, reserved before any track exists: its own center when
-//! no foreign pad blocks a via there (lands only — a via would wick a
-//! soldered pogo), else the nearest legal via site within 4 mm with a
+//! gets an escape, reserved before any track exists: on a land, a site on
+//! its rim, where the via's copper laps the land's and the bed's pogo
+//! still lands on unbroken gold, or its center when foreign pads block
+//! the rim (never in a soldered pogo's pad — a via would wick it); else
+//! the nearest legal via site within 4 mm with a
 //! no-tracks corridor to it on the pad's face. The site is guarded on
 //! both faces and handed to the stitch pass, which drills it first. The
 //! bed's alignment features carry
@@ -145,11 +147,27 @@ def site_ok(point):
     return True
 
 
+RIM_LAP = pcbnew.FromMM(0.05)
+RIM_DIRECTIONS = [(0, -1), (0, 1), (-1, -1), (1, -1), (-1, 1), (1, 1), (-1, 0), (1, 0)]
+
+
 def escape_site(pad, gap=pcbnew.FromMM(0.3)):
     center = pad.GetPosition()
     soldered = pad.IsOnLayer(pcbnew.F_Paste) or pad.IsOnLayer(pcbnew.B_Paste)
-    if not soldered and site_ok(center):
-        return center
+    if not soldered:
+        # A land: on its rim, the via's copper lapping the land's and its
+        # hole under the mask, so the bed's pogo lands on unbroken gold;
+        # across the land rows first, where neighboring lands leave room.
+        reach = radius_of(pad) + VIA_RADIUS - RIM_LAP
+        for dx, dy in RIM_DIRECTIONS:
+            norm = math.hypot(dx, dy)
+            point = pcbnew.VECTOR2I(
+                center.x + round(reach * dx / norm), center.y + round(reach * dy / norm)
+            )
+            if site_ok(point):
+                return point
+        if site_ok(center):
+            return center
     r = radius_of(pad) + VIA_RADIUS + gap
     while r <= radius_of(pad) + SITE_REACH:
         steps = max(12, int(2 * math.pi * r / SITE_STEP))

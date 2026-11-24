@@ -42,7 +42,13 @@
 //! on one primary cell ([`CellUse::Primary`]). A DUT's VTarget or VUSB
 //! pads are one DUT net, and binding them to two cells would tie two
 //! tester supplies together. Each USB pair (a DP and
-//! its nearest DM) stays inside one cell. Every contact takes a land of
+//! its nearest DM) stays inside one cell. So do digital lines that work
+//! together, so one tester controller runs the whole interface: NRST and
+//! SWO beside the SWD pair, and each bus — test points whose names share
+//! a stem, as `TP_UART_TX` and `TP_UART_RX` do — on the cell whose free
+//! lanes are nearest. A bus wider than a cell is cut into cell-sized
+//! runs, and one no cell can hold whole is matched line by line. Every
+//! contact takes a land of
 //! its own role — digital roles never reach the analog-only lands — and
 //! a contact with no free land of its role is dropped, not failed. A
 //! cell's VTarget lands are one bed net, so a board's VTarget contacts
@@ -580,6 +586,83 @@ fn by_cell(
             }
         }
 
+        // Digital lines that work together stay on one cell, so one
+        // tester controller runs the whole interface: the debug lines
+        // beside SWCLK and SWDIO first, then the buses, widest first.
+        // Each takes the cell whose free lanes are cheapest to reach; a
+        // bus with no cell left to hold it whole falls through to the
+        // per-role matching below.
+        let lanes_of = |free: &[usize], cell: u32| -> Vec<usize> {
+            free.iter()
+                .copied()
+                .filter(|&l| lands[l].block == cell && lands[l].role == Role::Ls)
+                .collect()
+        };
+        let lanes = own
+            .iter()
+            .map(|&cell| lanes_of(&free, cell).len())
+            .max()
+            .unwrap_or(0);
+        let debug: Vec<usize> = mine
+            .iter()
+            .copied()
+            .filter(|&c| contacts[c].role == Role::Ls && is_debug(&contacts[c].ict))
+            .collect();
+        let mut groups: Vec<(Option<u32>, Vec<usize>)> = Vec::new();
+        if !debug.is_empty() {
+            groups.push((Some(swd_home), debug));
+        }
+        let mut buses = buses(
+            contacts,
+            mine.iter()
+                .copied()
+                .filter(|&c| contacts[c].role == Role::Ls && !is_debug(&contacts[c].ict)),
+            lanes,
+        );
+        buses.sort_by_key(|bus| std::cmp::Reverse(bus.len()));
+        groups.extend(buses.into_iter().map(|bus| (None, bus)));
+        for (pinned, group) in groups {
+            let fit = |cell: u32| -> Option<(i64, Vec<(usize, usize)>)> {
+                let have = lanes_of(&free, cell);
+                if have.len() < group.len() {
+                    return None;
+                }
+                let cost: Vec<Vec<i64>> = (0..have.len())
+                    .map(|i| {
+                        have.iter()
+                            .map(|&l| {
+                                group
+                                    .get(i)
+                                    .map_or(0, |&c| cost_of(contacts[c].xy, lands[l].xy))
+                            })
+                            .collect()
+                    })
+                    .collect();
+                let matching = hungarian(&cost);
+                let pairs: Vec<(usize, usize)> = group
+                    .iter()
+                    .enumerate()
+                    .map(|(i, &c)| (c, have[matching[i].expect("square matching is total")]))
+                    .collect();
+                let total = pairs
+                    .iter()
+                    .map(|&(c, l)| cost_of(contacts[c].xy, lands[l].xy))
+                    .sum();
+                Some((total, pairs))
+            };
+            let best = pinned.and_then(fit).or_else(|| {
+                own.iter()
+                    .filter_map(|&cell| fit(cell).map(|(total, pairs)| (total, cell, pairs)))
+                    .min_by_key(|&(total, cell, _)| (total, cell))
+                    .map(|(total, _, pairs)| (total, pairs))
+            });
+            if let Some((_, pairs)) = best {
+                for (contact, land) in pairs {
+                    bind(take(&mut mine, contact), take(&mut free, land));
+                }
+            }
+        }
+
         for role in [
             Role::UsbDp,
             Role::UsbDm,
@@ -626,6 +709,52 @@ fn by_cell(
     }
     dropped.sort_unstable();
     (tested, board_cells, bindings, dropped)
+}
+
+/// Whether an `ict` role is one of the debug port's lines.
+fn is_debug(ict: &str) -> bool {
+    matches!(ict, "swclk" | "swdio" | "nrst" | "swo")
+}
+
+/// A contact's bus: its test point's name up to the first underscore,
+/// under the module that holds it, with a leading `TP_` dropped — so
+/// `TP_UART_TX` and `TP_UART_RX` are both `UART`, and the four
+/// `TP_SPI_*` points are `SPI`.
+fn bus_of(contact: &PanelContact) -> String {
+    let mut parts: Vec<&str> = contact.path.split('.').collect();
+    // The path ends in the test point's own part (`TP_UART_TX.TP`).
+    if parts.len() > 1 {
+        parts.pop();
+    }
+    let name = parts.pop().unwrap_or(&contact.refdes);
+    let name = name.strip_prefix("TP_").unwrap_or(name);
+    let stem = name.split('_').next().unwrap_or(name);
+    parts.push(stem);
+    parts.join(".")
+}
+
+/// The buses among `members`: contacts that share a [`bus_of`] name, two
+/// or more, in name order. A bus wider than a cell's `lanes` is cut into
+/// cell-sized runs.
+fn buses(
+    contacts: &[PanelContact],
+    members: impl Iterator<Item = usize>,
+    lanes: usize,
+) -> Vec<Vec<usize>> {
+    let mut by_bus: std::collections::BTreeMap<String, Vec<usize>> = Default::default();
+    for c in members {
+        by_bus.entry(bus_of(&contacts[c])).or_default().push(c);
+    }
+    let mut out = Vec::new();
+    for mut bus in by_bus.into_values() {
+        bus.sort_by(|&a, &b| contacts[a].path.cmp(&contacts[b].path));
+        out.extend(
+            bus.chunks(lanes.max(1))
+                .filter(|run| run.len() > 1)
+                .map(<[usize]>::to_vec),
+        );
+    }
+    out
 }
 
 fn distance(a: [f64; 2], b: [f64; 2]) -> f64 {
@@ -1163,6 +1292,92 @@ mod tests {
         assert_vtarget_paralleled(&plan, &lands, 6);
         assert_eq!(cell_of(&plan, &lands, "swclk"), 4);
         assert_eq!(cell_of(&plan, &lands, "swdio"), 4);
+    }
+
+    /// The debug port's four lines share one cell and the UART pair
+    /// another, though nearer lanes would split both.
+    #[test]
+    fn switchyard_debug_lines_and_buses_keep_to_one_cell() {
+        let lands = Bed::SwitchyardRev1.lands(105.0, 74.0).unwrap();
+        let contacts: Vec<PanelContact> = [
+            ("TP_VBAT", "vtarget", Role::Vtarget, [24.075, 15.85]),
+            ("TP_GND", "gnd", Role::Gnd, [60.475, 43.0]),
+            ("TP_BOOT", "ls", Role::Ls, [36.575, 16.8]),
+            ("TP_UART_TX", "ls", Role::Ls, [40.075, 16.8]),
+            ("TP_UART_RX", "ls", Role::Ls, [43.575, 16.8]),
+            ("TP_NRST", "nrst", Role::Ls, [47.075, 16.9]),
+            ("TP_SWO", "swo", Role::Ls, [50.075, 15.5]),
+            ("TP_SWCLK", "swclk", Role::Ls, [52.175, 17.9]),
+            ("TP_SWDIO", "swdio", Role::Ls, [55.175, 16.7]),
+            ("TP_LED_YELLOW", "ls", Role::Ls, [84.975, 24.4]),
+        ]
+        .iter()
+        .enumerate()
+        .map(|(i, &(name, ict, role, xy))| PanelContact {
+            board: 0,
+            refdes: format!("TP{}", i + 1),
+            path: format!("{name}.TP"),
+            role,
+            ict: ict.into(),
+            xy,
+        })
+        .collect();
+        let plan = plan(
+            contacts,
+            &lands,
+            &[],
+            Bed::SwitchyardRev1.envelope(),
+            Bed::SwitchyardRev1,
+            CellUse::Split,
+        )
+        .unwrap();
+        assert!(plan.dropped.is_empty());
+        let cell = |name: &str| {
+            let binding = plan
+                .bindings
+                .iter()
+                .find(|b| plan.contacts[b.contact].path == format!("{name}.TP"))
+                .unwrap();
+            lands[binding.land.unwrap()].block
+        };
+        let debug = cell("TP_SWCLK");
+        for name in ["TP_SWDIO", "TP_NRST", "TP_SWO"] {
+            assert_eq!(cell(name), debug, "{name}");
+        }
+        assert_eq!(cell("TP_UART_TX"), cell("TP_UART_RX"));
+        assert_ne!(cell("TP_UART_TX"), debug);
+    }
+
+    #[test]
+    fn buses_share_a_name_stem_and_split_at_a_cell() {
+        let contact = |path: &str| PanelContact {
+            board: 0,
+            refdes: "TP".into(),
+            path: path.into(),
+            role: Role::Ls,
+            ict: "ls".into(),
+            xy: [0.0, 0.0],
+        };
+        let contacts: Vec<PanelContact> = [
+            "HOST.TP_ZONE_A0.TP",
+            "HOST.TP_ZONE_A1.TP",
+            "HOST.TP_ZONE_A2.TP",
+            "HOST.TP_ZONE_A3.TP",
+            "HOST.TP_ZONE_EN_N.TP",
+            "HOST.TP_SPI_CLK.TP",
+            "HOST.TP_SPI_CS.TP",
+            "HOST.TP_IRQ.TP",
+            "POWER.TP_SPI_X.TP",
+        ]
+        .into_iter()
+        .map(contact)
+        .collect();
+        // The fifth ZONE line has no cell-mate; IRQ and the other
+        // module's SPI line are alone.
+        assert_eq!(
+            buses(&contacts, 0..contacts.len(), 4),
+            vec![vec![5, 6], vec![0, 1, 2, 3]]
+        );
     }
 
     #[test]

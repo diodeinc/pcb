@@ -2060,6 +2060,8 @@ impl<'a> Parser<'a> {
                 "platingStatus",
                 "Hole",
             )?)?,
+            plus_tol: self.opt_mm(node, "plusTol", units)?.unwrap_or(0.0),
+            minus_tol: self.opt_mm(node, "minusTol", units)?.unwrap_or(0.0),
             x: self.mm(node, "x", "Hole", units)?,
             y: self.mm(node, "y", "Hole", units)?,
             xform: None,
@@ -2081,6 +2083,8 @@ impl<'a> Parser<'a> {
         let name = self.optional_attr(node, "name");
         let plating_status =
             PlatingStatus::from_ipc(self.required_str(node, "platingStatus", "SlotCavity")?)?;
+        let plus_tol = self.opt_mm(node, "plusTol", units)?.unwrap_or(0.0);
+        let minus_tol = self.opt_mm(node, "minusTol", units)?.unwrap_or(0.0);
 
         // Allegro and KiCad revision B omit the Location; the shape is then
         // in step coordinates.
@@ -2121,6 +2125,8 @@ impl<'a> Parser<'a> {
             name,
             shape,
             plating_status,
+            plus_tol,
+            minus_tol,
             z_axis_dim,
             xform,
             x,

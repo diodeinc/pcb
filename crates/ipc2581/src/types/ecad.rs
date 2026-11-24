@@ -682,6 +682,10 @@ pub struct Hole {
     pub shape: HoleShape,
     pub diameter: f64,
     pub plating_status: PlatingStatus,
+    /// Allowed oversize and undersize of the finished diameter; zero
+    /// where the file states none.
+    pub plus_tol: f64,
+    pub minus_tol: f64,
     pub xform: Option<super::Xform>,
     pub spec_refs: Vec<Symbol>,
     pub x: f64,
@@ -714,6 +718,10 @@ pub struct Slot {
     pub name: Option<Symbol>,
     pub shape: SlotShape,
     pub plating_status: PlatingStatus,
+    /// Allowed oversize and undersize of the finished opening; zero
+    /// where the file states none.
+    pub plus_tol: f64,
+    pub minus_tol: f64,
     pub z_axis_dim: bool,
     pub xform: Option<super::Xform>,
     pub x: f64,

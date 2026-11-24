@@ -24,6 +24,9 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - `pcb ipc interposer --single-board` builds the interposer for one singulated board instead of a panel, from a board export or a panel export's board: it lays the board face down when its test points are on top, places it on the bed where its contacts clear the alignment features and lie nearest their lanes, lets it overhang the Switchyard bed along the pogo rows (growing the interposer and upper shroud to carry it), records the placement in the fixture map, and nests the board in a rim on the upper shroud.
 - `pcb ipc interposer` warns, once for each, about test points with an `ict` role but not the TestPoint ICT footprint, instead of skipping them silently; `--probe-non-ict-footprints` puts pogos on them too, though their pads may be too small or too close together for one.
 - TestPoint `ict="analog"` marks an analog-only contact, which the Switchyard bed keeps off its digital lanes.
+- On the Switchyard bed `pcb ipc interposer` keeps digital lines that work together on one cell, and so on one tester controller: NRST and SWO beside the SWD pair, and each bus (test points whose names share a stem, such as `TP_UART_TX` and `TP_UART_RX`) on the cell whose free lanes are nearest. A bus wider than a cell is cut into cell-sized runs.
+- `pcb ipc interposer --ipc` states the Switchyard stack-dowel hole's and slot's +0.05/−0 mm tolerance in the exported IPC-2581, and `pcb ipc2581 fab-drawing` notes every hole and slot size the design data holds to a tolerance of its own.
+- `pcb ipc interposer --route` sets each GND bed land's via on the land's rim, under the solder mask, instead of at its center where the bed's pogo lands.
 
 ## [0.4.103] - 2026-11-19
 
