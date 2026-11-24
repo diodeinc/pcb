@@ -1123,7 +1123,18 @@ Component(
         .write("test.kicad_mod", TEST_ONE_PAD_KICAD_MOD);
 
     let output = sandbox
-        .run("pcbc", ["build", "--offline", "--netlist", "board.zen"])
+        // Missing part information is a warning; denying warnings fails the build.
+        .run(
+            "pcbc",
+            [
+                "build",
+                "--offline",
+                "--netlist",
+                "-D",
+                "warnings",
+                "board.zen",
+            ],
+        )
         .stdout_capture()
         .stderr_capture()
         .unchecked()

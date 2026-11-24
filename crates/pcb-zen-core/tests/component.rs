@@ -2079,7 +2079,7 @@ Component(
 
     assert!(
         diagnostics.iter().any(|diag| {
-            matches!(diag.severity, EvalSeverity::Error)
+            matches!(diag.severity, EvalSeverity::Warning)
                 && diag
                     .downcast_error_ref::<CategorizedDiagnostic>()
                     .is_some_and(|c| c.kind == "bom.unspecified")

@@ -12,6 +12,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 - `pcb ipc board-array create --auto` draws rail artwork in the frame of a mouse-bite array, on both sides: the Diode mark, a Data Matrix and title block (`--part`, `--order`, `--run`, the `pcb` version and a hash of the board file), the sheet and side, row and column labels beside every board, and fabrication coupons. `--no-rail-art` leaves the frame bare.
 
+### Changed
+
+- A BOM part without a manufacturer or MPN (`bom.unspecified`, `bom.underspecified`) is a warning in `pcb build`, `pcb bom`, `pcb layout` and the LSP, so the design still builds and its viewers render. It still blocks `pcb publish` and release checks, which report it as an error.
+
 ## [0.4.105] - 2026-11-23
 
 ### Added

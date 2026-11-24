@@ -167,10 +167,17 @@ fn execute_tasks(info: &ReleaseInfo, tasks: &[(&str, TaskFn)], start_time: Insta
     Ok(())
 }
 
-/// Unsuppressed errors and unsuppressed `sch` / `sch.*` diagnostics block a
-/// board release and a package publish.
+/// Unsuppressed errors, `sch` / `sch.*` diagnostics and missing part information
+/// block a board release and a package publish.
 pub(crate) fn blocks_release(diagnostic: &pcb_zen_core::Diagnostic) -> bool {
-    !diagnostic.suppressed && (diagnostic.is_error() || diagnostic.has_kind("sch"))
+    !diagnostic.suppressed
+        && (diagnostic.is_error() || diagnostic.has_kind("sch") || missing_part_info(diagnostic))
+}
+
+/// A BOM part without a manufacturer or MPN: a build warning, so the design
+/// still renders, but a release error.
+fn missing_part_info(diagnostic: &pcb_zen_core::Diagnostic) -> bool {
+    diagnostic.has_kind("bom.unspecified") || diagnostic.has_kind("bom.underspecified")
 }
 
 fn release_blocked(diagnostics: &Diagnostics) -> bool {
@@ -190,7 +197,11 @@ fn release_diagnostics(
             let mut report =
                 pcb_zen_core::diagnostics::DiagnosticReport::from_diagnostic(diagnostic);
             // Release gating uses the outer severity, not the nested cause's.
-            report.severity = diagnostic.severity;
+            report.severity = if missing_part_info(diagnostic) {
+                starlark::errors::EvalSeverity::Error
+            } else {
+                diagnostic.severity
+            };
             report.location = report.location.replace(&staged_src, &workspace_root);
             report.body = report.body.replace(&staged_src, &workspace_root);
             for frame in &mut report.stack {
@@ -1149,6 +1160,24 @@ mod tests {
             "warning"
         );
         assert!(findings[0].suppressed);
+
+        // Missing part information is a build warning but a release error.
+        let unspecified = Diagnostic::categorized(
+            "board.zen",
+            "Component 'TP1' is missing part information",
+            "bom.unspecified",
+            Warning,
+        );
+        let diagnostics = Diagnostics {
+            diagnostics: vec![unspecified],
+        };
+        assert!(release_blocked(&diagnostics));
+        let findings =
+            release_diagnostics(&diagnostics, Path::new("/repo"), Path::new("/tmp/release"));
+        assert_eq!(
+            serde_json::to_value(&findings[0]).unwrap()["severity"],
+            "error"
+        );
     }
 
     #[test]

@@ -1155,23 +1155,23 @@ fn errors_for_components_without_api_bom_matching() {
     assert!(
         unspecified
             .iter()
-            .any(|(severity, body)| matches!(severity, EvalSeverity::Error)
+            .any(|(severity, body)| matches!(severity, EvalSeverity::Warning)
                 && body.contains("Component 'TH1'")),
-        "expected thermistor to error, got: {unspecified:?}"
+        "expected thermistor to warn, got: {unspecified:?}"
     );
     assert!(
         unspecified
             .iter()
-            .any(|(severity, body)| matches!(severity, EvalSeverity::Error)
+            .any(|(severity, body)| matches!(severity, EvalSeverity::Warning)
                 && body.contains("Component 'X1'")),
-        "expected unmatched connector to error, got: {unspecified:?}"
+        "expected unmatched connector to warn, got: {unspecified:?}"
     );
     assert!(
         unspecified
             .iter()
-            .any(|(severity, body)| matches!(severity, EvalSeverity::Error)
+            .any(|(severity, body)| matches!(severity, EvalSeverity::Warning)
                 && body.contains("Component 'J2'")),
-        "expected terminal block connector to error, got: {unspecified:?}"
+        "expected terminal block connector to warn, got: {unspecified:?}"
     );
     assert!(
         unspecified
@@ -1240,7 +1240,7 @@ fn errors_for_legacy_mpn_without_manufacturer_as_underspecified() {
 
     assert!(
         categorized.iter().any(|(severity, kind, body)| {
-            matches!(severity, EvalSeverity::Error)
+            matches!(severity, EvalSeverity::Warning)
                 && *kind == "bom.underspecified"
                 && body.contains("Component 'R1'")
                 && body.contains("missing manufacturer")
@@ -1250,7 +1250,7 @@ fn errors_for_legacy_mpn_without_manufacturer_as_underspecified() {
     );
     assert!(
         categorized.iter().any(|(severity, kind, body)| {
-            matches!(severity, EvalSeverity::Error)
+            matches!(severity, EvalSeverity::Warning)
                 && *kind == "bom.underspecified"
                 && body.contains("Component 'R3'")
                 && body.contains("missing manufacturer")
@@ -1259,7 +1259,7 @@ fn errors_for_legacy_mpn_without_manufacturer_as_underspecified() {
     );
     assert!(
         categorized.iter().any(|(severity, kind, body)| {
-            matches!(severity, EvalSeverity::Error)
+            matches!(severity, EvalSeverity::Warning)
                 && *kind == "bom.unspecified"
                 && body.contains("Component 'R2'")
         }),

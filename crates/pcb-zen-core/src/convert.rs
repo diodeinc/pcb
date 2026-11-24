@@ -473,11 +473,13 @@ impl<'v> ModuleConverter<'v> {
                     ),
                 ),
             };
+            // A warning, so the design still builds and renders; a release
+            // still blocks on it (`pcbc::release::blocks_release`).
             diagnostics.push(Diagnostic::categorized(
                 &instance.type_ref.source_path.to_string_lossy(),
                 &body,
                 kind,
-                EvalSeverity::Error,
+                EvalSeverity::Warning,
             ));
         }
     }
