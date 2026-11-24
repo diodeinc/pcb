@@ -216,8 +216,10 @@ for footprint in board.GetFootprints():
     for pad in footprint.Pads():
         size = pad.GetSize()
         if alignment:
-            # The keep-out disk: the drill's narrow side plus its clearance.
-            radius = min(size.x, size.y) // 2 + pad.GetOwnClearance(pcbnew.F_Cu)
+            # The pad's clearance, as the board's rules measure it, lies
+            # inside this disk: a slot's ends reach past the keep-out disk
+            # drawn from its narrow side.
+            radius = max(size.x, size.y) // 2 + pad.GetOwnClearance(pcbnew.F_Cu)
             for layer in (pcbnew.F_Cu, pcbnew.B_Cu):
                 guard(disk(pad.GetPosition(), radius), layer)
         elif fiducial:
