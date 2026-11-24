@@ -253,11 +253,15 @@ impl Bed {
 /// Interposer `number`'s six ID digits, ID1 first: five base-4 digits and
 /// the check digit.
 /// The interposer number an order number straps: the CRC-16/CCITT-FALSE
-/// of its characters (letters upper-cased), folded into 1–1023. The
+/// of its characters (letters upper-cased, a `DO-` prefix dropped),
+/// folded into 1–1023. The
 /// straps hold ten bits, so they check an order number rather than spell
 /// it: two orders share a number about once in a thousand pairs.
 pub fn order_id(order: &str) -> Result<u16> {
     let order = order.trim().to_ascii_uppercase();
+    // Diode order numbers read `DO-` and five characters; the code alone
+    // is hashed, so either form straps alike.
+    let order = order.strip_prefix("DO-").unwrap_or(&order);
     if order.is_empty() || !order.bytes().all(|b| b.is_ascii_alphanumeric()) {
         bail!("order number {order:?} is not letters and digits");
     }
@@ -384,6 +388,7 @@ mod tests {
         assert_eq!(order_id("bcxc5").unwrap(), order_id(" BCXC5 ").unwrap());
         assert!((1..=1023).contains(&order_id("BCXC5").unwrap()));
         assert!(order_id("BC-C5").is_err());
+        assert_eq!(order_id("DO-BCXC5").unwrap(), order_id("BCXC5").unwrap());
         assert!(order_id("").is_err());
     }
 

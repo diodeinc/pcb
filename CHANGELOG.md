@@ -26,7 +26,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - TestPoint `ict="analog"` marks an analog-only contact, which the Switchyard bed keeps off its digital lanes.
 - On the Switchyard bed `pcb ipc interposer` keeps digital lines that work together on one cell, and so on one tester controller: NRST and SWO beside the SWD pair, and each bus (test points whose names share a stem, such as `TP_UART_TX` and `TP_UART_RX`) on the cell whose free lanes are nearest. A bus wider than a cell is cut into cell-sized runs.
 - `pcb ipc interposer --ipc` states the Switchyard stack-dowel hole's and slot's +0.05/−0 mm tolerance in the exported IPC-2581, and `pcb ipc2581 fab-drawing` notes every hole and slot size the design data holds to a tolerance of its own.
-- `pcb ipc interposer --order <number>` derives the Switchyard interposer ID from an order number (CRC-16/CCITT-FALSE of its characters, folded into 1–1023) instead of `--interposer-id`.
+- `pcb ipc interposer --order <number>` derives the Switchyard interposer ID from an order number (CRC-16/CCITT-FALSE of its characters, without a `DO-` prefix, folded into 1–1023) instead of `--interposer-id`.
 - `pcb ipc interposer --route` sets each GND bed land's via on the land's rim, under the solder mask, instead of at its center where the bed's pogo lands.
 
 ## [0.4.103] - 2026-11-19
