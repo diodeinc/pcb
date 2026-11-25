@@ -357,9 +357,6 @@ pub enum StackupError {
     #[error("Stackup must have at least 3 layers (2 copper + 1 dielectric), got {0}")]
     TooFewLayers(usize),
 
-    #[error("Stackup must have an odd number of layers, got {0}")]
-    EvenLayerCount(usize),
-
     #[error("Stackup must have an even number of copper layers, got {0}")]
     OddCopperLayerCount(usize),
 
@@ -423,7 +420,7 @@ impl Stackup {
                 let mid = layers.len() / 2;
                 layers[..mid]
                     .iter()
-                    .zip(layers[mid + 1..].iter().rev())
+                    .zip(layers.iter().rev())
                     .all(|(a, b)| a == b)
             }
             _ => false,
@@ -450,9 +447,6 @@ impl Stackup {
     fn validate_layer_count(&self, layers: &[Layer]) -> Result<(), StackupError> {
         if layers.len() < 3 {
             return Err(StackupError::TooFewLayers(layers.len()));
-        }
-        if layers.len().is_multiple_of(2) {
-            return Err(StackupError::EvenLayerCount(layers.len()));
         }
         let copper_layers = self.copper_layer_count();
         if !copper_layers.is_multiple_of(2) {
@@ -1114,8 +1108,29 @@ mod tests {
 
         assert!(matches!(
             stackup.validate(),
-            Err(StackupError::EvenLayerCount(4))
+            Err(StackupError::MustStartEndWithCopper)
         ));
+    }
+
+    #[test]
+    fn dielectric_plies_sharing_a_gap_validate() {
+        let ply = |thickness| Layer::Dielectric {
+            thickness,
+            material: "FR4".to_string(),
+            form: DielectricForm::Core,
+        };
+        let copper = Layer::Copper {
+            thickness: 0.035,
+            role: CopperRole::Signal,
+        };
+        let stackup = Stackup {
+            materials: None,
+            layers: Some(vec![copper.clone(), ply(0.5), ply(0.1), copper]),
+            silk_screen_color: None,
+            solder_mask_color: None,
+            copper_finish: None,
+        };
+        stackup.validate().unwrap();
     }
 
     #[test]

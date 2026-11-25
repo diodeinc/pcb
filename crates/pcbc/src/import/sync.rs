@@ -12,9 +12,11 @@ pub(super) fn sync_imported_layout(board: &MaterializedBoard, schematic: &Schema
     let Some(pcb_path) = &board.layout_kicad_pcb else {
         return Ok(());
     };
-    // Sync needs every component's footprint. A board with unresolved footprints, which import
-    // has already reported, keeps the source layout until they resolve.
+    // Give every footprint that resolves its generated ID first, so a later sync keeps those
+    // placed copies too. Sync itself needs every footprint: a board with unresolved ones, which
+    // import has already reported, is left unsynced until they resolve.
     let mut fpid_by_path = BTreeMap::new();
+    let mut unresolved = false;
     for (instance_ref, instance) in &schematic.instances {
         if instance.kind != InstanceKind::Component {
             continue;
@@ -23,16 +25,17 @@ pub(super) fn sync_imported_layout(board: &MaterializedBoard, schematic: &Schema
             Ok((fpid, _)) => {
                 fpid_by_path.insert(instance_ref.instance_path.join("."), fpid);
             }
-            Err(_) => {
-                eprintln!(
-                    "Warning: left {} unsynced until every footprint resolves",
-                    pcb_path.display()
-                );
-                return Ok(());
-            }
+            Err(_) => unresolved = true,
         }
     }
     write_footprint_ids(pcb_path, &fpid_by_path)?;
+    if unresolved {
+        eprintln!(
+            "Warning: left {} unsynced until every footprint resolves",
+            pcb_path.display()
+        );
+        return Ok(());
+    }
 
     let mut diagnostics = pcb_zen_core::Diagnostics::default();
     pcb_layout::process_layout(

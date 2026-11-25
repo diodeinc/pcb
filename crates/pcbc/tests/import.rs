@@ -1534,6 +1534,12 @@ fn unresolved_footprint_off_the_board_keeps_the_import_and_its_layout() {
     let imported =
         fs::read_to_string(sandbox.root_path().join("out/eda/layout.kicad_pcb")).unwrap();
     assert_same_geometry(&imported, &pcb);
+    // R1 and R2 resolve, so they already carry their generated IDs and the sync after R3
+    // resolves keeps these placed copies as they are.
+    assert!(
+        !imported.contains("(footprint \"Resistor_SMD:R_0402_1005Metric\""),
+        "{imported}"
+    );
 }
 
 fn duplicate_pin_connectivity_fixture() -> String {

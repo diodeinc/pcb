@@ -696,6 +696,20 @@ mod stackup_tests {
     }
 
     #[test]
+    fn dielectric_plies_in_one_gap_import() {
+        let pcb_text = r#"(kicad_pcb (layers (0 "F.Cu" signal) (2 "B.Cu" signal))
+            (setup (stackup
+                (layer "F.Cu" (type "copper") (thickness 0.035))
+                (layer "dielectric 1" (type "core") (thickness 0.5) (material "FR4")
+                    addsublayer (thickness 0.1) (material "FR4"))
+                (layer "B.Cu" (type "copper") (thickness 0.035)))))"#;
+        let (layers, stackup) =
+            try_extract_stackup(pcb_text, Path::new("plies.kicad_pcb")).unwrap();
+        assert_eq!(layers, 2);
+        assert_eq!(stackup.unwrap().layers.unwrap().len(), 4);
+    }
+
+    #[test]
     fn board_without_stackup_imports_kicads_default_stackup() {
         let (layers, stackup) = try_extract_stackup(
             &twelve_layer_pcb(false)
