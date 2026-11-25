@@ -8,7 +8,11 @@ use pcb_sexpr::{PatchSet, Sexpr};
 use starlark::errors::EvalSeverity;
 use std::collections::BTreeMap;
 
-pub(super) fn sync_imported_layout(board: &MaterializedBoard, schematic: &Schematic) -> Result<()> {
+pub(super) fn sync_imported_layout(
+    board: &MaterializedBoard,
+    schematic: &Schematic,
+    unresolved_footprints: bool,
+) -> Result<()> {
     let Some(pcb_path) = &board.layout_kicad_pcb else {
         return Ok(());
     };
@@ -17,7 +21,7 @@ pub(super) fn sync_imported_layout(board: &MaterializedBoard, schematic: &Schema
     // import has already reported, is left unsynced until they resolve.
     let mut fpid_by_path = BTreeMap::new();
     let mut libs = std::collections::HashMap::new();
-    let mut unresolved = false;
+    let mut unresolved = unresolved_footprints;
     for (instance_ref, instance) in &schematic.instances {
         if instance.kind != InstanceKind::Component {
             continue;

@@ -56,7 +56,14 @@ fn generate_and_report(materialized: Materialized) -> Result<()> {
     )?;
     eprintln!("Wrote imported board to {}", board.board_zen.display());
     if selection.selected.kicad_pcb.is_some() {
-        sync::sync_imported_layout(&board, &schematic)?;
+        // Includes components without a footprint, which the built schematic gives KiCad's `~`.
+        let unresolved_footprints = ir.components.values().any(|component| {
+            component
+                .layout
+                .as_ref()
+                .is_some_and(|layout| layout.unresolved_footprint.is_some())
+        });
+        sync::sync_imported_layout(&board, &schematic, unresolved_footprints)?;
     }
 
     let report = report::build_import_report(&ctx.paths, &selection, &validation, ir, &board);

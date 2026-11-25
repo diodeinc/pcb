@@ -309,8 +309,15 @@ pub struct DesignRules {
     pub constraints: Option<JsonValue>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub predefined_sizes: Option<JsonValue>,
-    #[serde(default)]
+    /// `DesignRules()` without `netclasses` leaves the field `None`, which arrives as `null`.
+    #[serde(default, deserialize_with = "null_as_empty")]
     pub netclasses: Vec<NetClass>,
+}
+
+fn null_as_empty<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Vec<NetClass>, D::Error> {
+    Ok(Option::<Vec<NetClass>>::deserialize(deserializer)?.unwrap_or_default())
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1207,6 +1214,16 @@ mod tests {
         // Layout sync compares a board's stackup to the config by parsing it back.
         let board = format!("(kicad_pcb (setup {}))", stackup.generate_stackup_expr());
         assert_eq!(Stackup::from_kicad_pcb(&board).unwrap(), Some(stackup));
+    }
+
+    #[test]
+    fn design_rules_without_netclasses_parse() {
+        // `DesignRules(constraints = ...)` without netclasses and a Board() without `layers`.
+        let config = BoardConfig::from_json_str(
+            r#"{"design_rules": {"constraints": {}, "netclasses": null}, "stackup": null}"#,
+        )
+        .unwrap();
+        assert!(config.design_rules.unwrap().netclasses.is_empty());
     }
 
     #[test]
