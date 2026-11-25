@@ -1142,7 +1142,11 @@ fn build_workspace(
         let result = eval_state.build(
             zen_path,
             Default::default(),
-            crate::build::create_diagnostics_passes(suppress, &[]),
+            {
+                let mut passes = release::release_build_passes(suppress);
+                passes.push(Box::new(pcb_zen::diagnostics::RenderPass));
+                passes
+            },
             false,
             &mut false,
             &mut false,

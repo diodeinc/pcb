@@ -173,6 +173,31 @@ pub(crate) fn blocks_release(diagnostic: &pcb_zen_core::Diagnostic) -> bool {
     !diagnostic.suppressed && (diagnostic.is_error() || diagnostic.has_kind("sch"))
 }
 
+/// A BOM part without a manufacturer or MPN is a build warning, so the design
+/// still renders, but a release error. Run before suppression, so `-S warnings`
+/// cannot release an incomplete BOM; suppressing the kind itself still does.
+pub(crate) struct PromoteMissingPartInfo;
+
+impl DiagnosticsPass for PromoteMissingPartInfo {
+    fn apply(&self, diagnostics: &mut Diagnostics) {
+        for diagnostic in &mut diagnostics.diagnostics {
+            if diagnostic.has_kind("bom.unspecified") || diagnostic.has_kind("bom.underspecified") {
+                diagnostic.severity = starlark::errors::EvalSeverity::Error;
+            }
+        }
+    }
+}
+
+/// Build passes for a release or package publish.
+pub(crate) fn release_build_passes(suppress: &[String]) -> Vec<Box<dyn DiagnosticsPass>> {
+    let mut passes: Vec<Box<dyn DiagnosticsPass>> = vec![Box::new(PromoteMissingPartInfo)];
+    passes.extend(crate::build::create_diagnostics_processing_passes(
+        suppress,
+        &[],
+    ));
+    passes
+}
+
 fn release_blocked(diagnostics: &Diagnostics) -> bool {
     diagnostics.diagnostics.iter().any(blocks_release)
 }
@@ -822,7 +847,7 @@ fn validate_build(
         let mut has_warnings = false;
 
         // Export diagnostics to JSON for release artifacts
-        let mut passes = crate::build::create_diagnostics_processing_passes(&info.suppress, &[]);
+        let mut passes = release_build_passes(&info.suppress);
         if !info.quiet {
             passes.push(Box::new(RenderBuildErrorsPass));
         }
@@ -1149,6 +1174,23 @@ mod tests {
             "warning"
         );
         assert!(findings[0].suppressed);
+
+        // Missing part information is a build warning but a release error,
+        // which `-S warnings` does not suppress and its kind does.
+        let unspecified = || Diagnostics {
+            diagnostics: vec![Diagnostic::categorized(
+                "board.zen",
+                "Component 'TP1' is missing part information",
+                "bom.unspecified",
+                Warning,
+            )],
+        };
+        let mut diagnostics = unspecified();
+        diagnostics.apply_passes(&release_build_passes(&["warnings".to_string()]));
+        assert!(release_blocked(&diagnostics));
+        let mut diagnostics = unspecified();
+        diagnostics.apply_passes(&release_build_passes(&["bom.unspecified".to_string()]));
+        assert!(!release_blocked(&diagnostics));
     }
 
     #[test]

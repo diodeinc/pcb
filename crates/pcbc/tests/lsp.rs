@@ -65,8 +65,8 @@ Resistor(name = "R1", value = "10kOhm", package = "0603", P1 = Net("A"), P2 = Ne
     }
 }
 
-/// A component with no part information raises `bom.unspecified` (an error),
-/// but evaluation still produces a schematic.
+/// A component with no part information raises `bom.unspecified`, a warning:
+/// evaluation succeeds and produces a schematic.
 const UNSPECIFIED_PART_ZEN: &str = r#"
 Component(
     name = "U1",
@@ -84,7 +84,7 @@ const ONE_PAD_KICAD_MOD: &str = r#"(footprint "test"
 "#;
 
 #[test]
-fn evaluation_with_errors_still_returns_schematic() {
+fn evaluation_with_missing_part_information_succeeds() {
     let mut sandbox = Sandbox::new().with_workspace();
     sandbox
         .write("main.zen", UNSPECIFIED_PART_ZEN)
@@ -105,13 +105,13 @@ fn evaluation_with_errors_still_returns_schematic() {
         ],
     );
     let result = &responses.iter().find(|r| r["id"] == 2).unwrap()["result"];
-    assert_eq!(result["success"], false, "{result}");
+    assert_eq!(result["success"], true, "{result}");
     assert!(
         result["diagnostics"]
             .as_array()
             .unwrap()
             .iter()
-            .any(|d| d["level"] == "error"
+            .any(|d| d["level"] == "warning"
                 && d["message"]
                     .as_str()
                     .unwrap()
