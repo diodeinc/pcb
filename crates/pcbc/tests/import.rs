@@ -1540,6 +1540,17 @@ fn unresolved_footprint_off_the_board_keeps_the_import_and_its_layout() {
         !imported.contains("(footprint \"Resistor_SMD:R_0402_1005Metric\""),
         "{imported}"
     );
+    // KiCad finds those IDs' libraries through the layout's fp-lib-table.
+    let table = fs::read_to_string(sandbox.root_path().join("out/eda/fp-lib-table")).unwrap();
+    for line in imported.lines() {
+        if let Some(fpid) = line.strip_prefix("\t(footprint \"") {
+            let nickname = fpid.split(':').next().unwrap();
+            assert!(
+                table.contains(&format!("(name \"{nickname}\")")),
+                "{nickname}:\n{table}"
+            );
+        }
+    }
 }
 
 fn duplicate_pin_connectivity_fixture() -> String {

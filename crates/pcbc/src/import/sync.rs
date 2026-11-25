@@ -16,20 +16,30 @@ pub(super) fn sync_imported_layout(board: &MaterializedBoard, schematic: &Schema
     // placed copies too. Sync itself needs every footprint: a board with unresolved ones, which
     // import has already reported, is left unsynced until they resolve.
     let mut fpid_by_path = BTreeMap::new();
+    let mut libs = std::collections::HashMap::new();
     let mut unresolved = false;
     for (instance_ref, instance) in &schematic.instances {
         if instance.kind != InstanceKind::Component {
             continue;
         }
         match schematic.kicad_footprint(instance) {
-            Ok((fpid, _)) => {
+            Ok((fpid, lib)) => {
                 fpid_by_path.insert(instance_ref.instance_path.join("."), fpid);
+                libs.extend(lib);
             }
             Err(_) => unresolved = true,
         }
     }
     write_footprint_ids(pcb_path, &fpid_by_path)?;
     if unresolved {
+        // Sync writes the table that resolves these IDs; without it, register their libraries.
+        let layout_dir = pcb_path.parent().context("layout file has no directory")?;
+        pcb_sch::kicad_netlist::write_fp_lib_table(layout_dir, &libs).with_context(|| {
+            format!(
+                "Failed to write {}",
+                layout_dir.join("fp-lib-table").display()
+            )
+        })?;
         eprintln!(
             "Warning: left {} unsynced until every footprint resolves",
             pcb_path.display()
