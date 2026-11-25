@@ -370,9 +370,7 @@ def rmv_quotes(s):
 
 
 def _net_codes(board: pcbnew.BOARD) -> dict[str, int]:
-    return {
-        str(name): net.GetNetCode() for name, net in board.GetNetsByName().items()
-    }
+    return {str(name): net.GetNetCode() for name, net in board.GetNetsByName().items()}
 
 
 def get_footprint_uuid(fp: pcbnew.FOOTPRINT) -> str:
