@@ -23,6 +23,11 @@ an existing equivalent schematic.
 
 Generation may give a new module instance its own child sheet and file. Later
 applications preserve user reorganizations rather than restoring that layout.
+A new symbol goes on the page of its closest placed relatives: the managed
+symbols under its nearest module ancestor, including a stale symbol it
+replaces. A module organized onto its own sheet, with or without `Project()`,
+therefore keeps receiving its parts there, connected through that sheet's
+existing hierarchical labels where they already carry the net.
 Full reconciliation removes an obsolete generated subtree only when its page
 filenames, page UUIDs and incoming sheet UUIDs still identify the generated
 module paths and parent-relative filenames, and it contains no live managed
