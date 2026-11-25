@@ -149,7 +149,7 @@ struct ImportedBoardZenArgs<'a> {
 }
 
 fn write_imported_board_zen(args: ImportedBoardZenArgs<'_>) -> Result<()> {
-    let (copper_layers, stackup, design_rules) = if let Some(layout_kicad_pcb) =
+    let (copper_layers, user_layers, stackup, design_rules) = if let Some(layout_kicad_pcb) =
         args.layout_kicad_pcb
     {
         let pcb_text = fs::read_to_string(layout_kicad_pcb).with_context(|| {
@@ -159,6 +159,7 @@ fn write_imported_board_zen(args: ImportedBoardZenArgs<'_>) -> Result<()> {
             )
         })?;
         let (copper_layers, stackup) = try_extract_stackup(&pcb_text, layout_kicad_pcb)?;
+        let user_layers = source_user_layer_count(&pcb_text)?;
         let design_rules = pcb_layout::extract_kicad_design_rules(args.layout_kicad_pro, &pcb_text)
             .ok()
             .flatten();
@@ -181,10 +182,19 @@ fn write_imported_board_zen(args: ImportedBoardZenArgs<'_>) -> Result<()> {
             sheet_modules: args.sheet_modules,
         })
         .context("Failed to pre-patch imported KiCad PCB for sync hooks")?;
+        if args.source_board {
+            pcb_layout::rename_netclass_patterns(
+                args.layout_kicad_pro,
+                args.net_decls
+                    .zener_name_by_kicad_name
+                    .iter()
+                    .map(|(kicad, zener)| (kicad.as_str(), zener.as_str())),
+            )?;
+        }
 
-        (copper_layers, stackup, design_rules)
+        (copper_layers, user_layers, stackup, design_rules)
     } else {
-        (4, None, None)
+        (4, None, None, None)
     };
 
     let root_sheet = KiCadSheetPath::root();
@@ -250,6 +260,7 @@ fn write_imported_board_zen(args: ImportedBoardZenArgs<'_>) -> Result<()> {
         crate::codegen::board::RenderImportedBoardArgs {
             board_name: args.board_name,
             copper_layers,
+            user_layers,
             design_rules: design_rules.as_ref(),
             stackup: stackup.as_ref(),
             net_decls: &root_net_decls,
@@ -500,12 +511,10 @@ fn try_extract_stackup(
         )
     })?
     else {
-        anyhow::ensure!(
-            matches!(source_copper_layers, 2 | 4 | 6 | 8 | 10),
-            "KiCad PCB {} has {source_copper_layers} copper layers but no explicit stackup; Zener has no default stackup for that layer count, so configure a stackup in KiCad before importing",
-            layout_kicad_pcb.display()
-        );
-        return Ok((source_copper_layers, None));
+        return Ok((
+            source_copper_layers,
+            Some(kicad_default_stackup(pcb_text, source_copper_layers)?),
+        ));
     };
 
     stackup
@@ -520,6 +529,90 @@ fn try_extract_stackup(
     );
 
     Ok((source_copper_layers, Some(stackup)))
+}
+
+/// The highest `User.N` layer the board defines, so sync keeps every user layer and its items,
+/// or `None` when that is the `BoardConfig` default of 4.
+fn source_user_layer_count(pcb_text: &str) -> Result<Option<usize>> {
+    let root = pcb_sexpr::parse(pcb_text).map_err(|e| anyhow::anyhow!("{e:#}"))?;
+    let root_items = root
+        .as_list()
+        .ok_or_else(|| anyhow::anyhow!("Expected KiCad PCB root to be a list"))?;
+    let count = find_child_list(root_items, "layers")
+        .into_iter()
+        .flatten()
+        .filter_map(Sexpr::as_list)
+        .filter_map(|entry| entry.get(1)?.as_str()?.strip_prefix("User.")?.parse().ok())
+        .max()
+        .unwrap_or(0);
+    Ok((count != 4).then_some(count))
+}
+
+/// The stackup KiCad gives a board that defines none, as `BOARD_STACKUP::BuildDefaultStackupList`
+/// builds it: 35 µm copper, 10 µm solder masks, and FR4 dielectrics of equal thickness filling the
+/// rest of the board thickness, alternating core and prepreg. Importing this rather than no stackup
+/// keeps sync from replacing the board's thickness with that of Zener's default stackup.
+fn kicad_default_stackup(pcb_text: &str, copper_layers: usize) -> Result<zen_stackup::Stackup> {
+    const COPPER_MM: f64 = 0.035;
+    const MASK_MM: f64 = 0.01;
+    anyhow::ensure!(
+        copper_layers >= 2,
+        "KiCad PCB has {copper_layers} copper layers"
+    );
+    let root = pcb_sexpr::parse(pcb_text).map_err(|e| anyhow::anyhow!("{e:#}"))?;
+    let thickness = root
+        .find_list("general")
+        .and_then(|general| find_child_list(general, "thickness"))
+        .and_then(|thickness| thickness.get(1))
+        .and_then(|value| {
+            value
+                .as_float()
+                .or_else(|| value.as_int().map(|i| i as f64))
+        })
+        .unwrap_or(1.6);
+    // In whole nanometres, KiCad's units. The first dielectric takes the remainder of the split,
+    // so the stackup adds up to the board thickness exactly.
+    let nm = |mm: f64| (mm * 1e6).round() as i64;
+    let total = nm(thickness) - 2 * nm(MASK_MM) - nm(COPPER_MM) * copper_layers as i64;
+    let dielectrics = copper_layers as i64 - 1;
+    let dielectric = total / dielectrics;
+    let first_dielectric = total - dielectric * (dielectrics - 1);
+    let mut layers = Vec::new();
+    for index in 0..copper_layers {
+        if index > 0 {
+            layers.push(zen_stackup::Layer::Dielectric {
+                thickness: if index == 1 {
+                    first_dielectric
+                } else {
+                    dielectric
+                } as f64
+                    / 1e6,
+                material: "FR4".to_string(),
+                form: if index % 2 == 1 {
+                    zen_stackup::DielectricForm::Core
+                } else {
+                    zen_stackup::DielectricForm::Prepreg
+                },
+            });
+        }
+        layers.push(zen_stackup::Layer::Copper {
+            thickness: COPPER_MM,
+            role: zen_stackup::CopperRole::Signal,
+        });
+    }
+    Ok(zen_stackup::Stackup {
+        materials: Some(vec![zen_stackup::Material {
+            name: Some("FR4".to_string()),
+            vendor: None,
+            relative_permittivity: Some(4.5),
+            loss_tangent: Some(0.02),
+            reference_frequency: None,
+        }]),
+        silk_screen_color: None,
+        solder_mask_color: None,
+        layers: Some(layers),
+        copper_finish: None,
+    })
 }
 
 fn infer_copper_layers_from_layers_section(pcb_text: &str) -> Result<usize> {
@@ -593,15 +686,22 @@ mod stackup_tests {
     }
 
     #[test]
-    fn unsupported_default_layer_count_requires_explicit_stackup() {
-        let error = try_extract_stackup(
-            &twelve_layer_pcb(false),
+    fn board_without_stackup_imports_kicads_default_stackup() {
+        let (layers, stackup) = try_extract_stackup(
+            &twelve_layer_pcb(false).replacen(
+                "(kicad_pcb\n",
+                "(kicad_pcb\n  (general (thickness 1.2))\n",
+                1,
+            ),
             Path::new("twelve-layer.kicad_pcb"),
         )
-        .unwrap_err()
-        .to_string();
+        .unwrap();
+        let stackup = stackup.unwrap();
 
-        assert!(error.contains("12 copper layers but no explicit stackup"));
+        assert_eq!(layers, 12);
+        assert_eq!(stackup.copper_layer_count(), 12);
+        // Sync writes this thickness, so it must be the board's own.
+        assert!((stackup.kicad_board_thickness().unwrap() - 1.2).abs() < 1e-9);
     }
 
     #[test]
@@ -622,7 +722,7 @@ mod stackup_tests {
         let (layers, stackup) =
             try_extract_stackup(pcb_text, Path::new("dummy.kicad_pcb")).unwrap();
         assert_eq!(layers, 4);
-        assert!(stackup.is_none());
+        assert_eq!(stackup.unwrap().copper_layer_count(), 4);
     }
 
     #[test]
@@ -632,7 +732,7 @@ mod stackup_tests {
         let (layers, stackup) =
             try_extract_stackup(pcb_text, Path::new("dummy.kicad_pcb")).unwrap();
         assert_eq!(layers, 2);
-        assert!(stackup.is_none());
+        assert!((stackup.unwrap().kicad_board_thickness().unwrap() - 1.6).abs() < 1e-6);
     }
 }
 
@@ -3262,6 +3362,7 @@ mod tests {
         let board = render_imported_board(RenderImportedBoardArgs {
             board_name: "TestBoard",
             copper_layers: 2,
+            user_layers: None,
             design_rules: None,
             stackup: None,
             net_decls: &decls.decls,

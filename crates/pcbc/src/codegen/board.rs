@@ -57,6 +57,8 @@ pub struct ImportedInstanceCall {
 pub struct RenderImportedBoardArgs<'a> {
     pub board_name: &'a str,
     pub copper_layers: usize,
+    /// The `User.N` layers to enable, when not the `BoardConfig` default.
+    pub user_layers: Option<usize>,
     pub design_rules: Option<&'a zen_stackup::DesignRules>,
     pub stackup: Option<&'a zen_stackup::Stackup>,
     pub net_decls: &'a [ImportedNetDecl],
@@ -101,9 +103,14 @@ pub fn render_imported_board(args: RenderImportedBoardArgs<'_>) -> String {
         starlark::string(BOARD_PROJECT_DIR)
     ));
     out.push_str("    schematic = True,\n");
-    out.push_str(&format!("    layers = {},\n", args.copper_layers));
+    // `layers` merges Diode's defaults for that layer count, such as an ENIG finish and
+    // preset track sizes, under the config. A source stackup is the complete config, so
+    // only boards without one take the defaults.
+    if args.stackup.is_none() {
+        out.push_str(&format!("    layers = {},\n", args.copper_layers));
+    }
 
-    if args.design_rules.is_some() || args.stackup.is_some() {
+    if args.design_rules.is_some() || args.stackup.is_some() || args.user_layers.is_some() {
         out.push_str("    config = BoardConfig(\n");
         if let Some(design_rules) = args.design_rules {
             out.push_str("        design_rules = ");
@@ -114,6 +121,9 @@ pub fn render_imported_board(args: RenderImportedBoardArgs<'_>) -> String {
             out.push_str("        stackup = ");
             out.push_str(&render_stackup_expr(stackup, 2));
             out.push_str(",\n");
+        }
+        if let Some(user_layers) = args.user_layers {
+            out.push_str(&format!("        num_user_layers = {user_layers},\n"));
         }
         out.push_str("    ),\n");
     } else {
@@ -878,6 +888,7 @@ mod tests {
         let out = render_imported_board(RenderImportedBoardArgs {
             board_name: "Demo",
             copper_layers: 4,
+            user_layers: None,
             design_rules: Some(&design_rules),
             stackup: None,
             net_decls: &[],
@@ -914,6 +925,7 @@ mod tests {
         let out = render_imported_board(RenderImportedBoardArgs {
             board_name: "Demo",
             copper_layers: 4,
+            user_layers: None,
             design_rules: Some(&design_rules),
             stackup: None,
             net_decls: &[],

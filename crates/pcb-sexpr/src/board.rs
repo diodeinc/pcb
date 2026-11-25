@@ -182,13 +182,13 @@ pub fn transform_board_instance_footprint_to_standalone(
         }
     }
 
-    // Many `.kicad_mod` footprints contain fp_text reference/value/user.
-    // If the instance footprint did not include them, add minimal placeholders.
+    // `.kicad_mod` footprints contain fp_text reference/value. If the instance footprint did not
+    // include them, add minimal placeholders. Add no other text: a placed copy loaded from this
+    // definition would show it although the board footprint never had it.
     if !has_fp_text {
         let fp_texts: Vec<Sexpr> = vec![
             min_fp_text("reference", "REF**", "F.SilkS"),
             min_fp_text("value", &name, "F.Fab"),
-            min_fp_text("user", "${REFERENCE}", "F.Fab"),
         ];
         out_items.extend(fp_texts);
     }
@@ -499,11 +499,12 @@ fn deinstance_xy_tag(
 }
 
 fn deinstance_point_from_zone_abs(x: f64, y: f64, pose: &FootprintInstancePose) -> (f64, f64) {
-    // Inverse of: p_file = t + R(theta) * (M(p_local) if is_back else p_local)
+    // Inverse of: p_file = t + R(theta) * (M(p_local) if is_back else p_local), where KiCad's
+    // R(theta) maps (x, y) to (x cos + y sin, -x sin + y cos) in its y-down coordinates.
     let mut px = x - pose.tx;
     let mut py = y - pose.ty;
 
-    let theta = (-pose.rot_deg).to_radians();
+    let theta = pose.rot_deg.to_radians();
     let (s, c) = theta.sin_cos();
     let rx = c * px - s * py;
     let ry = s * px + c * py;
@@ -1541,51 +1542,46 @@ mod tests {
 
     #[test]
     fn standalone_footprint_deinstances_zone_points() {
-        // A minimal footprint keepout zone point based on the MOLEX-5033981892 board instance.
-        // p_file = t + R(180) * M(p_local)
-        // where p_local = (-3.22001, 5.72989), t = (96.12111, 46.5236).
-        let input = r#"
-        (footprint "lib:TEST"
-            (layer "B.Cu")
-            (at 96.12111 46.5236 180)
-            (zone
-                (layer "B.Cu")
-                (polygon (pts (xy 99.34112 52.25349)))
-            )
-        )
-        "#;
-
+        // Board points KiCad 10 wrote for the library point (9, -1.5) placed at each pose. A
+        // pose rotated by other than 0 or 180 degrees catches a reversed rotation, which maps
+        // 90 degrees to the point (-9, 1.5) mirrored through the footprint origin.
+        let cases = [
+            ("F.Cu", "80 50 90", (78.5, 41.0), (9.0, -1.5)),
+            ("F.Cu", "110 50 30", (117.044229, 44.200962), (9.0, -1.5)),
+            ("B.Cu", "200 50 -30", (207.044229, 55.799038), (9.0, -1.5)),
+            // The MOLEX-5033981892 instance: p_file = t + R(180) * M(p_local).
+            (
+                "B.Cu",
+                "96.12111 46.5236 180",
+                (99.34112, 52.25349),
+                (-3.22001, 5.72989),
+            ),
+        ];
         let board = parse("(kicad_pcb (version 20211014) (generator pcbnew))").unwrap();
-        let out = transform_board_instance_footprint_to_standalone(input, &board).unwrap();
-        let parsed = parse(&out).unwrap();
-
-        let mut xy: Option<(f64, f64)> = None;
-        parsed.walk(|node, ctx| {
-            if xy.is_some() {
-                return;
-            }
-            let Some(items) = node.as_list() else {
-                return;
-            };
-            if items.first().and_then(Sexpr::as_sym) != Some("xy") {
-                return;
-            }
-            if ctx.parent_tag() != Some("pts") {
-                return;
-            }
-            if ctx.grandparent_tag() != Some("polygon") {
-                return;
-            }
-
-            let x = items.get(1).and_then(number_as_f64).unwrap_or(f64::NAN);
-            let y = items.get(2).and_then(number_as_f64).unwrap_or(f64::NAN);
-            xy = Some((x, y));
-        });
-
-        let (x, y) = xy.expect("missing polygon xy");
-
-        assert!((x - (-3.22001)).abs() < 1e-5);
-        assert!((y - 5.72989).abs() < 1e-5);
+        for (layer, at, (board_x, board_y), (local_x, local_y)) in cases {
+            let input = format!(
+                r#"(footprint "lib:TEST" (layer "{layer}") (at {at})
+                    (zone (layer "{layer}") (polygon (pts (xy {board_x} {board_y})))))"#
+            );
+            let out = transform_board_instance_footprint_to_standalone(&input, &board).unwrap();
+            let mut xy = None;
+            parse(&out).unwrap().walk(|node, ctx| {
+                if let Some(items) = node.as_list()
+                    && items.first().and_then(Sexpr::as_sym) == Some("xy")
+                    && ctx.parent_tag() == Some("pts")
+                {
+                    xy = items
+                        .get(1)
+                        .and_then(number_as_f64)
+                        .zip(items.get(2).and_then(number_as_f64));
+                }
+            });
+            let (x, y) = xy.expect("missing polygon xy");
+            assert!(
+                (x - local_x).abs() < 1e-5 && (y - local_y).abs() < 1e-5,
+                "{layer} at {at}: got ({x}, {y}), expected ({local_x}, {local_y})"
+            );
+        }
     }
 
     #[test]

@@ -799,10 +799,13 @@ impl Stackup {
 
     /// Parse stackup configuration from KiCad PCB file content
     pub fn from_kicad_pcb(content: &str) -> Result<Option<Self>, StackupError> {
-        let pcb_expr = pcb_sexpr::parse(content)?;
+        Self::from_kicad_board(&pcb_sexpr::parse(content)?)
+    }
 
+    /// Parse stackup configuration from a parsed KiCad PCB.
+    pub fn from_kicad_board(pcb_expr: &Sexpr) -> Result<Option<Self>, StackupError> {
         // First, parse the layers section to get copper roles
-        let copper_roles = Self::parse_copper_roles_from_layers(&pcb_expr)?;
+        let copper_roles = Self::parse_copper_roles_from_layers(pcb_expr)?;
 
         // KiCad writes a header-only board, without a setup section, when it creates a project.
         let Some(setup) = pcb_expr.find_list("setup") else {
