@@ -570,6 +570,8 @@ fn kicad_default_stackup(pcb_text: &str, copper_layers: usize) -> Result<zen_sta
                 .or_else(|| value.as_int().map(|i| i as f64))
         })
         .unwrap_or(1.6);
+    // Keep each copper layer's type from `(layers ...)`, so sync leaves that section as it is.
+    let roles = zen_stackup::Stackup::parse_copper_roles_from_layers(&root)?;
     // In whole nanometres, KiCad's units. The first dielectric takes the remainder of the split,
     // so the stackup adds up to the board thickness exactly.
     let nm = |mm: f64| (mm * 1e6).round() as i64;
@@ -595,9 +597,17 @@ fn kicad_default_stackup(pcb_text: &str, copper_layers: usize) -> Result<zen_sta
                 },
             });
         }
+        let name = match index {
+            0 => "F.Cu".to_string(),
+            index if index + 1 == copper_layers => "B.Cu".to_string(),
+            index => format!("In{index}.Cu"),
+        };
         layers.push(zen_stackup::Layer::Copper {
             thickness: COPPER_MM,
-            role: zen_stackup::CopperRole::Signal,
+            role: roles
+                .get(&name)
+                .copied()
+                .unwrap_or(zen_stackup::CopperRole::Signal),
         });
     }
     Ok(zen_stackup::Stackup {
@@ -688,11 +698,14 @@ mod stackup_tests {
     #[test]
     fn board_without_stackup_imports_kicads_default_stackup() {
         let (layers, stackup) = try_extract_stackup(
-            &twelve_layer_pcb(false).replacen(
-                "(kicad_pcb\n",
-                "(kicad_pcb\n  (general (thickness 1.2))\n",
-                1,
-            ),
+            &twelve_layer_pcb(false)
+                .replacen(
+                    "(kicad_pcb\n",
+                    "(kicad_pcb\n  (general (thickness 1.2))\n",
+                    1,
+                )
+                .replace("\"F.Cu\" signal", "\"F.Cu\" mixed")
+                .replace("\"In5.Cu\" signal", "\"In5.Cu\" power"),
             Path::new("twelve-layer.kicad_pcb"),
         )
         .unwrap();
@@ -700,8 +713,12 @@ mod stackup_tests {
 
         assert_eq!(layers, 12);
         assert_eq!(stackup.copper_layer_count(), 12);
-        // Sync writes this thickness, so it must be the board's own.
+        // Sync writes this thickness and these layer types, so they must be the board's own.
         assert!((stackup.kicad_board_thickness().unwrap() - 1.2).abs() < 1e-9);
+        let layers = stackup.generate_layers_expr(4).to_string();
+        assert!(layers.contains("\"F.Cu\" mixed"), "{layers}");
+        assert!(layers.contains("\"In5.Cu\" power"), "{layers}");
+        assert!(layers.contains("\"B.Cu\" signal"), "{layers}");
     }
 
     #[test]

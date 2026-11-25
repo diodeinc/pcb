@@ -782,13 +782,15 @@ impl Stackup {
             None,
         ));
 
-        // Finish and constraints
-        if let Some(finish) = &self.copper_finish {
-            b.push(Sexpr::list(vec![
-                Sexpr::symbol("copper_finish"),
-                Sexpr::string(finish.to_string()),
-            ]));
-        }
+        // Finish and constraints, written as KiCad saves them, so its next save keeps them.
+        b.push(Sexpr::list(vec![
+            Sexpr::symbol("copper_finish"),
+            Sexpr::string(
+                self.copper_finish
+                    .as_ref()
+                    .map_or("None".to_string(), ToString::to_string),
+            ),
+        ]));
         b.push(Sexpr::list(vec![
             Sexpr::symbol("dielectric_constraints"),
             Sexpr::symbol("no"),
@@ -826,7 +828,7 @@ impl Stackup {
     }
 
     /// Parse copper roles from the layers section
-    fn parse_copper_roles_from_layers(
+    pub fn parse_copper_roles_from_layers(
         pcb_expr: &Sexpr,
     ) -> Result<HashMap<String, CopperRole>, StackupError> {
         let mut copper_roles = HashMap::new();

@@ -1971,11 +1971,14 @@ fn build_stackup_patchset(
             LayoutError::StackupPatchingError("Invalid layers span in PCB file".to_string())
         })?
         .span;
-    patches.replace_raw(layers_span, layers.to_string());
-    patches.extend(
-        pcb_sexpr::board::build_prune_items_not_in_layers_patchset(board, layers)
-            .map_err(LayoutError::StackupPatchingError)?,
-    );
+    // Same layers keep the board's own entries, such as user-given layer names.
+    if layer_entries(board) != layer_entries(layers) {
+        patches.replace_raw(layers_span, layers.to_string());
+        patches.extend(
+            pcb_sexpr::board::build_prune_items_not_in_layers_patchset(board, layers)
+                .map_err(LayoutError::StackupPatchingError)?,
+        );
+    }
 
     let setup_idx = pcb_sexpr::find_named_list_index(root_items, "setup").ok_or_else(|| {
         LayoutError::StackupPatchingError("PCB file is missing (setup ...) section".to_string())
@@ -2347,6 +2350,25 @@ mod tests {
         assert!(out.contains("(dashed_line_gap_ratio 3.000000)"));
         assert!(out.contains("(hpglpendiameter 15.000000)"));
         assert!(out.contains("(thickness 1.6062)"));
+    }
+
+    #[test]
+    fn build_stackup_patchset_keeps_the_layer_names_of_the_same_layers() {
+        let input = r#"(kicad_pcb
+	(layers (0 "F.Cu" mixed "Top") (2 "B.Cu" signal "Bottom"))
+	(setup)
+)"#;
+        let board = pcb_sexpr::parse(input).unwrap();
+        let layers = pcb_sexpr::parse(r#"(layers (0 "F.Cu" mixed) (2 "B.Cu" signal))"#).unwrap();
+        let stackup = pcb_sexpr::parse(r#"(stackup (layer "F.Cu") (layer "B.Cu"))"#).unwrap();
+
+        let patches = build_stackup_patchset(&board, &layers, &stackup, None).unwrap();
+        let mut out = Vec::new();
+        patches.write_to(input, &mut out).unwrap();
+        let out = String::from_utf8(out).unwrap();
+
+        assert!(out.contains(r#"(0 "F.Cu" mixed "Top")"#), "{out}");
+        assert!(out.contains("(stackup"), "{out}");
     }
 
     #[test]
