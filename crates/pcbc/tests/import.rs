@@ -1486,6 +1486,56 @@ fn unavailable_footprints_emit_a_short_warning_and_stay_in_the_report() {
     }));
 }
 
+#[test]
+fn unresolved_footprint_off_the_board_keeps_the_import_and_its_layout() {
+    // R3 is only in the schematic, and its footprint's library is missing, so the layout
+    // cannot sync; import still succeeds and keeps the source layout.
+    let mut sandbox = sandbox();
+    let r3 = STANDALONE_FIXTURE.find("\"Reference\" \"R3\"").unwrap();
+    let footprint = r3
+        + STANDALONE_FIXTURE[r3..]
+            .find("Resistor_SMD:R_0402_1005Metric")
+            .unwrap();
+    let schematic = format!(
+        "{}UnavailableLibrary:R_0402{}",
+        &STANDALONE_FIXTURE[..footprint],
+        &STANDALONE_FIXTURE[footprint + "Resistor_SMD:R_0402_1005Metric".len()..]
+    );
+    let r3 = PCB_FIXTURE.find("\"Reference\" \"R3\"").unwrap();
+    let start = PCB_FIXTURE[..r3].rfind("\t(footprint").unwrap();
+    let end = start + PCB_FIXTURE[start..].find("\n\t)\n").unwrap() + "\n\t)\n".len();
+    let pcb = format!("{}{}", &PCB_FIXTURE[..start], &PCB_FIXTURE[end..]);
+    sandbox.write("source/layout.kicad_sch", &schematic);
+    sandbox.write("source/layout.kicad_pro", PROJECT_FIXTURE);
+    sandbox.write("source/layout.kicad_pcb", &pcb);
+
+    let import = sandbox
+        .run(
+            "pcbc",
+            [
+                "import",
+                "--force",
+                "--skip-drc",
+                "source/layout.kicad_sch",
+                "out",
+            ],
+        )
+        .stdout_capture()
+        .stderr_capture()
+        .unchecked()
+        .run()
+        .expect("run pcbc import");
+    let stderr = String::from_utf8_lossy(&import.stderr).into_owned();
+    assert!(import.status.success(), "import failed:\n{stderr}");
+    assert!(
+        stderr.contains("unsynced until every footprint resolves"),
+        "{stderr}"
+    );
+    let imported =
+        fs::read_to_string(sandbox.root_path().join("out/eda/layout.kicad_pcb")).unwrap();
+    assert_same_geometry(&imported, &pcb);
+}
+
 fn duplicate_pin_connectivity_fixture() -> String {
     let mut schematic = STANDALONE_FIXTURE.to_string();
     schematic = schematic.replace(

@@ -12,7 +12,27 @@ pub(super) fn sync_imported_layout(board: &MaterializedBoard, schematic: &Schema
     let Some(pcb_path) = &board.layout_kicad_pcb else {
         return Ok(());
     };
-    write_footprint_ids(pcb_path, schematic)?;
+    // Sync needs every component's footprint. A board with unresolved footprints, which import
+    // has already reported, keeps the source layout until they resolve.
+    let mut fpid_by_path = BTreeMap::new();
+    for (instance_ref, instance) in &schematic.instances {
+        if instance.kind != InstanceKind::Component {
+            continue;
+        }
+        match schematic.kicad_footprint(instance) {
+            Ok((fpid, _)) => {
+                fpid_by_path.insert(instance_ref.instance_path.join("."), fpid);
+            }
+            Err(_) => {
+                eprintln!(
+                    "Warning: left {} unsynced until every footprint resolves",
+                    pcb_path.display()
+                );
+                return Ok(());
+            }
+        }
+    }
+    write_footprint_ids(pcb_path, &fpid_by_path)?;
 
     let mut diagnostics = pcb_zen_core::Diagnostics::default();
     pcb_layout::process_layout(
@@ -50,17 +70,7 @@ pub(super) fn sync_imported_layout(board: &MaterializedBoard, schematic: &Schema
 /// Give each footprint the ID layout sync assigns to its component. Sync replaces a footprint
 /// whose ID changed with its library definition, which import generated from only one of the
 /// package's placed copies; with matching IDs every placed copy is kept as it is.
-fn write_footprint_ids(pcb_path: &Path, schematic: &Schematic) -> Result<()> {
-    let mut fpid_by_path = BTreeMap::new();
-    for (instance_ref, instance) in &schematic.instances {
-        if instance.kind == InstanceKind::Component {
-            let (fpid, _) = schematic
-                .kicad_footprint(instance)
-                .with_context(|| format!("component {instance_ref}"))?;
-            fpid_by_path.insert(instance_ref.instance_path.join("."), fpid);
-        }
-    }
-
+fn write_footprint_ids(pcb_path: &Path, fpid_by_path: &BTreeMap<String, String>) -> Result<()> {
     let text = std::fs::read_to_string(pcb_path)
         .with_context(|| format!("Failed to read {}", pcb_path.display()))?;
     let root = pcb_sexpr::parse(&text).map_err(|error| anyhow::anyhow!(error))?;

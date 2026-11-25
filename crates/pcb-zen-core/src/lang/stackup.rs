@@ -900,42 +900,44 @@ impl Stackup {
                         layers.push(Layer::Copper { thickness, role });
                     }
                     name if name.starts_with("dielectric ") => {
-                        // Dielectric layer
-                        let thickness = Self::extract_numeric_prop(&layer_data[2..], "thickness")
-                            .ok_or(StackupError::MissingThickness)?;
-                        let material = Self::extract_string_prop(&layer_data[2..], "material")
-                            .unwrap_or("FR4".to_string());
-                        let form = Self::extract_string_prop(&layer_data[2..], "type")
+                        // A dielectric entry holds one or more plies, separated by `addsublayer`;
+                        // its type is written once, on the first ply.
+                        let props = &layer_data[2..];
+                        let form = Self::extract_string_prop(props, "type")
                             .and_then(|s| match s.as_str() {
                                 "core" => Some(DielectricForm::Core),
                                 "prepreg" => Some(DielectricForm::Prepreg),
                                 _ => None,
                             })
                             .unwrap_or(DielectricForm::Core);
+                        for ply in props.split(|item| item.as_sym() == Some("addsublayer")) {
+                            let thickness = Self::extract_numeric_prop(ply, "thickness")
+                                .ok_or(StackupError::MissingThickness)?;
+                            let material = Self::extract_string_prop(ply, "material")
+                                .unwrap_or("FR4".to_string());
 
-                        // Extract material properties
-                        if let (Some(er), Some(tan_d)) = (
-                            Self::extract_numeric_prop(&layer_data[2..], "epsilon_r"),
-                            Self::extract_numeric_prop(&layer_data[2..], "loss_tangent"),
-                        ) {
-                            // Check if we already have this material or need to add it
-                            let mat = Material {
-                                name: Some(material.clone()),
-                                vendor: None,
-                                relative_permittivity: Some(er),
-                                loss_tangent: Some(tan_d),
-                                reference_frequency: None,
-                            };
-                            if !materials.iter().any(|m: &Material| m.name == mat.name) {
-                                materials.push(mat);
+                            if let (Some(er), Some(tan_d)) = (
+                                Self::extract_numeric_prop(ply, "epsilon_r"),
+                                Self::extract_numeric_prop(ply, "loss_tangent"),
+                            ) && !materials
+                                .iter()
+                                .any(|m: &Material| m.name.as_deref() == Some(material.as_str()))
+                            {
+                                materials.push(Material {
+                                    name: Some(material.clone()),
+                                    vendor: None,
+                                    relative_permittivity: Some(er),
+                                    loss_tangent: Some(tan_d),
+                                    reference_frequency: None,
+                                });
                             }
-                        }
 
-                        layers.push(Layer::Dielectric {
-                            thickness,
-                            material,
-                            form,
-                        });
+                            layers.push(Layer::Dielectric {
+                                thickness,
+                                material,
+                                form,
+                            });
+                        }
                     }
                     _ => {} // Skip other layers
                 }
@@ -1153,6 +1155,43 @@ mod tests {
             stackup.validate(),
             Err(StackupError::OddCopperLayerCount(3))
         ));
+    }
+
+    #[test]
+    fn kicad_dielectric_sublayers_round_trip() {
+        let kicad_content = r#"(kicad_pcb (setup (stackup
+            (layer "F.Cu" (type "copper") (thickness 0.035))
+            (layer "dielectric 1" (type "core") (thickness 0.5) (material "FR4") (epsilon_r 4.5) (loss_tangent 0.02)
+                addsublayer (thickness 0.1) (material "PP") (epsilon_r 3.9) (loss_tangent 0.01)
+                addsublayer (thickness 0.1) (material "FR4") (epsilon_r 4.5) (loss_tangent 0.02))
+            (layer "B.Cu" (type "copper") (thickness 0.035)))))"#;
+
+        let stackup = Stackup::from_kicad_pcb(kicad_content).unwrap().unwrap();
+        let dielectrics: Vec<_> = stackup
+            .layers
+            .iter()
+            .flatten()
+            .filter_map(|layer| match layer {
+                Layer::Dielectric {
+                    thickness,
+                    material,
+                    form,
+                } => Some((*thickness, material.as_str(), *form)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            dielectrics,
+            [
+                (0.5, "FR4", DielectricForm::Core),
+                (0.1, "PP", DielectricForm::Core),
+                (0.1, "FR4", DielectricForm::Core),
+            ]
+        );
+
+        // Layout sync compares a board's stackup to the config by parsing it back.
+        let board = format!("(kicad_pcb (setup {}))", stackup.generate_stackup_expr());
+        assert_eq!(Stackup::from_kicad_pcb(&board).unwrap(), Some(stackup));
     }
 
     #[test]
