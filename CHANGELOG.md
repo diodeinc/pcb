@@ -16,6 +16,13 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 - A BOM part without a manufacturer or MPN (`bom.unspecified`, `bom.underspecified`) is a warning in `pcb build`, `pcb bom`, `pcb layout` and the LSP, so the design still builds and its viewers render. It still blocks `pcb publish` and release checks, which report it as an error.
 
+### Fixed
+
+- `pcb apply schematic` keeps a module's sheet symbol in step with its interface: pins for removed ports are deleted along with the child hierarchical labels and parent labels left connected to nothing, and new ports get a wired sheet pin unless global labels or power symbols already connect them. Pins and labels you renamed are kept.
+- `pcb apply schematic` puts a new part on the page that holds most of its module's existing parts, instead of the root page, and no longer fails when a module's parts span several pages.
+- `pcb apply schematic` no longer stacks a global label on nets its sheet pins already connect, which raised `same_local_global_label` and `multiple_net_names` ERC warnings. A net gets a global label only where local and hierarchical labels cannot reach it.
+- `pcb apply schematic` reports `unchanged` when every file it would write is byte-identical.
+
 ## [0.4.105] - 2026-11-23
 
 ### Added

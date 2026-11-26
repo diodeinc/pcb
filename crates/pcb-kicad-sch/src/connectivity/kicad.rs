@@ -15,7 +15,7 @@ use crate::{
 
 #[path = "bus.rs"]
 mod bus;
-pub(crate) use bus::is_bus_junction;
+pub(crate) use bus::{bus_aliases, is_bus_junction};
 
 const SCH_IU_PER_MM: f64 = 10_000.0;
 

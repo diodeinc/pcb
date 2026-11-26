@@ -1,0 +1,12 @@
+"""A child module whose two ports join the same root net."""
+
+Project(name="RootWithAlias", path="kicad", layout=False)
+
+Monitor = Module("monitor.zen")
+Resistor = Module("@stdlib/generics/Resistor.zen")
+
+SOURCE = Net("SOURCE")
+SINK = Net("SINK")
+
+Monitor(name="MONITOR", IN=SOURCE, IN_MONITOR=SOURCE, OUT=SINK)
+Resistor(name="R2", value="2kohms", package="0402", P1=SOURCE, P2=SINK)

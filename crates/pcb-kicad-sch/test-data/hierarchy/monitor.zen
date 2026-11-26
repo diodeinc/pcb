@@ -1,0 +1,11 @@
+"""Linked child exposing one net under two port names."""
+
+Project(name="Monitor", path="kicad", layout=False)
+
+Resistor = Module("@stdlib/generics/Resistor.zen")
+
+IN = io("IN", Net)
+IN_MONITOR = io("IN_MONITOR", Net)
+OUT = io("OUT", Net)
+
+Resistor(name="R1", value="1kohms", package="0402", P1=IN, P2=OUT)

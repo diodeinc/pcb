@@ -30,6 +30,7 @@ pub(crate) struct PlannedSheet {
 pub(crate) struct HierarchyPlan {
     pub sheets: Vec<PlannedSheet>,
     root_page: usize,
+    existing_component_pages: BTreeMap<String, BTreeSet<usize>>,
     existing_module_pages: BTreeMap<String, BTreeSet<usize>>,
     linked_modules: Vec<LinkedModule>,
 }
@@ -39,26 +40,43 @@ impl HierarchyPlan {
         self.root_page
     }
 
+    /// A new component joins its nearest relatives: the page of the closest
+    /// enclosing module that is planned or already has managed symbols, else
+    /// the root page. Relatives inside a nested linked module live on that
+    /// module's own page and do not vote.
     pub(crate) fn page_for_new_component(&self, component_path: &str) -> Result<usize> {
-        if let Some(sheet) = self
-            .sheets
-            .iter()
-            .rev()
-            .find(|sheet| is_descendant(component_path, &sheet.module_path))
-        {
-            return Ok(sheet.child_page);
+        let owner = owning_module(component_path, &self.linked_modules).map(|m| m.path.as_str());
+        let mut ancestor = component_path;
+        while let Some((parent, _)) = ancestor.rsplit_once('.') {
+            ancestor = parent;
+            if let Some(sheet) = self.sheets.iter().find(|s| s.module_path == ancestor) {
+                return Ok(sheet.child_page);
+            }
+            let mut votes = BTreeMap::<usize, usize>::new();
+            for (path, pages) in &self.existing_component_pages {
+                if is_descendant(path, ancestor)
+                    && owning_module(path, &self.linked_modules).map(|m| m.path.as_str()) == owner
+                {
+                    for page in pages {
+                        *votes.entry(*page).or_default() += 1;
+                    }
+                }
+            }
+            if let Some((page, _)) = votes
+                .into_iter()
+                .max_by_key(|(page, count)| (*count, std::cmp::Reverse(*page)))
+            {
+                return Ok(page);
+            }
+            if let Some(page) = self
+                .existing_module_pages
+                .get(ancestor)
+                .and_then(|pages| pages.first())
+            {
+                return Ok(*page);
+            }
         }
-
-        let Some(module) = self
-            .linked_modules
-            .iter()
-            .rev()
-            .find(|module| is_descendant(component_path, &module.path))
-        else {
-            return Ok(self.root_page);
-        };
-
-        required_module_page(&self.existing_module_pages, &module.path)
+        Ok(self.root_page)
     }
 }
 
@@ -142,6 +160,7 @@ pub(crate) fn plan(
     Ok(HierarchyPlan {
         sheets,
         root_page,
+        existing_component_pages,
         existing_module_pages,
         linked_modules,
     })
@@ -702,38 +721,47 @@ mod tests {
     }
 
     #[test]
-    fn rejects_missing_or_ambiguous_module_page_for_new_content() {
-        let ambiguous = plan(
+    fn new_components_join_their_nearest_relatives() {
+        // Plain (unlinked) modules the user organized onto their own pages:
+        // new parts follow the majority of their module's existing parts,
+        // and the nearest enclosing module wins over outer ones.
+        let organized = plan(
+            vec![module("LINKED")],
+            component_pages(&[
+                ("CAM.R1", 2),
+                ("CAM.R2", 2),
+                ("CAM.R3", 3),
+                ("CAM.FILTER.C1", 4),
+                ("LINKED.R1", 5),
+                ("LINKED.INNER.R1", 5),
+            ]),
+            &[],
+            0,
+            6,
+        )
+        .unwrap();
+        assert_eq!(organized.page_for_new_component("CAM.R9").unwrap(), 2);
+        assert_eq!(
+            organized.page_for_new_component("CAM.FILTER.C2").unwrap(),
+            4
+        );
+        assert_eq!(organized.page_for_new_component("CAM.NEW.R1").unwrap(), 2);
+        assert_eq!(
+            organized.page_for_new_component("LINKED.INNER.R2").unwrap(),
+            5
+        );
+        assert_eq!(organized.page_for_new_component("OTHER.R1").unwrap(), 0);
+        assert_eq!(organized.page_for_new_component("R1").unwrap(), 0);
+
+        // A tie picks the first page instead of refusing to apply.
+        let tied = plan(
             vec![module("A")],
-            component_pages(&[("A.R1", 2), ("A.R2", 3)]),
+            component_pages(&[("A.R1", 3), ("A.R2", 2)]),
             &[],
             0,
             4,
         )
         .unwrap();
-
-        assert_eq!(
-            ambiguous
-                .page_for_new_component("A.R3")
-                .unwrap_err()
-                .to_string(),
-            "linked module 'A' has managed symbols on multiple schematic pages; cannot choose a page for new content"
-        );
-
-        let missing = plan(
-            vec![module("A"), module("A.CHILD")],
-            component_pages(&[("A.CHILD.R1", 2)]),
-            &[],
-            0,
-            3,
-        )
-        .unwrap();
-        assert_eq!(
-            missing
-                .page_for_new_component("A.R1")
-                .unwrap_err()
-                .to_string(),
-            "linked module 'A' has no page identified by a directly owned managed symbol; cannot choose a page for new content"
-        );
+        assert_eq!(tied.page_for_new_component("A.R3").unwrap(), 2);
     }
 }

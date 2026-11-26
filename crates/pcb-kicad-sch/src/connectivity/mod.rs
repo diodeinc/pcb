@@ -9,10 +9,13 @@ pub(crate) mod kicad;
 mod raw;
 mod zener;
 
+pub(crate) use bus_name::bus_member_names;
 pub use kicad::{
     ConnectivityItemRef, PhysicalConnectivity, PhysicalIsland, PinVisibility, points_connect,
 };
-pub(crate) use kicad::{CutGraph, CutNode, PhysicalPinRef, cut_graph, reduce_with_provenance};
+pub(crate) use kicad::{
+    CutGraph, CutNode, PhysicalPinRef, bus_aliases, cut_graph, reduce_with_provenance,
+};
 pub(crate) use raw::TerminalIndex;
 pub(crate) use zener::{
     connected_component_terminals, named_connected_nets, not_connected_terminals,

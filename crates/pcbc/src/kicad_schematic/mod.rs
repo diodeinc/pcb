@@ -96,7 +96,8 @@ fn apply_existing(mut project: KicadProject, netlist: &Schematic) -> Result<Sche
         if existing_page_ids.contains(page.id.as_str()) {
             let source = fs::read_to_string(&path)
                 .with_context(|| format!("failed to read {}", path.display()))?;
-            if let Some(next) = patch_page_source(&source, page)? {
+            // A patch can reproduce the source byte for byte; that is no change.
+            if let Some(next) = patch_page_source(&source, page)?.filter(|next| *next != source) {
                 writes.push(PendingWrite {
                     path,
                     source: Some(source),
@@ -135,11 +136,13 @@ fn apply_existing(mut project: KicadProject, netlist: &Schematic) -> Result<Sche
             .with_context(|| format!("failed to read {}", project.project_file.display()))?;
         let mut next = serde_json::to_string_pretty(&project.project)?;
         next.push('\n');
-        writes.push(PendingWrite {
-            path: project.project_file.clone(),
-            source: Some(source),
-            next: Some(next),
-        });
+        if next != source {
+            writes.push(PendingWrite {
+                path: project.project_file.clone(),
+                source: Some(source),
+                next: Some(next),
+            });
+        }
     }
     let changed = !writes.is_empty();
     if changed {
