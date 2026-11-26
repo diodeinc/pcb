@@ -12,8 +12,8 @@ use crate::{
     component_slots,
     connectivity::{
         ConnectionOrigin, ConnectivityItemRef, IslandRef, PhysicalConnectivity, PhysicalIsland,
-        PhysicalPinRef, PinVisibility, SymbolLocation, bus_member_names, named_connected_nets,
-        points_connect, reduce_with_provenance,
+        PhysicalPinRef, PinVisibility, SymbolLocation, bus_aliases, bus_member_names,
+        named_connected_nets, points_connect, reduce_with_provenance,
     },
     deterministic_uuid, field_autoplace, hierarchy, net_symbols,
     placement::{GridPacker, GridPoint, GridRect, point_rect},
@@ -985,6 +985,8 @@ fn sync_generated_sheet_pins(
     // The input may not reduce yet (reconciliation repairs it later); then
     // nothing counts as already joined.
     let observed = reduce_with_provenance(document, PinVisibility::VisibleOnly).ok();
+    // Malformed aliases leave bus names unexpanded, as above.
+    let aliases = bus_aliases(&document.pages, &document.bus_aliases).unwrap_or_default();
     let globally_named = targets
         .iter()
         .map(|(_, _, child_page)| {
@@ -1042,13 +1044,13 @@ fn sync_generated_sheet_pins(
             .partition(|pin| {
                 port_names.contains(pin.name.as_str())
                     || port_pin_ids.contains(&pin.id)
-                    || !bus_member_names(&pin.name).is_empty()
+                    || !bus_member_names(&pin.name, &aliases).is_empty()
             });
         sheet.pins = kept;
         let bus_members = sheet
             .pins
             .iter()
-            .flat_map(|pin| bus_member_names(&pin.name))
+            .flat_map(|pin| bus_member_names(&pin.name, &aliases))
             .collect::<BTreeSet<_>>();
         // New pins skip the freed slots, so the labels left there dangle and
         // are removed below.

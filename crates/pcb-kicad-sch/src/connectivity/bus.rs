@@ -95,18 +95,19 @@ struct Claim {
     root_port: bool,
 }
 
-pub(super) fn collect(
-    instances: &[PageInstance<'_>],
+/// The bus aliases KiCad resolves on these pages, by name.
+pub(crate) fn bus_aliases<'a>(
+    pages: impl IntoIterator<Item = &'a SchPage>,
     project_aliases: &BTreeMap<String, Vec<String>>,
-) -> Result<Vec<PageBuses>> {
+) -> Result<BTreeMap<String, Vec<String>>> {
     // KiCad loads project aliases first and appends in-sheet blocks; lookups
     // take the first definition of a name (SCHEMATIC::GetBusAlias).
     let project = project_aliases
         .iter()
         .map(|(name, members)| alias(name, members.iter().map(String::as_str)));
-    let sheets = instances
-        .iter()
-        .flat_map(|instance| &instance.page.items)
+    let sheets = pages
+        .into_iter()
+        .flat_map(|page| &page.items)
         .filter_map(|item| raw(item, "bus_alias"))
         .map(|list| {
             let name = list.get(1).and_then(Sexpr::as_atom);
@@ -122,6 +123,17 @@ pub(super) fn collect(
         let (name, members) = entry?;
         aliases.entry(name).or_insert(members);
     }
+    Ok(aliases)
+}
+
+pub(super) fn collect(
+    instances: &[PageInstance<'_>],
+    project_aliases: &BTreeMap<String, Vec<String>>,
+) -> Result<Vec<PageBuses>> {
+    let aliases = bus_aliases(
+        instances.iter().map(|instance| instance.page),
+        project_aliases,
+    )?;
 
     let mut pages = Vec::new();
     let mut claims = Vec::new();
