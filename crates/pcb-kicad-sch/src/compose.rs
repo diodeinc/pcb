@@ -12,8 +12,8 @@ use crate::{
     component_slots,
     connectivity::{
         ConnectionOrigin, ConnectivityItemRef, IslandRef, PhysicalConnectivity, PhysicalIsland,
-        PhysicalPinRef, PinVisibility, SymbolLocation, named_connected_nets, points_connect,
-        reduce_with_provenance,
+        PhysicalPinRef, PinVisibility, SymbolLocation, bus_member_names, named_connected_nets,
+        points_connect, reduce_with_provenance,
     },
     deterministic_uuid, field_autoplace, hierarchy, net_symbols,
     placement::{GridPacker, GridPoint, GridRect, point_rect},
@@ -1035,14 +1035,25 @@ fn sync_generated_sheet_pins(
         else {
             continue;
         };
-        // A renamed pin keeps its generated id, so it still stands for its port.
+        // A renamed pin keeps its generated id, so it still stands for its
+        // port. A bus pin is the designer's own grouping of ports; keep it.
         let (kept, removed): (Vec<_>, Vec<_>) = std::mem::take(&mut sheet.pins)
             .into_iter()
             .partition(|pin| {
-                port_names.contains(pin.name.as_str()) || port_pin_ids.contains(&pin.id)
+                port_names.contains(pin.name.as_str())
+                    || port_pin_ids.contains(&pin.id)
+                    || !bus_member_names(&pin.name).is_empty()
             });
         sheet.pins = kept;
-        removed_anchors.extend(removed.into_iter().map(|pin| (parent_page, pin.at)));
+        let bus_members = sheet
+            .pins
+            .iter()
+            .flat_map(|pin| bus_member_names(&pin.name))
+            .collect::<BTreeSet<_>>();
+        // New pins skip the freed slots, so the labels left there dangle and
+        // are removed below.
+        let freed = removed.iter().map(|pin| pin.at).collect::<Vec<_>>();
+        removed_anchors.extend(freed.iter().map(|at| (parent_page, *at)));
         let kept_names = sheet
             .pins
             .iter()
@@ -1055,6 +1066,7 @@ fn sync_generated_sheet_pins(
             let id = pin_id(port_name);
             if globally_named.contains(net_name)
                 || !connected_nets.contains(net_name)
+                || bus_members.contains(port_name)
                 || sheet
                     .pins
                     .iter()
@@ -1065,7 +1077,14 @@ fn sync_generated_sheet_pins(
             // The first free slot on the left edge, below the generated header.
             let pin_at = (2..)
                 .map(|slot| Point::new(at.x, at.y + slot as f64 * SHEET_PIN_SPACING_MM))
-                .find(|point| !sheet.pins.iter().any(|pin| points_coincide(pin.at, *point)))
+                .find(|point| {
+                    !sheet
+                        .pins
+                        .iter()
+                        .map(|pin| pin.at)
+                        .chain(freed.iter().copied())
+                        .any(|at| points_coincide(at, *point))
+                })
                 .expect("an unbounded range has a free slot");
             sheet.pins.push(SheetPin {
                 id,
@@ -2373,6 +2392,7 @@ pub(crate) fn plan_net_driver_kinds(
             .filter(|target| !target.hidden)
             .map(|target| target.page_index)
             .collect::<BTreeSet<_>>();
+        let pin_pages = pages.clone();
         // An island cut off from the same net on another page needs a global
         // driver whatever the page's interface says. This is the realizer's
         // own rule, so a consumer following the intent lands on the same
@@ -2414,7 +2434,9 @@ pub(crate) fn plan_net_driver_kinds(
                     NetDriverKind::Hierarchical {
                         names: names.clone(),
                     }
-                } else if spans_pages {
+                } else if spans_pages && !pin_pages.contains(&page_index) {
+                    // The simulated pass above leaves a page with pins of the
+                    // net globally named only where it stays cut off.
                     NetDriverKind::Global
                 } else {
                     NetDriverKind::Local
@@ -2583,21 +2605,34 @@ fn add_hierarchy_connectivity(
         if page_has_hierarchical_label(document, pin.child_page, &pin.port_name) {
             continue;
         }
-        let child_anchor = canonical_target(&targets, &pin.net_name, pin.child_page)
+        // The pin needs a child label with its exact name, even when the net
+        // already reaches the page under another port's name. Anchor it at a
+        // pin of the net, else at a nested sheet pin forwarding it.
+        let forwarded_names = page_contexts
+            .get(&pin.child_page)
+            .and_then(|context| context.get(&pin.net_name))
+            .cloned()
+            .unwrap_or_else(|| BTreeSet::from([pin.port_name.clone()]));
+        let (at, spin) = match canonical_target(&targets, &pin.net_name, pin.child_page)
             .map(|target| (target.point, target.spin))
-            .unwrap_or((
+            .or_else(|| sheet_pin_anchor(document, pin.child_page, &forwarded_names))
+        {
+            Some(anchor) => anchor,
+            None => (
                 place_context_label(document, pin.child_page, &pin.port_name)?,
                 LabelSpin::Right,
-            ));
-        upsert_contextual_driver(
-            document,
-            net_symbol_specs,
-            &page_contexts,
-            pin.child_page,
-            &pin.net_name,
-            child_anchor,
-            &format!("zener:module-child-driver:{key}:{}", pin.net_name),
-        )?;
+            ),
+        };
+        let mut label = Label::new(
+            deterministic_uuid(format!("zener:module-child-driver:{key}:{}", pin.net_name)),
+            &pin.port_name,
+            at,
+        );
+        label.kind = LabelKind::Hierarchical {
+            shape: LabelShape::Bidirectional,
+        };
+        label.spin = spin;
+        upsert_label(document, pin.child_page, label)?;
     }
     Ok(())
 }
@@ -2824,24 +2859,26 @@ fn sync_net_drivers(
             {
                 continue;
             }
+            // Same-name local labels merged several unnamed islands into this
+            // one; promote all of them so the page does not mix scopes.
             let page = &mut document.pages[target.page_index];
-            let promoted = page.items.iter_mut().find_map(|item| match item {
-                SchItem::Label(label)
-                    if label.kind == LabelKind::Local
-                        && scoped.contains(&(target.page_index, label.id.clone()))
-                        && provenance.items.contains(&ConnectivityItemRef::Label {
-                            page_id: page.id.clone(),
-                            id: label.id.clone(),
-                        }) =>
+            let mut promoted = false;
+            for item in &mut page.items {
+                if let SchItem::Label(label) = item
+                    && label.kind == LabelKind::Local
+                    && scoped.contains(&(target.page_index, label.id.clone()))
+                    && provenance.items.contains(&ConnectivityItemRef::Label {
+                        page_id: page.id.clone(),
+                        id: label.id.clone(),
+                    })
                 {
-                    Some(label)
+                    label.kind = LabelKind::Global {
+                        shape: LabelShape::Bidirectional,
+                    };
+                    promoted = true;
                 }
-                _ => None,
-            });
-            if let Some(label) = promoted {
-                label.kind = LabelKind::Global {
-                    shape: LabelShape::Bidirectional,
-                };
+            }
+            if promoted {
                 continue;
             }
             let id = available_deterministic_id(document, &target.label_key(net_name));

@@ -9,6 +9,7 @@ pub(crate) mod kicad;
 mod raw;
 mod zener;
 
+pub(crate) use bus_name::bus_member_names;
 pub use kicad::{
     ConnectivityItemRef, PhysicalConnectivity, PhysicalIsland, PinVisibility, points_connect,
 };

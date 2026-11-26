@@ -48,6 +48,16 @@ pub(super) fn parse(
     }))
 }
 
+/// The member names KiCad reads from a bus name (`D[0..1]` is `D0`, `D1`);
+/// empty for a scalar name.
+pub(crate) fn bus_member_names(name: &str) -> Vec<String> {
+    parse(name, &BTreeMap::new())
+        .ok()
+        .flatten()
+        .map(|bus| bus.members.into_iter().map(|member| member.name).collect())
+        .unwrap_or_default()
+}
+
 enum Syntax {
     Vector {
         prefix: String,

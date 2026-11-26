@@ -277,6 +277,16 @@ fn generated_sheet_pins_follow_the_module_interface() {
                         pcb_kicad_sch::deterministic_uuid("zener:module-sheet-pin:FILTER_A:STALE");
                 }
                 SchItem::Label(label)
+                    if label.id
+                        == pcb_kicad_sch::deterministic_uuid(
+                            "zener:module-parent-driver:FILTER_A:OUTPUT:MID",
+                        ) =>
+                {
+                    label.id = pcb_kicad_sch::deterministic_uuid(
+                        "zener:module-parent-driver:FILTER_A:STALE:MID",
+                    );
+                }
+                SchItem::Label(label)
                     if page.file_name.as_deref() == Some(child_file.as_str())
                         && label.text == "OUTPUT" =>
                 {
@@ -299,6 +309,24 @@ fn generated_sheet_pins_follow_the_module_interface() {
         .map(|pin| pin.name.as_str())
         .collect::<std::collections::BTreeSet<_>>();
     assert_eq!(pins, ["INPUT", "OUTPUT"].into());
+    // The removed pin's parent label is not left stacked on a new pin.
+    let parent = repaired
+        .pages
+        .iter()
+        .find(|page| {
+            page.items
+                .iter()
+                .any(|item| matches!(item, SchItem::Sheet(sheet) if sheet.id == sheet_id))
+        })
+        .unwrap();
+    for pin in &sheets(&repaired).find(|sheet| sheet.id == sheet_id).unwrap().pins {
+        let labels = parent
+            .items
+            .iter()
+            .filter(|item| matches!(item, SchItem::Label(label) if label.at == pin.at))
+            .count();
+        assert_eq!(labels, 1, "{}", pin.name);
+    }
     assert!(
         !repaired
             .pages
@@ -418,4 +446,72 @@ fn ports_already_joined_by_global_labels_get_no_sheet_pin() {
         .map(|pin| pin.name.as_str())
         .collect::<Vec<_>>();
     assert_eq!(pins, ["INPUT"]);
+}
+
+#[test]
+fn a_port_added_on_a_connected_net_gets_its_own_child_label() {
+    let netlist = common::compile_fixture("hierarchy", "root_with_alias.zen");
+    let mut document = plan_reconciliation(None, &netlist, "root.kicad_sch")
+        .unwrap()
+        .apply(None)
+        .unwrap();
+    // Emulate a schematic drawn before IN_MONITOR joined the module: the net
+    // still crosses the sheet through IN, so it stays connected.
+    let sheet_id = pcb_kicad_sch::deterministic_uuid("zener:module-sheet:MONITOR");
+    let child_file = sheets(&document)
+        .find(|sheet| sheet.id == sheet_id)
+        .unwrap()
+        .file_name()
+        .to_string();
+    let child_labels = |document: &SchDocument| {
+        document
+            .pages
+            .iter()
+            .filter(|page| page.file_name.as_deref() == Some(child_file.as_str()))
+            .flat_map(|page| &page.items)
+            .filter_map(|item| match item {
+                SchItem::Label(label)
+                    if matches!(label.kind, pcb_kicad_sch::LabelKind::Hierarchical { .. }) =>
+                {
+                    Some(label.text.clone())
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    assert!(child_labels(&document).contains(&"IN_MONITOR".to_string()));
+    for page in &mut document.pages {
+        let is_child = page.file_name.as_deref() == Some(child_file.as_str());
+        page.items.retain(|item| {
+            !(is_child && matches!(item, SchItem::Label(label) if label.text == "IN_MONITOR"))
+        });
+        for item in &mut page.items {
+            if let SchItem::Sheet(sheet) = item
+                && sheet.id == sheet_id
+            {
+                sheet.pins.retain(|pin| pin.name != "IN_MONITOR");
+            }
+        }
+    }
+
+    let repaired = plan_reconciliation(Some(&document), &netlist, "")
+        .unwrap()
+        .apply(Some(&document))
+        .unwrap();
+    assert!(
+        sheets(&repaired)
+            .find(|sheet| sheet.id == sheet_id)
+            .unwrap()
+            .pins
+            .iter()
+            .any(|pin| pin.name == "IN_MONITOR")
+    );
+    let labels = child_labels(&repaired);
+    assert!(labels.contains(&"IN_MONITOR".to_string()), "{labels:?}");
+    assert!(
+        inspect_schematic(&repaired, &netlist)
+            .unwrap()
+            .analysis
+            .is_equivalent()
+    );
 }
