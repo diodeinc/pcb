@@ -319,7 +319,11 @@ fn generated_sheet_pins_follow_the_module_interface() {
                 .any(|item| matches!(item, SchItem::Sheet(sheet) if sheet.id == sheet_id))
         })
         .unwrap();
-    for pin in &sheets(&repaired).find(|sheet| sheet.id == sheet_id).unwrap().pins {
+    for pin in &sheets(&repaired)
+        .find(|sheet| sheet.id == sheet_id)
+        .unwrap()
+        .pins
+    {
         let labels = parent
             .items
             .iter()
