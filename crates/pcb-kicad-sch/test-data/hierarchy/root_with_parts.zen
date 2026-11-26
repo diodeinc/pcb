@@ -1,0 +1,12 @@
+"""A root part sharing nets with a linked child schematic."""
+
+Project(name="RootWithParts", path="kicad", layout=False)
+
+Filter = Module("filter.zen")
+Resistor = Module("@stdlib/generics/Resistor.zen")
+
+SOURCE = Net("SOURCE")
+SINK = Net("SINK")
+
+Filter(name="FILTER", resistance="1kohms", INPUT=SOURCE, OUTPUT=SINK)
+Resistor(name="R1", value="2kohms", package="0402", P1=SOURCE, P2=SINK)
