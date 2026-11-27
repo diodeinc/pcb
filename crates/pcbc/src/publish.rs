@@ -550,13 +550,16 @@ fn publish_board(zen_path: &Path, args: &PublishArgs) -> Result<()> {
         version: git::rev_parse_short_head(&workspace.root).unwrap_or_else(|| "unknown".into()),
         suppress: args.suppress.clone(),
         exclude: args.exclude.clone(),
-        check: args.check,
         check_bom_offers: false,
     };
 
     // Local hash release: --check stops the build after preflight.
     let Some(bump) = args.bump else {
-        release::build_board_release(&workspace.root, board_path, board_name, options)?;
+        if args.check {
+            release::check_board_release(board_path, options)?;
+        } else {
+            release::build_board_release(board_path, board_name, options)?;
+        }
         return Ok(());
     };
 
@@ -602,15 +605,11 @@ fn publish_board(zen_path: &Path, args: &PublishArgs) -> Result<()> {
     // Build the release archive
     options.version = format!("v{next_version}");
     if args.check {
-        release::build_board_release(&workspace.root, board_path, board_name, options)?;
+        release::check_board_release(board_path, options)?;
         return Ok(());
     }
     options.check_bom_offers = true;
-    let Some(zip_path) =
-        release::build_board_release(&workspace.root, board_path, board_name.clone(), options)?
-    else {
-        return Ok(());
-    };
+    let zip_path = release::build_board_release(board_path, board_name.clone(), options)?;
 
     // Upload to API (must succeed before creating tag)
     if !args.no_push {
