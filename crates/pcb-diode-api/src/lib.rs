@@ -4,6 +4,7 @@ extern crate anstream;
 
 pub mod auth;
 pub mod bom;
+mod compress;
 pub mod datasheet;
 mod endpoint;
 mod git_auth;

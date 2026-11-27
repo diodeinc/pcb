@@ -9,6 +9,7 @@ use serde::Serialize;
 use std::time::Duration;
 
 use crate::WorkspaceContext;
+use crate::compress::JsonZstd;
 use crate::release::{AUTHENTICATION_FAILED_MESSAGE, check_response};
 
 /// The server runs DFM on the IPC-2581 when quoting US bare boards.
@@ -44,8 +45,9 @@ fn send_quote(
         .user_agent(format!("diode-pcb/{}", env!("CARGO_PKG_VERSION")))
         .timeout(Duration::from_secs(QUOTE_TIMEOUT_SECS))
         .build()?;
+    // Compressed: large boards' IPC-2581 would otherwise upload hundreds of MB.
     let response = crate::auth::apply_bearer_auth(client.post(&url), auth_token)
-        .json(request)
+        .json_zstd(request)?
         .send()
         .context("Failed to connect to Diode API")?;
     let response = check_response(response, |status, message| match status {
@@ -74,13 +76,19 @@ mod tests {
         let mock = server.mock(|when, then| {
             when.method(POST)
                 .path("/api/quotes")
-                .json_body(serde_json::json!({
+                .header("content-encoding", "zstd")
+                .is_true(|request| {
+                    let body: serde_json::Value =
+                        serde_json::from_reader(zstd::Decoder::new(request.body_ref()).unwrap())
+                            .unwrap();
+                    body == serde_json::json!({
                     "route": "us",
                     "quantities": [5, 10],
                     "bareBoardQuantity": 2,
                     "ipcXml": "<IPC-2581/>",
                     "designBom": [{ "designator": "R1", "mpn": "RC0402" }],
-                }));
+                    })
+                });
             then.status(200)
                 .json_body(serde_json::json!({ "results": [] }));
         });

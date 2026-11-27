@@ -3604,6 +3604,7 @@ dependencies = [
  "urlencoding",
  "uuid",
  "zip",
+ "zstd",
 ]
 
 [[package]]
