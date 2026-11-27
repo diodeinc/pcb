@@ -242,13 +242,8 @@ pub fn build_board_release(
 ) -> Result<PathBuf> {
     let start_time = Instant::now();
     let mut diagnostics = Diagnostics::default();
-    let release_info = preflight_board_release(
-        zen_path,
-        board_name,
-        &options,
-        start_time,
-        &mut diagnostics,
-    )?;
+    let release_info =
+        preflight_board_release(zen_path, board_name, &options, start_time, &mut diagnostics)?;
     execute_task("Reviewing release preflight", start_time, |spinner| {
         review_release_preflight(&release_info, spinner, &mut diagnostics)
     })?;
@@ -338,7 +333,12 @@ fn run_check_preflight(
             stages.layout = StageStatus::Skipped;
         } else {
             let drc_output = tempfile::NamedTempFile::new()?;
-            run_kicad_drc(&schematic, drc_output.path(), &options.suppress, diagnostics)?;
+            run_kicad_drc(
+                &schematic,
+                drc_output.path(),
+                &options.suppress,
+                diagnostics,
+            )?;
             if release_blocked(diagnostics) {
                 return Ok(());
             }
@@ -930,7 +930,10 @@ fn check_bom_offers(zen_path: &Path, bom: &pcb_sch::bom::Bom) -> Diagnostics {
 }
 
 /// Match the placed BOM parts, or return `None` when there are none to source.
-fn match_sourcing_bom(zen_path: &Path, bom: &pcb_sch::bom::Bom) -> Result<Option<pcb_sch::bom::Bom>> {
+fn match_sourcing_bom(
+    zen_path: &Path,
+    bom: &pcb_sch::bom::Bom,
+) -> Result<Option<pcb_sch::bom::Bom>> {
     let mut bom = bom.filter_excluded();
     bom.entries.retain(|_, entry| !entry.dnp);
     if bom.is_empty() {
