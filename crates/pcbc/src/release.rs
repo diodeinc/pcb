@@ -326,8 +326,14 @@ fn run_check_preflight(
         let kicad_files = layout_utils::KiCadLayoutFiles {
             kicad_pro: workspace_root.join(&layout.kicad_pro_rel),
         };
+        let kicad_pcb = kicad_files.kicad_pcb();
         read_kicad_pro_json(&kicad_files.kicad_pro)?;
-        ensure_board_compatible_with_installed_kicad(&kicad_files.kicad_pcb())?;
+        anyhow::ensure!(
+            kicad_pcb.is_file(),
+            "Failed to read .kicad_pcb file: {}",
+            kicad_pcb.display()
+        );
+        ensure_board_compatible_with_installed_kicad(&kicad_pcb)?;
         if options.exclude.contains(&ArtifactType::Drc) {
             stages.layout = StageStatus::Skipped;
         } else {
