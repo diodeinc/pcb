@@ -197,6 +197,23 @@ steps:
     command: *rust-tests
     artifact_paths: target/nextest/ci/junit.xml
 
+  - label: ":nix: Nix compiler package"
+    key: nix-pcbc
+    agents: {queue: pfet, arch: amd64, heavy: "true"}
+    if_changed:
+      - crates/**
+      - lib/**
+      - Cargo.{toml,lock}
+      - .cargo/**
+      - rust-toolchain{,.toml}
+      - flake.{nix,lock}
+      - .buildkite/**
+    timeout_in_minutes: 45
+    env:
+      BUILDKITE_NIX_SHELL: ""
+    # Unlike Cargo tests, this builds from the package's filtered source tree.
+    command: nix build -L --no-link .#checks.x86_64-linux.pcbc-package
+
   - label: ":python: Python checks"
     key: python
     if: build.branch != pipeline.default_branch
