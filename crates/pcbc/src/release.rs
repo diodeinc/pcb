@@ -321,14 +321,13 @@ fn run_check_preflight(
     let schematic = schematic.context("Evaluation produced no output")?;
     stages.build = StageStatus::Passed;
 
-    if let Some(layout) = discover_layout(&schematic, &workspace_root)? {
+    if let Some(layout) = discover_layout(&schematic, &workspace_root, None)? {
         stages.layout = StageStatus::Failed;
-        ensure_board_compatible_with_installed_kicad(
-            &layout_utils::KiCadLayoutFiles {
-                kicad_pro: workspace_root.join(&layout.kicad_pro_rel),
-            }
-            .kicad_pcb(),
-        )?;
+        let kicad_files = layout_utils::KiCadLayoutFiles {
+            kicad_pro: workspace_root.join(&layout.kicad_pro_rel),
+        };
+        read_kicad_pro_json(&kicad_files.kicad_pro)?;
+        ensure_board_compatible_with_installed_kicad(&kicad_files.kicad_pcb())?;
         if options.exclude.contains(&ArtifactType::Drc) {
             stages.layout = StageStatus::Skipped;
         } else {
@@ -464,13 +463,33 @@ fn display_release_info(info: &ReleaseInfo) {
 }
 
 /// Discover layout info from a built schematic, relative to `root`.
-/// Returns None if no layout_path exists, the directory has no KiCad files, or
-/// it sits outside `root`.
-fn discover_layout(schematic: &pcb_sch::Schematic, root: &Path) -> Result<Option<ReleaseLayout>> {
+/// When `authored_root` is provided for a staged build, fail if a layout exists
+/// in the workspace but was omitted from the staged bundle (e.g. via `.gitignore`).
+fn discover_layout(
+    schematic: &pcb_sch::Schematic,
+    root: &Path,
+    authored_root: Option<&Path>,
+) -> Result<Option<ReleaseLayout>> {
     let Some(layout_dir) = layout_utils::resolve_layout_dir(schematic)? else {
         return Ok(None);
     };
+    let Ok(layout_dir_rel) = layout_dir.strip_prefix(root) else {
+        warn!(
+            "Layout path {} is outside workspace root, ignoring",
+            layout_dir.display()
+        );
+        return Ok(None);
+    };
     let Some(discovered) = layout_utils::discover_kicad_files(&layout_dir)? else {
+        if let Some(authored_root) = authored_root
+            && let Some(authored) =
+                layout_utils::discover_kicad_files(&authored_root.join(layout_dir_rel))?
+        {
+            anyhow::bail!(
+                "Layout {} exists in workspace but was omitted from the staged bundle",
+                authored.kicad_pro.display()
+            );
+        }
         if layout_dir.exists() {
             warn!(
                 "Layout directory {} exists but has no discoverable KiCad project/layout files, skipping layout tasks",
@@ -484,18 +503,8 @@ fn discover_layout(schematic: &pcb_sch::Schematic, root: &Path) -> Result<Option
         }
         return Ok(None);
     };
-    match discovered.kicad_pro.strip_prefix(root) {
-        Ok(kicad_pro_rel) => Ok(Some(ReleaseLayout {
-            kicad_pro_rel: kicad_pro_rel.to_path_buf(),
-        })),
-        Err(_) => {
-            warn!(
-                "Layout path {} is outside workspace root, ignoring",
-                layout_dir.display()
-            );
-            Ok(None)
-        }
-    }
+    let kicad_pro_rel = discovered.kicad_pro.strip_prefix(root)?.to_path_buf();
+    Ok(Some(ReleaseLayout { kicad_pro_rel }))
 }
 
 /// Copy source files and vendor dependencies
@@ -507,31 +516,34 @@ fn copy_sources(info: &ReleaseInfo) -> Result<()> {
     })
 }
 
-fn update_kicad_pro_release_variables(
-    kicad_pro_path: &Path,
-    version: &str,
-    git_hash: &str,
-) -> Result<()> {
-    // Read the existing .kicad_pro file
+fn read_kicad_pro_json(kicad_pro_path: &Path) -> Result<serde_json::Value> {
     let content = fs::read_to_string(kicad_pro_path).with_context(|| {
         format!(
             "Failed to read .kicad_pro file: {}",
             kicad_pro_path.display()
         )
     })?;
-
-    // Parse as JSON
-    let mut project: serde_json::Value = serde_json::from_str(&content).with_context(|| {
+    let project: serde_json::Value = serde_json::from_str(&content).with_context(|| {
         format!(
             "Failed to parse .kicad_pro file as JSON: {}",
             kicad_pro_path.display()
         )
     })?;
+    anyhow::ensure!(
+        project.is_object(),
+        "KiCad project file root must be a JSON object"
+    );
+    Ok(project)
+}
 
-    let project = project
-        .as_object_mut()
-        .context("KiCad project file root must be a JSON object")?;
-    let text_vars = project
+fn update_kicad_pro_release_variables(
+    kicad_pro_path: &Path,
+    version: &str,
+    git_hash: &str,
+) -> Result<()> {
+    let mut project = read_kicad_pro_json(kicad_pro_path)?;
+    let project_obj = project.as_object_mut().unwrap();
+    let text_vars = project_obj
         .entry("text_variables")
         .or_insert_with(|| serde_json::json!({}));
     if !text_vars.is_object() {
@@ -818,7 +830,7 @@ fn validate_build(
         return Ok(None);
     }
     let schematic = schematic.context("Evaluation produced no output")?;
-    info.layout = discover_layout(&schematic, &staged_src)?;
+    info.layout = discover_layout(&schematic, &staged_src, Some(info.workspace_root()))?;
 
     // Write fp-lib-table with correct vendor/ paths to staged layout directory.
     if let Some(staged_layout_dir) = info.staged_layout_dir()
