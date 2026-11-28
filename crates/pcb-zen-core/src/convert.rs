@@ -19,8 +19,8 @@ use pcb_sch::position::{MirrorAxis, Position};
 use pcb_sch::{AttributeValue, Instance, InstanceKind, InstanceRef, ModuleRef, Net, Schematic};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map as JsonMap, Number as JsonNumber, Value as JsonValue};
-use starlark::values::list::ListRef;
-use starlark::values::{Value, dict::DictRef};
+use starlark::values::list::StarlarkList;
+use starlark::values::{Value, dict::StarlarkDict};
 use starlark::{codemap::ResolvedSpan, errors::EvalSeverity};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::Path;
@@ -104,13 +104,13 @@ fn serialize_signature_values(values: Option<&Vec<Value<'_>>>) -> Option<Vec<Jso
 }
 
 fn serialize_value(value: Value) -> JsonValue {
-    if let Some(list) = ListRef::from_value(value) {
-        return JsonValue::Array(list.iter().map(serialize_value).collect());
+    if let Some(list) = StarlarkList::from_value(value) {
+        return JsonValue::Array(list.values().map(serialize_value).collect());
     }
 
-    if let Some(dict) = DictRef::from_value(value) {
+    if let Some(dict) = StarlarkDict::from_value(value) {
         return JsonValue::Object(
-            dict.iter()
+            dict.entries()
                 .map(|(key, val)| {
                     let key = key
                         .unpack_str()
@@ -1267,9 +1267,9 @@ fn to_attribute_value(v: Value<'_>) -> anyhow::Result<AttributeValue> {
     }
 
     // Handle lists (no nested list support)
-    if let Some(list) = ListRef::from_value(v.to_value()) {
+    if let Some(list) = StarlarkList::from_value(v.to_value()) {
         let mut elements = Vec::with_capacity(list.len());
-        for item in list.iter() {
+        for item in list.values() {
             let attr = if let Some(s) = item.unpack_str() {
                 AttributeValue::String(s.to_string())
             } else if let Some(n) = item.unpack_i32() {

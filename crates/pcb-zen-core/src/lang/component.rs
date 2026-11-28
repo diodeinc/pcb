@@ -8,12 +8,13 @@ use starlark::{
     collections::SmallMap,
     environment::GlobalsBuilder,
     errors::EvalSeverity,
-    eval::{Arguments, Evaluator, ParametersSpec, ParametersSpecParam},
-    starlark_module, starlark_simple_value,
+    eval::Evaluator,
     values::{
-        Freeze, Heap, NoSerialize, StarlarkValue, Trace, Value,
-        dict::{AllocDict, DictRef},
-        list::ListRef,
+        Absent, Freeze, Heap, NoSerialize, StarlarkRepresentations, StarlarkType, StarlarkValue,
+        Trace, Value, ValueError, ValueTyped,
+        dict::{AllocDict, StarlarkDict},
+        list::{AllocList, StarlarkList},
+        none::NoneType,
         starlark_value,
     },
 };
@@ -32,7 +33,7 @@ use crate::{
 use super::net::{ConnectionIntent, NetValue, generate_net_id};
 use super::part::PartValue;
 use super::path::normalize_path_to_package_uri;
-use super::symbol::{SymbolType, SymbolValue, symbol_pins_from_pad_map};
+use super::symbol::{SymbolValue, symbol_pins_from_pad_map};
 use super::validation::validate_identifier_name;
 
 use anyhow::anyhow;
@@ -379,13 +380,13 @@ fn parse_component_properties<'v>(
         return Ok(properties_map);
     }
 
-    let Some(dict_ref) = DictRef::from_value(properties_val) else {
+    let Some(dict_ref) = StarlarkDict::from_value(properties_val) else {
         return Err(starlark::Error::new_other(anyhow!(
             "`properties` must be a dict when provided"
         )));
     };
 
-    for (k_val, v_val) in dict_ref.iter() {
+    for (k_val, v_val) in dict_ref.entries() {
         let key_str = k_val
             .unpack_str()
             .map(|s| s.to_owned())
@@ -781,12 +782,15 @@ fn resolve_symbol_spice_model<'v>(
     let args = parse_sim_params(sim_params)?;
     validate_spice_model(&circuit, nets.len(), &args)?;
 
-    Ok(Some(heap.alloc_complex(SpiceModelValue {
-        definition,
-        name: sim_name.to_owned(),
-        nets,
-        args,
-    })))
+    Ok(Some(
+        heap.alloc(SpiceModelValue {
+            definition,
+            name: sim_name.to_owned(),
+            nets,
+            args,
+        })
+        .to_value(),
+    ))
 }
 
 fn diagnostic_location(
@@ -896,6 +900,7 @@ fn alloc_not_connected<'v>(
         connection_intent: ConnectionIntent::Open,
         properties: SmallMap::new(),
     })
+    .to_value()
 }
 
 fn warn_pin_net_compatibility<'v>(
@@ -965,13 +970,13 @@ fn append_alternatives_property<'v>(
 
     let mut alt_values = Vec::new();
     if let Some(existing) = properties_map.get("alternatives").copied() {
-        let existing_list = ListRef::from_value(existing).ok_or_else(|| {
+        let existing_list = StarlarkList::from_value(existing).ok_or_else(|| {
             starlark::Error::new_other(anyhow!(
                 "`properties[\"alternatives\"]` must be a list of Part values"
             ))
         })?;
 
-        for value in existing_list.iter() {
+        for value in existing_list.values() {
             if value.downcast_ref::<PartValue>().is_none() {
                 return Err(starlark::Error::new_other(anyhow!(
                     "`properties[\"alternatives\"]` must contain only Part values"
@@ -981,8 +986,15 @@ fn append_alternatives_property<'v>(
         }
     }
 
-    alt_values.extend(alternatives.into_iter().map(|part| heap.alloc(part)));
-    properties_map.insert("alternatives".to_string(), heap.alloc(alt_values));
+    alt_values.extend(
+        alternatives
+            .into_iter()
+            .map(|part| heap.alloc(part).to_value()),
+    );
+    properties_map.insert(
+        "alternatives".to_string(),
+        heap.alloc(AllocList(alt_values)).to_value(),
+    );
     Ok(())
 }
 
@@ -1165,24 +1177,115 @@ fn validate_spice_model_value<'v>(value: Value<'v>) -> starlark::Result<()> {
     Ok(())
 }
 
-// StarlarkValue implementation for mutable ComponentValue
+#[derive(Debug, Clone, Copy, StarlarkRepresentations)]
+pub enum ComponentView<'v> {
+    Mutable(ValueTyped<'v, ComponentValue<'v>>),
+    Frozen(ValueTyped<'v, FrozenComponentValue<'v>>),
+}
+
+impl<'v> ComponentView<'v> {
+    fn with_fields<R>(
+        self,
+        f: impl FnOnce(&str, &str, Option<&str>, &SmallMap<String, Value<'v>>, &ComponentData<'v>) -> R,
+    ) -> R {
+        match self {
+            ComponentView::Mutable(c) => {
+                let data = c.data.borrow();
+                f(
+                    &c.name,
+                    &c.prefix,
+                    c.ctype.as_deref(),
+                    &c.connections,
+                    &data,
+                )
+            }
+            ComponentView::Frozen(c) => f(
+                &c.name,
+                &c.prefix,
+                c.ctype.as_deref(),
+                &c.connections,
+                &c.data,
+            ),
+        }
+    }
+}
+
+const COMPONENT_FIXED_ATTRS: &[&str] = &[
+    "name",
+    "prefix",
+    "mpn",
+    "manufacturer",
+    "part",
+    "datasheet",
+    "spice_model",
+    "dnp",
+    "skip_bom",
+    "skip_pos",
+    "type",
+    "properties",
+    "pins",
+];
+
 #[starlark_value(type = "Component")]
-impl<'v> StarlarkValue<'v> for ComponentValue<'v> {
-    fn get_attr(&self, attr: &str, heap: Heap<'v>) -> Option<Value<'v>> {
-        let data = self.data.borrow();
-        match attr {
-            "name" => Some(heap.alloc_str(&self.name).to_value()),
-            "prefix" => Some(heap.alloc_str(&self.prefix).to_value()),
+impl<'v> StarlarkType<'v> for ComponentView<'v> {
+    #[allow(non_snake_case, clippy::too_many_arguments)]
+    #[starlark(constructor)]
+    fn Component(
+        #[starlark(require = named)] name: Value<'v>,
+        #[starlark(require = named, default = Absent)] footprint: Option<Value<'v>>,
+        #[starlark(require = named, default = Absent)] pin_defs: Option<Value<'v>>,
+        #[starlark(require = named)] pins: Value<'v>,
+        #[starlark(require = named, default = Absent)] prefix: Option<Value<'v>>,
+        #[starlark(require = named, default = Absent)] symbol: Option<Value<'v>>,
+        #[starlark(require = named, default = Absent)] mpn: Option<Value<'v>>,
+        #[starlark(require = named, default = Absent)] manufacturer: Option<Value<'v>>,
+        #[starlark(require = named, default = Absent)] part: Option<Value<'v>>,
+        #[starlark(require = named, default = Absent)] r#type: Option<Value<'v>>,
+        #[starlark(require = named, default = Absent)] properties: Option<Value<'v>>,
+        #[starlark(require = named, default = Absent)] spice_model: Option<Value<'v>>,
+        #[starlark(require = named, default = Absent)] dnp: Option<Value<'v>>,
+        #[starlark(require = named, default = Absent)] skip_bom: Option<Value<'v>>,
+        #[starlark(require = named, default = Absent)] skip_pos: Option<Value<'v>>,
+        #[starlark(require = named, default = Absent)] datasheet: Option<Value<'v>>,
+        #[starlark(require = named, default = Absent)] description: Option<Value<'v>>,
+        eval: &mut Evaluator<'v, '_, '_>,
+    ) -> starlark::Result<NoneType> {
+        construct_component(
+            name,
+            footprint,
+            pin_defs,
+            pins,
+            prefix,
+            symbol,
+            mpn,
+            manufacturer,
+            part,
+            r#type,
+            properties,
+            spice_model,
+            dnp,
+            skip_bom,
+            skip_pos,
+            datasheet,
+            description,
+            eval,
+        )
+    }
+
+    fn get_attr(this: Self, attr: &str, heap: Heap<'v>) -> Option<Value<'v>> {
+        this.with_fields(|name, prefix, ctype, connections, data| match attr {
+            "name" => Some(heap.alloc(name).to_value()),
+            "prefix" => Some(heap.alloc(prefix).to_value()),
             "mpn" => Some(
                 data.part
                     .as_ref()
-                    .map(|p| heap.alloc_str(p.mpn()).to_value())
+                    .map(|p| heap.alloc(p.mpn()).to_value())
                     .unwrap_or_else(Value::new_none),
             ),
             "manufacturer" => Some(
                 data.part
                     .as_ref()
-                    .map(|p| heap.alloc_str(p.manufacturer()).to_value())
+                    .map(|p| heap.alloc(p.manufacturer()).to_value())
                     .unwrap_or_else(Value::new_none),
             ),
             "part" => Some(
@@ -1194,7 +1297,7 @@ impl<'v> StarlarkValue<'v> for ComponentValue<'v> {
             "datasheet" => Some(
                 data.datasheet
                     .as_ref()
-                    .map(|datasheet| heap.alloc_str(datasheet).to_value())
+                    .map(|datasheet| heap.alloc(datasheet.as_str()).to_value())
                     .unwrap_or_else(Value::new_none),
             ),
             "spice_model" => Some(data.spice_model.unwrap_or_else(Value::new_none)),
@@ -1202,9 +1305,8 @@ impl<'v> StarlarkValue<'v> for ComponentValue<'v> {
             "skip_bom" => Some(heap.alloc(data.skip_bom).to_value()),
             "skip_pos" => Some(heap.alloc(data.skip_pos).to_value()),
             "type" => Some(
-                self.ctype
-                    .as_ref()
-                    .map(|ctype| heap.alloc_str(ctype).to_value())
+                ctype
+                    .map(|ctype| heap.alloc(ctype).to_value())
                     .unwrap_or_else(Value::new_none),
             ),
             "properties" => {
@@ -1224,42 +1326,44 @@ impl<'v> StarlarkValue<'v> for ComponentValue<'v> {
                 // Convert HashMap to Starlark dictionary
                 let attrs_vec: Vec<(Value<'v>, Value<'v>)> = component_attrs
                     .into_iter()
-                    .map(|(key, value)| (heap.alloc_str(&key).to_value(), value))
+                    .map(|(key, value)| (heap.alloc(key).to_value(), value))
                     .collect();
 
-                Some(heap.alloc(AllocDict(attrs_vec)))
+                Some(heap.alloc(AllocDict(attrs_vec)).to_value())
             }
             "pins" => {
                 // Convert connections SmallMap to Starlark dictionary
-                let connections_vec: Vec<(Value<'v>, Value<'v>)> = self
-                    .connections
+                let connections_vec: Vec<(Value<'v>, Value<'v>)> = connections
                     .iter()
-                    .map(|(pin, net)| (heap.alloc_str(pin).to_value(), net.to_value()))
+                    .map(|(pin, net)| (heap.alloc(pin.as_str()).to_value(), net.to_value()))
                     .collect();
-                Some(heap.alloc(AllocDict(connections_vec)))
+                Some(heap.alloc(AllocDict(connections_vec)).to_value())
             }
             // Fallback: check properties map
-            _ => {
-                data.properties.get(attr).map(|v| {
-                    // For capacitance/resistance, attempt to convert string to PhysicalValue
-                    let is_special = matches!(
-                        attr,
-                        "capacitance" | "Capacitance" | "resistance" | "Resistance"
-                    );
-                    if is_special
-                        && let Some(s) = v.unpack_str()
-                        && let Ok(pv) = s.parse::<PhysicalValue>()
-                    {
-                        return heap.alloc(pv);
-                    }
-                    v.to_value()
-                })
-            }
-        }
+            _ => data.properties.get(attr).map(|v| {
+                // For capacitance/resistance, attempt to convert string to PhysicalValue
+                let is_special = matches!(
+                    attr,
+                    "capacitance" | "Capacitance" | "resistance" | "Resistance"
+                );
+                if is_special
+                    && let Some(s) = v.unpack_str()
+                    && let Ok(pv) = s.parse::<PhysicalValue>()
+                {
+                    return heap.alloc(pv).to_value();
+                }
+                v.to_value()
+            }),
+        })
     }
 
-    fn set_attr(&self, attr: &str, value: Value<'v>) -> starlark::Result<()> {
-        let mut data = self.data.borrow_mut();
+    fn set_attr(this: Self, attr: &str, value: Value<'v>) -> starlark::Result<()> {
+        let ComponentView::Mutable(comp) = this else {
+            return Err(starlark::Error::new_other(
+                ValueError::CannotMutateImmutableValue,
+            ));
+        };
+        let mut data = comp.data.borrow_mut();
         match attr {
             "mpn" => {
                 let Some(existing) = data.part.as_ref() else {
@@ -1369,203 +1473,37 @@ impl<'v> StarlarkValue<'v> for ComponentValue<'v> {
         }
     }
 
-    fn has_attr(&self, attr: &str, _heap: Heap<'v>) -> bool {
-        if matches!(
-            attr,
-            "name"
-                | "prefix"
-                | "mpn"
-                | "manufacturer"
-                | "part"
-                | "datasheet"
-                | "spice_model"
-                | "dnp"
-                | "skip_bom"
-                | "skip_pos"
-                | "type"
-                | "properties"
-                | "pins"
-        ) {
+    fn has_attr(this: Self, attr: &str, _heap: Heap<'v>) -> bool {
+        if COMPONENT_FIXED_ATTRS.contains(&attr) {
             return true;
         }
-        let data = self.data.borrow();
-        data.properties.contains_key(attr)
+        this.with_fields(|_, _, _, _, data| data.properties.contains_key(attr))
     }
 
-    fn dir_attr(&self) -> Vec<String> {
-        let mut attrs = vec![
-            "name".to_string(),
-            "prefix".to_string(),
-            "mpn".to_string(),
-            "manufacturer".to_string(),
-            "part".to_string(),
-            "datasheet".to_string(),
-            "spice_model".to_string(),
-            "dnp".to_string(),
-            "skip_bom".to_string(),
-            "skip_pos".to_string(),
-            "type".to_string(),
-            "properties".to_string(),
-            "pins".to_string(),
-        ];
-        let data = self.data.borrow();
-        for key in data.properties.keys() {
-            if !key.starts_with("__") {
-                attrs.push(key.clone());
+    fn dir_attr(this: Self) -> Vec<String> {
+        let mut attrs: Vec<String> = COMPONENT_FIXED_ATTRS
+            .iter()
+            .map(|s| (*s).to_string())
+            .collect();
+        this.with_fields(|_, _, _, _, data| {
+            for key in data.properties.keys() {
+                if !key.starts_with("__") {
+                    attrs.push(key.clone());
+                }
             }
-        }
+        });
         attrs
     }
 }
 
-// StarlarkValue implementation for frozen FrozenComponentValue
-#[starlark_value(type = "Component", frozen_vtable)]
+#[starlark_value(alloc = complex)]
+impl<'v> StarlarkValue<'v> for ComponentValue<'v> {
+    type Type = ComponentView<'v>;
+}
+
+#[starlark_value(alloc = frozen)]
 impl<'v> StarlarkValue<'v> for FrozenComponentValue<'v> {
-    type Canonical = FrozenComponentValue<'v>;
-
-    fn get_attr(&self, attr: &str, heap: Heap<'v>) -> Option<Value<'v>> {
-        match attr {
-            "name" => Some(heap.alloc_str(&self.name).to_value()),
-            "prefix" => Some(heap.alloc_str(&self.prefix).to_value()),
-            "mpn" => Some(
-                self.data
-                    .part
-                    .as_ref()
-                    .map(|p| heap.alloc_str(p.mpn()).to_value())
-                    .unwrap_or_else(Value::new_none),
-            ),
-            "manufacturer" => Some(
-                self.data
-                    .part
-                    .as_ref()
-                    .map(|p| heap.alloc_str(p.manufacturer()).to_value())
-                    .unwrap_or_else(Value::new_none),
-            ),
-            "part" => Some(
-                self.data
-                    .part
-                    .as_ref()
-                    .map(|p| heap.alloc(p.clone()).to_value())
-                    .unwrap_or_else(Value::new_none),
-            ),
-            "datasheet" => Some(
-                self.data
-                    .datasheet
-                    .as_ref()
-                    .map(|datasheet| heap.alloc_str(datasheet).to_value())
-                    .unwrap_or_else(Value::new_none),
-            ),
-            "spice_model" => Some(
-                self.data
-                    .spice_model
-                    .as_ref()
-                    .map(|sm| sm.to_value())
-                    .unwrap_or_else(Value::new_none),
-            ),
-            "dnp" => Some(heap.alloc(self.data.dnp).to_value()),
-            "skip_bom" => Some(heap.alloc(self.data.skip_bom).to_value()),
-            "skip_pos" => Some(heap.alloc(self.data.skip_pos).to_value()),
-            "type" => Some(
-                self.ctype
-                    .as_ref()
-                    .map(|ctype| heap.alloc_str(ctype).to_value())
-                    .unwrap_or_else(Value::new_none),
-            ),
-            "properties" => {
-                // Build the same properties dictionary as in the testbench components dict
-                let mut component_attrs = std::collections::HashMap::new();
-
-                // Add component properties (excluding internal ones)
-                for (key, value) in self.data.properties.iter() {
-                    if matches!(key.as_str(), "footprint" | "symbol_path" | "symbol_name")
-                        || key.starts_with("__")
-                    {
-                        continue;
-                    }
-                    component_attrs.insert(key.clone(), value.to_value());
-                }
-
-                // Convert HashMap to Starlark dictionary
-                let attrs_vec: Vec<(Value<'v>, Value<'v>)> = component_attrs
-                    .into_iter()
-                    .map(|(key, value)| (heap.alloc_str(&key).to_value(), value))
-                    .collect();
-
-                Some(heap.alloc(AllocDict(attrs_vec)))
-            }
-            "pins" => {
-                // Convert connections SmallMap to Starlark dictionary
-                let connections_vec: Vec<(Value<'v>, Value<'v>)> = self
-                    .connections
-                    .iter()
-                    .map(|(pin, net)| (heap.alloc_str(pin).to_value(), net.to_value()))
-                    .collect();
-                Some(heap.alloc(AllocDict(connections_vec)))
-            }
-            _ => {
-                self.data.properties.get(attr).map(|v| {
-                    // For capacitance/resistance, attempt to convert string to PhysicalValue
-                    let is_special = matches!(
-                        attr,
-                        "capacitance" | "Capacitance" | "resistance" | "Resistance"
-                    );
-                    if is_special
-                        && let Some(s) = v.to_value().unpack_str()
-                        && let Ok(pv) = s.parse::<PhysicalValue>()
-                    {
-                        return heap.alloc(pv);
-                    }
-                    v.to_value()
-                })
-            }
-        }
-    }
-
-    fn has_attr(&self, attr: &str, _heap: Heap<'v>) -> bool {
-        if matches!(
-            attr,
-            "name"
-                | "prefix"
-                | "mpn"
-                | "manufacturer"
-                | "part"
-                | "datasheet"
-                | "spice_model"
-                | "dnp"
-                | "skip_bom"
-                | "skip_pos"
-                | "type"
-                | "properties"
-                | "pins"
-        ) {
-            return true;
-        }
-        self.data.properties.contains_key(attr)
-    }
-
-    fn dir_attr(&self) -> Vec<String> {
-        let mut attrs = vec![
-            "name".to_string(),
-            "prefix".to_string(),
-            "mpn".to_string(),
-            "manufacturer".to_string(),
-            "part".to_string(),
-            "datasheet".to_string(),
-            "spice_model".to_string(),
-            "dnp".to_string(),
-            "skip_bom".to_string(),
-            "skip_pos".to_string(),
-            "type".to_string(),
-            "properties".to_string(),
-            "pins".to_string(),
-        ];
-        for key in self.data.properties.keys() {
-            if !key.starts_with("__") {
-                attrs.push(key.clone());
-            }
-        }
-        attrs
-    }
+    type Type = ComponentView<'v>;
 }
 
 impl std::fmt::Display for ComponentValue<'_> {
@@ -1777,471 +1715,418 @@ impl<'v> FrozenComponentValue<'v> {
 }
 
 /// ComponentFactory is a value that represents a factory for a component.
-#[derive(Debug, Trace, ProvidesStaticType, NoSerialize, Allocative, Freeze)]
-#[repr(C)]
-pub struct ComponentType;
+#[allow(clippy::too_many_arguments)]
+fn construct_component<'v>(
+    name_val: Value<'v>,
+    footprint_val: Option<Value<'v>>,
+    pin_defs_val: Option<Value<'v>>,
+    pins_val: Value<'v>,
+    prefix_val: Option<Value<'v>>,
+    symbol_val: Option<Value<'v>>,
+    mpn: Option<Value<'v>>,
+    manufacturer: Option<Value<'v>>,
+    part_val: Option<Value<'v>>,
+    ctype: Option<Value<'v>>,
+    properties_val: Option<Value<'v>>,
+    spice_model_val: Option<Value<'v>>,
+    dnp_val: Option<Value<'v>>,
+    skip_bom_val: Option<Value<'v>>,
+    skip_pos_val: Option<Value<'v>>,
+    datasheet_val: Option<Value<'v>>,
+    description_val: Option<Value<'v>>,
+    eval: &mut Evaluator<'v, '_, '_>,
+) -> starlark::Result<NoneType> {
+    // Check if parent module has dnp=True in properties
+    let module_has_dnp = eval
+        .module_value()
+        .and_then(|m| m.properties().get("dnp")?.unpack_bool())
+        .unwrap_or(false);
 
-starlark_simple_value!(ComponentType);
+    let eval_ctx = &mut *eval;
+    let properties_val = properties_val.unwrap_or_default();
 
-#[starlark_value(type = "Component")]
-impl<'v> StarlarkValue<'v> for ComponentType {
-    fn invoke(
-        &self,
-        _me: Value<'v>,
-        args: &Arguments<'v, '_>,
-        eval: &mut Evaluator<'v, '_, '_>,
-    ) -> starlark::Result<Value<'v>> {
-        // Check if parent module has dnp=True in properties
-        let module_has_dnp = eval
-            .module_value()
-            .and_then(|m| m.properties().get("dnp")?.unpack_bool())
-            .unwrap_or(false);
+    let name = name_val
+        .unpack_str()
+        .ok_or(ComponentError::NameNotString)?
+        .to_owned();
 
-        let param_spec = ParametersSpec::new_named_only(
-            "Component",
-            [
-                ("name", ParametersSpecParam::<Value<'_>>::Required),
-                ("footprint", ParametersSpecParam::<Value<'_>>::Optional),
-                ("pin_defs", ParametersSpecParam::<Value<'_>>::Optional),
-                ("pins", ParametersSpecParam::<Value<'_>>::Required),
-                ("prefix", ParametersSpecParam::<Value<'_>>::Optional),
-                ("symbol", ParametersSpecParam::<Value<'_>>::Optional),
-                ("mpn", ParametersSpecParam::<Value<'_>>::Optional),
-                ("manufacturer", ParametersSpecParam::<Value<'_>>::Optional),
-                ("part", ParametersSpecParam::<Value<'_>>::Optional),
-                ("type", ParametersSpecParam::<Value<'_>>::Optional),
-                ("properties", ParametersSpecParam::<Value<'_>>::Optional),
-                ("spice_model", ParametersSpecParam::<Value<'_>>::Optional),
-                ("dnp", ParametersSpecParam::<Value<'_>>::Optional),
-                ("skip_bom", ParametersSpecParam::<Value<'_>>::Optional),
-                ("skip_pos", ParametersSpecParam::<Value<'_>>::Optional),
-                ("datasheet", ParametersSpecParam::<Value<'_>>::Optional),
-                ("description", ParametersSpecParam::<Value<'_>>::Optional),
-            ],
-        );
+    let _span = info_span!("component", name = %name).entered();
 
-        let component_val = param_spec.parser(args, eval, |param_parser, eval_ctx| {
-            let name_val: Value = param_parser.next()?;
-            let name = name_val
+    // Validate the component name
+    validate_identifier_name(&name, "Component name")?;
+
+    let explicit_footprint = match footprint_val {
+        Some(v) if v.is_none() => None,
+        Some(v) => Some(
+            v.unpack_str()
+                .ok_or(ComponentError::FootprintNotString)?
+                .to_owned(),
+        ),
+        None => None,
+    };
+
+    let conn_dict = StarlarkDict::from_value(pins_val).ok_or(ComponentError::PinsNotDict)?;
+
+    let prefix = prefix_val.and_then(|v| v.unpack_str().map(|s| s.to_owned()));
+
+    // Get a SymbolValue from the pin_defs or symbol_val
+    let final_symbol: SymbolValue = if let Some(pin_defs) = pin_defs_val {
+        // Old way: pin_defs provided as a dict
+        let dict_ref = StarlarkDict::from_value(pin_defs).ok_or_else(|| {
+            starlark::Error::new_other(anyhow!("`pin_defs` must be a dict of name -> pad"))
+        })?;
+
+        let mut pad_to_signal: SmallMap<String, String> = SmallMap::new();
+        for (k_val, v_val) in dict_ref.entries() {
+            let pin_name = k_val
                 .unpack_str()
-                .ok_or(ComponentError::NameNotString)?
+                .ok_or_else(|| starlark::Error::new_other(anyhow!("pin name must be a string")))?
                 .to_owned();
+            let pad_name = v_val
+                .unpack_str()
+                .ok_or_else(|| starlark::Error::new_other(anyhow!("pad must be a string")))?
+                .to_owned();
+            pad_to_signal.insert(pad_name, pin_name);
+        }
 
-            let _span = info_span!("component", name = %name).entered();
-
-            // Validate the component name
-            validate_identifier_name(&name, "Component name")?;
-
-            let footprint_val: Option<Value> = param_parser.next_opt()?;
-            let explicit_footprint = match footprint_val {
-                Some(v) if v.is_none() => None,
-                Some(v) => Some(
-                    v.unpack_str()
-                        .ok_or(ComponentError::FootprintNotString)?
-                        .to_owned(),
-                ),
-                None => None,
-            };
-
-            let pin_defs_val: Option<Value> = param_parser.next_opt()?;
-
-            let pins_val: Value = param_parser.next()?;
-            let conn_dict = DictRef::from_value(pins_val).ok_or(ComponentError::PinsNotDict)?;
-
-            let prefix_val: Option<Value> = param_parser.next_opt()?;
-            let prefix = prefix_val.and_then(|v| v.unpack_str().map(|s| s.to_owned()));
-
-            // Optional fields
-            let symbol_val: Option<Value> = param_parser.next_opt()?;
-            let mpn: Option<Value> = param_parser.next_opt()?;
-            let manufacturer: Option<Value> = param_parser.next_opt()?;
-            let part_val: Option<Value> = param_parser.next_opt()?;
-            let ctype: Option<Value> = param_parser.next_opt()?;
-            let properties_val: Value = param_parser.next_opt()?.unwrap_or_default();
-            let spice_model_val: Option<Value> = param_parser.next_opt()?;
-            let dnp_val: Option<Value> = param_parser.next_opt()?;
-            let skip_bom_val: Option<Value> = param_parser.next_opt()?;
-            let skip_pos_val: Option<Value> = param_parser.next_opt()?;
-            let datasheet_val: Option<Value> = param_parser.next_opt()?;
-            let description_val: Option<Value> = param_parser.next_opt()?;
-
-            // Get a SymbolValue from the pin_defs or symbol_val
-            let final_symbol: SymbolValue = if let Some(pin_defs) = pin_defs_val {
-                // Old way: pin_defs provided as a dict
-                let dict_ref = DictRef::from_value(pin_defs).ok_or_else(|| {
-                    starlark::Error::new_other(anyhow!("`pin_defs` must be a dict of name -> pad"))
+        // Check if symbol is also provided - if so, merge the information
+        if let Some(symbol) = &symbol_val {
+            if symbol.get_type() == "Symbol" {
+                // Extract the Symbol value
+                let symbol_value = symbol.downcast_ref::<SymbolValue>().ok_or_else(|| {
+                    starlark::Error::new_other(anyhow!("Failed to downcast Symbol value"))
                 })?;
 
-                let mut pad_to_signal: SmallMap<String, String> = SmallMap::new();
-                for (k_val, v_val) in dict_ref.iter() {
-                    let pin_name = k_val
-                        .unpack_str()
-                        .ok_or_else(|| {
-                            starlark::Error::new_other(anyhow!("pin name must be a string"))
-                        })?
-                        .to_owned();
-                    let pad_name = v_val
-                        .unpack_str()
-                        .ok_or_else(|| starlark::Error::new_other(anyhow!("pad must be a string")))?
-                        .to_owned();
-                    pad_to_signal.insert(pad_name, pin_name);
-                }
-
-                // Check if symbol is also provided - if so, merge the information
-                if let Some(symbol) = &symbol_val {
-                    if symbol.get_type() == "Symbol" {
-                        // Extract the Symbol value
-                        let symbol_value =
-                            symbol.downcast_ref::<SymbolValue>().ok_or_else(|| {
-                                starlark::Error::new_other(anyhow!(
-                                    "Failed to downcast Symbol value"
-                                ))
-                            })?;
-
-                        // Create a new symbol that combines the symbol's metadata with pin_defs overrides
-                        SymbolValue {
-                            name: symbol_value.name.clone(),
-                            pad_to_signal, // Use pin mappings from pin_defs
-                            pins: symbol_value.pins.clone(),
-                            source_uri: symbol_value.source_uri.clone(),
-                            source_format_version: symbol_value.source_format_version,
-                            raw_sexp: symbol_value.raw_sexp.clone(),
-                            properties: symbol_value.properties.clone(),
-                            in_bom: symbol_value.in_bom,
-                            internal_connectivity: symbol_value.internal_connectivity.clone(),
-                        }
-                    } else {
-                        // symbol is not a Symbol type, just use pin_defs
-                        let pins = symbol_pins_from_pad_map(&pad_to_signal);
-                        SymbolValue {
-                            name: None,
-                            pad_to_signal,
-                            pins,
-                            source_uri: None,
-                            source_format_version: None,
-                            raw_sexp: None,
-                            properties: SmallMap::new(),
-                            in_bom: true,
-                            internal_connectivity: pcb_sch::InternalConnectivity::default(),
-                        }
-                    }
-                } else {
-                    // No symbol provided, create minimal SymbolValue from pin_defs
-                    let pins = symbol_pins_from_pad_map(&pad_to_signal);
-                    SymbolValue {
-                        name: None,
-                        pad_to_signal,
-                        pins,
-                        source_uri: None,
-                        source_format_version: None,
-                        raw_sexp: None,
-                        properties: SmallMap::new(),
-                        in_bom: true,
-                        internal_connectivity: pcb_sch::InternalConnectivity::default(),
-                    }
-                }
-            } else if let Some(symbol) = &symbol_val {
-                // New way: symbol provided as a Symbol value
-                if symbol.get_type() == "Symbol" {
-                    // Extract pins from the Symbol value
-                    let symbol_value = symbol.downcast_ref::<SymbolValue>().ok_or_else(|| {
-                        starlark::Error::new_other(anyhow!("Failed to downcast Symbol value"))
-                    })?;
-
-                    // Return the existing symbol
-                    symbol_value.clone()
-                } else {
-                    return Err(starlark::Error::new_other(anyhow!(
-                        "Use Symbol(library = \"...\") to load a symbol from a library."
-                    )));
+                // Create a new symbol that combines the symbol's metadata with pin_defs overrides
+                SymbolValue {
+                    name: symbol_value.name.clone(),
+                    pad_to_signal, // Use pin mappings from pin_defs
+                    pins: symbol_value.pins.clone(),
+                    source_uri: symbol_value.source_uri.clone(),
+                    source_format_version: symbol_value.source_format_version,
+                    raw_sexp: symbol_value.raw_sexp.clone(),
+                    properties: symbol_value.properties.clone(),
+                    in_bom: symbol_value.in_bom,
+                    internal_connectivity: symbol_value.internal_connectivity.clone(),
                 }
             } else {
-                return Err(starlark::Error::new_other(anyhow!(
-                    "Either `pin_defs` or a Symbol value for `symbol` must be provided"
-                )));
-            };
-
-            // Resolve footprint source in one place: explicit `footprint` if set,
-            // otherwise infer `<symbol_dir>/<stem>.kicad_mod` from the symbol
-            // `Footprint`, then normalize to `package://...` when possible.
-            let ctx = eval_ctx.eval_context().ok_or_else(|| {
-                starlark::Error::new_other(anyhow!("Component() requires an evaluation context"))
+                // symbol is not a Symbol type, just use pin_defs
+                let pins = symbol_pins_from_pad_map(&pad_to_signal);
+                SymbolValue {
+                    name: None,
+                    pad_to_signal,
+                    pins,
+                    source_uri: None,
+                    source_format_version: None,
+                    raw_sexp: None,
+                    properties: SmallMap::new(),
+                    in_bom: true,
+                    internal_connectivity: pcb_sch::InternalConnectivity::default(),
+                }
+            }
+        } else {
+            // No symbol provided, create minimal SymbolValue from pin_defs
+            let pins = symbol_pins_from_pad_map(&pad_to_signal);
+            SymbolValue {
+                name: None,
+                pad_to_signal,
+                pins,
+                source_uri: None,
+                source_format_version: None,
+                raw_sexp: None,
+                properties: SmallMap::new(),
+                in_bom: true,
+                internal_connectivity: pcb_sch::InternalConnectivity::default(),
+            }
+        }
+    } else if let Some(symbol) = &symbol_val {
+        // New way: symbol provided as a Symbol value
+        if symbol.get_type() == "Symbol" {
+            // Extract pins from the Symbol value
+            let symbol_value = symbol.downcast_ref::<SymbolValue>().ok_or_else(|| {
+                starlark::Error::new_other(anyhow!("Failed to downcast Symbol value"))
             })?;
-            let footprint = resolve_component_footprint(explicit_footprint, &final_symbol, ctx)?;
-            let footprint = normalize_path_to_package_uri(&footprint, Some(ctx));
 
-            // Now handle connections after we have pins_str_map
-            let mut connections: SmallMap<String, Value<'v>> = SmallMap::new();
-            for (k_val, v_val) in conn_dict.iter() {
-                let signal_name = k_val
-                    .unpack_str()
-                    .ok_or_else(|| {
-                        starlark::Error::new_other(anyhow!("pin names must be strings"))
-                    })?
-                    .to_owned();
+            // Return the existing symbol
+            symbol_value.clone()
+        } else {
+            return Err(starlark::Error::new_other(anyhow!(
+                "Use Symbol(library = \"...\") to load a symbol from a library."
+            )));
+        }
+    } else {
+        return Err(starlark::Error::new_other(anyhow!(
+            "Either `pin_defs` or a Symbol value for `symbol` must be provided"
+        )));
+    };
 
-                if !final_symbol.signal_names().any(|n| n == signal_name) {
-                    return Err(starlark::Error::new_other(anyhow!(format!(
-                        "Unknown pin name '{}' (expected one of: {})",
-                        signal_name,
-                        final_symbol.signal_names().collect::<Vec<_>>().join(", ")
-                    ))));
-                }
+    // Resolve footprint source in one place: explicit `footprint` if set,
+    // otherwise infer `<symbol_dir>/<stem>.kicad_mod` from the symbol
+    // `Footprint`, then normalize to `package://...` when possible.
+    let ctx = eval_ctx.eval_context().ok_or_else(|| {
+        starlark::Error::new_other(anyhow!("Component() requires an evaluation context"))
+    })?;
+    let footprint = resolve_component_footprint(explicit_footprint, &final_symbol, ctx)?;
+    let footprint = normalize_path_to_package_uri(&footprint, Some(ctx));
 
-                if v_val.get_type() != "Net" {
-                    return Err(starlark::Error::new_other(anyhow!(format!(
-                        "Pin '{}' must be connected to a Net, got {}",
-                        signal_name,
-                        v_val.get_type()
-                    ))));
-                }
+    // Now handle connections after we have pins_str_map
+    let mut connections: SmallMap<String, Value<'v>> = SmallMap::new();
+    for (k_val, v_val) in conn_dict.entries() {
+        let signal_name = k_val
+            .unpack_str()
+            .ok_or_else(|| starlark::Error::new_other(anyhow!("pin names must be strings")))?
+            .to_owned();
 
-                warn_pin_net_compatibility(eval_ctx, &name, &final_symbol, &signal_name, v_val);
-                connections.insert(signal_name, v_val);
+        if !final_symbol.signal_names().any(|n| n == signal_name) {
+            return Err(starlark::Error::new_other(anyhow!(format!(
+                "Unknown pin name '{}' (expected one of: {})",
+                signal_name,
+                final_symbol.signal_names().collect::<Vec<_>>().join(", ")
+            ))));
+        }
+
+        if v_val.get_type() != "Net" {
+            return Err(starlark::Error::new_other(anyhow!(format!(
+                "Pin '{}' must be connected to a Net, got {}",
+                signal_name,
+                v_val.get_type()
+            ))));
+        }
+
+        warn_pin_net_compatibility(eval_ctx, &name, &final_symbol, &signal_name, v_val);
+        connections.insert(signal_name, v_val);
+    }
+
+    apply_explicit_jumper_connections(&name, &final_symbol, &mut connections)?;
+
+    // Auto-fill unambiguously no_connect pins and error on all other missing pins.
+    let mut missing_pins: Vec<&str> = final_symbol
+        .signal_names()
+        .filter(|signal_name| {
+            if connections.contains_key(*signal_name) {
+                return false;
             }
 
-            apply_explicit_jumper_connections(&name, &final_symbol, &mut connections)?;
-
-            // Auto-fill unambiguously no_connect pins and error on all other missing pins.
-            let mut missing_pins: Vec<&str> = final_symbol
-                .signal_names()
-                .filter(|signal_name| {
-                    if connections.contains_key(*signal_name) {
-                        return false;
-                    }
-
-                    let pin_types = signal_pin_type_candidates(&final_symbol, signal_name);
-                    if pin_types_are_only_no_connect(&pin_types) {
-                        let (path, span) = diagnostic_location(eval_ctx);
-                        connections.insert(
-                            (*signal_name).to_owned(),
-                            alloc_not_connected(eval_ctx.heap(), path, span),
-                        );
-                        false
-                    } else {
-                        true
-                    }
-                })
-                .collect();
-
-            missing_pins.sort();
-            if !missing_pins.is_empty() {
-                return Err(starlark::Error::new_other(anyhow!(format!(
-                    "Unconnected pin(s): {}",
-                    missing_pins.join(", ")
-                ))));
-            }
-
-            // Properties map.
-            let mut properties_map = parse_component_properties(properties_val)?;
-            // Older imports persisted the source schematic's footprint ID; apply now derives it.
-            properties_map.shift_remove("Footprint");
-            // Remove both legacy keys; `Value` wins over `Val`.
-            let legacy_value = ["Value", "Val"]
-                .map(|key| properties_map.shift_remove(key))
-                .into_iter()
-                .flatten()
-                .next();
-            if let Some(value) = legacy_value
-                && !properties_map.contains_key(crate::attrs::VALUE)
-            {
-                properties_map.insert(crate::attrs::VALUE.to_owned(), value);
-            }
-
-            // Warn on any legacy `Component()` inputs that have a typed-kwarg
-            // replacement. The legacy values are still honored below.
-            warn_legacy_component_inputs(eval_ctx, &name, mpn, manufacturer, &properties_map);
-
-            if let Some(name) = final_symbol.name() {
-                properties_map.insert(
-                    "symbol_name".to_string(),
-                    eval_ctx.heap().alloc_str(name).to_value(),
+            let pin_types = signal_pin_type_candidates(&final_symbol, signal_name);
+            if pin_types_are_only_no_connect(&pin_types) {
+                let (path, span) = diagnostic_location(eval_ctx);
+                connections.insert(
+                    (*signal_name).to_owned(),
+                    alloc_not_connected(eval_ctx.heap(), path, span),
                 );
+                false
+            } else {
+                true
             }
+        })
+        .collect();
 
-            if let Some(sm) = spice_model_val {
-                validate_spice_model_value(sm)?;
-            }
+    missing_pins.sort();
+    if !missing_pins.is_empty() {
+        return Err(starlark::Error::new_other(anyhow!(format!(
+            "Unconnected pin(s): {}",
+            missing_pins.join(", ")
+        ))));
+    }
 
-            let part_from_kwarg = parse_optional_part(part_val)?;
+    // Properties map.
+    let mut properties_map = parse_component_properties(properties_val)?;
+    // Older imports persisted the source schematic's footprint ID; apply now derives it.
+    properties_map.shift_remove("Footprint");
+    // Remove both legacy keys; `Value` wins over `Val`.
+    let legacy_value = ["Value", "Val"]
+        .map(|key| properties_map.shift_remove(key))
+        .into_iter()
+        .flatten()
+        .next();
+    if let Some(value) = legacy_value
+        && !properties_map.contains_key(crate::attrs::VALUE)
+    {
+        properties_map.insert(crate::attrs::VALUE.to_owned(), value);
+    }
 
-            for (kwarg, value) in [("mpn", mpn), ("manufacturer", manufacturer)] {
-                if let Some(v) = value.filter(|v| !v.is_none() && v.unpack_str().is_none()) {
-                    return Err(starlark::Error::new_other(anyhow!(
-                        "`{kwarg}` must be a string, got {}",
-                        v.get_type()
-                    )));
-                }
-            }
-            let explicit_mpn = mpn.and_then(|v| v.unpack_str().and_then(non_empty_string));
-            let explicit_manufacturer =
-                manufacturer.and_then(|v| v.unpack_str().and_then(non_empty_string));
-            let matching_manifest_parts = final_symbol
-                .source_uri()
-                .and_then(|path| ctx.resolution().symbol_parts.get(path))
-                .map(|parts| {
-                    parts
-                        .iter()
-                        .filter(|part| manifest_part_matches_symbol(part, &final_symbol))
-                        .cloned()
-                        .collect::<Vec<_>>()
-                });
-            let manifest_parts = matching_manifest_parts.as_deref();
+    // Warn on any legacy `Component()` inputs that have a typed-kwarg
+    // replacement. The legacy values are still honored below.
+    warn_legacy_component_inputs(eval_ctx, &name, mpn, manufacturer, &properties_map);
 
-            let (final_part, alternatives, bom_mpn) = resolve_component_sourcing(
-                part_from_kwarg.as_ref(),
-                explicit_mpn,
-                explicit_manufacturer,
-                &properties_map,
-                &final_symbol,
-                manifest_parts,
-            );
-            append_alternatives_property(&mut properties_map, alternatives, eval_ctx.heap())?;
+    if let Some(name) = final_symbol.name() {
+        properties_map.insert(
+            "symbol_name".to_string(),
+            eval_ctx.heap().alloc(name).to_value(),
+        );
+    }
 
-            // Datasheets resolve as Part > component field/property > KiCad symbol fallback.
-            // Skip empty strings and "~" (KiCad's placeholder for no datasheet) - prefer None over empty
-            let component_datasheet = datasheet_val
+    if let Some(sm) = spice_model_val {
+        validate_spice_model_value(sm)?;
+    }
+
+    let part_from_kwarg = parse_optional_part(part_val)?;
+
+    for (kwarg, value) in [("mpn", mpn), ("manufacturer", manufacturer)] {
+        if let Some(v) = value.filter(|v| !v.is_none() && v.unpack_str().is_none()) {
+            return Err(starlark::Error::new_other(anyhow!(
+                "`{kwarg}` must be a string, got {}",
+                v.get_type()
+            )));
+        }
+    }
+    let explicit_mpn = mpn.and_then(|v| v.unpack_str().and_then(non_empty_string));
+    let explicit_manufacturer =
+        manufacturer.and_then(|v| v.unpack_str().and_then(non_empty_string));
+    let matching_manifest_parts = final_symbol
+        .source_uri()
+        .and_then(|path| ctx.resolution().symbol_parts.get(path))
+        .map(|parts| {
+            parts
+                .iter()
+                .filter(|part| manifest_part_matches_symbol(part, &final_symbol))
+                .cloned()
+                .collect::<Vec<_>>()
+        });
+    let manifest_parts = matching_manifest_parts.as_deref();
+
+    let (final_part, alternatives, bom_mpn) = resolve_component_sourcing(
+        part_from_kwarg.as_ref(),
+        explicit_mpn,
+        explicit_manufacturer,
+        &properties_map,
+        &final_symbol,
+        manifest_parts,
+    );
+    append_alternatives_property(&mut properties_map, alternatives, eval_ctx.heap())?;
+
+    // Datasheets resolve as Part > component field/property > KiCad symbol fallback.
+    // Skip empty strings and "~" (KiCad's placeholder for no datasheet) - prefer None over empty
+    let component_datasheet = datasheet_val
+        .and_then(|v| v.unpack_str())
+        .and_then(pcb_eda::usable_kicad_field_value)
+        .map(ToOwned::to_owned)
+        .or_else(|| {
+            properties_map
+                .get("datasheet")
                 .and_then(|v| v.unpack_str())
                 .and_then(pcb_eda::usable_kicad_field_value)
                 .map(ToOwned::to_owned)
-                .or_else(|| {
-                    properties_map
-                        .get("datasheet")
-                        .and_then(|v| v.unpack_str())
-                        .and_then(pcb_eda::usable_kicad_field_value)
-                        .map(ToOwned::to_owned)
-                });
-            let component_datasheet = component_datasheet
-                .map(|datasheet| normalize_path_to_package_uri(&datasheet, Some(ctx)));
-            let symbol_datasheet = resolve_symbol_datasheet(&final_symbol, ctx)?;
-            let final_datasheet = resolve_component_datasheet(
-                final_part.as_ref(),
-                component_datasheet.as_deref(),
-                symbol_datasheet.as_deref(),
-            );
+        });
+    let component_datasheet =
+        component_datasheet.map(|datasheet| normalize_path_to_package_uri(&datasheet, Some(ctx)));
+    let symbol_datasheet = resolve_symbol_datasheet(&final_symbol, ctx)?;
+    let final_datasheet = resolve_component_datasheet(
+        final_part.as_ref(),
+        component_datasheet.as_deref(),
+        symbol_datasheet.as_deref(),
+    );
 
-            // Consolidate ctype: check kwarg, then legacy properties (type, Type)
-            let final_ctype = ctype
-                .and_then(|v| v.unpack_str().and_then(non_empty_string))
-                .or_else(|| first_property_string(&properties_map, &["type", "Type"]));
+    // Consolidate ctype: check kwarg, then legacy properties (type, Type)
+    let final_ctype = ctype
+        .and_then(|v| v.unpack_str().and_then(non_empty_string))
+        .or_else(|| first_property_string(&properties_map, &["type", "Type"]));
 
-            let symbol_description = final_symbol
+    let symbol_description = final_symbol
+        .properties()
+        .get("Description")
+        .and_then(|value| non_empty_string(value));
+    let value_description = property_string(&properties_map, crate::attrs::VALUE);
+    // Typed components use their parameterized value as the useful BOM description.
+    let fallback_description = if final_ctype.is_some() {
+        value_description.or(symbol_description)
+    } else {
+        symbol_description.or(value_description)
+    };
+    let final_description = description_val
+        .and_then(|v| v.unpack_str().and_then(non_empty_string))
+        .or_else(|| first_property_string(&properties_map, &["description", "Description"]))
+        .or(fallback_description);
+
+    // Consolidate DNP: module dnp (highest priority), then kwarg, then component properties
+    let final_dnp = if module_has_dnp {
+        Some(true)
+    } else {
+        consolidate_bool_property(
+            dnp_val,
+            &properties_map,
+            &["do_not_populate", "Do_not_populate", "DNP", "dnp"],
+        )
+    };
+
+    // Consolidate skip_bom: check kwarg, then legacy properties, then symbol in_bom (inverted)
+    let final_skip_bom = consolidate_bool_property(
+        skip_bom_val,
+        &properties_map,
+        &["Exclude_from_bom", "exclude_from_bom"],
+    )
+    .unwrap_or(!final_symbol.in_bom);
+
+    // Consolidate skip_pos: check kwarg, then legacy properties
+    let final_skip_pos = consolidate_bool_property(
+        skip_pos_val,
+        &properties_map,
+        &["Exclude_from_pos_files", "exclude_from_pos_files"],
+    );
+
+    // If prefix is not explicitly provided, try to get it from the symbol's Reference property
+    let final_prefix = prefix
+        .or_else(|| {
+            final_symbol
                 .properties()
-                .get("Description")
-                .and_then(|value| non_empty_string(value));
-            let value_description = property_string(&properties_map, crate::attrs::VALUE);
-            // Typed components use their parameterized value as the useful BOM description.
-            let fallback_description = if final_ctype.is_some() {
-                value_description.or(symbol_description)
-            } else {
-                symbol_description.or(value_description)
-            };
-            let final_description = description_val
-                .and_then(|v| v.unpack_str().and_then(non_empty_string))
-                .or_else(|| first_property_string(&properties_map, &["description", "Description"]))
-                .or(fallback_description);
+                .get("Reference")
+                .map(|s| s.to_owned())
+        })
+        .unwrap_or_else(|| "U".to_owned());
 
-            // Consolidate DNP: module dnp (highest priority), then kwarg, then component properties
-            let final_dnp = if module_has_dnp {
-                Some(true)
-            } else {
-                consolidate_bool_property(
-                    dnp_val,
-                    &properties_map,
-                    &["do_not_populate", "Do_not_populate", "DNP", "dnp"],
-                )
-            };
+    remove_consolidated_component_properties(&mut properties_map);
 
-            // Consolidate skip_bom: check kwarg, then legacy properties, then symbol in_bom (inverted)
-            let final_skip_bom = consolidate_bool_property(
-                skip_bom_val,
-                &properties_map,
-                &["Exclude_from_bom", "exclude_from_bom"],
-            )
-            .unwrap_or(!final_symbol.in_bom);
+    let final_spice_model = if spice_model_val.is_some() {
+        spice_model_val
+    } else {
+        resolve_symbol_spice_model(&final_symbol, &connections, ctx, eval_ctx.heap())?
+    };
 
-            // Consolidate skip_pos: check kwarg, then legacy properties
-            let final_skip_pos = consolidate_bool_property(
-                skip_pos_val,
-                &properties_map,
-                &["Exclude_from_pos_files", "exclude_from_pos_files"],
-            );
+    let component_val = eval_ctx
+        .heap()
+        .alloc(ComponentValue {
+            name,
+            ctype: final_ctype,
+            footprint,
+            prefix: final_prefix,
+            connections,
+            data: RefCell::new(ComponentData {
+                part: final_part,
+                bom_mpn,
+                spice_model: final_spice_model,
+                dnp: final_dnp.unwrap_or(false),
+                skip_bom: final_skip_bom,
+                skip_pos: final_skip_pos.unwrap_or(false),
+                datasheet: final_datasheet,
+                component_datasheet,
+                symbol_datasheet,
+                properties: properties_map,
+            }),
+            source_path: eval_ctx.source_path().unwrap_or_default(),
+            declaration_span: eval_ctx
+                .call_stack_top_location()
+                .map(|location| location.resolve_span()),
+            symbol: eval_ctx.heap().alloc(final_symbol).to_value(),
+            description: final_description,
+        })
+        .to_value();
 
-            // If prefix is not explicitly provided, try to get it from the symbol's Reference property
-            let final_prefix = prefix
-                .or_else(|| {
-                    final_symbol
-                        .properties()
-                        .get("Reference")
-                        .map(|s| s.to_owned())
-                })
-                .unwrap_or_else(|| "U".to_owned());
-
-            remove_consolidated_component_properties(&mut properties_map);
-
-            let final_spice_model = if spice_model_val.is_some() {
-                spice_model_val
-            } else {
-                resolve_symbol_spice_model(&final_symbol, &connections, ctx, eval_ctx.heap())?
-            };
-
-            let component = eval_ctx.heap().alloc_complex(ComponentValue {
-                name,
-                ctype: final_ctype,
-                footprint,
-                prefix: final_prefix,
-                connections,
-                data: RefCell::new(ComponentData {
-                    part: final_part,
-                    bom_mpn,
-                    spice_model: final_spice_model,
-                    dnp: final_dnp.unwrap_or(false),
-                    skip_bom: final_skip_bom,
-                    skip_pos: final_skip_pos.unwrap_or(false),
-                    datasheet: final_datasheet,
-                    component_datasheet,
-                    symbol_datasheet,
-                    properties: properties_map,
-                }),
-                source_path: eval_ctx.source_path().unwrap_or_default(),
-                declaration_span: eval_ctx
-                    .call_stack_top_location()
-                    .map(|location| location.resolve_span()),
-                symbol: eval_ctx.heap().alloc_complex(final_symbol),
-                description: final_description,
-            });
-
-            Ok(component)
-        })?;
-
-        // Add to current module context if available
-        // Note: Component modifiers are applied later, after module evaluation but before freezing
-        if let Some(context) = eval.context_value() {
-            let comp_name = component_val
-                .downcast_ref::<ComponentValue>()
-                .map(|c| c.name());
-            let call_site = eval.call_stack_top_location();
-            context.add_child(comp_name, component_val, call_site.as_ref());
-        }
-
-        Ok(Value::new_none())
+    // Add to current module context if available
+    // Note: Component modifiers are applied later, after module evaluation but before freezing
+    if let Some(context) = eval.context_value() {
+        let comp_name = component_val
+            .downcast_ref::<ComponentValue>()
+            .map(|c| c.name());
+        let call_site = eval.call_stack_top_location();
+        context.add_child(comp_name, component_val, call_site.as_ref());
     }
 
-    fn eval_type(&self) -> Option<starlark::typing::Ty> {
-        Some(<ComponentType as StarlarkValue>::get_type_starlark_repr())
-    }
+    Ok(NoneType)
 }
 
-impl std::fmt::Display for ComponentType {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "<Component>")
-    }
-}
-
-#[starlark_module]
 pub fn component_globals(builder: &mut GlobalsBuilder) {
-    const Component: ComponentType = ComponentType;
-    const Symbol: SymbolType = SymbolType;
+    builder.type_symbol::<ComponentView>();
+    builder.type_symbol::<SymbolValue>();
 }
 
 #[cfg(test)]
@@ -2284,7 +2169,7 @@ mod tests {
     ) -> SmallMap<String, Value<'v>> {
         let mut props = SmallMap::new();
         for (k, v) in entries {
-            props.insert((*k).to_string(), heap.alloc_str(v).to_value());
+            props.insert((*k).to_string(), heap.alloc(*v).to_value());
         }
         props
     }

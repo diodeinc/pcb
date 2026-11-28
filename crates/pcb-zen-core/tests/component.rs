@@ -2169,3 +2169,46 @@ fn schematic_option_on_project_module_warns_only_for_linked_projects() {
     );
     assert!(warned_files("").is_empty());
 }
+
+#[test]
+fn component_modifier_accepts_component_type_annotation() {
+    let result = common::eval_zen(vec![(
+        "test.zen".to_string(),
+        r#"
+def mark_modified(comp: Component):
+    comp.modified = "yes"
+    comp.dnp = True
+
+builtin.add_component_modifier(mark_modified)
+
+Component(
+    name = "R1",
+    footprint = "Resistor_SMD:R_0402_1005Metric",
+    pin_defs = {"1": "1", "2": "2"},
+    pins = {"1": Net("A"), "2": Net("B")},
+)
+"#
+        .to_string(),
+    )]);
+
+    assert!(
+        !result.diagnostics.has_errors(),
+        "unexpected errors: {:?}",
+        result.diagnostics
+    );
+    let output = result.output.expect("expected eval output");
+    let sch = output.to_schematic().expect("expected schematic");
+    let comp = sch
+        .instances
+        .values()
+        .find(|i| i.kind == pcb_sch::InstanceKind::Component)
+        .expect("expected component instance");
+    assert_eq!(
+        comp.attributes.get("modified"),
+        Some(&pcb_sch::AttributeValue::String("yes".to_string()))
+    );
+    assert_eq!(
+        comp.attributes.get("dnp"),
+        Some(&pcb_sch::AttributeValue::Boolean(true))
+    );
+}

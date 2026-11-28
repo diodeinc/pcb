@@ -97,3 +97,30 @@ fn stdlib_units_primary_type_does_not_warn_on_constructor() {
         "did not expect deprecation warning, got: {warning_bodies:?}"
     );
 }
+
+#[test]
+fn module_constructor_tolerates_extra_kwargs() {
+    let result = eval_zen(vec![
+        (
+            "Sub.zen".to_string(),
+            r#"
+                VIN = io(Net)
+            "#
+            .to_string(),
+        ),
+        (
+            "test.zen".to_string(),
+            r#"
+                Sub = Module("Sub.zen", embed=True)
+                Sub(name = "sub", VIN = Net("V1"))
+            "#
+            .to_string(),
+        ),
+    ]);
+
+    assert!(
+        !result.diagnostics.has_errors(),
+        "unexpected errors: {:?}",
+        result.diagnostics
+    );
+}

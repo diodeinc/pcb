@@ -7,15 +7,17 @@ use starlark::{
     Error,
     any::ProvidesStaticType,
     collections::SmallMap,
-    environment::{GlobalsBuilder, Methods, MethodsBuilder},
+    environment::{GlobalsBuilder, MethodsBuilder},
     eval::{Arguments, Evaluator},
     starlark_module, starlark_simple_value,
     values::{
-        Freeze, StarlarkValue, Value,
-        list::UnpackList,
+        Absent, Freeze, StarlarkValue, Value, ValueOf,
+        dict::StarlarkDict,
+        list::{AllocList, StarlarkList},
         none::{NoneOr, NoneType},
         starlark_value,
-        tuple::UnpackTuple,
+        string::StarlarkStr,
+        tuple::StarlarkTuple,
     },
 };
 
@@ -37,32 +39,27 @@ impl fmt::Display for Builtin {
 }
 
 starlark_simple_value!(Builtin);
-starlark::methods_static!(BUILTIN_METHODS = builtin_methods);
 
-#[starlark_value(type = "builtin")]
-impl<'v> StarlarkValue<'v> for Builtin {
-    fn get_methods() -> Option<&'static Methods> {
-        Some(BUILTIN_METHODS.methods())
-    }
-}
+#[starlark_value(type = "builtin", methods = builtin_methods)]
+impl<'v> StarlarkValue<'v> for Builtin {}
 
 #[starlark_module]
 pub fn builtin_globals(builder: &mut GlobalsBuilder) {
     const builtin: Builtin = Builtin;
 
     fn r#enum<'v>(
-        #[starlark(args)] args: UnpackTuple<Value<'v>>,
+        #[starlark(args)] args: ValueOf<'v, StarlarkTuple<'v>>,
         eval: &mut Evaluator<'v, '_, '_>,
     ) -> starlark::Result<Value<'v>> {
         let mut variant_strings = Vec::new();
-        for val in args.items {
+        for val in args.values() {
             let variant = val.unpack_str().ok_or_else(|| {
                 starlark::Error::new_other(anyhow::anyhow!("All enum variants must be strings"))
             })?;
             variant_strings.push(variant.to_string());
         }
         let enum_type = crate::lang::r#enum::EnumType::new(variant_strings)?;
-        Ok(eval.heap().alloc(enum_type))
+        Ok(eval.heap().alloc(enum_type).to_value())
     }
 }
 
@@ -102,7 +99,7 @@ fn builtin_methods(methods: &mut MethodsBuilder) {
 
     fn add_board_config<'v>(
         #[allow(unused_variables)] this: &Builtin,
-        name: String,
+        name: &str,
         default: bool,
         config: Value<'v>,
         eval: &mut Evaluator<'v, '_, '_>,
@@ -135,7 +132,7 @@ fn builtin_methods(methods: &mut MethodsBuilder) {
                     )));
                 }
             }
-            eval.add_property("default_board_config", heap.alloc(name.clone()));
+            eval.add_property("default_board_config", heap.alloc(name).to_value());
         }
 
         // Convert value to pretty-printed JSON and store config directly
@@ -153,14 +150,14 @@ fn builtin_methods(methods: &mut MethodsBuilder) {
             .and_then(|v| serde_json::to_string_pretty(&v))
             .map_err(|e| Error::new_other(anyhow::anyhow!("Failed to pretty-print JSON: {}", e)))?;
 
-        eval.add_property(&config_key, heap.alloc(&pretty_config_json));
+        eval.add_property(&config_key, heap.alloc(pretty_config_json).to_value());
         Ok(NoneType)
     }
 
     fn net_type<'v>(
         #[allow(unused_variables)] this: &Builtin,
-        name: String,
-        #[starlark(kwargs)] kwargs: SmallMap<String, Value<'v>>,
+        name: &str,
+        #[starlark(kwargs)] kwargs: StarlarkDict<'v>,
         eval: &mut Evaluator<'v, '_, '_>,
     ) -> starlark::Result<Value<'v>> {
         if name == "NotConnected" {
@@ -169,8 +166,16 @@ fn builtin_methods(methods: &mut MethodsBuilder) {
             )));
         }
 
-        let net_type = NetType::new(name, kwargs, eval)?;
-        Ok(eval.heap().alloc(net_type))
+        let mut kw_map = SmallMap::with_capacity(kwargs.len());
+        for (k, v) in kwargs.entries() {
+            let key = k.unpack_str().ok_or_else(|| {
+                Error::new_other(anyhow::anyhow!("net_type kwargs keys must be strings"))
+            })?;
+            kw_map.insert(key.to_owned(), v);
+        }
+
+        let net_type = NetType::new(name.to_owned(), kw_map, eval)?;
+        Ok(eval.heap().alloc(net_type).to_value())
     }
 
     fn not_connected<'v>(
@@ -190,14 +195,14 @@ fn builtin_methods(methods: &mut MethodsBuilder) {
     }
 
     #[allow(non_snake_case)]
-    fn Part(
+    fn Part<'v>(
         #[allow(unused_variables)] this: &Builtin,
-        #[starlark(require = named)] mpn: String,
-        #[starlark(require = named)] manufacturer: String,
-        #[starlark(require = named, default = UnpackList::default())] qualifications: UnpackList<
-            String,
+        #[starlark(require = named)] mpn: &str,
+        #[starlark(require = named)] manufacturer: &str,
+        #[starlark(require = named, default = Absent)] qualifications: Option<
+            StarlarkList<'v, StarlarkStr>,
         >,
-        #[starlark(require = named, default = NoneOr::None)] datasheet: NoneOr<String>,
+        #[starlark(require = named, default = NoneType)] datasheet: NoneOr<&str>,
     ) -> starlark::Result<PartValue> {
         if mpn.trim().is_empty() {
             return Err(Error::new_other(anyhow::anyhow!(
@@ -217,31 +222,38 @@ fn builtin_methods(methods: &mut MethodsBuilder) {
                         "`datasheet` must be a non-empty string when provided"
                     )));
                 }
-                Some(datasheet)
+                Some(datasheet.to_owned())
             }
         };
+        let qualifications = qualifications
+            .map(|list| {
+                list.try_items::<&str>()
+                    .map(|item| item.map(str::to_owned))
+                    .collect::<starlark::Result<Vec<_>>>()
+            })
+            .transpose()?
+            .unwrap_or_default();
         Ok(PartValue::new(
-            mpn,
-            manufacturer,
-            qualifications.items,
+            mpn.to_owned(),
+            manufacturer.to_owned(),
+            qualifications,
             datasheet,
         ))
     }
 
     fn add_electrical_check<'v>(
         #[allow(unused_variables)] this: &Builtin,
-        #[starlark(require = named)] name: String,
+        #[starlark(require = named)] name: &str,
         #[starlark(require = named)] check_fn: Value<'v>,
-        #[starlark(require = named, default = SmallMap::default())] inputs: SmallMap<
-            String,
-            Value<'v>,
+        #[starlark(require = named, default = Absent)] inputs: Option<
+            StarlarkDict<'v, StarlarkStr, Value<'v>>,
         >,
-        #[starlark(require = named, default = "error".to_string())] severity: String,
+        #[starlark(require = named, default = "error")] severity: &str,
         eval: &mut Evaluator<'v, '_, '_>,
     ) -> starlark::Result<NoneType> {
         use crate::lang::electrical_check::ElectricalCheck;
 
-        if !["error", "warning", "advice"].contains(&severity.as_str()) {
+        if !["error", "warning", "advice"].contains(&severity) {
             return Err(Error::new_other(anyhow::anyhow!(
                 "Invalid severity '{}'. Must be 'error', 'warning', or 'advice'",
                 severity
@@ -255,17 +267,25 @@ fn builtin_methods(methods: &mut MethodsBuilder) {
             .unwrap_or_default();
         let call_span = call_site.map(|cs| cs.resolve_span());
 
+        let mut inputs_map = SmallMap::new();
+        if let Some(inputs_dict) = inputs {
+            for entry in inputs_dict.try_items::<&str, Value<'v>>() {
+                let (k, v) = entry?;
+                inputs_map.insert(k.to_owned(), v);
+            }
+        }
+
         let check = ElectricalCheck {
-            name,
-            inputs,
+            name: name.to_owned(),
+            inputs: inputs_map,
             check_func: check_fn,
-            severity,
+            severity: severity.to_owned(),
             source_path,
             call_span,
         };
 
         if let Some(ctx) = eval.context_value() {
-            let check_value = eval.heap().alloc_complex(check);
+            let check_value = eval.heap().alloc(check).to_value();
             ctx.add_child(None, check_value, None); // No duplicate check for electrical checks
         }
 
@@ -274,12 +294,12 @@ fn builtin_methods(methods: &mut MethodsBuilder) {
 
     fn add_property<'v>(
         #[allow(unused_variables)] this: &Builtin,
-        #[starlark(require = pos)] name: String,
+        #[starlark(require = pos)] name: &str,
         #[starlark(require = pos)] value: Value<'v>,
         eval: &mut Evaluator<'v, '_, '_>,
     ) -> starlark::Result<NoneType> {
-        crate::lang::module::warn_legacy_module_dnp_add_property(eval, &name);
-        eval.add_property(&name, value);
+        crate::lang::module::warn_legacy_module_dnp_add_property(eval, name);
+        eval.add_property(name, value);
         Ok(NoneType)
     }
 
@@ -318,20 +338,20 @@ fn builtin_methods(methods: &mut MethodsBuilder) {
             let segments: Vec<Value> = path
                 .segments
                 .iter()
-                .map(|s| heap.alloc(s.as_str()))
+                .map(|s| heap.alloc(s.as_str()).to_value())
                 .collect();
 
-            Ok(heap.alloc(segments))
+            Ok(heap.alloc(AllocList(segments)).to_value())
         } else {
             // No module context, return empty list
-            Ok(heap.alloc(Vec::<Value>::new()))
+            Ok(heap.alloc(AllocList::EMPTY).to_value())
         }
     }
 
     fn set_sim_setup<'v>(
         #[allow(unused_variables)] this: &Builtin,
-        #[starlark(require = named, default = NoneOr::None)] file: NoneOr<String>,
-        #[starlark(require = named, default = NoneOr::None)] content: NoneOr<String>,
+        #[starlark(require = named, default = NoneType)] file: NoneOr<&str>,
+        #[starlark(require = named, default = NoneType)] content: NoneOr<&str>,
         eval: &mut Evaluator<'v, '_, '_>,
     ) -> starlark::Result<NoneType> {
         let setup_content = match (file, content) {
@@ -346,7 +366,7 @@ fn builtin_methods(methods: &mut MethodsBuilder) {
 
                 let resolved_path = eval_ctx
                     .get_config()
-                    .resolve_path(&path, std::path::Path::new(&current_file))
+                    .resolve_path(path, std::path::Path::new(&current_file))
                     .map_err(|e| {
                         Error::new_other(anyhow::anyhow!(
                             "Failed to resolve sim setup file path: {}",
@@ -365,7 +385,7 @@ fn builtin_methods(methods: &mut MethodsBuilder) {
                         ))
                     })?
             }
-            (NoneOr::None, NoneOr::Other(text)) => text,
+            (NoneOr::None, NoneOr::Other(text)) => text.to_owned(),
             (NoneOr::Other(_), NoneOr::Other(_)) => {
                 return Err(Error::new_other(anyhow::anyhow!(
                     "set_sim_setup() accepts either 'file' or 'content', not both"
@@ -389,7 +409,7 @@ fn builtin_methods(methods: &mut MethodsBuilder) {
         }
 
         let heap = eval.heap();
-        eval.add_property(attrs::SIM_SETUP, heap.alloc(setup_content));
+        eval.add_property(attrs::SIM_SETUP, heap.alloc(setup_content).to_value());
 
         // Store the call-site span so the LSP can point diagnostics at the
         // actual call in the user's source file, not inside a wrapper module.
@@ -410,7 +430,7 @@ fn builtin_methods(methods: &mut MethodsBuilder) {
                 "{}:{}:{}:{}",
                 span.begin.line, span.begin.column, span.end.line, span.end.column,
             );
-            eval.add_property(attrs::SIM_SETUP_SPAN, heap.alloc(span_str));
+            eval.add_property(attrs::SIM_SETUP_SPAN, heap.alloc(span_str).to_value());
         }
 
         Ok(NoneType)

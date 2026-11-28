@@ -157,7 +157,7 @@ fn execute_testbench_checks(
         let heap = module.heap();
         let testbench = eval_output.collect_testbenches_at(heap)[index];
         let ctx_value = pcb_zen_core::lang::context::ContextValue::from_context(&eval_ctx);
-        module.set_extra_value(heap.alloc_complex(ctx_value));
+        module.set_extra_value(heap.alloc(ctx_value).to_value());
         let mut eval_context_ref = EvalContextRef::for_checks(&eval_ctx, eval_output);
         let mut eval = Evaluator::new(&module);
         eval.extra_mut = Some(&mut eval_context_ref);
@@ -202,7 +202,7 @@ fn execute_testbench_checks(
                     deferred_case
                         .params
                         .iter()
-                        .map(|(k, v)| (heap.alloc_str(k).to_value(), v.to_value()))
+                        .map(|(k, v)| (heap.alloc(k.as_str()).to_value(), v.to_value()))
                         .collect::<Vec<_>>(),
                 ))
                 .to_value();
@@ -219,7 +219,7 @@ fn execute_testbench_checks(
                 total_checks += 1;
                 // module_value is ModuleValue (ModuleValueGen<FrozenValue>)
                 // Allocate it to heap to get a Value
-                let module_as_value = heap.alloc_complex((*module_value).clone());
+                let module_as_value = heap.alloc((*module_value).clone()).to_value();
                 let (passed, mut diagnostics) =
                     execute_deferred_check(&mut eval, check, module_as_value, inputs_dict, &ctx);
 

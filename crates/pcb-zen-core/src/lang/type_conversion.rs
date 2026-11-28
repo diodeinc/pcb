@@ -83,7 +83,11 @@ fn try_physical_conversion_for_unit<'v>(
         return Ok(None);
     }
 
-    try_function_conversion(eval.heap().alloc(PhysicalValueType::new(unit)), value, eval)
+    try_function_conversion(
+        eval.heap().alloc(PhysicalValueType::new(unit)).to_value(),
+        value,
+        eval,
+    )
 }
 
 /// Attempt to convert scalar/string inputs to a PhysicalValue via the
@@ -180,7 +184,7 @@ pub(crate) fn try_implicit_type_conversion<'v>(
         if is_float_type(typ)
             && let Ok(parsed) = raw.parse::<f64>()
         {
-            return Ok(Some(eval.heap().alloc(StarlarkFloat(parsed))));
+            return Ok(Some(eval.heap().alloc(StarlarkFloat(parsed)).to_value()));
         }
     }
 
@@ -199,7 +203,7 @@ pub(crate) fn try_implicit_type_conversion<'v>(
     if is_float_type(typ)
         && let Some(i) = value.unpack_i32()
     {
-        return Ok(Some(eval.heap().alloc(StarlarkFloat(i as f64))));
+        return Ok(Some(eval.heap().alloc(StarlarkFloat(i as f64)).to_value()));
     }
 
     Ok(None)

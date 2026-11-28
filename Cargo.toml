@@ -11,9 +11,9 @@ authors = ["Diode Computers, Inc. <founders@diode.computer>"]
 
 [workspace.dependencies]
 glam = { version = "0.34.1", default-features = false, features = ["std", "f64", "u32"] }
-starlark = { git = "https://github.com/diodeinc/starlark-rust", rev = "74312f2a947db8add89c004a3d43ff166bfb4f29", default-features = false }
-starlark_map = { git = "https://github.com/diodeinc/starlark-rust", rev = "74312f2a947db8add89c004a3d43ff166bfb4f29", default-features = false }
-starlark_syntax = { git = "https://github.com/diodeinc/starlark-rust", rev = "74312f2a947db8add89c004a3d43ff166bfb4f29", default-features = false }
+starlark = { git = "https://github.com/diodeinc/starlark-rust", rev = "4b2a2b21bc3b9e7f19c14965694c6681639274a9", default-features = false }
+starlark_map = { git = "https://github.com/diodeinc/starlark-rust", rev = "4b2a2b21bc3b9e7f19c14965694c6681639274a9", default-features = false }
+starlark_syntax = { git = "https://github.com/diodeinc/starlark-rust", rev = "4b2a2b21bc3b9e7f19c14965694c6681639274a9", default-features = false }
 # The starlark fork above names these buck2 crates by `branch = "main"`, and cargo treats a
 # different ref of the same git repo as a separate source. Rev-pinning them here would pull a
 # second copy of each crate, so the commit is pinned in Cargo.lock instead.

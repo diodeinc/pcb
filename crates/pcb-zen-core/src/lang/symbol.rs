@@ -1,6 +1,5 @@
 #![allow(clippy::needless_lifetimes)]
 
-use pcb_sch::physical::PcbTypeIdDomain;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 
@@ -8,12 +7,11 @@ use allocative::Allocative;
 use starlark::{
     any::ProvidesStaticType,
     collections::SmallMap,
-    eval::{Arguments, Evaluator, ParametersSpec, ParametersSpecParam},
+    eval::Evaluator,
     starlark_simple_value,
-    typing::{Ty, TyStarlarkValue, TyUser, TyUserParams},
     values::{
-        Freeze, Heap, NoSerialize, StarlarkValue, Trace, Value, list::ListRef, starlark_value,
-        tuple::TupleRef, typing::TypeInstanceId,
+        Absent, Freeze, Heap, NoSerialize, StarlarkValue, Trace, Value, list::StarlarkList,
+        starlark_value, tuple::StarlarkTuple,
     },
 };
 use std::sync::LazyLock;
@@ -118,30 +116,83 @@ starlark_simple_value!(SymbolValue);
 
 #[starlark_value(type = "Symbol")]
 impl<'v> StarlarkValue<'v> for SymbolValue {
-    fn get_attr(&self, attr: &str, heap: Heap<'v>) -> Option<Value<'v>> {
+    #[allow(non_snake_case)]
+    #[starlark(constructor)]
+    fn Symbol(
+        #[starlark(require = pos, default = Absent)] library_spec: Option<Value<'v>>,
+        #[starlark(default = Absent)] name: Option<&str>,
+        #[starlark(default = Absent)] definition: Option<Value<'v>>,
+        #[starlark(default = Absent)] library: Option<&str>,
+        eval: &mut Evaluator<'v, '_, '_>,
+    ) -> starlark::Result<SymbolValue> {
+        let name_val = name.map(str::to_owned);
+        let library_val = library.map(str::to_owned);
+
+        let (resolved_library, resolved_name) = if let Some(spec_val) = library_spec {
+            if let Some(spec_str) = spec_val.unpack_str() {
+                if let Some(colon_pos) = spec_str.rfind(':') {
+                    let lib_part = &spec_str[..colon_pos];
+                    let name_part = &spec_str[colon_pos + 1..];
+
+                    if library_val.is_some() || name_val.is_some() {
+                        return Err(starlark::Error::new_other(anyhow!(
+                            "Cannot specify both positional 'library:name' argument and named 'library' or 'name' parameters"
+                        )));
+                    }
+
+                    (Some(lib_part.to_owned()), Some(name_part.to_owned()))
+                } else {
+                    if library_val.is_some() {
+                        return Err(starlark::Error::new_other(anyhow!(
+                            "Cannot specify both positional library argument and named 'library' parameter"
+                        )));
+                    }
+                    (Some(spec_str.to_owned()), name_val)
+                }
+            } else {
+                return Err(starlark::Error::new_other(anyhow!(
+                    "Positional argument must be a string"
+                )));
+            }
+        } else {
+            (library_val, name_val)
+        };
+
+        SymbolValue::from_args(
+            resolved_name,
+            definition,
+            resolved_library,
+            eval.eval_context().unwrap(),
+        )
+    }
+
+    fn get_attr(this: &Self, attr: &str, heap: Heap<'v>) -> Option<Value<'v>> {
         match attr {
             "properties" => {
-                let props_vec: Vec<(Value<'v>, Value<'v>)> = self
+                let props_vec: Vec<(Value<'v>, Value<'v>)> = this
                     .properties
                     .iter()
                     .map(|(key, value)| {
                         (
-                            heap.alloc_str(key).to_value(),
-                            heap.alloc_str(value).to_value(),
+                            heap.alloc(key.as_str()).to_value(),
+                            heap.alloc(value.as_str()).to_value(),
                         )
                     })
                     .collect();
-                Some(heap.alloc(starlark::values::dict::AllocDict(props_vec)))
+                Some(
+                    heap.alloc(starlark::values::dict::AllocDict(props_vec))
+                        .to_value(),
+                )
             }
             _ => None,
         }
     }
 
-    fn has_attr(&self, attr: &str, _heap: Heap<'v>) -> bool {
+    fn has_attr(_this: &Self, attr: &str, _heap: Heap<'v>) -> bool {
         matches!(attr, "properties")
     }
 
-    fn dir_attr(&self) -> Vec<String> {
+    fn dir_attr(_this: &Self) -> Vec<String> {
         vec!["properties".to_string()]
     }
 }
@@ -184,7 +235,7 @@ impl<'v> SymbolValue {
                 .map(|s| s.to_owned())
                 .unwrap_or_else(|| "Symbol".to_owned());
 
-            let def_list = ListRef::from_value(def_val).ok_or_else(|| {
+            let def_list = StarlarkList::from_value(def_val).ok_or_else(|| {
                 starlark::Error::new_other(anyhow!(
                     "`definition` must be a list of (signal_name, [pad_names]) tuples"
                 ))
@@ -192,14 +243,14 @@ impl<'v> SymbolValue {
 
             let mut pad_to_signal: SmallMap<String, String> = SmallMap::new();
 
-            for item in def_list.iter() {
-                let tuple = TupleRef::from_value(item).ok_or_else(|| {
+            for item in def_list.values() {
+                let tuple = StarlarkTuple::from_value(item).ok_or_else(|| {
                     starlark::Error::new_other(anyhow!(
                         "Each definition item must be a tuple of (signal_name, [pad_names])"
                     ))
                 })?;
 
-                let tuple_items: Vec<_> = tuple.iter().collect();
+                let tuple_items: Vec<_> = tuple.values().collect();
                 if tuple_items.len() != 2 {
                     return Err(starlark::Error::new_other(anyhow!(
                         "Each definition tuple must have exactly 2 elements: (signal_name, [pad_names])"
@@ -210,7 +261,7 @@ impl<'v> SymbolValue {
                     starlark::Error::new_other(anyhow!("Signal name must be a string"))
                 })?;
 
-                let pad_list = ListRef::from_value(tuple_items[1]).ok_or_else(|| {
+                let pad_list = StarlarkList::from_value(tuple_items[1]).ok_or_else(|| {
                     starlark::Error::new_other(anyhow!("Pad names must be a list"))
                 })?;
 
@@ -222,7 +273,7 @@ impl<'v> SymbolValue {
                 }
 
                 // For each pad in the list, create a mapping from pad to signal
-                for pad_val in pad_list.iter() {
+                for pad_val in pad_list.values() {
                     let pad_name = pad_val.unpack_str().ok_or_else(|| {
                         starlark::Error::new_other(anyhow!("Pad name must be a string"))
                     })?;
@@ -511,117 +562,6 @@ pub(crate) fn symbol_pins_from_pad_map(pad_to_signal: &SmallMap<String, String>)
             alternates: Vec::new(),
         })
         .collect()
-}
-
-/// SymbolType is a factory for creating Symbol values
-#[derive(Debug, Trace, ProvidesStaticType, NoSerialize, Allocative, Freeze)]
-#[repr(C)]
-pub struct SymbolType;
-
-starlark_simple_value!(SymbolType);
-
-impl std::fmt::Display for SymbolType {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "<Symbol>")
-    }
-}
-
-impl SymbolType {
-    fn type_instance_id() -> TypeInstanceId {
-        TypeInstanceId::from_identity(PcbTypeIdDomain::Symbol, &())
-    }
-}
-
-#[starlark_value(type = "Symbol")]
-impl<'v> StarlarkValue<'v> for SymbolType {
-    fn invoke(
-        &self,
-        _me: Value<'v>,
-        args: &Arguments<'v, '_>,
-        eval: &mut Evaluator<'v, '_, '_>,
-    ) -> starlark::Result<Value<'v>> {
-        let param_spec = ParametersSpec::new_parts(
-            "Symbol",
-            // One optional positional parameter
-            [("library_spec", ParametersSpecParam::<Value<'_>>::Optional)],
-            // Named parameters
-            [
-                ("name", ParametersSpecParam::<Value<'_>>::Optional),
-                ("definition", ParametersSpecParam::<Value<'_>>::Optional),
-                ("library", ParametersSpecParam::<Value<'_>>::Optional),
-            ],
-            false,
-            std::iter::empty::<(&str, ParametersSpecParam<_>)>(),
-            false,
-        );
-
-        let (library_spec_val, name_val, definition_val, library_val) =
-            param_spec.parser(args, eval, |param_parser, _eval_ctx| {
-                let library_spec_val: Option<Value> = param_parser.next_opt()?;
-                let name_val: Option<String> = param_parser.next_opt()?;
-                let definition_val: Option<Value> = param_parser.next_opt()?;
-                let library_val: Option<String> = param_parser.next_opt()?;
-
-                Ok((library_spec_val, name_val, definition_val, library_val))
-            })?;
-
-        // Check if we have a positional argument in the format "library:name"
-        let (resolved_library, resolved_name) = if let Some(spec_val) = library_spec_val {
-            if let Some(spec_str) = spec_val.unpack_str() {
-                // Check if it contains a colon
-                if let Some(colon_pos) = spec_str.rfind(':') {
-                    // Split into library and name
-                    let lib_part = &spec_str[..colon_pos];
-                    let name_part = &spec_str[colon_pos + 1..];
-
-                    // Make sure we don't have conflicting parameters
-                    if library_val.is_some() || name_val.is_some() {
-                        return Err(starlark::Error::new_other(anyhow!(
-                            "Cannot specify both positional 'library:name' argument and named 'library' or 'name' parameters"
-                        )));
-                    }
-
-                    (Some(lib_part.to_owned()), Some(name_part.to_owned()))
-                } else {
-                    // No colon, treat as library path only
-                    if library_val.is_some() {
-                        return Err(starlark::Error::new_other(anyhow!(
-                            "Cannot specify both positional library argument and named 'library' parameter"
-                        )));
-                    }
-                    // Use positional as library, keep name from named parameter (if any)
-                    (Some(spec_str.to_owned()), name_val)
-                }
-            } else {
-                return Err(starlark::Error::new_other(anyhow!(
-                    "Positional argument must be a string"
-                )));
-            }
-        } else {
-            (library_val, name_val)
-        };
-
-        Ok(eval.heap().alloc_complex(SymbolValue::from_args(
-            resolved_name,
-            definition_val,
-            resolved_library,
-            eval.eval_context().unwrap(),
-        )?))
-    }
-
-    fn eval_type(&self) -> Option<Ty> {
-        let id = SymbolType::type_instance_id();
-        let ty = Ty::custom(
-            TyUser::new(
-                "Symbol".to_string(),
-                TyStarlarkValue::new::<SymbolValue>(),
-                id,
-                TyUserParams::default(),
-            )
-            .ok()?,
-        );
-        Some(ty)
-    }
 }
 
 /// Get a library from cache, or load it lazily if not cached.

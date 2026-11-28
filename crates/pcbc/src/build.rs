@@ -180,7 +180,7 @@ fn execute_electrical_check(
         let (check, defining_module) =
             eval_output.collect_electrical_checks_at(module.heap())[index];
         let mut eval = Evaluator::new(&module);
-        let module_value = module.heap().alloc_complex(defining_module.clone());
+        let module_value = module.heap().alloc(defining_module.clone()).to_value();
 
         pcb_zen_core::lang::electrical_check::execute_electrical_check(
             &mut eval,

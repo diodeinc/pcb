@@ -130,19 +130,13 @@ struct DeferredParam<'v> {
     declaration_site: DeclarationSite,
 }
 
-impl<'v> starlark::values::AllocValue<'v> for DeferredParam<'v> {
-    fn alloc_value(self, heap: Heap<'v>) -> Value<'v> {
-        heap.alloc_complex(self)
-    }
-}
-
 impl<'v> Freeze<'v> for DeferredParam<'v> {
-    type Frozen<'fv> = starlark::values::none::NoneType;
+    type Frozen<'fv> = DeferredParam<'fv>;
 
     fn freeze<'fv>(
         self,
         _freezer: &starlark::values::Freezer<'v, 'fv>,
-    ) -> starlark::values::FreezeResult<starlark::values::none::NoneType> {
+    ) -> starlark::values::FreezeResult<DeferredParam<'fv>> {
         Err(starlark::values::FreezeError::new(
             self.kind.unresolved_error().to_owned(),
         ))
@@ -155,22 +149,22 @@ impl<'v> Display for DeferredParam<'v> {
     }
 }
 
-#[starlark_value(type = "DeferredParameter")]
+#[starlark_value(type = "DeferredParameter", alloc = complex)]
 impl<'v> StarlarkValue<'v> for DeferredParam<'v> {
     fn export_as(
-        &self,
+        this: &Self,
         variable_name: &str,
         eval: &mut Evaluator<'v, '_, '_>,
     ) -> starlark::Result<()> {
-        let value = self
+        let value = this
             .kind
-            .resolve(variable_name, &self.args, &self.declaration_site, eval)?;
+            .resolve(variable_name, &this.args, &this.declaration_site, eval)?;
         eval.set_export_as_replacement(value)?;
         Ok(())
     }
 
-    fn collect_repr(&self, collector: &mut String) {
-        collector.push_str(self.kind.repr());
+    fn collect_repr(this: &Self, collector: &mut String) {
+        collector.push_str(this.kind.repr());
     }
 }
 
@@ -533,11 +527,14 @@ fn invoke_decl<'v>(
         return kind.resolve(&name, &args, &declaration_site, eval);
     }
 
-    Ok(eval.heap().alloc(DeferredParam {
-        kind,
-        args,
-        declaration_site,
-    }))
+    Ok(eval
+        .heap()
+        .alloc(DeferredParam {
+            kind,
+            args,
+            declaration_site,
+        })
+        .to_value())
 }
 
 pub(crate) fn invoke_config<'v>(
@@ -584,7 +581,7 @@ impl<'v> IoTemplateValue<'v> {
         match self {
             Self::Net(value) => {
                 let net_type = NetType::new(net_template_type_name(value)?, SmallMap::new(), eval)?;
-                Ok(eval.heap().alloc(net_type))
+                Ok(eval.heap().alloc(net_type).to_value())
             }
             Self::Interface(value) => interface_template_factory(value),
         }

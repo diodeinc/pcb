@@ -14,8 +14,8 @@ use starlark::{
     eval::Evaluator,
     starlark_complex_value, starlark_module,
     values::{
-        Freeze, NoSerialize, StarlarkValue, Trace, Value, dict::DictRef, list::ListRef,
-        starlark_value, tuple::TupleRef,
+        Absent, Freeze, NoSerialize, StarlarkValue, Trace, Value, dict::StarlarkDict,
+        list::StarlarkList, starlark_value, tuple::StarlarkTuple,
     },
 };
 
@@ -115,10 +115,10 @@ impl<'v> TestBenchValue<'v> {
 
 /// Collect parent values from a test case dictionary
 fn collect_parent_values<'v>(
-    case_dict: &DictRef<'v>,
+    case_dict: StarlarkDict<'v>,
 ) -> anyhow::Result<SmallMap<String, Value<'v>>> {
     let mut values = SmallMap::new();
-    for (key, value) in case_dict.iter() {
+    for (key, value) in case_dict.entries() {
         let key_str = key
             .unpack_str()
             .ok_or_else(|| anyhow::anyhow!("test case keys must be strings, got: {}", key))?;
@@ -131,10 +131,10 @@ fn collect_parent_values<'v>(
 pub fn test_bench_globals(builder: &mut GlobalsBuilder) {
     /// Create a TestBench that evaluates modules with explicit test cases
     fn TestBench<'v>(
-        #[starlark(require = named)] name: String,
+        #[starlark(require = named)] name: &str,
         #[starlark(require = named)] module: Value<'v>,
         #[starlark(require = named)] test_cases: Value<'v>,
-        #[starlark(require = named)] checks: Option<Value<'v>>,
+        #[starlark(require = named, default = Absent)] checks: Option<Value<'v>>,
         eval: &mut Evaluator<'v, '_, '_>,
     ) -> anyhow::Result<Value<'v>> {
         // Extract ModuleLoader from the module parameter
@@ -143,7 +143,7 @@ pub fn test_bench_globals(builder: &mut GlobalsBuilder) {
         })?;
 
         // Parse test_cases dict
-        let test_cases_dict = DictRef::from_value(test_cases)
+        let test_cases_dict = StarlarkDict::from_value(test_cases)
             .ok_or_else(|| anyhow::anyhow!("'test_cases' parameter must be a dictionary"))?;
 
         if test_cases_dict.is_empty() {
@@ -162,7 +162,7 @@ pub fn test_bench_globals(builder: &mut GlobalsBuilder) {
         // Parse checks list once if provided
         let checks_list =
             if let Some(checks_value) = checks {
-                Some(ListRef::from_value(checks_value).ok_or_else(|| {
+                Some(StarlarkList::from_value(checks_value).ok_or_else(|| {
                     anyhow::anyhow!("'checks' parameter must be a list of functions")
                 })?)
             } else {
@@ -178,17 +178,17 @@ pub fn test_bench_globals(builder: &mut GlobalsBuilder) {
         let combined_modifiers = ctx.module().collect_all_component_modifiers_as_values();
 
         // Process each test case - enqueue for freeze-time evaluation
-        for (case_name, case_value) in test_cases_dict.iter() {
+        for (case_name, case_value) in test_cases_dict.entries() {
             let case_name_str = case_name.unpack_str().ok_or_else(|| {
                 anyhow::anyhow!("test case names must be strings, got: {}", case_name)
             })?;
 
-            let case_dict = DictRef::from_value(case_value).ok_or_else(|| {
+            let case_dict = StarlarkDict::from_value(case_value).ok_or_else(|| {
                 anyhow::anyhow!("test case '{}' must be a dictionary", case_name_str)
             })?;
 
             // Collect input values from case parameters
-            let inputs = collect_parent_values(&case_dict)?;
+            let inputs = collect_parent_values(case_dict)?;
 
             // Compute the final module name
             let case_final_name = format!("{}__{}", name, case_name_str);
@@ -208,7 +208,7 @@ pub fn test_bench_globals(builder: &mut GlobalsBuilder) {
 
             // Store case parameters for later
             let mut params = SmallMap::new();
-            for (key, value) in case_dict.iter() {
+            for (key, value) in case_dict.entries() {
                 if let Some(key_str) = key.unpack_str() {
                     params.insert(key_str.to_string(), value);
                 }
@@ -217,17 +217,17 @@ pub fn test_bench_globals(builder: &mut GlobalsBuilder) {
             // Store check functions for later execution
             let deferred_checks = if let Some(checks_list_ref) = checks_list {
                 checks_list_ref
-                    .iter()
+                    .values()
                     .map(|check_item| {
                         // Check if it's a tuple (name, function) or just a function
                         let (check_func, custom_name) =
-                            if let Some(tuple_ref) = TupleRef::from_value(check_item) {
+                            if let Some(tuple_ref) = StarlarkTuple::from_value(check_item) {
                                 if tuple_ref.len() != 2 {
                                     anyhow::bail!(
                                         "Check tuple must have exactly 2 elements: (name, function)"
                                     );
                                 }
-                                let tuple_items: Vec<_> = tuple_ref.iter().collect();
+                                let tuple_items: Vec<_> = tuple_ref.values().collect();
                                 let name = tuple_items[0].unpack_str().ok_or_else(|| {
                                     anyhow::anyhow!(
                                         "First element of check tuple must be a string name"
@@ -264,7 +264,7 @@ pub fn test_bench_globals(builder: &mut GlobalsBuilder) {
 
         // Create and return the TestBenchValue with deferred checks
         let testbench = TestBenchValue {
-            name,
+            name: name.to_owned(),
             module_loader: loader.clone(),
             deferred_cases,
             source_path,
@@ -273,7 +273,7 @@ pub fn test_bench_globals(builder: &mut GlobalsBuilder) {
         };
 
         // Allocate testbench first
-        let testbench_value = eval.heap().alloc(testbench);
+        let testbench_value = eval.heap().alloc(testbench).to_value();
 
         // Add to current module context if available
         if let Some(ctx) = eval.context_value() {
