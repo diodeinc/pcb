@@ -1357,5 +1357,63 @@ mod tests {
             field.achieved_rms <= field.initial_rms + 1e-6,
             "stack moment worsened: {field:?}"
         );
+
+        // When the promoted crossover layer is lighter than a mirror saturated
+        // at `max_void_radius_mm`, stack settlement widens the promoted web to
+        // actually reduce the emitted copper imbalance.
+        let run_mirrored = |stack_flex_density: f64| {
+            crate::geom::copper_balance::generate_spatial_dense_copper_balance(
+                DenseCopperBalanceProfile {
+                    stack_flex_density,
+                    ..DenseCopperBalanceProfile::V1
+                },
+                crate::geom::copper_balance::SpatialCopperBalanceRequest {
+                    panel_region: &panel,
+                    lattice_origin: Point::ZERO,
+                    layers: &[
+                        crate::geom::copper_balance::SpatialCopperBalanceLayerRequest {
+                            density_domain: &panel,
+                            existing_copper: &empty,
+                            safe_region: &panel,
+                            target_density: 0.146,
+                            stack_weight_mm2: 1.0,
+                        },
+                        crate::geom::copper_balance::SpatialCopperBalanceLayerRequest {
+                            density_domain: &panel,
+                            existing_copper: &empty,
+                            safe_region: &panel,
+                            target_density: 0.25,
+                            stack_weight_mm2: -1.0,
+                        },
+                    ],
+                },
+            )
+            .unwrap()
+        };
+        let pinned = run_mirrored(0.0);
+        let flexed = run_mirrored(DenseCopperBalanceProfile::V1.stack_flex_density);
+        assert!(
+            flexed.layers[0].solution.generated_area_mm2
+                > pinned.layers[0].solution.generated_area_mm2 + 10.0,
+            "promoted web did not widen under stack flex: pinned={:.2}, flexed={:.2}",
+            pinned.layers[0].solution.generated_area_mm2,
+            flexed.layers[0].solution.generated_area_mm2
+        );
+        let pinned_imbalance = (pinned.layers[0].solution.generated_area_mm2
+            - pinned.layers[1].solution.generated_area_mm2)
+            .abs();
+        let flexed_imbalance = (flexed.layers[0].solution.generated_area_mm2
+            - flexed.layers[1].solution.generated_area_mm2)
+            .abs();
+        assert!(
+            flexed_imbalance < pinned_imbalance * 0.5,
+            "stack imbalance did not shrink: pinned={pinned_imbalance:.2}, flexed={flexed_imbalance:.2}"
+        );
+        let flexed_field = flexed.moment_field.expect("weighed stackup");
+        assert!(
+            flexed_field.achieved_rms < flexed_field.initial_rms,
+            "moment_field did not reflect widened promoted web: {flexed_field:?}"
+        );
+        assert_web_clean(&panel, &flexed.layers[0]);
     }
 }

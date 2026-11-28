@@ -585,18 +585,22 @@ fn finalize_perforated_web(
     smooth_squared_radii: &[f64],
     layer: SpatialCopperBalanceLayerRequest<'_>,
     profile: DenseCopperBalanceProfile,
+    area_shift_mm2: f64,
 ) -> Result<DenseCopperBalanceResult, AccuracyError> {
     let DenseCopperBalanceMode::Perforated { void_radius_mm } = result.solution.mode else {
         return Ok(result);
     };
-    if !result.web.is_empty() {
+    let promoted_web = !result.web.is_empty();
+    if promoted_web && area_shift_mm2 <= 1e-6 {
         return Ok(result);
     }
     let desired = result.solution.desired_added_area_mm2;
     // Preserve stack-moment area shifts on weighed layers; on unweighed layers
     // saturated at the legacy rounded-void floor, let the thinner stroked web
     // calibrate all the way down to `desired`.
-    let target_area_mm2 = if layer.stack_weight_mm2 == 0.0 {
+    let target_area_mm2 = if promoted_web {
+        (result.solution.generated_area_mm2 + area_shift_mm2).min(result.usable.area())
+    } else if layer.stack_weight_mm2 == 0.0 {
         result.solution.generated_area_mm2.min(desired.max(0.0))
     } else {
         result.solution.generated_area_mm2
@@ -730,7 +734,7 @@ pub fn generate_spatial_dense_copper_balance(
     if region_active_sites.iter().all(Vec::is_empty) {
         let layers = map_layers(
             uniform.into_iter().zip(request.layers.iter()),
-            |(result, layer)| finalize_perforated_web(result, &[], &[], *layer, profile),
+            |(result, layer)| finalize_perforated_web(result, &[], &[], *layer, profile, 0.0),
         )
         .into_iter()
         .collect::<Result<Vec<_>, _>>()?;
@@ -795,21 +799,9 @@ pub fn generate_spatial_dense_copper_balance(
     // no moment to report and none to flatten, and saying it is zero would
     // claim we looked.
     let stack_is_weighed = normalized_stack_weights.iter().any(|weight| *weight != 0.0);
-    // Where each layer's copper area lands is settled once, here, rather than
-    // argued against the local term on every iteration: the moment is linear
-    // in the copper each layer carries, so what flattens it is a closed form,
-    // and the iteration below is left to the local density term alone.
-    //
-    // How far each layer may step, as copper area over the lattice it actually
-    // controls, so the bound is the density step between a board and the frame
-    // beside it and a layer that took no lattice brings nothing to the trade.
-    let slack_areas_mm2 = squared_radii
-        .iter()
-        .map(|radii| profile.stack_flex_density * radii.len() as f64 * cell_area_mm2)
-        .collect::<Vec<_>>();
-    // The moment the uniform selection carries, and the most those steps can
-    // move it. All-zero weights leave both at zero and every layer on its own
-    // density.
+    // The moment the uniform selection carries, and the most each layer's step
+    // can move it. All-zero weights leave both at zero and every layer on its
+    // own density.
     let moment_mm4 = uniform
         .iter()
         .zip(request.layers)
@@ -818,6 +810,50 @@ pub fn generate_spatial_dense_copper_balance(
             weight * (layer.existing_copper.area() + result.solution.generated_area_mm2)
         })
         .sum::<f64>();
+    // Where each layer's copper area lands is settled once, here, rather than
+    // argued against the local term on every iteration: the moment is linear
+    // in the copper each layer carries, so what flattens it is a closed form,
+    // and the iteration below is left to the local density term alone.
+    //
+    // How far each layer may step, as copper area over the lattice it actually
+    // controls, so the bound is the density step between a board and the frame
+    // beside it and a layer that took no lattice brings nothing to the trade.
+    // A promoted minimum-width web can only widen (when `moment_mm4 * weight < 0`),
+    // never thin below `min_copper_web_mm`.
+    let (lower_r2, upper_r2) = profile.void_area_bounds();
+    let slack_areas_mm2 = uniform
+        .iter()
+        .enumerate()
+        .map(|(layer_index, result)| {
+            let active_count = region_active_sites[layer_regions[layer_index]].len();
+            let flex_area = profile.stack_flex_density * active_count as f64 * cell_area_mm2;
+            let weight = normalized_stack_weights[layer_index];
+            let wants_more_copper = moment_mm4 * weight < 0.0;
+            let wants_less_copper = moment_mm4 * weight > 0.0;
+            if !squared_radii[layer_index].is_empty() {
+                let headroom = if wants_more_copper {
+                    ROUNDED_HEXAGON_AREA_FACTOR
+                        * squared_radii[layer_index]
+                            .iter()
+                            .map(|&r2| (r2 - lower_r2).max(0.0))
+                            .sum::<f64>()
+                } else if wants_less_copper {
+                    ROUNDED_HEXAGON_AREA_FACTOR
+                        * squared_radii[layer_index]
+                            .iter()
+                            .map(|&r2| (upper_r2 - r2).max(0.0))
+                            .sum::<f64>()
+                } else {
+                    flex_area
+                };
+                flex_area.min(headroom)
+            } else if !result.web.is_empty() && active_count > 0 && wants_more_copper {
+                flex_area.min((result.usable.area() - result.solution.generated_area_mm2).max(0.0))
+            } else {
+                0.0
+            }
+        })
+        .collect::<Vec<_>>();
     // Shares are weighted by lever arm against the longest one, so the layer
     // with the most leverage spends its whole step and the others spend in
     // proportion. A layer the stackup gave no weight does not move, and none
@@ -832,14 +868,16 @@ pub fn generate_spatial_dense_copper_balance(
         .map(|(weight, slack)| weight * share(*weight) * slack)
         .sum::<f64>();
     let spend = (-moment_mm4).clamp(-reach_mm4, reach_mm4) / reach_mm4.max(f64::MIN_POSITIVE);
+    let area_shifts_mm2 = normalized_stack_weights
+        .iter()
+        .zip(&slack_areas_mm2)
+        .map(|(weight, slack)| spend * share(*weight) * slack)
+        .collect::<Vec<_>>();
     // Void area moves opposite to copper area.
     let pinned_sums = squared_radii
         .iter()
-        .zip(&normalized_stack_weights)
-        .zip(&slack_areas_mm2)
-        .map(|((radii, weight), slack)| {
-            radii.iter().sum::<f64>() - spend * share(*weight) * slack / ROUNDED_HEXAGON_AREA_FACTOR
-        })
+        .zip(&area_shifts_mm2)
+        .map(|(radii, shift)| radii.iter().sum::<f64>() - shift / ROUNDED_HEXAGON_AREA_FACTOR)
         .collect::<Vec<_>>();
     let void_fraction_per_radius_squared = ROUNDED_HEXAGON_AREA_FACTOR / cell_area_mm2;
     // Nothing couples the layers once the settlement has pinned their areas,
@@ -890,8 +928,16 @@ pub fn generate_spatial_dense_copper_balance(
             );
             let full_sites = &region_lattices[layer_regions[layer_index]].full_sites;
             let baseline_mode = baseline.solution.mode;
+            let area_shift_mm2 = area_shifts_mm2[layer_index];
             let result = if squared_radii.is_empty() {
-                finalize_perforated_web(baseline, &[], &[], request.layers[layer_index], profile)?
+                finalize_perforated_web(
+                    baseline,
+                    &[],
+                    &[],
+                    request.layers[layer_index],
+                    profile,
+                    area_shift_mm2,
+                )?
             } else {
                 let result = spatial_result_from_squared_radii(
                     full_sites,
@@ -906,6 +952,7 @@ pub fn generate_spatial_dense_copper_balance(
                     &squared_radii,
                     request.layers[layer_index],
                     profile,
+                    0.0,
                 )?
             };
             let achieved_density = if matches!(
@@ -916,6 +963,15 @@ pub fn generate_spatial_dense_copper_balance(
                 )
             ) {
                 scales[0].smooth(&fixed_density[layer_index])
+            } else if uniform_web_fill.is_some() && area_shift_mm2 > 1e-6 {
+                let fill = result.solution.generated_area_mm2
+                    / result.usable.area().max(f64::MIN_POSITIVE);
+                let coverage: Vec<f64> = fixed_density[layer_index]
+                    .iter()
+                    .zip(available)
+                    .map(|(fixed, avail)| fixed + fill * avail)
+                    .collect();
+                scales[0].smooth(&coverage)
             } else {
                 let emitted = result
                     .full_voids
