@@ -1518,10 +1518,10 @@ def _inherit_uuids(old_fp: Any, new_fp: Any) -> None:
     KiCad keys DRC exclusions by item UUID. The replacement shares the old
     placement, so pads with the same number pair up closest first: a pad that
     stayed put keeps its UUID however its neighbours moved or the library orders
-    them. Pads at the same distance, such as concentric lands, pair by copper
-    outline and then KiCad's pad similarity (drill, layers, ...) rather than by
-    list order, which differs between a saved board and a library file. Pads the
-    old footprint lacks keep their fresh UUIDs.
+    them. Pads at the same distance, such as concentric lands, pair by pad type
+    and copper layers, then copper outline, then KiCad's pad similarity, rather
+    than by list order, which differs between a saved board and a library file.
+    Pads the old footprint lacks keep their fresh UUIDs.
 
     pcbnew has no UUID setter, so this writes through the exposed member. That
     is only sound while new_fp is detached: the board indexes its items by UUID.
@@ -1536,10 +1536,16 @@ def _inherit_uuids(old_fp: Any, new_fp: Any) -> None:
         center = box.GetCenter()
         return (box.GetWidth(), box.GetHeight(), center.x, center.y, poly.Area() ** 0.5)
 
-    def pads_by_number(fp: Any) -> dict[str, list[tuple[Any, tuple, Any]]]:
+    def kind(pad: Any) -> tuple:
+        # SMD/PTH/NPTH and copper layers: a resized land is still the same land.
+        return (pad.GetAttribute(), tuple(pad.GetLayerSet().CuStack()))
+
+    def pads_by_number(fp: Any) -> dict[str, list[tuple[Any, tuple, tuple, Any]]]:
         pads = defaultdict(list)
         for pad in fp.Pads():
-            pads[pad.GetNumber()].append((pad.GetPosition(), outline(pad), pad))
+            pads[pad.GetNumber()].append(
+                (pad.GetPosition(), kind(pad), outline(pad), pad)
+            )
         return pads
 
     old_pads = pads_by_number(old_fp)
@@ -1549,17 +1555,18 @@ def _inherit_uuids(old_fp: Any, new_fp: Any) -> None:
         closest_first = sorted(
             (
                 (op.x - np.x) ** 2 + (op.y - np.y) ** 2,
+                o_kind != n_kind,
                 sum(abs(a - b) for a, b in zip(o_outline, n_outline)),
                 -old.Similarity(new),
                 i,
                 j,
             )
-            for i, (op, o_outline, old) in olds.items()
-            for j, (np, n_outline, new) in news.items()
+            for i, (op, o_kind, o_outline, old) in olds.items()
+            for j, (np, n_kind, n_outline, new) in news.items()
         )
         for *_, i, j in closest_first:
             if i in olds and j in news:
-                news.pop(j)[2].m_Uuid.Clone(olds.pop(i)[2].m_Uuid)
+                news.pop(j)[-1].m_Uuid.Clone(olds.pop(i)[-1].m_Uuid)
 
 
 def _resolve_field_value(
