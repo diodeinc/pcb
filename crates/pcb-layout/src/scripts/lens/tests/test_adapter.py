@@ -549,6 +549,15 @@ def fake_pad(uuid: str, number: str, x: int, y: int) -> SimpleNamespace:
         m_Uuid=FakeUuid(uuid),
         GetNumber=lambda: number,
         GetPosition=lambda: SimpleNamespace(x=x, y=y),
+        Similarity=lambda other: 1.0,
+        GetCustomShapeAsPolygon=lambda: SimpleNamespace(
+            BBox=lambda: SimpleNamespace(
+                GetWidth=lambda: 1,
+                GetHeight=lambda: 1,
+                GetCenter=lambda: SimpleNamespace(x=0, y=0),
+            ),
+            Area=lambda: 1,
+        ),
     )
 
 
@@ -587,6 +596,82 @@ def test_replacement_inherits_footprint_and_pad_uuids():
         "old-1",
         "new-added",
     ]
+
+
+def footprint(*pads: str) -> str:
+    body = "".join(f"  {pad}\n" for pad in pads)
+    return f'(footprint "TP" (version 20240108) (generator "pcbnew") (layer "F.Cu")\n{body})\n'
+
+
+def custom_pad(half_width: str, half_height: str) -> str:
+    return (
+        '(pad "1" smd custom (at 0 0) (size 0.5 0.5) (layers "F.Cu" "F.Mask")'
+        " (options (clearance outline) (anchor circle)) (primitives (gr_poly (pts"
+        f" (xy -{half_width} -{half_height}) (xy {half_width} -{half_height})"
+        f" (xy {half_width} {half_height}) (xy -{half_width} {half_height}))"
+        " (width 0) (fill yes))))"
+    )
+
+
+ROUND_PAD = (
+    '(pad "1" smd circle (at 0 0) (size 1 1) (layers "F.Cu" "F.Paste" "F.Mask"))'
+)
+OFFSET_PTH = (
+    '(pad "1" thru_hole circle (at 2 0) (size 1.5 1.5) (drill 0.8)'
+    ' (layers "*.Cu" "*.Mask"))'
+)
+
+
+@pytest.mark.parametrize(
+    ("pads", "reverse_library"),
+    [
+        # Unchanged library: KiCad saves the custom pad before the round one.
+        ((ROUND_PAD, custom_pad("1", "1"), OFFSET_PTH), False),
+        # Custom pads that differ only in outline, reordered by a library update.
+        ((custom_pad("1", "1"), custom_pad("2", "0.5"), OFFSET_PTH), True),
+    ],
+    ids=["save-reorders", "outline-only"],
+)
+def test_replacement_keeps_concentric_pad_uuids_through_save_reload(
+    tmp_path, pads, reverse_library
+):
+    """Same-number pads at one center keep their UUIDs whatever order they are listed in."""
+    pcbnew = pytest.importorskip("pcbnew")
+
+    def load(pads, name):
+        library = tmp_path / f"{name}.pretty"
+        library.mkdir()
+        (library / "TP.kicad_mod").write_text(footprint(*pads))
+        fp = pcbnew.FootprintLoad(str(library), "TP")
+        fp.SetPosition(pcbnew.VECTOR2I(31_000_000, 47_000_000))
+        fp.SetOrientationDegrees(37.0)
+        return fp
+
+    def plate(pad):
+        outline = pad.GetCustomShapeAsPolygon().BBox()
+        return (
+            pad.GetShape(),
+            tuple(pad.GetFPRelativePosition()),
+            (outline.GetWidth(), outline.GetHeight()),
+        )
+
+    board = pcbnew.BOARD()
+    placed = load(pads, "Board")
+    pad_by_plate = dict(zip(map(plate, placed.Pads()), pads))
+    board.Add(placed)
+    board_file = tmp_path / "test.kicad_pcb"
+    pcbnew.SaveBoard(str(board_file), board)
+    old = next(iter(pcbnew.LoadBoard(str(board_file)).GetFootprints()))
+    old_plates = {pad.m_Uuid.AsString(): plate(pad) for pad in old.Pads()}
+    assert len(pad_by_plate) == len(old_plates) == 3
+
+    # KiCad orders equal-looking pads by random UUID on save; list them in the
+    # opposite order so pairing by order would always swap them.
+    saved = [pad_by_plate[p] for p in old_plates.values()]
+    new = load(saved[::-1] if reverse_library else pads, "Library")
+    kicad_adapter._inherit_uuids(old, new)
+
+    assert {pad.m_Uuid.AsString(): plate(pad) for pad in new.Pads()} == old_plates
 
 
 @pytest.mark.parametrize(

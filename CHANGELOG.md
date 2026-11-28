@@ -22,6 +22,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - `pcb apply schematic` puts a new part on the page that holds most of its module's existing parts, instead of the root page, and no longer fails when a module's parts span several pages.
 - `pcb apply schematic` no longer stacks a global label on nets its sheet pins already connect, which raised `same_local_global_label` and `multiple_net_names` ERC warnings. A net gets a global label only where local and hierarchical labels cannot reach it.
 - `pcb apply schematic` reports `unchanged` when every file it would write is byte-identical.
+- `pcb layout` keeps each pad's UUID on its own copper when a footprint update replaces same-number pads that share a center, such as a custom land and a round test point, instead of swapping them by list order.
 
 ## [0.4.105] - 2026-11-23
 
