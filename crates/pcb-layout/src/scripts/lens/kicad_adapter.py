@@ -1536,9 +1536,14 @@ def _inherit_uuids(old_fp: Any, new_fp: Any) -> None:
         center = box.GetCenter()
         return (box.GetWidth(), box.GetHeight(), center.x, center.y, poly.Area() ** 0.5)
 
+    # KiCad saves a pad on every board copper layer as *.Cu and reads that back
+    # as all 32, so only the board's own copper layers tell pads apart.
+    board_copper = set(old_fp.GetBoard().GetEnabledLayers().CuStack())
+
     def kind(pad: Any) -> tuple:
         # SMD/PTH/NPTH and copper layers: a resized land is still the same land.
-        return (pad.GetAttribute(), tuple(pad.GetLayerSet().CuStack()))
+        copper = board_copper.intersection(pad.GetLayerSet().CuStack())
+        return (pad.GetAttribute(), tuple(sorted(copper)))
 
     def pads_by_number(fp: Any) -> dict[str, list[tuple[Any, tuple, tuple, Any]]]:
         pads = defaultdict(list)

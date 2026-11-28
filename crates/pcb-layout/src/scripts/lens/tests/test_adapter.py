@@ -565,7 +565,11 @@ def fake_pad(uuid: str, number: str, x: int, y: int) -> SimpleNamespace:
 
 
 def fake_footprint(uuid: str, pads: list[SimpleNamespace]) -> SimpleNamespace:
-    return SimpleNamespace(m_Uuid=FakeUuid(uuid), Pads=lambda: pads)
+    layers = SimpleNamespace(CuStack=lambda: [0])
+    board = SimpleNamespace(GetEnabledLayers=lambda: layers)
+    return SimpleNamespace(
+        m_Uuid=FakeUuid(uuid), Pads=lambda: pads, GetBoard=lambda: board
+    )
 
 
 def test_replacement_inherits_footprint_and_pad_uuids():
@@ -715,6 +719,30 @@ def test_replacement_keeps_land_uuid_when_concentric_drilled_pad_is_added(tmp_pa
         pad for pad in new.Pads() if pad.GetPosition() == new.GetPosition()
     )
     assert concentric.m_Uuid.AsString() not in {p.m_Uuid.AsString() for p in old.Pads()}
+
+
+def test_replacement_keeps_through_hole_uuid_when_wildcard_pad_is_added(tmp_path):
+    """A pad on F.Cu and B.Cu reloads as *.Cu yet still matches its library twin."""
+    pcbnew = pytest.importorskip("pcbnew")
+    outer_pth = (
+        '(pad "1" thru_hole circle (at 0 0) (size 1.5 1.5) (drill 0.8)'
+        ' (layers "F.Cu" "B.Cu" "*.Mask"))'
+    )
+    old = save_reload(
+        pcbnew, tmp_path, load_footprint(pcbnew, tmp_path, "Board", (outer_pth,))
+    )
+    (pth_uuid,) = (pad.m_Uuid.AsString() for pad in old.Pads())
+    wildcard_pth = (
+        '(pad "1" thru_hole circle (at 0 0) (size 2.5 2.5) (drill 0.8)'
+        ' (layers "*.Cu" "*.Mask"))'
+    )
+    new = load_footprint(pcbnew, tmp_path, "Library", (wildcard_pth, outer_pth))
+
+    kicad_adapter._inherit_uuids(old, new)
+
+    by_size = {pad.GetSize().x: pad.m_Uuid.AsString() for pad in new.Pads()}
+    assert by_size[1_500_000] == pth_uuid
+    assert by_size[2_500_000] != pth_uuid
 
 
 @pytest.mark.parametrize(
