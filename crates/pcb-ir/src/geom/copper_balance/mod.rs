@@ -10,8 +10,10 @@ use rayon::prelude::*;
 
 mod lattice;
 mod spatial;
+mod web;
 
 pub use lattice::{ROUNDED_HEXAGON_CORNER_RADIUS_RATIO, rounded_hexagonal_void};
+pub use web::HoneycombPolyline;
 
 use lattice::{LatticeCandidates, ROUNDED_HEXAGON_AREA_FACTOR, SiteTable};
 use spatial::{
@@ -365,6 +367,9 @@ pub struct DenseCopperBalanceResult {
     /// The one emitted form of the edge voids, computed once at solve time
     /// so density accounting and emission read the same geometry.
     pub edge_void_emission: EdgeVoidEmission,
+    /// Sliver-free dark-only honeycomb web strokes emitted for perforated
+    /// layers. Empty for `None` and `Solid` modes.
+    pub web: Vec<HoneycombPolyline>,
 }
 
 /// Edge voids resolved to their emitted form: voids whose circumscribed
@@ -535,7 +540,39 @@ fn uniform_copper_balance(
         full_voids,
         edge_voids,
         edge_void_emission,
+        web: Vec::new(),
     })
+}
+
+/// Populate `result.web` with the sliver-free all-lines honeycomb strokes for a
+/// perforated layer and update `solution` area/density accounting to match the
+/// emitted strokes.
+fn finalize_perforated_web(
+    mut result: DenseCopperBalanceResult,
+    sites: &[DenseCopperLatticeSite],
+    smooth_squared_radii: &[f64],
+    layer: SpatialCopperBalanceLayerRequest<'_>,
+    profile: DenseCopperBalanceProfile,
+) -> Result<DenseCopperBalanceResult, AccuracyError> {
+    let DenseCopperBalanceMode::Perforated { void_radius_mm } = result.solution.mode else {
+        return Ok(result);
+    };
+    let built = web::build_honeycomb_web(
+        &result.usable,
+        result.lattice,
+        sites,
+        smooth_squared_radii,
+        void_radius_mm,
+        result.solution.generated_area_mm2,
+        profile,
+    )?;
+    let achieved_density =
+        (layer.existing_copper.area() + built.area_mm2) / layer.density_domain.area();
+    result.web = built.polylines;
+    result.solution.generated_area_mm2 = built.area_mm2;
+    result.solution.achieved_density = achieved_density;
+    result.solution.residual_error = (achieved_density - layer.target_density).abs();
+    Ok(result)
 }
 
 /// Distribute each layer's already-selected copper area in space.
@@ -634,8 +671,14 @@ pub fn generate_spatial_dense_copper_balance(
         })
         .collect::<Vec<_>>();
     if region_active_sites.iter().all(Vec::is_empty) {
+        let layers = map_layers(
+            uniform.into_iter().zip(request.layers.iter()),
+            |(result, layer)| finalize_perforated_web(result, &[], &[], *layer, profile),
+        )
+        .into_iter()
+        .collect::<Result<Vec<_>, _>>()?;
         return Ok(SpatialCopperBalance {
-            layers: uniform,
+            layers,
             moment_field: None,
         });
     }
@@ -778,16 +821,24 @@ pub fn generate_spatial_dense_copper_balance(
                 profile.void_area_bounds(),
                 pinned_sums[layer_index],
             );
+            let full_sites = &region_lattices[layer_regions[layer_index]].full_sites;
             let result = if squared_radii.is_empty() {
-                baseline
+                finalize_perforated_web(baseline, &[], &[], request.layers[layer_index], profile)?
             } else {
-                spatial_result_from_squared_radii(
-                    &region_lattices[layer_regions[layer_index]].full_sites,
+                let result = spatial_result_from_squared_radii(
+                    full_sites,
                     &squared_radii,
                     baseline,
                     request.layers[layer_index],
                     profile,
-                )
+                );
+                finalize_perforated_web(
+                    result,
+                    full_sites,
+                    &squared_radii,
+                    request.layers[layer_index],
+                    profile,
+                )?
             };
             let emitted = result
                 .full_voids
@@ -795,9 +846,11 @@ pub fn generate_spatial_dense_copper_balance(
                 .map(|void| void.radius_mm.powi(2))
                 .collect::<Vec<_>>();
             let achieved_density = model.density(&emitted);
-            (result, initial_density, achieved_density)
+            Ok::<_, AccuracyError>((result, initial_density, achieved_density))
         },
-    );
+    )
+    .into_iter()
+    .collect::<Result<Vec<_>, _>>()?;
 
     // Mean and RMS of the panel's copper moment about its mid-plane, before
     // and after, so the summary can say what the solve bought.

@@ -21,6 +21,7 @@ pub const COPPER_BALANCE_LATTICE_VALUE: &str = "staggered-hex-v1";
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CopperBalanceKind {
     Plane,
+    Web,
     FullVoid,
     /// A boundary void emitted as an explicit clipped contour rather than a
     /// lattice hex instance.
@@ -29,8 +30,9 @@ pub enum CopperBalanceKind {
 }
 
 impl CopperBalanceKind {
-    const ALL: [Self; 4] = [
+    const ALL: [Self; 5] = [
         Self::Plane,
+        Self::Web,
         Self::FullVoid,
         Self::EdgeVoid,
         Self::BoundaryWeb,
@@ -39,6 +41,7 @@ impl CopperBalanceKind {
     pub fn attribute_value(self) -> &'static str {
         match self {
             Self::Plane => "plane",
+            Self::Web => "web",
             Self::FullVoid => "full_void",
             Self::EdgeVoid => "edge_void",
             Self::BoundaryWeb => "boundary_web",

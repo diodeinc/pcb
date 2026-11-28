@@ -370,9 +370,12 @@ fn board_array_creation_reports_and_emits_the_balance() {
         );
     }
     let xml = creation.xml;
-    // Perforated balance planes carry their voids as a negative instance set.
-    assert!(xml.contains(r#"<Set polarity="NEGATIVE">"#));
-    assert!(xml.matches("<Contour>").count() > 0);
+    // Perforated balance planes lower to a single dark-only stroked web set.
+    assert!(!xml.contains(r#"<Set polarity="NEGATIVE">"#));
+    assert!(xml.contains(
+        r#"<NonstandardAttribute name="diode.copper_balance" type="STRING" value="web"/>"#
+    ));
+    assert!(xml.contains("<Polyline>"));
 }
 
 #[test]
@@ -1085,11 +1088,7 @@ fn explicit_copper_balance_region_round_trips_as_panel_geometry() {
     .pop()
     .unwrap();
     let features = balance_features(&balance).unwrap();
-    let void_count = features
-        .void_sets
-        .iter()
-        .map(|set| set.sites.len())
-        .sum::<usize>();
+    let polyline_count = features.web.len();
     let (templates, features) = features.into_layer_features("TOP");
     spec.generated_geometry.user_entries = templates;
     spec.generated_geometry.layer_features.extend(
@@ -1101,21 +1100,17 @@ fn explicit_copper_balance_region_round_trips_as_panel_geometry() {
         balance.solution.mode,
         DenseCopperBalanceMode::Perforated { .. }
     ));
-    assert!(void_count > 0);
+    assert!(polyline_count > 0);
 
     let xml = write_board_array_xml(&input, &spec).unwrap();
-    assert!(xml.contains(r#"<Set polarity="NEGATIVE">"#));
-    for kind in ["plane", "full_void", "edge_void", "boundary_web"] {
-        assert!(xml.contains(&format!(
-            r#"<NonstandardAttribute name="diode.copper_balance" type="STRING" value="{kind}"/>"#
-        )));
-    }
+    assert!(!xml.contains(r#"<Set polarity="NEGATIVE">"#));
+    assert!(xml.contains(
+        r#"<NonstandardAttribute name="diode.copper_balance" type="STRING" value="web"/>"#
+    ));
+    assert!(xml.matches("<Polyline>").count() >= polyline_count);
 
     let parsed = Ipc2581::parse(&xml).unwrap();
-    assert!(xml.matches("<Contour>").count() > 0);
-    assert!(xml.matches("<EntryUser").count() > 0);
-    assert!(xml.matches("<Location ").count() >= void_count);
-    assert!(xml.matches("<UserPrimitiveRef").count() < void_count);
+    assert_eq!(xml.matches("<EntryUser").count(), 0);
 
     let mut top = geometry::extract_layer_for_view(
         &parsed,
@@ -1124,10 +1119,6 @@ fn explicit_copper_balance_region_round_trips_as_panel_geometry() {
         Resolution::default(),
     )
     .unwrap();
-    assert!(
-        !top.feature_placement_groups.is_empty(),
-        "shared IPC Locations should remain a placement group"
-    );
     pcb_ir::dialects::ipc::process::expand_feature_placement_groups(&mut top);
     let copper_balance = |feature: &pcb_ir::dialects::ipc::Feature| {
         top.feature_set(feature)
@@ -1140,28 +1131,24 @@ fn explicit_copper_balance_region_round_trips_as_panel_geometry() {
                 && !feature.is_fiducial())
             .all(copper_balance)
     );
-    // Paint the balance features in order: the plane, the voids that clear
-    // it, then the boundary web.
+    // All balancing features are positive strokes; paint them into one region.
     let round_trip = top
         .features
         .iter()
         .filter(|feature| {
             feature.source_step_kind == LayoutStepKind::Panel
-                && feature.kind == FeatureKind::Primitive
+                && feature.kind == FeatureKind::Trace
                 && copper_balance(feature)
         })
         .fold(ContourSet::empty(resolution), |image, feature| {
+            assert_eq!(feature.polarity, pcb_ir::geom::Polarity::Dark);
             let paint = ContourSet::from_painted_paths(
                 &top.arena,
                 feature.paths.slice(&top.arena.paths),
                 resolution,
             )
             .unwrap();
-            match feature.polarity {
-                pcb_ir::geom::Polarity::Dark => image.union(&paint),
-                pcb_ir::geom::Polarity::Clear => image.difference(&paint),
-            }
-            .unwrap()
+            image.union(&paint).unwrap()
         });
 
     assert!(!round_trip.is_empty());
@@ -1175,14 +1162,15 @@ fn explicit_copper_balance_region_round_trips_as_panel_geometry() {
 
     let package = manufacturing_package(&parsed, ArtworkScope::ArrayFlattened).unwrap();
     let top_gerber = gerber(&package, "F_Cu.gtl").unwrap();
-    assert!(top_gerber.contains("G36*"));
-    assert!(top_gerber.contains("G37*"));
+    // Perforated balancing emits standard round-aperture D01 draws only: no
+    // G36/G37 regions, no macros, no aperture blocks, and no clear polarity.
+    assert!(!top_gerber.contains("G36*"));
+    assert!(!top_gerber.contains("G37*"));
     assert!(top_gerber.contains("%SRX"));
     assert!(top_gerber.contains("%TA.AperFunction,CopperBalancing*%"));
+    assert!(top_gerber.contains("D01*"));
     // Manufacturing Gerbers expand array hierarchy for broad CAM compatibility.
     assert!(!top_gerber.contains("%ABD"));
-    // CAM importers composite every clear object, so the lattice ships
-    // dark-only: explicit regions for the interior and boundary alike.
     assert!(!top_gerber.contains("%AM"));
     assert!(!top_gerber.contains("%LPC*%"));
 
