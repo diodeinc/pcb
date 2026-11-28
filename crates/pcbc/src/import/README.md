@@ -22,7 +22,24 @@ several projects fail with the candidates listed.
 6. `materialize` copies the original schematic hierarchy, project, optional board, and diagnostics.
 7. `generate` writes board, module, and component sources using the original embedded symbols.
 8. `generated_validate` builds the board, verifies physical pins and net partitions, then binds and checks the persistent schematic through `pcb-kicad-sch`.
-9. `report` writes the extraction report.
+9. `sync` syncs a copied source board once with `pcb layout`, so the next `pcb layout`
+   leaves it unchanged and `pcb layout --check` reports no sync findings.
+10. `report` writes the extraction report.
+
+## Synced layout
+
+The first sync takes the board to the generated design: nets get their Zener names, footprints
+get their `Path`, generated FPID and fields, and hierarchical sheets become groups. It keeps the
+board's copper and geometry:
+
+- Each footprint is first given the FPID sync assigns, so sync keeps every placed copy instead of
+  reloading it from the package's `.kicad_mod`, which import took from only one copy.
+- Netclass patterns that name a renamed net exactly follow the rename, here and in later syncs.
+- `Board()` carries the source stackup, or for a board without one KiCad's implicit default
+  stackup for its thickness, and no `layers`, whose Diode defaults would replace finish, track
+  sizes and thickness. Sync rewrites a board's layers and stackup only when they differ from
+  the config.
+- `num_user_layers` covers the highest `User.N` layer the board defines, so sync removes none.
 
 KiCad CLI validation and netlist export run on temporary source copies.
 Source ERC, DRC, and schematic/PCB parity findings are reported, not import blockers.

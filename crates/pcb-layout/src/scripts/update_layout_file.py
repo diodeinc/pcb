@@ -369,6 +369,10 @@ def rmv_quotes(s):
     return s
 
 
+def _net_codes(board: pcbnew.BOARD) -> dict[str, int]:
+    return {str(name): net.GetNetCode() for name, net in board.GetNetsByName().items()}
+
+
 def get_footprint_uuid(fp: pcbnew.FOOTPRINT) -> str:
     """Return the UUID of a footprint."""
     path = fp.GetPath().AsString()
@@ -815,7 +819,15 @@ class FinalizeBoard(Step):
 
         # Save board only once at the very end
         save_start = time.time()
-        pcbnew.SaveBoard(self.board.GetFileName(), self.board)
+        path = self.board.GetFileName()
+        pcbnew.SaveBoard(path, self.board)
+        # KiCad writes tracks sorted by net code, and loading a board numbers its
+        # nets in the order the file first uses them. When that differs from the
+        # codes this board had, the next load would write the tracks in another
+        # order, so save the reloaded board to reach the fixed point now.
+        reloaded = pcbnew.LoadBoard(path)
+        if _net_codes(reloaded) != _net_codes(self.board):
+            pcbnew.SaveBoard(path, reloaded)
         logger.info(f"Board saving took {time.time() - save_start:.3f} seconds")
 
     def _export_diagnostics(self):

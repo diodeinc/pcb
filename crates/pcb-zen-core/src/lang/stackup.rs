@@ -309,8 +309,15 @@ pub struct DesignRules {
     pub constraints: Option<JsonValue>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub predefined_sizes: Option<JsonValue>,
-    #[serde(default)]
+    /// `DesignRules()` without `netclasses` leaves the field `None`, which arrives as `null`.
+    #[serde(default, deserialize_with = "null_as_empty")]
     pub netclasses: Vec<NetClass>,
+}
+
+fn null_as_empty<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Vec<NetClass>, D::Error> {
+    Ok(Option::<Vec<NetClass>>::deserialize(deserializer)?.unwrap_or_default())
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -356,9 +363,6 @@ pub enum BoardConfigError {
 pub enum StackupError {
     #[error("Stackup must have at least 3 layers (2 copper + 1 dielectric), got {0}")]
     TooFewLayers(usize),
-
-    #[error("Stackup must have an odd number of layers, got {0}")]
-    EvenLayerCount(usize),
 
     #[error("Stackup must have an even number of copper layers, got {0}")]
     OddCopperLayerCount(usize),
@@ -423,7 +427,7 @@ impl Stackup {
                 let mid = layers.len() / 2;
                 layers[..mid]
                     .iter()
-                    .zip(layers[mid + 1..].iter().rev())
+                    .zip(layers.iter().rev())
                     .all(|(a, b)| a == b)
             }
             _ => false,
@@ -450,9 +454,6 @@ impl Stackup {
     fn validate_layer_count(&self, layers: &[Layer]) -> Result<(), StackupError> {
         if layers.len() < 3 {
             return Err(StackupError::TooFewLayers(layers.len()));
-        }
-        if layers.len().is_multiple_of(2) {
-            return Err(StackupError::EvenLayerCount(layers.len()));
         }
         let copper_layers = self.copper_layer_count();
         if !copper_layers.is_multiple_of(2) {
@@ -782,13 +783,15 @@ impl Stackup {
             None,
         ));
 
-        // Finish and constraints
-        if let Some(finish) = &self.copper_finish {
-            b.push(Sexpr::list(vec![
-                Sexpr::symbol("copper_finish"),
-                Sexpr::string(finish.to_string()),
-            ]));
-        }
+        // Finish and constraints, written as KiCad saves them, so its next save keeps them.
+        b.push(Sexpr::list(vec![
+            Sexpr::symbol("copper_finish"),
+            Sexpr::string(
+                self.copper_finish
+                    .as_ref()
+                    .map_or("None".to_string(), ToString::to_string),
+            ),
+        ]));
         b.push(Sexpr::list(vec![
             Sexpr::symbol("dielectric_constraints"),
             Sexpr::symbol("no"),
@@ -799,10 +802,13 @@ impl Stackup {
 
     /// Parse stackup configuration from KiCad PCB file content
     pub fn from_kicad_pcb(content: &str) -> Result<Option<Self>, StackupError> {
-        let pcb_expr = pcb_sexpr::parse(content)?;
+        Self::from_kicad_board(&pcb_sexpr::parse(content)?)
+    }
 
+    /// Parse stackup configuration from a parsed KiCad PCB.
+    pub fn from_kicad_board(pcb_expr: &Sexpr) -> Result<Option<Self>, StackupError> {
         // First, parse the layers section to get copper roles
-        let copper_roles = Self::parse_copper_roles_from_layers(&pcb_expr)?;
+        let copper_roles = Self::parse_copper_roles_from_layers(pcb_expr)?;
 
         // KiCad writes a header-only board, without a setup section, when it creates a project.
         let Some(setup) = pcb_expr.find_list("setup") else {
@@ -823,7 +829,7 @@ impl Stackup {
     }
 
     /// Parse copper roles from the layers section
-    fn parse_copper_roles_from_layers(
+    pub fn parse_copper_roles_from_layers(
         pcb_expr: &Sexpr,
     ) -> Result<HashMap<String, CopperRole>, StackupError> {
         let mut copper_roles = HashMap::new();
@@ -895,42 +901,44 @@ impl Stackup {
                         layers.push(Layer::Copper { thickness, role });
                     }
                     name if name.starts_with("dielectric ") => {
-                        // Dielectric layer
-                        let thickness = Self::extract_numeric_prop(&layer_data[2..], "thickness")
-                            .ok_or(StackupError::MissingThickness)?;
-                        let material = Self::extract_string_prop(&layer_data[2..], "material")
-                            .unwrap_or("FR4".to_string());
-                        let form = Self::extract_string_prop(&layer_data[2..], "type")
+                        // A dielectric entry holds one or more plies, separated by `addsublayer`;
+                        // its type is written once, on the first ply.
+                        let props = &layer_data[2..];
+                        let form = Self::extract_string_prop(props, "type")
                             .and_then(|s| match s.as_str() {
                                 "core" => Some(DielectricForm::Core),
                                 "prepreg" => Some(DielectricForm::Prepreg),
                                 _ => None,
                             })
                             .unwrap_or(DielectricForm::Core);
+                        for ply in props.split(|item| item.as_sym() == Some("addsublayer")) {
+                            let thickness = Self::extract_numeric_prop(ply, "thickness")
+                                .ok_or(StackupError::MissingThickness)?;
+                            let material = Self::extract_string_prop(ply, "material")
+                                .unwrap_or("FR4".to_string());
 
-                        // Extract material properties
-                        if let (Some(er), Some(tan_d)) = (
-                            Self::extract_numeric_prop(&layer_data[2..], "epsilon_r"),
-                            Self::extract_numeric_prop(&layer_data[2..], "loss_tangent"),
-                        ) {
-                            // Check if we already have this material or need to add it
-                            let mat = Material {
-                                name: Some(material.clone()),
-                                vendor: None,
-                                relative_permittivity: Some(er),
-                                loss_tangent: Some(tan_d),
-                                reference_frequency: None,
-                            };
-                            if !materials.iter().any(|m: &Material| m.name == mat.name) {
-                                materials.push(mat);
+                            if let (Some(er), Some(tan_d)) = (
+                                Self::extract_numeric_prop(ply, "epsilon_r"),
+                                Self::extract_numeric_prop(ply, "loss_tangent"),
+                            ) && !materials
+                                .iter()
+                                .any(|m: &Material| m.name.as_deref() == Some(material.as_str()))
+                            {
+                                materials.push(Material {
+                                    name: Some(material.clone()),
+                                    vendor: None,
+                                    relative_permittivity: Some(er),
+                                    loss_tangent: Some(tan_d),
+                                    reference_frequency: None,
+                                });
                             }
-                        }
 
-                        layers.push(Layer::Dielectric {
-                            thickness,
-                            material,
-                            form,
-                        });
+                            layers.push(Layer::Dielectric {
+                                thickness,
+                                material,
+                                form,
+                            });
+                        }
                     }
                     _ => {} // Skip other layers
                 }
@@ -1107,8 +1115,29 @@ mod tests {
 
         assert!(matches!(
             stackup.validate(),
-            Err(StackupError::EvenLayerCount(4))
+            Err(StackupError::MustStartEndWithCopper)
         ));
+    }
+
+    #[test]
+    fn dielectric_plies_sharing_a_gap_validate() {
+        let ply = |thickness| Layer::Dielectric {
+            thickness,
+            material: "FR4".to_string(),
+            form: DielectricForm::Core,
+        };
+        let copper = Layer::Copper {
+            thickness: 0.035,
+            role: CopperRole::Signal,
+        };
+        let stackup = Stackup {
+            materials: None,
+            layers: Some(vec![copper.clone(), ply(0.5), ply(0.1), copper]),
+            silk_screen_color: None,
+            solder_mask_color: None,
+            copper_finish: None,
+        };
+        stackup.validate().unwrap();
     }
 
     #[test]
@@ -1148,6 +1177,53 @@ mod tests {
             stackup.validate(),
             Err(StackupError::OddCopperLayerCount(3))
         ));
+    }
+
+    #[test]
+    fn kicad_dielectric_sublayers_round_trip() {
+        let kicad_content = r#"(kicad_pcb (setup (stackup
+            (layer "F.Cu" (type "copper") (thickness 0.035))
+            (layer "dielectric 1" (type "core") (thickness 0.5) (material "FR4") (epsilon_r 4.5) (loss_tangent 0.02)
+                addsublayer (thickness 0.1) (material "PP") (epsilon_r 3.9) (loss_tangent 0.01)
+                addsublayer (thickness 0.1) (material "FR4") (epsilon_r 4.5) (loss_tangent 0.02))
+            (layer "B.Cu" (type "copper") (thickness 0.035)))))"#;
+
+        let stackup = Stackup::from_kicad_pcb(kicad_content).unwrap().unwrap();
+        let dielectrics: Vec<_> = stackup
+            .layers
+            .iter()
+            .flatten()
+            .filter_map(|layer| match layer {
+                Layer::Dielectric {
+                    thickness,
+                    material,
+                    form,
+                } => Some((*thickness, material.as_str(), *form)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            dielectrics,
+            [
+                (0.5, "FR4", DielectricForm::Core),
+                (0.1, "PP", DielectricForm::Core),
+                (0.1, "FR4", DielectricForm::Core),
+            ]
+        );
+
+        // Layout sync compares a board's stackup to the config by parsing it back.
+        let board = format!("(kicad_pcb (setup {}))", stackup.generate_stackup_expr());
+        assert_eq!(Stackup::from_kicad_pcb(&board).unwrap(), Some(stackup));
+    }
+
+    #[test]
+    fn design_rules_without_netclasses_parse() {
+        // `DesignRules(constraints = ...)` without netclasses and a Board() without `layers`.
+        let config = BoardConfig::from_json_str(
+            r#"{"design_rules": {"constraints": {}, "netclasses": null}, "stackup": null}"#,
+        )
+        .unwrap();
+        assert!(config.design_rules.unwrap().netclasses.is_empty());
     }
 
     #[test]

@@ -12,6 +12,7 @@ mod portable;
 mod report;
 mod schematic;
 mod semantic;
+mod sync;
 mod types;
 mod validate;
 

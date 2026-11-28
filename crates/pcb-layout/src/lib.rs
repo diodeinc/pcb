@@ -27,6 +27,7 @@ use effective_netlist::{
     BoardFootprintPath, DiffSeverity, diff_effective_netlists, layout_effective_netlist,
     match_board_footprints, source_effective_netlist,
 };
+pub use kicad_project_patch::rename_netclass_patterns;
 pub use moved::compute_moved_paths_patches;
 pub use moved::compute_net_renames_patches;
 
@@ -653,6 +654,12 @@ fn apply_moved_paths(
     }
 
     apply_source_preserving_patches_to_file(pcb_path, &pcb_content, &patches)?;
+    rename_netclass_patterns(
+        &pcb_path.with_extension("kicad_pro"),
+        renames
+            .iter()
+            .map(|(old, new)| (old.as_str(), new.as_str())),
+    )?;
 
     for (old_path, new_path) in &renames {
         diagnostics.diagnostics.push(Diagnostic::categorized(
@@ -705,6 +712,13 @@ fn repair_net_names(
     if !result.renames.is_empty() {
         let (patches, _) = moved::compute_net_renames_patches(&board, &result.renames);
         apply_source_preserving_patches_to_file(pcb_path, &pcb_content, &patches)?;
+        rename_netclass_patterns(
+            &pcb_path.with_extension("kicad_pro"),
+            result
+                .renames
+                .iter()
+                .map(|(old, new)| (old.as_str(), new.as_str())),
+        )?;
 
         // Only report implicit renames after the patch successfully applies.
         for (old_net, new_net) in &result.renames {
@@ -1544,16 +1558,19 @@ fn build_pcb_patchset(
     )?);
 
     if let Some(stackup) = board_config.and_then(|config| config.stackup.as_ref()) {
-        let board_thickness_iu = stackup_thickness_iu(stackup);
         let user_layers = board_config.map_or(4, |config| config.num_user_layers);
         let layers = stackup.generate_layers_expr(user_layers);
-        let stackup = stackup.generate_stackup_expr();
-        patches.extend(build_stackup_patchset(
-            board,
-            &layers,
-            &stackup,
-            board_thickness_iu,
-        )?);
+        // A board that already has this stackup and these layers keeps its own
+        // rendering of them: layer names, mask thicknesses and board thickness.
+        let current = Stackup::from_kicad_board(board).ok().flatten();
+        if current.as_ref() != Some(stackup) || layer_entries(board) != layer_entries(&layers) {
+            patches.extend(build_stackup_patchset(
+                board,
+                &layers,
+                &stackup.generate_stackup_expr(),
+                stackup_thickness_iu(stackup),
+            )?);
+        }
     }
 
     if let Some(constraints) = board_config
@@ -1954,11 +1971,14 @@ fn build_stackup_patchset(
             LayoutError::StackupPatchingError("Invalid layers span in PCB file".to_string())
         })?
         .span;
-    patches.replace_raw(layers_span, layers.to_string());
-    patches.extend(
-        pcb_sexpr::board::build_prune_items_not_in_layers_patchset(board, layers)
-            .map_err(LayoutError::StackupPatchingError)?,
-    );
+    // Same layers keep the board's own entries, such as user-given layer names.
+    if layer_entries(board) != layer_entries(layers) {
+        patches.replace_raw(layers_span, layers.to_string());
+        patches.extend(
+            pcb_sexpr::board::build_prune_items_not_in_layers_patchset(board, layers)
+                .map_err(LayoutError::StackupPatchingError)?,
+        );
+    }
 
     let setup_idx = pcb_sexpr::find_named_list_index(root_items, "setup").ok_or_else(|| {
         LayoutError::StackupPatchingError("PCB file is missing (setup ...) section".to_string())
@@ -2023,6 +2043,37 @@ fn build_stackup_patchset(
     }
 
     Ok(patches)
+}
+
+/// The `(id "name" type)` of each copper and `User.N` layer in a board's `(layers ...)`
+/// section, or in a generated one, without user-given names. These are the layers a
+/// `BoardConfig` sets; the technical layers are the same for every config.
+fn layer_entries(expr: &pcb_sexpr::Sexpr) -> BTreeSet<(String, String, String)> {
+    let layers = match expr.as_list() {
+        Some(items) if items.first().and_then(pcb_sexpr::Sexpr::as_sym) == Some("layers") => {
+            Some(items)
+        }
+        Some(items) => pcb_sexpr::find_named_list_index(items, "layers")
+            .and_then(|index| items[index].as_list()),
+        None => None,
+    };
+    layers
+        .into_iter()
+        .flatten()
+        .skip(1)
+        .filter_map(pcb_sexpr::Sexpr::as_list)
+        .filter_map(|entry| {
+            let name = entry.get(1)?.as_str()?;
+            if !name.ends_with(".Cu") && !name.starts_with("User.") {
+                return None;
+            }
+            Some((
+                entry.first()?.to_string(),
+                name.to_string(),
+                entry.get(2)?.as_sym()?.to_string(),
+            ))
+        })
+        .collect()
 }
 
 fn stackup_thickness_iu(stackup: &Stackup) -> Option<PcbIu> {
@@ -2299,6 +2350,25 @@ mod tests {
         assert!(out.contains("(dashed_line_gap_ratio 3.000000)"));
         assert!(out.contains("(hpglpendiameter 15.000000)"));
         assert!(out.contains("(thickness 1.6062)"));
+    }
+
+    #[test]
+    fn build_stackup_patchset_keeps_the_layer_names_of_the_same_layers() {
+        let input = r#"(kicad_pcb
+	(layers (0 "F.Cu" mixed "Top") (2 "B.Cu" signal "Bottom"))
+	(setup)
+)"#;
+        let board = pcb_sexpr::parse(input).unwrap();
+        let layers = pcb_sexpr::parse(r#"(layers (0 "F.Cu" mixed) (2 "B.Cu" signal))"#).unwrap();
+        let stackup = pcb_sexpr::parse(r#"(stackup (layer "F.Cu") (layer "B.Cu"))"#).unwrap();
+
+        let patches = build_stackup_patchset(&board, &layers, &stackup, None).unwrap();
+        let mut out = Vec::new();
+        patches.write_to(input, &mut out).unwrap();
+        let out = String::from_utf8(out).unwrap();
+
+        assert!(out.contains(r#"(0 "F.Cu" mixed "Top")"#), "{out}");
+        assert!(out.contains("(stackup"), "{out}");
     }
 
     #[test]

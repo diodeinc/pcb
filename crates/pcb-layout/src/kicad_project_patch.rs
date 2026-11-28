@@ -114,6 +114,42 @@ pub(crate) fn patch_kicad_pro(
         .with_context(|| format!("Failed to write {}", pro_path.display()))
 }
 
+/// Point netclass patterns that name a renamed net exactly at its new name, so the net
+/// keeps its netclass. Wildcard and regex patterns are left as they are.
+pub fn rename_netclass_patterns<'a>(
+    pro_path: &Path,
+    renames: impl IntoIterator<Item = (&'a str, &'a str)>,
+) -> Result<()> {
+    let renames: HashMap<&str, &str> = renames.into_iter().collect();
+    if renames.is_empty() || !pro_path.exists() {
+        return Ok(());
+    }
+    let source = fs::read_to_string(pro_path)
+        .with_context(|| format!("Failed to read {}", pro_path.display()))?;
+    let mut project: Value = serde_json::from_str(&source)
+        .with_context(|| format!("Failed to parse {}", pro_path.display()))?;
+    let Some(patterns) = project
+        .pointer_mut("/net_settings/netclass_patterns")
+        .and_then(Value::as_array_mut)
+    else {
+        return Ok(());
+    };
+    let mut changed = false;
+    for pattern in patterns.iter_mut().filter_map(|p| p.get_mut("pattern")) {
+        if let Some(new) = pattern.as_str().and_then(|old| renames.get(old)) {
+            *pattern = Value::String(new.to_string());
+            changed = true;
+        }
+    }
+    if !changed {
+        return Ok(());
+    }
+    let mut serialized = serde_json::to_string_pretty(&project)?;
+    serialized.push('\n');
+    fs::write(pro_path, serialized)
+        .with_context(|| format!("Failed to write {}", pro_path.display()))
+}
+
 pub(crate) fn extract_design_rules(
     pro_path: &Path,
     board: &pcb_sexpr::Sexpr,

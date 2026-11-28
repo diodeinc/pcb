@@ -202,10 +202,10 @@ fn validation_extraction_and_materialization_share_one_source_snapshot() {
     );
 
     let output = sandbox.root_path().join("out");
-    assert_eq!(
-        fs::read(output.join("eda/layout.kicad_pro")).unwrap(),
-        initial_project
-    );
+    // Import syncs the copied project, so it is the source project, not the mutated one.
+    let project: serde_json::Value =
+        serde_json::from_slice(&fs::read(output.join("eda/layout.kicad_pro")).unwrap()).unwrap();
+    assert_eq!(project["meta"]["filename"], "layout.kicad_pro");
     assert_ne!(
         fs::read(output.join("eda/layout.kicad_pcb")).unwrap(),
         fs::read(&mutated_pcb).unwrap()
@@ -430,34 +430,7 @@ fn project_import_preserves_sources_and_existing_archive_behavior() {
     assert!(output.join("eda/layout.kicad_pcb").is_file());
     assert_preserved_schematic(&output.join("eda/layout.kicad_sch"), &schematic, false);
     let pcb_before_apply = fs::read(output.join("eda/layout.kicad_pcb")).unwrap();
-    let mut source_pcb = pcb_sexpr::parse(
-        &pcb.replace("Signal_Name", "Signal_Name_2")
-            .replace("Signal.Name", "Signal_Name"),
-    )
-    .unwrap();
-    let mut imported_pcb =
-        pcb_sexpr::parse(std::str::from_utf8(&pcb_before_apply).unwrap()).unwrap();
-    for board in [&mut source_pcb, &mut imported_pcb] {
-        for item in board.as_list_mut().unwrap() {
-            let Some(footprint) = item.as_list_mut() else {
-                continue;
-            };
-            if footprint.first().and_then(pcb_sexpr::Sexpr::as_sym) == Some("footprint") {
-                footprint.retain(|item| {
-                    let Some(items) = item.as_list() else {
-                        return true;
-                    };
-                    !(items.first().and_then(pcb_sexpr::Sexpr::as_sym) == Some("path")
-                        || (items.first().and_then(pcb_sexpr::Sexpr::as_sym) == Some("property")
-                            && items.get(1).and_then(pcb_sexpr::Sexpr::as_str) == Some("Path")))
-                });
-            }
-        }
-    }
-    assert_eq!(
-        imported_pcb, source_pcb,
-        "Only footprint identity bindings and allocated net names may change"
-    );
+    assert_same_geometry(std::str::from_utf8(&pcb_before_apply).unwrap(), &pcb);
     assert_repeated_schematic_apply(&mut sandbox, "out/layout.zen", &[]);
     assert_eq!(
         pcb_before_apply,
@@ -515,8 +488,33 @@ fn project_import_preserves_sources_and_existing_archive_behavior() {
         String::from_utf8_lossy(&reimport.stderr)
     );
     let regenerated = fs::read_to_string(output.join("layout.zen")).unwrap();
-    assert!(regenerated.contains("layers=2,"), "{regenerated}");
-    assert_eq!(embedded_geometry, fs::read(footprint_path).unwrap());
+    assert_eq!(
+        regenerated.matches("CopperLayer(").count(),
+        2,
+        "{regenerated}"
+    );
+    // The retained board was saved by the sync in KiCad's current format, with pin types from
+    // the Zener netlist, so only the format and the pin types may differ.
+    let body = |footprint: &[u8]| {
+        String::from_utf8_lossy(footprint)
+            .lines()
+            .filter(|line| {
+                ![
+                    "(version ",
+                    "(generator",
+                    "(duplicate_pad_numbers_are_jumpers",
+                    "(pintype ",
+                ]
+                .iter()
+                .any(|prefix| line.trim_start().starts_with(prefix))
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    assert_eq!(
+        body(&embedded_geometry),
+        body(&fs::read(footprint_path).unwrap())
+    );
     assert_eq!(
         retained_project,
         fs::read(output.join("eda/layout.kicad_pro")).unwrap()
@@ -531,6 +529,176 @@ fn project_import_preserves_sources_and_existing_archive_behavior() {
         pcb_before_apply,
         fs::read(output.join("eda/layout.kicad_pcb")).unwrap()
     );
+}
+
+#[test]
+fn first_layout_sync_after_import_keeps_the_board() {
+    let mut sandbox = sandbox();
+    let mut schematic = STANDALONE_FIXTURE.replace("(in_bom yes)", "(in_bom no)");
+    // Import renames this net to `Signal_Name`.
+    schematic.insert_str(
+        schematic.rfind(')').unwrap(),
+        r#"(global_label "Signal.Name" (shape input) (at 101.6 114.3 0)
+            (effects (font (size 1.27 1.27))) (uuid "0148d5e0-b736-47f2-87b0-731cda33eaf1"))"#,
+    );
+    // The source of each first-sync mutation seen after imports:
+    // - The stackup sums to 1.6 mm before the solder masks KiCad adds, so Zener computes 1.62 mm
+    //   against the source's 1.6 mm.
+    // - A drawing on User.5, beyond the default four user layers.
+    // - The three resistors share one package but differ: R3 is turned 180 degrees and one of R2's
+    //   pads is 0.1 µm off, so a sync that reloads the package from one copy changes the others.
+    let pcb = PCB_FIXTURE
+        .replacen(
+            "\t(setup\n",
+            "\t(setup\n\t\t(stackup\n\t\t\t(layer \"F.SilkS\" (type \"Top Silk Screen\"))\n\t\t\t(layer \"F.Paste\" (type \"Top Solder Paste\"))\n\t\t\t(layer \"F.Mask\" (type \"Top Solder Mask\") (thickness 0.01))\n\t\t\t(layer \"F.Cu\" (type \"copper\") (thickness 0.035))\n\t\t\t(layer \"dielectric 1\" (type \"core\") (thickness 1.53) (material \"FR4\") (epsilon_r 4.5) (loss_tangent 0.02))\n\t\t\t(layer \"B.Cu\" (type \"copper\") (thickness 0.035))\n\t\t\t(layer \"B.Mask\" (type \"Bottom Solder Mask\") (thickness 0.01))\n\t\t\t(layer \"B.Paste\" (type \"Bottom Solder Paste\"))\n\t\t\t(layer \"B.SilkS\" (type \"Bottom Silk Screen\"))\n\t\t\t(copper_finish \"None\")\n\t\t\t(dielectric_constraints no)\n\t\t)\n",
+            1,
+        )
+        .replacen(
+            "\t\t(45 \"User.4\" user)\n",
+            "\t\t(45 \"User.4\" user)\n\t\t(47 \"User.5\" user)\n",
+            1,
+        )
+        .replacen(
+            "\t(embedded_fonts no)\n)",
+            "\t(gr_rect (start 118 93) (end 130 106) (stroke (width 0.05) (type solid)) (fill no) (layer \"Edge.Cuts\") (uuid \"5e1d1a2b-0000-4000-8000-0000000000ec\"))\n\t(gr_line (start 120 95) (end 128 95) (stroke (width 0.1) (type solid)) (layer \"User.5\") (uuid \"5e1d1a2b-0000-4000-8000-000000000005\"))\n\t(embedded_fonts no)\n)",
+            1,
+        )
+        .replacen("(at 123.99 102)", "(at 123.99 102 180)", 1)
+        .replace("unconnected-(R2-Pad1)", "Signal.Name")
+        ;
+    let r2 = pcb.find("\"Reference\" \"R2\"").unwrap();
+    let pad = r2 + pcb[r2..].find("(at 0.51 0)").unwrap();
+    let pcb = format!(
+        "{}(at 0.5099 0){}",
+        &pcb[..pad],
+        &pcb[pad + "(at 0.51 0)".len()..]
+    );
+    // A netclass pattern naming a net that import renames.
+    let mut project: serde_json::Value = serde_json::from_str(PROJECT_FIXTURE).unwrap();
+    let mut power = project["net_settings"]["classes"][0].clone();
+    power["name"] = "Power".into();
+    power["clearance"] = 0.3.into();
+    project["net_settings"]["classes"]
+        .as_array_mut()
+        .unwrap()
+        .push(power);
+    project["net_settings"]["netclass_patterns"] =
+        serde_json::json!([{ "netclass": "Power", "pattern": "Signal.Name" }]);
+    sandbox.write("source/layout.kicad_sch", &schematic);
+    sandbox.write("source/layout.kicad_pro", project.to_string());
+    sandbox.write("source/layout.kicad_pcb", &pcb);
+
+    let import = sandbox
+        .run(
+            "pcbc",
+            [
+                "import",
+                "--force",
+                "--skip-drc",
+                "source/layout.kicad_pro",
+                "out",
+            ],
+        )
+        .stderr_capture()
+        .unchecked()
+        .run()
+        .unwrap();
+    assert!(
+        import.status.success(),
+        "import failed:\n{}",
+        String::from_utf8_lossy(&import.stderr)
+    );
+    let board_path = sandbox.root_path().join("out/eda/layout.kicad_pcb");
+    let imported = fs::read_to_string(&board_path).unwrap();
+    assert_same_geometry(&imported, &pcb);
+    assert!(imported.contains("(thickness 1.6)"), "{imported}");
+    assert!(imported.contains("\"User.5\""));
+
+    let pad_net = |board: &str, reference: &str, number: &str| -> String {
+        let root = pcb_sexpr::parse(board).unwrap();
+        for footprint in root.find_all_lists("footprint") {
+            let is_reference = footprint
+                .iter()
+                .filter_map(pcb_sexpr::Sexpr::as_list)
+                .any(|p| {
+                    p.first().and_then(pcb_sexpr::Sexpr::as_sym) == Some("property")
+                        && p.get(1).and_then(pcb_sexpr::Sexpr::as_str) == Some("Reference")
+                        && p.get(2).and_then(pcb_sexpr::Sexpr::as_str) == Some(reference)
+                });
+            let pad = footprint
+                .iter()
+                .filter_map(pcb_sexpr::Sexpr::as_list)
+                .find(|p| {
+                    is_reference
+                        && p.first().and_then(pcb_sexpr::Sexpr::as_sym) == Some("pad")
+                        && p.get(1).and_then(pcb_sexpr::Sexpr::as_str) == Some(number)
+                });
+            if let Some(pad) = pad {
+                let net = pad
+                    .iter()
+                    .filter_map(pcb_sexpr::Sexpr::as_list)
+                    .find(|n| n.first().and_then(pcb_sexpr::Sexpr::as_sym) == Some("net"))
+                    .unwrap();
+                return pcb_sexpr::board::net_name_str(net).unwrap().to_string();
+            }
+        }
+        panic!("no pad {reference}.{number}");
+    };
+    let renamed = pad_net(&imported, "R2", "1");
+    assert_eq!(renamed, "Signal_Name");
+    let project: serde_json::Value = serde_json::from_slice(
+        &fs::read(sandbox.root_path().join("out/eda/layout.kicad_pro")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        project["net_settings"]["netclass_patterns"],
+        serde_json::json!([{ "netclass": "Power", "pattern": renamed }])
+    );
+
+    // The sync after import, and the one after that, leave the board as import wrote it.
+    for _ in 0..2 {
+        let layout = sandbox
+            .run(
+                "pcbc",
+                [
+                    "layout",
+                    "--no-open",
+                    "-S",
+                    "bom",
+                    "--offline",
+                    "out/layout.zen",
+                ],
+            )
+            .stderr_capture()
+            .unchecked()
+            .run()
+            .unwrap();
+        assert!(
+            layout.status.success(),
+            "layout failed:\n{}",
+            String::from_utf8_lossy(&layout.stderr)
+        );
+        assert_eq!(fs::read_to_string(&board_path).unwrap(), imported);
+    }
+    let check = sandbox
+        .run(
+            "pcbc",
+            [
+                "layout",
+                "--check",
+                "-S",
+                "bom",
+                "--offline",
+                "out/layout.zen",
+            ],
+        )
+        .stderr_capture()
+        .unchecked()
+        .run()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&check.stderr);
+    assert!(check.status.success(), "layout --check failed:\n{stderr}");
+    assert!(!stderr.contains("layout.sync"), "{stderr}");
 }
 
 #[test]
@@ -604,6 +772,126 @@ fn project_import_joins_stale_pcb_reference_by_native_path() {
         );
     }
     assert_repeated_schematic_apply(&mut sandbox, "out/layout.zen", &[]);
+}
+
+/// Panics with the differing entries unless `actual` has the copper and geometry of `expected`.
+fn assert_same_geometry(actual: &str, expected: &str) {
+    let (actual, expected) = (board_geometry(actual), board_geometry(expected));
+    let mut differences = Vec::new();
+    for key in actual
+        .keys()
+        .chain(expected.keys())
+        .collect::<BTreeSet<_>>()
+    {
+        let empty = BTreeSet::new();
+        let (a, e) = (
+            actual.get(key).unwrap_or(&empty),
+            expected.get(key).unwrap_or(&empty),
+        );
+        for item in a.difference(e) {
+            differences.push(format!("{key}: added {item}"));
+        }
+        for item in e.difference(a) {
+            differences.push(format!("{key}: lost {item}"));
+        }
+    }
+    assert!(
+        differences.is_empty(),
+        "copper or geometry changed:\n{}",
+        differences.join("\n")
+    );
+}
+
+/// A board's copper and geometry, keyed by what it belongs to: placement, pads and graphics of
+/// each footprint by reference, board items, layers and thickness. Identity, nets, fields and
+/// formatting are left out, so two boards compare equal when sync or import changed only those.
+fn board_geometry(pcb: &str) -> BTreeMap<String, BTreeSet<String>> {
+    use pcb_sexpr::Sexpr;
+    fn tag(node: &Sexpr) -> Option<&str> {
+        node.as_list()?.first()?.as_sym()
+    }
+    fn strip(node: &Sexpr) -> Sexpr {
+        match node.as_list() {
+            Some(items) => Sexpr::list(
+                items
+                    .iter()
+                    .filter(|child| {
+                        !matches!(
+                            tag(child),
+                            Some(
+                                "uuid" | "tstamp" | "net" | "net_name" | "pintype" | "pinfunction"
+                            )
+                        )
+                    })
+                    .map(strip)
+                    .collect(),
+            ),
+            None => node.clone(),
+        }
+    }
+    let root = pcb_sexpr::parse(pcb).unwrap();
+    let mut out: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    for item in root.as_list().unwrap().iter().skip(1) {
+        let Some(items) = item.as_list() else {
+            continue;
+        };
+        match tag(item) {
+            Some("footprint") => {
+                let reference = items
+                    .iter()
+                    .filter_map(Sexpr::as_list)
+                    .find(|p| {
+                        p.first().and_then(Sexpr::as_sym) == Some("property")
+                            && p.get(1).and_then(Sexpr::as_str) == Some("Reference")
+                    })
+                    .and_then(|p| p.get(2)?.as_str())
+                    .unwrap()
+                    .to_string();
+                let entry = out.entry(format!("footprint {reference}")).or_default();
+                for child in items {
+                    if matches!(
+                        tag(child),
+                        Some(
+                            "at" | "layer"
+                                | "pad"
+                                | "zone"
+                                | "fp_line"
+                                | "fp_arc"
+                                | "fp_circle"
+                                | "fp_rect"
+                                | "fp_poly"
+                                | "model"
+                        )
+                    ) {
+                        entry.insert(strip(child).to_string());
+                    }
+                }
+            }
+            Some("general") => {
+                let thickness = items.iter().find(|c| tag(c) == Some("thickness")).unwrap();
+                out.entry("thickness".into())
+                    .or_default()
+                    .insert(thickness.to_string());
+            }
+            Some("layers") => {
+                // The names a board gives its layers are its own; ids and types are the layers.
+                let layers = out.entry("layers".into()).or_default();
+                for layer in items.iter().skip(1).filter_map(Sexpr::as_list) {
+                    layers.insert(format!("{} {}", layer[0], layer[1]));
+                }
+            }
+            Some(
+                kind @ ("segment" | "arc" | "via" | "zone" | "gr_line" | "gr_arc" | "gr_circle"
+                | "gr_rect" | "gr_poly" | "gr_text"),
+            ) => {
+                out.entry(kind.into())
+                    .or_default()
+                    .insert(strip(item).to_string());
+            }
+            _ => {}
+        }
+    }
+    out
 }
 
 fn assert_preserved_schematic(path: &std::path::Path, original: &str, applied: bool) {
@@ -1196,6 +1484,82 @@ fn unavailable_footprints_emit_a_short_warning_and_stay_in_the_report() {
     assert!(imported_components.values().all(|component| {
         component["layout"]["unresolved_footprint"]["source_id"] == unresolved_fpid
     }));
+}
+
+#[test]
+fn unresolved_footprint_off_the_board_keeps_the_import_and_its_layout() {
+    // R3 is only in the schematic, and its footprint's library is missing or it has no
+    // footprint, so the layout cannot sync; import still succeeds and keeps the source layout.
+    for r3_footprint in ["UnavailableLibrary:R_0402", ""] {
+        import_with_unresolved_r3(r3_footprint);
+    }
+}
+
+fn import_with_unresolved_r3(r3_footprint: &str) {
+    let mut sandbox = sandbox();
+    let r3 = STANDALONE_FIXTURE.find("\"Reference\" \"R3\"").unwrap();
+    let footprint = r3
+        + STANDALONE_FIXTURE[r3..]
+            .find("Resistor_SMD:R_0402_1005Metric")
+            .unwrap();
+    let schematic = format!(
+        "{}{r3_footprint}{}",
+        &STANDALONE_FIXTURE[..footprint],
+        &STANDALONE_FIXTURE[footprint + "Resistor_SMD:R_0402_1005Metric".len()..]
+    );
+    let r3 = PCB_FIXTURE.find("\"Reference\" \"R3\"").unwrap();
+    let start = PCB_FIXTURE[..r3].rfind("\t(footprint").unwrap();
+    let end = start + PCB_FIXTURE[start..].find("\n\t)\n").unwrap() + "\n\t)\n".len();
+    let pcb = format!("{}{}", &PCB_FIXTURE[..start], &PCB_FIXTURE[end..]);
+    sandbox.write("source/layout.kicad_sch", &schematic);
+    sandbox.write("source/layout.kicad_pro", PROJECT_FIXTURE);
+    sandbox.write("source/layout.kicad_pcb", &pcb);
+
+    let import = sandbox
+        .run(
+            "pcbc",
+            [
+                "import",
+                "--force",
+                "--skip-drc",
+                "source/layout.kicad_sch",
+                "out",
+            ],
+        )
+        .stdout_capture()
+        .stderr_capture()
+        .unchecked()
+        .run()
+        .expect("run pcbc import");
+    let stderr = String::from_utf8_lossy(&import.stderr).into_owned();
+    assert!(
+        import.status.success(),
+        "{r3_footprint:?} import failed:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("unsynced until every footprint resolves"),
+        "{stderr}"
+    );
+    let imported =
+        fs::read_to_string(sandbox.root_path().join("out/eda/layout.kicad_pcb")).unwrap();
+    assert_same_geometry(&imported, &pcb);
+    // R1 and R2 resolve, so they already carry their generated IDs and the sync after R3
+    // resolves keeps these placed copies as they are.
+    assert!(
+        !imported.contains("(footprint \"Resistor_SMD:R_0402_1005Metric\""),
+        "{imported}"
+    );
+    // KiCad finds those IDs' libraries through the layout's fp-lib-table.
+    let table = fs::read_to_string(sandbox.root_path().join("out/eda/fp-lib-table")).unwrap();
+    for line in imported.lines() {
+        if let Some(fpid) = line.strip_prefix("\t(footprint \"") {
+            let nickname = fpid.split(':').next().unwrap();
+            assert!(
+                table.contains(&format!("(name \"{nickname}\")")),
+                "{nickname}:\n{table}"
+            );
+        }
+    }
 }
 
 fn duplicate_pin_connectivity_fixture() -> String {

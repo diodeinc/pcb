@@ -10,7 +10,7 @@ pub(super) fn validate_generated_zen(
     expected_pins_by_refdes: &BTreeMap<KiCadRefDes, BTreeSet<KiCadPinNumber>>,
     instance_name_by_refdes: &BTreeMap<KiCadRefDes, String>,
     not_connected_nets: &BTreeSet<KiCadNetName>,
-) -> Result<()> {
+) -> Result<Schematic> {
     // Inverted once: the built instance path carries generated instance names, and this is the only
     // exact way back to the source refdes.
     let refdes_by_instance_name = instance_name_by_refdes
@@ -77,7 +77,7 @@ pub(super) fn validate_generated_zen(
         partition_count,
     );
     super::schematic::bind_imported_schematic(board, ir, &schematic, &refdes_by_instance_name)?;
-    Ok(())
+    Ok(schematic)
 }
 
 type PhysicalEndpoint = (String, String);

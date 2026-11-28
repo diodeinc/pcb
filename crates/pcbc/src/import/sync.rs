@@ -1,0 +1,129 @@
+//! Sync the copied source layout once, so `pcb layout` after import is a no-op.
+
+use super::*;
+use anstream::eprintln;
+use anyhow::{Context, Result};
+use pcb_sch::{InstanceKind, Schematic};
+use pcb_sexpr::{PatchSet, Sexpr};
+use starlark::errors::EvalSeverity;
+use std::collections::BTreeMap;
+
+pub(super) fn sync_imported_layout(
+    board: &MaterializedBoard,
+    schematic: &Schematic,
+    unresolved_footprints: bool,
+) -> Result<()> {
+    let Some(pcb_path) = &board.layout_kicad_pcb else {
+        return Ok(());
+    };
+    // Give every footprint that resolves its generated ID first, so a later sync keeps those
+    // placed copies too. Sync itself needs every footprint: a board with unresolved ones, which
+    // import has already reported, is left unsynced until they resolve.
+    let mut fpid_by_path = BTreeMap::new();
+    let mut libs = std::collections::HashMap::new();
+    let mut unresolved = unresolved_footprints;
+    for (instance_ref, instance) in &schematic.instances {
+        if instance.kind != InstanceKind::Component {
+            continue;
+        }
+        match schematic.kicad_footprint(instance) {
+            Ok((fpid, lib)) => {
+                fpid_by_path.insert(instance_ref.instance_path.join("."), fpid);
+                libs.extend(lib);
+            }
+            Err(_) => unresolved = true,
+        }
+    }
+    write_footprint_ids(pcb_path, &fpid_by_path)?;
+    if unresolved {
+        // Sync writes the table that resolves these IDs; without it, register their libraries.
+        let layout_dir = pcb_path.parent().context("layout file has no directory")?;
+        pcb_sch::kicad_netlist::write_fp_lib_table(layout_dir, &libs).with_context(|| {
+            format!(
+                "Failed to write {}",
+                layout_dir.join("fp-lib-table").display()
+            )
+        })?;
+        eprintln!(
+            "Warning: left {} unsynced until every footprint resolves",
+            pcb_path.display()
+        );
+        return Ok(());
+    }
+
+    let mut diagnostics = pcb_zen_core::Diagnostics::default();
+    pcb_layout::process_layout(
+        schematic,
+        pcb_layout::LayoutOptions {
+            check: false,
+            sync_footprints: false,
+        },
+        &mut diagnostics,
+    )
+    .context("Failed to sync the imported layout")?;
+    let findings = diagnostics
+        .diagnostics
+        .iter()
+        .filter(|diagnostic| {
+            matches!(
+                diagnostic.severity,
+                EvalSeverity::Error | EvalSeverity::Warning
+            )
+        })
+        .collect::<Vec<_>>();
+    for diagnostic in findings.iter().take(5) {
+        eprintln!("Warning: layout sync: {}", diagnostic.innermost().body);
+    }
+    if findings.len() > 5 {
+        eprintln!(
+            "Warning: layout sync: {} more finding(s)",
+            findings.len() - 5
+        );
+    }
+    eprintln!("Synced imported layout {}", pcb_path.display());
+    Ok(())
+}
+
+/// Give each footprint the ID layout sync assigns to its component. Sync replaces a footprint
+/// whose ID changed with its library definition, which import generated from only one of the
+/// package's placed copies; with matching IDs every placed copy is kept as it is.
+fn write_footprint_ids(pcb_path: &Path, fpid_by_path: &BTreeMap<String, String>) -> Result<()> {
+    let text = std::fs::read_to_string(pcb_path)
+        .with_context(|| format!("Failed to read {}", pcb_path.display()))?;
+    let root = pcb_sexpr::parse(&text).map_err(|error| anyhow::anyhow!(error))?;
+    let mut patches = PatchSet::default();
+    for footprint in root
+        .as_list()
+        .into_iter()
+        .flatten()
+        .filter_map(Sexpr::as_list)
+    {
+        if footprint.first().and_then(Sexpr::as_sym) != Some("footprint") {
+            continue;
+        }
+        let path = footprint
+            .iter()
+            .filter_map(Sexpr::as_list)
+            .find_map(|item| {
+                (item.first().and_then(Sexpr::as_sym) == Some("property")
+                    && item.get(1).and_then(Sexpr::as_str) == Some("Path"))
+                .then(|| item.get(2).and_then(Sexpr::as_str))
+                .flatten()
+            });
+        let (Some(fpid), Some(current)) = (
+            path.and_then(|path| fpid_by_path.get(path)),
+            footprint.get(1),
+        ) else {
+            continue;
+        };
+        if current.as_str() != Some(fpid.as_str()) {
+            patches.replace_string(current.span, fpid);
+        }
+    }
+    if patches.is_empty() {
+        return Ok(());
+    }
+    let mut out = Vec::new();
+    patches.write_to(&text, &mut out)?;
+    std::fs::write(pcb_path, out).with_context(|| format!("Failed to write {}", pcb_path.display()))
+}
