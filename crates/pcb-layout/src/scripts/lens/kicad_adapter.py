@@ -1518,18 +1518,39 @@ def _inherit_uuids(old_fp: Any, new_fp: Any) -> None:
     KiCad keys DRC exclusions by item UUID. The replacement shares the old
     placement, so pads with the same number pair up closest first: a pad that
     stayed put keeps its UUID however its neighbours moved or the library orders
-    them. Pads the old footprint lacks keep their fresh UUIDs.
+    them. Pads at the same distance, such as concentric lands, pair by pad type
+    and copper layers, then copper outline, then KiCad's pad similarity, rather
+    than by list order, which differs between a saved board and a library file.
+    Pads the old footprint lacks keep their fresh UUIDs.
 
     pcbnew has no UUID setter, so this writes through the exposed member. That
     is only sound while new_fp is detached: the board indexes its items by UUID.
     """
     new_fp.m_Uuid.Clone(old_fp.m_Uuid)
 
-    def pads_by_number(fp: Any) -> dict[str, list[tuple[int, int, Any]]]:
+    def outline(pad: Any) -> tuple[float, ...]:
+        # Pad-local copper outline for every shape, custom primitives included.
+        # PAD.Similarity cannot tell custom outlines apart across footprints.
+        poly = pad.GetCustomShapeAsPolygon()
+        box = poly.BBox()
+        center = box.GetCenter()
+        return (box.GetWidth(), box.GetHeight(), center.x, center.y, poly.Area() ** 0.5)
+
+    # KiCad saves a pad on every board copper layer as *.Cu and reads that back
+    # as all 32, so only the board's own copper layers tell pads apart.
+    board_copper = set(old_fp.GetBoard().GetEnabledLayers().CuStack())
+
+    def kind(pad: Any) -> tuple:
+        # SMD/PTH/NPTH and copper layers: a resized land is still the same land.
+        copper = board_copper.intersection(pad.GetLayerSet().CuStack())
+        return (pad.GetAttribute(), tuple(sorted(copper)))
+
+    def pads_by_number(fp: Any) -> dict[str, list[tuple[Any, tuple, tuple, Any]]]:
         pads = defaultdict(list)
         for pad in fp.Pads():
-            pos = pad.GetPosition()
-            pads[pad.GetNumber()].append((pos.x, pos.y, pad))
+            pads[pad.GetNumber()].append(
+                (pad.GetPosition(), kind(pad), outline(pad), pad)
+            )
         return pads
 
     old_pads = pads_by_number(old_fp)
@@ -1537,13 +1558,20 @@ def _inherit_uuids(old_fp: Any, new_fp: Any) -> None:
         olds = dict(enumerate(old_pads[number]))
         news = dict(enumerate(pads))
         closest_first = sorted(
-            ((ox - nx) ** 2 + (oy - ny) ** 2, i, j)
-            for i, (ox, oy, _) in olds.items()
-            for j, (nx, ny, _) in news.items()
+            (
+                (op.x - np.x) ** 2 + (op.y - np.y) ** 2,
+                o_kind != n_kind,
+                sum(abs(a - b) for a, b in zip(o_outline, n_outline)),
+                -old.Similarity(new),
+                i,
+                j,
+            )
+            for i, (op, o_kind, o_outline, old) in olds.items()
+            for j, (np, n_kind, n_outline, new) in news.items()
         )
-        for _, i, j in closest_first:
+        for *_, i, j in closest_first:
             if i in olds and j in news:
-                news.pop(j)[2].m_Uuid.Clone(olds.pop(i)[2].m_Uuid)
+                news.pop(j)[-1].m_Uuid.Clone(olds.pop(i)[-1].m_Uuid)
 
 
 def _resolve_field_value(
