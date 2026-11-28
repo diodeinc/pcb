@@ -1089,8 +1089,7 @@ fn explicit_copper_balance_region_round_trips_as_panel_geometry() {
     .unwrap();
     let features = balance_features(&balance).unwrap();
     let polyline_count = features.web.len();
-    let (templates, features) = features.into_layer_features("TOP");
-    spec.generated_geometry.user_entries = templates;
+    let features = features.into_layer_features("TOP");
     spec.generated_geometry.layer_features.extend(
         features
             .into_iter()

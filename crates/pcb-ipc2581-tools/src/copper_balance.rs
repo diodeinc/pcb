@@ -16,8 +16,7 @@ use ipc2581::types::{
     },
 };
 use pcb_ir::geom::copper_balance::{
-    DenseCopperBalanceMode, DenseCopperBalanceProfile, DenseCopperBalanceResult,
-    DenseCopperLattice, DenseCopperLatticeSite, HoneycombPolyline,
+    DenseCopperBalanceMode, DenseCopperBalanceProfile, DenseCopperBalanceResult, HoneycombPolyline,
     SpatialCopperBalanceLayerRequest, SpatialCopperBalanceRequest, StackMomentField,
     generate_spatial_dense_copper_balance,
 };
@@ -51,24 +50,6 @@ pub struct PreparedCopperLayer {
     pub density_domain: ContourSet,
 }
 
-/// One origin-centered rounded-hex dictionary entry, shared by every void of
-/// its radius.
-#[derive(Debug, Clone)]
-pub struct BalanceVoidTemplate {
-    pub id: String,
-    pub contour: IpcContour,
-}
-
-/// One radius class of exact rounded-hex voids on the declared lattice.
-#[derive(Debug, Clone)]
-pub struct BalanceVoidSet {
-    pub template: String,
-    pub radius_mm: f64,
-    pub corner_radius_mm: f64,
-    pub lattice: DenseCopperLattice,
-    pub sites: Vec<DenseCopperLatticeSite>,
-}
-
 /// Generated IPC features for one balanced layer: either a solid positive
 /// plane (`Solid` mode) or dark-only stroked honeycomb web polylines
 /// (`Perforated` mode).
@@ -76,13 +57,11 @@ pub struct BalanceVoidSet {
 pub struct BalanceFeatureSets {
     pub plane: Vec<SetFeature>,
     pub web: Vec<SetFeature>,
-    pub templates: Vec<BalanceVoidTemplate>,
-    pub void_sets: Vec<BalanceVoidSet>,
 }
 
 impl BalanceFeatureSets {
     pub fn is_empty(&self) -> bool {
-        self.plane.is_empty() && self.web.is_empty() && self.void_sets.is_empty()
+        self.plane.is_empty() && self.web.is_empty()
     }
 
     /// Lower one balanced layer to its ordered generated feature sets — either
@@ -90,54 +69,27 @@ impl BalanceFeatureSets {
     pub(crate) fn into_layer_features(
         self,
         layer_name: &str,
-    ) -> (
-        Vec<BalanceVoidTemplate>,
-        Vec<crate::generated::GeneratedLayerFeature>,
-    ) {
+    ) -> Vec<crate::generated::GeneratedLayerFeature> {
         use crate::generated::GeneratedLayerFeature;
         use ipc2581::types::ecad::Polarity;
 
-        let Self {
-            plane,
-            web,
-            templates,
-            void_sets,
-        } = self;
-        let balance_features = |polarity, kind, features, void_set| GeneratedLayerFeature {
+        let Self { plane, web } = self;
+        let balance_features = |kind, features| GeneratedLayerFeature {
             layer_name: layer_name.to_string(),
-            polarity,
+            polarity: Polarity::Positive,
             copper_balance: Some(kind),
             mouse_bites: false,
             spec_refs: Vec::new(),
             features,
-            void_set,
         };
         let mut features = Vec::new();
         if !plane.is_empty() {
-            features.push(balance_features(
-                Polarity::Positive,
-                CopperBalanceKind::Plane,
-                plane,
-                None,
-            ));
+            features.push(balance_features(CopperBalanceKind::Plane, plane));
         }
         if !web.is_empty() {
-            features.push(balance_features(
-                Polarity::Positive,
-                CopperBalanceKind::Web,
-                web,
-                None,
-            ));
+            features.push(balance_features(CopperBalanceKind::Web, web));
         }
-        for void_set in void_sets {
-            features.push(balance_features(
-                Polarity::Negative,
-                CopperBalanceKind::FullVoid,
-                Vec::new(),
-                Some(void_set),
-            ));
-        }
-        (templates, features)
+        features
     }
 }
 
@@ -597,8 +549,6 @@ mod tests {
         // Perforated balancing lowers to dark-only round-capped stroked
         // polylines in one positive set — no solid plane, no negative voids.
         assert!(features.plane.is_empty());
-        assert!(features.templates.is_empty());
-        assert!(features.void_sets.is_empty());
         assert_eq!(features.web.len(), result.web.len());
         assert!(features.web.iter().all(|feature| {
             matches!(

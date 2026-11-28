@@ -204,7 +204,6 @@ struct BoardArrayGeneratedGeometry {
     overlays: Vec<(String, Vec<SetFeature>)>,
     /// Areas the copper balance stays out of.
     balance_keepouts: Vec<balance::BalanceKeepout>,
-    user_entries: Vec<crate::copper_balance::BalanceVoidTemplate>,
 }
 
 impl BoardArrayGeneratedGeometry {
@@ -225,7 +224,6 @@ impl BoardArrayGeneratedGeometry {
                 mouse_bites: false,
                 spec_refs: Vec::new(),
                 features,
-                void_set: None,
             },
         ));
         &mut self.layer_features.last_mut().expect("just pushed").1
@@ -507,10 +505,8 @@ fn write_board_array_creation(
             &spec.generated_geometry.balance_keepouts,
         )?;
         copper_balance = Some(balance.report());
-        let (templates, features) = balance::generated_features(balance);
-        spec.generated_geometry.user_entries = templates;
         spec.generated_geometry.layer_features.extend(
-            features
+            balance::generated_features(balance)
                 .into_iter()
                 .map(|feature| (GeneratedFeatureScope::Array, feature)),
         );

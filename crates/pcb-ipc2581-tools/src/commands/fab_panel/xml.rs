@@ -241,7 +241,6 @@ pub(super) fn write_fab_panel_xml(
     provisional: &str,
     units: Units,
     balance_features: &[GeneratedLayerFeature],
-    templates: &[crate::copper_balance::BalanceVoidTemplate],
 ) -> Result<String> {
     let mut features_xml = XmlWriter::new();
     let mut names = GeneratedNameState::default();
@@ -250,23 +249,16 @@ pub(super) fn write_fab_panel_xml(
     }
     let features_xml = features_xml.into_string();
 
-    let xml = if features_xml.is_empty() && templates.is_empty() {
+    let xml = if features_xml.is_empty() {
         provisional.to_string()
     } else {
         let doc = Doc::parse(provisional)?;
-        let mut edits = Vec::new();
-        if !features_xml.is_empty() {
-            let fab_step = doc
-                .find_all("Step")
-                .into_iter()
-                .find(|step| doc.attr(*step, "name") == Some(FAB_PANEL_STEP_NAME))
-                .context("provisional fabrication panel has no fab step")?;
-            edits.push(doc.append_inside(fab_step, features_xml));
-        }
-        edits.extend(crate::generated::user_dictionary_edit(
-            &doc, units, templates,
-        )?);
-        doc.apply(edits)?
+        let fab_step = doc
+            .find_all("Step")
+            .into_iter()
+            .find(|step| doc.attr(*step, "name") == Some(FAB_PANEL_STEP_NAME))
+            .context("provisional fabrication panel has no fab step")?;
+        doc.apply(vec![doc.append_inside(fab_step, features_xml)])?
     };
     let xml = crate::utils::format::reformat_xml(&xml)?;
     // Schema validation lives in the fab-panel tests; on documents this size
