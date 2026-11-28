@@ -29,8 +29,8 @@ dependencies = [
 
 [[package]]
 name = "allocative"
-version = "0.3.6"
-source = "git+https://github.com/facebook/buck2.git?branch=main#1e5a375f6247f6c22a5fc10550679bae824e016f"
+version = "0.4.0"
+source = "git+https://github.com/facebook/buck2.git?branch=main#a97075f26494cef3d66563e90bff78499cdd642d"
 dependencies = [
  "allocative_derive",
  "anyhow",
@@ -42,10 +42,10 @@ dependencies = [
  "futures",
  "hashbrown 0.17.1",
  "indexmap",
- "jiff",
+ "jiff 1.0.3",
  "num-bigint 0.5.1",
  "once_cell",
- "parking_lot 0.12.5",
+ "parking_lot 0.13.0",
  "prost-types",
  "serde_json",
  "slab",
@@ -57,8 +57,8 @@ dependencies = [
 
 [[package]]
 name = "allocative_derive"
-version = "0.3.6"
-source = "git+https://github.com/facebook/buck2.git?branch=main#1e5a375f6247f6c22a5fc10550679bae824e016f"
+version = "0.4.0"
+source = "git+https://github.com/facebook/buck2.git?branch=main#a97075f26494cef3d66563e90bff78499cdd642d"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -700,7 +700,7 @@ checksum = "0c9ea0ac24bc397ab3c98583a3c9ba74fa56b09a4449bbe172b9b1ddb016027a"
 [[package]]
 name = "cmp_any"
 version = "0.8.1"
-source = "git+https://github.com/facebook/buck2.git?branch=main#1e5a375f6247f6c22a5fc10550679bae824e016f"
+source = "git+https://github.com/facebook/buck2.git?branch=main#a97075f26494cef3d66563e90bff78499cdd642d"
 
 [[package]]
 name = "cobs"
@@ -1247,7 +1247,7 @@ dependencies = [
 [[package]]
 name = "display_container"
 version = "0.9.0"
-source = "git+https://github.com/facebook/buck2.git?branch=main#1e5a375f6247f6c22a5fc10550679bae824e016f"
+source = "git+https://github.com/facebook/buck2.git?branch=main#a97075f26494cef3d66563e90bff78499cdd642d"
 dependencies = [
  "either",
  "indenter",
@@ -1300,7 +1300,7 @@ checksum = "92773504d58c093f6de2459af4af33faa518c13451eb8f2b5698ed3d36e7c813"
 [[package]]
 name = "dupe"
 version = "0.9.1"
-source = "git+https://github.com/facebook/buck2.git?branch=main#1e5a375f6247f6c22a5fc10550679bae824e016f"
+source = "git+https://github.com/facebook/buck2.git?branch=main#a97075f26494cef3d66563e90bff78499cdd642d"
 dependencies = [
  "dupe_derive",
 ]
@@ -1308,7 +1308,7 @@ dependencies = [
 [[package]]
 name = "dupe_derive"
 version = "0.9.1"
-source = "git+https://github.com/facebook/buck2.git?branch=main#1e5a375f6247f6c22a5fc10550679bae824e016f"
+source = "git+https://github.com/facebook/buck2.git?branch=main#a97075f26494cef3d66563e90bff78499cdd642d"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1370,7 +1370,7 @@ dependencies = [
  "anstream",
  "anstyle",
  "env_filter",
- "jiff",
+ "jiff 0.2.41",
  "log",
 ]
 
@@ -1441,9 +1441,9 @@ dependencies = [
 
 [[package]]
 name = "fancy-regex"
-version = "0.19.2"
+version = "0.20.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d301f5bf187b3c295fce6468d3875037a0bccc5f6b151c63cac2f85babf21912"
+checksum = "0a2e16b9a584b602f1e0e5e22c30ca0906786088c27500653e432d086def8b53"
 dependencies = [
  "bit-set",
  "regex-automata",
@@ -2554,15 +2554,29 @@ version = "0.2.41"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fcefdcefac59ac8f8401852e3427d55610481fc41e6625c39bac62d2d771623a"
 dependencies = [
- "jiff-core",
- "jiff-static",
- "jiff-tzdb-platform",
+ "jiff-core 0.1.4",
+ "jiff-static 0.2.41",
  "js-sys",
  "log",
  "portable-atomic",
  "portable-atomic-util",
  "serde_core",
  "wasm-bindgen",
+]
+
+[[package]]
+name = "jiff"
+version = "1.0.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "107f2e89536b6818514025f6787b0d94d819e54fe3b40365275fc753de485b3f"
+dependencies = [
+ "jiff-core 1.0.2",
+ "jiff-static 1.0.3",
+ "jiff-tzdb-platform",
+ "log",
+ "portable-atomic",
+ "portable-atomic-util",
+ "serde_core",
  "windows-link",
 ]
 
@@ -2576,28 +2590,49 @@ dependencies = [
 ]
 
 [[package]]
+name = "jiff-core"
+version = "1.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d44c923edf2bf456a982253f1a9ee1f6e89e421dffd0065d9b9a581da0def58f"
+dependencies = [
+ "log",
+]
+
+[[package]]
 name = "jiff-static"
 version = "0.2.41"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "203edf9b0ce4083ec8fbf4adc823eac89768ea994b4953fc0dab1b90083234dd"
 dependencies = [
- "jiff-core",
+ "jiff-core 0.1.4",
  "proc-macro2",
  "quote",
  "syn 2.0.119",
 ]
 
 [[package]]
-name = "jiff-tzdb"
-version = "0.1.9"
+name = "jiff-static"
+version = "1.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fa8377070c6bae868759445e5a77f66d84f0b72f3a054bfb00e6d038b8282da7"
+checksum = "4996f71e569e3a3e32b925c28ef8f0027dc30bb1d594b33eeda409eea185f5c8"
+dependencies = [
+ "jiff-core 1.0.2",
+ "proc-macro2",
+ "quote",
+ "syn 3.0.10",
+]
+
+[[package]]
+name = "jiff-tzdb"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "12e71a1b68a875a44a33bb7a1dd84392cb77145a3367a552a3cfe6a4f5cf3afc"
 
 [[package]]
 name = "jiff-tzdb-platform"
-version = "0.1.3"
+version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "875a5a69ac2bab1a891711cf5eccbec1ce0341ea805560dcd90b7a2e925132e8"
+checksum = "dc65b284afcfa8f6cf189c7274c805505314a7ab975c60e1f548bff56525420e"
 dependencies = [
  "jiff-tzdb",
 ]
@@ -2826,15 +2861,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "65d91b22da179613dcf4d6ec8349563f52a363f6849e03b00dd0a185ec4a59af"
 dependencies = [
  "scopeguard",
+ "serde",
 ]
 
 [[package]]
 name = "lock_free_hashtable"
 version = "0.2.0"
-source = "git+https://github.com/facebook/buck2.git?branch=main#1e5a375f6247f6c22a5fc10550679bae824e016f"
+source = "git+https://github.com/facebook/buck2.git?branch=main#a97075f26494cef3d66563e90bff78499cdd642d"
 dependencies = [
  "allocative",
- "parking_lot 0.12.5",
+ "parking_lot 0.13.0",
 ]
 
 [[package]]
@@ -3013,7 +3049,7 @@ dependencies = [
 [[package]]
 name = "mini_map"
 version = "0.1.0"
-source = "git+https://github.com/facebook/buck2.git?branch=main#1e5a375f6247f6c22a5fc10550679bae824e016f"
+source = "git+https://github.com/facebook/buck2.git?branch=main#a97075f26494cef3d66563e90bff78499cdd642d"
 dependencies = [
  "allocative",
  "dupe",
@@ -3027,7 +3063,7 @@ dependencies = [
 [[package]]
 name = "mini_vec"
 version = "0.1.0"
-source = "git+https://github.com/facebook/buck2.git?branch=main#1e5a375f6247f6c22a5fc10550679bae824e016f"
+source = "git+https://github.com/facebook/buck2.git?branch=main#a97075f26494cef3d66563e90bff78499cdd642d"
 dependencies = [
  "allocative",
  "dupe",
@@ -3418,7 +3454,7 @@ dependencies = [
 [[package]]
 name = "pagable"
 version = "0.4.2"
-source = "git+https://github.com/facebook/buck2.git?branch=main#1e5a375f6247f6c22a5fc10550679bae824e016f"
+source = "git+https://github.com/facebook/buck2.git?branch=main#a97075f26494cef3d66563e90bff78499cdd642d"
 dependencies = [
  "allocative",
  "anyhow",
@@ -3428,13 +3464,13 @@ dependencies = [
  "dashmap",
  "dupe",
  "either",
- "fancy-regex 0.19.2",
+ "fancy-regex 0.20.2",
  "indexmap",
  "inventory",
  "num-bigint 0.5.1",
  "once_cell",
  "pagable_derive",
- "parking_lot 0.12.5",
+ "parking_lot 0.13.0",
  "postcard",
  "regex",
  "sequence_trie",
@@ -3453,7 +3489,7 @@ dependencies = [
 [[package]]
 name = "pagable_derive"
 version = "0.4.2"
-source = "git+https://github.com/facebook/buck2.git?branch=main#1e5a375f6247f6c22a5fc10550679bae824e016f"
+source = "git+https://github.com/facebook/buck2.git?branch=main#a97075f26494cef3d66563e90bff78499cdd642d"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -3708,7 +3744,7 @@ dependencies = [
  "gerberx2",
  "hex",
  "ipc2581",
- "jiff",
+ "jiff 0.2.41",
  "log",
  "minijinja",
  "natord",
@@ -3976,7 +4012,7 @@ dependencies = [
  "hex",
  "ignore",
  "insta",
- "jiff",
+ "jiff 0.2.41",
  "log",
  "lsp-server",
  "lsp-types",
@@ -5247,12 +5283,11 @@ dependencies = [
 
 [[package]]
 name = "rustyline"
-version = "18.0.1"
+version = "19.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "53f6a737db68eb1a8ccff86b584b2fc13eca6a7bb6f78ebc7c529547e3ab9684"
+checksum = "56e1d6bd81c2d5feafd2419138df9183c45a10a492c4e873b8b0acb8eb2b549e"
 dependencies = [
  "bitflags 2.13.2",
- "cfg-if",
  "clipboard-win",
  "home",
  "libc",
@@ -5269,13 +5304,13 @@ dependencies = [
 
 [[package]]
 name = "rustyline-derive"
-version = "0.12.0"
+version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "64e5587417a3c4e16a4415e8d7d07f80998ed835ade621d19dfbe9fbe3205b0f"
+checksum = "6b45a652b0c95353d3206b7f5355f4c034ba08400ddfd0dcb7c1f788c244185a"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.119",
+ "syn 3.0.10",
 ]
 
 [[package]]
@@ -5830,7 +5865,7 @@ checksum = "6ce2be8dc25455e1f91df71bfa12ad37d7af1092ae736f3a6cd0e37bc7810596"
 [[package]]
 name = "starlark"
 version = "0.14.2"
-source = "git+https://github.com/diodeinc/starlark-rust?rev=74312f2a947db8add89c004a3d43ff166bfb4f29#74312f2a947db8add89c004a3d43ff166bfb4f29"
+source = "git+https://github.com/diodeinc/starlark-rust?rev=4b2a2b21bc3b9e7f19c14965694c6681639274a9#4b2a2b21bc3b9e7f19c14965694c6681639274a9"
 dependencies = [
  "allocative",
  "anyhow",
@@ -5849,6 +5884,7 @@ dependencies = [
  "inventory",
  "itertools 0.15.0",
  "maplit",
+ "memchr",
  "mini_map",
  "mini_vec",
  "num-bigint 0.5.1",
@@ -5856,7 +5892,6 @@ dependencies = [
  "once_cell",
  "pagable",
  "rand 0.10.3",
- "ref-cast",
  "regex",
  "rustyline",
  "serde",
@@ -5875,7 +5910,7 @@ dependencies = [
 [[package]]
 name = "starlark_derive"
 version = "0.14.2"
-source = "git+https://github.com/diodeinc/starlark-rust?rev=74312f2a947db8add89c004a3d43ff166bfb4f29#74312f2a947db8add89c004a3d43ff166bfb4f29"
+source = "git+https://github.com/diodeinc/starlark-rust?rev=4b2a2b21bc3b9e7f19c14965694c6681639274a9#4b2a2b21bc3b9e7f19c14965694c6681639274a9"
 dependencies = [
  "dupe",
  "proc-macro2",
@@ -5886,7 +5921,7 @@ dependencies = [
 [[package]]
 name = "starlark_map"
 version = "0.14.2"
-source = "git+https://github.com/diodeinc/starlark-rust?rev=74312f2a947db8add89c004a3d43ff166bfb4f29#74312f2a947db8add89c004a3d43ff166bfb4f29"
+source = "git+https://github.com/diodeinc/starlark-rust?rev=4b2a2b21bc3b9e7f19c14965694c6681639274a9#4b2a2b21bc3b9e7f19c14965694c6681639274a9"
 dependencies = [
  "allocative",
  "equivalent",
@@ -5900,7 +5935,7 @@ dependencies = [
 [[package]]
 name = "starlark_syntax"
 version = "0.14.2"
-source = "git+https://github.com/diodeinc/starlark-rust?rev=74312f2a947db8add89c004a3d43ff166bfb4f29#74312f2a947db8add89c004a3d43ff166bfb4f29"
+source = "git+https://github.com/diodeinc/starlark-rust?rev=4b2a2b21bc3b9e7f19c14965694c6681639274a9#4b2a2b21bc3b9e7f19c14965694c6681639274a9"
 dependencies = [
  "allocative",
  "annotate-snippets",
@@ -5928,7 +5963,7 @@ checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
 [[package]]
 name = "static_interner"
 version = "0.1.3"
-source = "git+https://github.com/facebook/buck2.git?branch=main#1e5a375f6247f6c22a5fc10550679bae824e016f"
+source = "git+https://github.com/facebook/buck2.git?branch=main#a97075f26494cef3d66563e90bff78499cdd642d"
 dependencies = [
  "allocative",
  "dupe",
@@ -5980,7 +6015,7 @@ dependencies = [
 [[package]]
 name = "strong_hash"
 version = "0.1.0"
-source = "git+https://github.com/facebook/buck2.git?branch=main#1e5a375f6247f6c22a5fc10550679bae824e016f"
+source = "git+https://github.com/facebook/buck2.git?branch=main#a97075f26494cef3d66563e90bff78499cdd642d"
 dependencies = [
  "compact_str",
  "num-bigint 0.5.1",
@@ -5992,7 +6027,7 @@ dependencies = [
 [[package]]
 name = "strong_hash_derive"
 version = "0.1.0"
-source = "git+https://github.com/facebook/buck2.git?branch=main#1e5a375f6247f6c22a5fc10550679bae824e016f"
+source = "git+https://github.com/facebook/buck2.git?branch=main#a97075f26494cef3d66563e90bff78499cdd642d"
 dependencies = [
  "quote",
  "syn 3.0.10",

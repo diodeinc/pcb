@@ -102,35 +102,38 @@ starlark_simple_value!(PartValue);
 
 #[starlark_value(type = "Part")]
 impl<'v> StarlarkValue<'v> for PartValue {
-    fn get_attr(&self, attr: &str, heap: Heap<'v>) -> Option<Value<'v>> {
+    fn get_attr(this: &Self, attr: &str, heap: Heap<'v>) -> Option<Value<'v>> {
         match attr {
-            "mpn" => Some(heap.alloc_str(self.mpn()).to_value()),
-            "manufacturer" => Some(heap.alloc_str(self.manufacturer()).to_value()),
+            "mpn" => Some(heap.alloc(this.mpn()).to_value()),
+            "manufacturer" => Some(heap.alloc(this.manufacturer()).to_value()),
             "datasheet" => Some(
-                self.datasheet()
-                    .map(|datasheet| heap.alloc_str(datasheet).to_value())
+                this.datasheet()
+                    .map(|datasheet| heap.alloc(datasheet).to_value())
                     .unwrap_or_else(Value::new_none),
             ),
             "qualifications" => Some(
                 heap.alloc(AllocList(
-                    self.qualifications()
+                    this.qualifications()
                         .iter()
-                        .map(|q| heap.alloc_str(q).to_value())
+                        .map(|q| heap.alloc(q.as_str()).to_value())
                         .collect::<Vec<_>>(),
-                )),
+                ))
+                .to_value(),
             ),
             _ => None,
         }
     }
 
-    fn has_attr(&self, attr: &str, _heap: Heap<'v>) -> bool {
+    fn has_attr(this: &Self, attr: &str, _heap: Heap<'v>) -> bool {
+        let _ = this;
         matches!(
             attr,
             "mpn" | "manufacturer" | "qualifications" | "datasheet"
         )
     }
 
-    fn dir_attr(&self) -> Vec<String> {
+    fn dir_attr(this: &Self) -> Vec<String> {
+        let _ = this;
         vec![
             "mpn".to_string(),
             "manufacturer".to_string(),

@@ -117,32 +117,39 @@ fn make_diagnostic(
 #[starlark_module]
 pub(crate) fn assert_globals(builder: &mut GlobalsBuilder) {
     fn error<'v>(
-        #[starlark(require = pos)] msg: String,
-        suppress: Option<bool>,
-        kind: Option<String>,
+        #[starlark(require = pos)] msg: &str,
+        #[starlark(default = false)] suppress: bool,
+        #[starlark(default = starlark::values::none::NoneType)]
+        kind: starlark::values::none::NoneOr<&str>,
         eval: &mut Evaluator<'v, '_, '_>,
     ) -> anyhow::Result<Value<'v>> {
-        if suppress.unwrap_or(false) {
-            eval.add_diagnostic(make_diagnostic(eval, msg, EvalSeverity::Error, true, kind));
+        if suppress {
+            eval.add_diagnostic(make_diagnostic(
+                eval,
+                msg.to_owned(),
+                EvalSeverity::Error,
+                true,
+                kind.into_option().map(str::to_owned),
+            ));
             Ok(Value::new_none())
         } else {
-            Err(anyhow::anyhow!(msg))
+            Err(anyhow::anyhow!("{}", msg))
         }
     }
 
     fn warn<'v>(
-        #[starlark(require = pos)] msg: String,
-        suppress: Option<bool>,
-        kind: Option<String>,
+        #[starlark(require = pos)] msg: &str,
+        #[starlark(default = false)] suppress: bool,
+        #[starlark(default = starlark::values::none::NoneType)]
+        kind: starlark::values::none::NoneOr<&str>,
         eval: &mut Evaluator<'v, '_, '_>,
     ) -> anyhow::Result<Value<'v>> {
-        let suppressed = suppress.unwrap_or(false);
         eval.add_diagnostic(make_diagnostic(
             eval,
-            msg,
+            msg.to_owned(),
             EvalSeverity::Warning,
-            suppressed,
-            kind,
+            suppress,
+            kind.into_option().map(str::to_owned),
         ));
         Ok(Value::new_none())
     }
@@ -150,12 +157,12 @@ pub(crate) fn assert_globals(builder: &mut GlobalsBuilder) {
     /// Check that a condition holds. If `cond` is false, raise an error with `msg`.
     fn check<'v>(
         #[starlark(require = pos)] cond: bool,
-        #[starlark(require = pos)] msg: String,
+        #[starlark(require = pos)] msg: &str,
     ) -> anyhow::Result<Value<'v>> {
         if cond {
             Ok(Value::new_none())
         } else {
-            Err(anyhow::anyhow!(msg))
+            Err(anyhow::anyhow!("{}", msg))
         }
     }
 }

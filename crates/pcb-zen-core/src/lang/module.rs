@@ -5,8 +5,6 @@ use crate::lang::test_bench::TestBenchValue;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
 
-use tracing::instrument;
-
 use crate::lang::component::FrozenComponentValue;
 use crate::lang::r#enum::{EnumType, EnumValue};
 use crate::lang::io_direction::IoDirection;
@@ -14,9 +12,9 @@ use crate::lang::type_conversion::try_implicit_type_conversion;
 use allocative::Allocative;
 use pcb_sch::physical::PhysicalValueType;
 use serde::Serialize;
-use starlark::environment::FrozenModule;
+use starlark::environment::{FrozenModule, MethodsBuilder};
 use starlark::values::typing::{TypeCompiled, TypeType};
-use starlark::values::{Heap, UnpackValue};
+use starlark::values::{Heap, UnpackValue, ValueTyped};
 use starlark::{
     any::ProvidesStaticType,
     collections::SmallMap,
@@ -24,8 +22,11 @@ use starlark::{
     eval::{Arguments, Evaluator},
     starlark_complex_value, starlark_module, starlark_simple_value,
     values::{
-        Freeze, NoSerialize, StarlarkValue, Trace, Value, float::StarlarkFloat, list::ListRef,
-        starlark_value, tuple::TupleRef,
+        Freeze, NoSerialize, StarlarkValue, Trace, Value,
+        float::StarlarkFloat,
+        list::{AllocList, StarlarkList},
+        starlark_value,
+        tuple::StarlarkTuple,
     },
 };
 
@@ -37,7 +38,7 @@ use crate::lang::param_decl::invoke_config;
 use crate::lang::validation::validate_identifier_name;
 use regex::Regex;
 use starlark::codemap::{CodeMap, Pos, ResolvedSpan, Span};
-use starlark::values::dict::{AllocDict, DictRef};
+use starlark::values::dict::{AllocDict, StarlarkDict};
 use std::fs;
 
 /// Helper macro for frozen module downcasting to reduce repetition
@@ -484,44 +485,163 @@ pub struct ModuleValue<'v> {
 
 starlark_complex_value!(pub ModuleValue);
 
-#[starlark_value(type = "Module")]
+#[starlark_value(type = "Module", methods = module_methods)]
 impl<'v> StarlarkValue<'v> for ModuleValue<'v> {
-    fn get_attr(&self, attr: &str, heap: Heap<'v>) -> Option<Value<'v>> {
-        let module_value = heap.alloc_complex(self.clone()).to_value();
+    #[allow(non_snake_case)]
+    #[starlark(constructor)]
+    fn Module(
+        #[starlark(require = pos)] path: Value<'v>,
+        // Preserve prior `args.positional1()` behavior that tolerated extra kwargs
+        // passed to `Module(...)` (e.g. legacy boards passing `embed=True`).
+        #[starlark(kwargs)] _kwargs: Value<'v>,
+        eval: &mut Evaluator<'v, '_, '_>,
+    ) -> starlark::Result<ModuleLoader> {
+        let path = path
+            .unpack_str()
+            .ok_or_else(|| {
+                starlark::Error::new_other(anyhow::anyhow!("Module path must be a string"))
+            })?
+            .to_string();
 
-        match attr {
-            "nets" => {
-                let callable = NetsCallable {
-                    module: module_value,
-                };
-                Some(heap.alloc_complex(callable))
-            }
-            "components" => {
-                let callable = ComponentsCallable {
-                    module: module_value,
-                };
-                Some(heap.alloc_complex(callable))
-            }
-            "graph" => {
-                let callable = GraphCallable {
-                    module: module_value,
-                };
-                Some(heap.alloc_complex(callable))
-            }
-            _ => None,
+        // Get the parent context from the evaluator's ContextValue if available
+        let parent_context = eval.eval_context().expect("expected eval context");
+        let span = eval.call_stack_top_location().unwrap().resolve_span();
+        let frozen_module = parent_context.resolve_and_eval_module(&path, Some(span))?;
+        let mut params: Vec<String> = vec!["name".to_string(), "properties".to_string()];
+        let mut param_types: SmallMap<String, String> = SmallMap::new();
+
+        let extra = crate::lang::eval::frozen_context(&frozen_module);
+        for param in extra.module.signature().iter() {
+            params.push(param.name.clone());
+            param_types.insert(param.name.clone(), param.type_value.to_string());
         }
+        Ok(ModuleLoader {
+            name: extra.module.path.name().clone(),
+            source_path: extra.module.source_path.clone(),
+            params,
+            param_types,
+            frozen_module,
+        })
+    }
+}
+
+#[starlark_module]
+fn module_methods(methods: &mut MethodsBuilder) {
+    fn nets<'v>(
+        this: &ModuleValue<'v>,
+        eval: &mut Evaluator<'v, '_, '_>,
+    ) -> starlark::Result<Value<'v>> {
+        let heap = eval.heap();
+        let components = eval.collect_components(this.path());
+
+        // Build reverse mapping: net_name -> list of (comp_path, pin_name) tuples
+        let mut net_to_ports: HashMap<String, Vec<Value<'v>>> = HashMap::new();
+
+        for (comp_path, component_val) in components.iter() {
+            if let Some(component) = component_val.downcast_ref::<FrozenComponentValue>() {
+                for (pin_name, net_val) in component.connections().iter() {
+                    if let Some(net) = net_val.downcast_ref::<NetValue<'_>>() {
+                        let port_tuple = heap.alloc((
+                            heap.alloc(comp_path.to_string()),
+                            heap.alloc(pin_name.as_str()),
+                        ));
+                        net_to_ports
+                            .entry(net.name().to_string())
+                            .or_default()
+                            .push(port_tuple.to_value());
+                    }
+                }
+            }
+        }
+
+        let nets_dict: Vec<_> = net_to_ports
+            .into_iter()
+            .map(|(net_name, port_tuples)| {
+                (
+                    heap.alloc(net_name).to_value(),
+                    heap.alloc(AllocList(port_tuples)).to_value(),
+                )
+            })
+            .collect();
+
+        Ok(heap.alloc(AllocDict(nets_dict)).to_value())
     }
 
-    fn has_attr(&self, attr: &str, _heap: Heap<'v>) -> bool {
-        matches!(attr, "nets" | "components" | "graph")
+    fn components<'v>(
+        this: &ModuleValue<'v>,
+        eval: &mut Evaluator<'v, '_, '_>,
+    ) -> starlark::Result<Value<'v>> {
+        let heap = eval.heap();
+        let base_path = this.path();
+        let components = eval.collect_components(base_path);
+
+        Ok(heap
+            .alloc(AllocDict(
+                components
+                    .iter()
+                    .map(|(path, comp_val)| {
+                        let key = path.to_rel_string(base_path).unwrap_or_default();
+                        (heap.alloc(key).to_value(), comp_val.to_value())
+                    })
+                    .collect::<Vec<_>>(),
+            ))
+            .to_value())
     }
 
-    fn dir_attr(&self) -> Vec<String> {
-        vec![
-            "nets".to_string(),
-            "components".to_string(),
-            "graph".to_string(),
-        ]
+    fn graph<'v>(
+        this: ValueTyped<'v, ModuleValue<'v>>,
+        eval: &mut Evaluator<'v, '_, '_>,
+    ) -> starlark::Result<Value<'v>> {
+        let heap = eval.heap();
+        let components = eval.collect_components(this.path());
+
+        use crate::graph::PortPath;
+        let mut net_to_ports: HashMap<String, Vec<PortPath>> = HashMap::new();
+        let mut component_pins: HashMap<ModulePath, Vec<String>> = HashMap::new();
+
+        for (comp_path, component_val) in components.iter() {
+            if let Some(component) = component_val.downcast_ref::<FrozenComponentValue>() {
+                let mut pins = Vec::new();
+                for (pin_name, net_val) in component.connections().iter() {
+                    if let Some(net) = net_val.downcast_ref::<crate::NetValue>() {
+                        let port_path = PortPath::new(comp_path.clone(), pin_name.clone());
+                        pins.push(pin_name.clone());
+
+                        net_to_ports
+                            .entry(net.name().to_string())
+                            .or_default()
+                            .push(port_path);
+                    }
+                }
+                if !pins.is_empty() {
+                    component_pins.insert(comp_path.clone(), pins);
+                }
+            }
+        }
+
+        // Collect public nets from module signature (io() parameters)
+        let mut public_nets = HashSet::new();
+        for param in this.signature().iter() {
+            if !param.is_config
+                && let Some(actual_value) = &param.actual_value
+            {
+                public_nets.extend(ModuleValue::<'v>::extract_nets_from_value(
+                    actual_value.to_value(),
+                ));
+            }
+        }
+
+        let graph = crate::graph::CircuitGraph::new(net_to_ports, component_pins, public_nets)
+            .map_err(|e| {
+                starlark::Error::new_other(anyhow::anyhow!("Failed to create circuit graph: {}", e))
+            })?;
+
+        let module_graph = ModuleGraphValue {
+            module: this.to_value(),
+            graph: Arc::new(graph),
+        };
+
+        Ok(heap.alloc(module_graph).to_value())
     }
 }
 
@@ -948,13 +1068,12 @@ impl std::fmt::Display for ModuleLoader {
 
 #[starlark_value(type = "ModuleLoader")]
 impl<'v> StarlarkValue<'v> for ModuleLoader {
-    #[instrument(name = "module_instantiate", skip_all, fields(module = %self.name))]
     fn invoke(
-        &self,
-        _me: Value<'v>,
+        this: &Self,
         args: &Arguments<'v, '_>,
         eval: &mut Evaluator<'v, '_, '_>,
     ) -> starlark::Result<Value<'v>> {
+        let _span = tracing::info_span!("module_instantiate", module = %this.name).entered();
         let heap = eval.heap();
         // Only allow named arguments
         let positions_iter = args.positions(heap)?;
@@ -995,14 +1114,14 @@ impl<'v> StarlarkValue<'v> for ModuleLoader {
 
             if arg_name.as_str() == "properties" {
                 // Expect a dict {str: any}
-                let dict = DictRef::from_value(value).ok_or_else(|| {
+                let dict = StarlarkDict::from_value(value).ok_or_else(|| {
                     starlark::Error::new_other(anyhow::anyhow!(
                         "properties parameter must be a dict"
                     ))
                 })?;
 
                 let mut map = SmallMap::new();
-                for (k, v) in dict.iter() {
+                for (k, v) in dict.entries() {
                     let key_str = k.unpack_str().ok_or_else(|| {
                         starlark::Error::new_other(anyhow::anyhow!("property keys must be strings"))
                     })?;
@@ -1047,13 +1166,13 @@ impl<'v> StarlarkValue<'v> for ModuleLoader {
         if let Some(dnp) = dnp {
             properties_override
                 .get_or_insert_with(SmallMap::new)
-                .insert("dnp".to_string(), heap.alloc(dnp));
+                .insert("dnp".to_string(), heap.alloc(dnp).to_value());
         }
         if let Some(mode) = schematic {
             let props = properties_override.get_or_insert_with(SmallMap::new);
             props.shift_remove("collapse");
             props.shift_remove("embed");
-            props.insert(mode.to_string(), heap.alloc(true));
+            props.insert(mode.to_string(), heap.alloc(true).to_value());
         }
 
         // `name` is required when instantiating a module via its loader.  If the
@@ -1065,7 +1184,7 @@ impl<'v> StarlarkValue<'v> for ModuleLoader {
             if let Some(call_site) = eval.call_stack_top_location() {
                 let msg = format!(
                     "Missing required argument `name` when instantiating module {}",
-                    self.name
+                    this.name
                 );
                 let mut diag = EvalMessage::from_any_error(Path::new(call_site.filename()), &msg);
                 diag.span = Some(call_site.resolve_span());
@@ -1073,16 +1192,16 @@ impl<'v> StarlarkValue<'v> for ModuleLoader {
             } else {
                 let msg = format!(
                     "Missing required argument `name` when instantiating module {}",
-                    self.name
+                    this.name
                 );
                 eval.add_diagnostic(EvalMessage::from_any_error(
-                    Path::new(&self.source_path),
+                    Path::new(&this.source_path),
                     &msg,
                 ));
             }
 
             // Use the file-stem derived name from the loader as a fallback.
-            self.name.clone()
+            this.name.clone()
         };
 
         let context = eval
@@ -1130,7 +1249,7 @@ impl<'v> StarlarkValue<'v> for ModuleLoader {
         drop(parent_module);
 
         context.enqueue_child(PendingChild {
-            loader: self.clone(),
+            loader: this.clone(),
             final_name,
             inputs: parent_values,
             properties: properties_override,
@@ -1145,7 +1264,7 @@ impl<'v> StarlarkValue<'v> for ModuleLoader {
         Ok(Value::new_none())
     }
 
-    fn eval_type(&self) -> Option<starlark::typing::Ty> {
+    fn eval_type(_this: &Self) -> Option<starlark::typing::Ty> {
         Some(<ModuleLoader as StarlarkValue>::get_type_starlark_repr())
     }
 
@@ -1154,13 +1273,13 @@ impl<'v> StarlarkValue<'v> for ModuleLoader {
     // file with an *empty* input map – mirroring the lightweight introspection pass in
     // `Module()` – and then access the owned frozen value through the current heap so the
     // heap records the upstream frozen-module dependency.
-    fn get_attr(&self, attr: &str, heap: Heap<'v>) -> Option<Value<'v>> {
+    fn get_attr(this: &Self, attr: &str, heap: Heap<'v>) -> Option<Value<'v>> {
         // Fast-path: ignore private/internal names.
         if attr.starts_with("__") {
             return None;
         }
 
-        self.frozen_module
+        this.frozen_module
             .get_option(attr)
             .ok()
             .flatten()
@@ -1175,8 +1294,8 @@ pub(crate) fn default_for_type<'v>(
 ) -> anyhow::Result<Value<'v>> {
     let heap = eval.heap();
 
-    if let Some(enum_type) = typ.downcast_ref::<EnumType>() {
-        if let Ok(first_variant) = enum_type.at(heap.alloc(0), heap) {
+    if typ.downcast_ref::<EnumType>().is_some() {
+        if let Ok(first_variant) = typ.at(heap.alloc(0i32).to_value(), heap) {
             return Ok(first_variant.to_value());
         } else {
             return Err(anyhow::anyhow!(
@@ -1204,7 +1323,7 @@ pub(crate) fn default_for_type<'v>(
 
     // Handle PhysicalValueType - create default 0 value
     if typ.downcast_ref::<PhysicalValueType>().is_some() {
-        let zero = heap.alloc(0i32);
+        let zero = heap.alloc(0i32).to_value();
         return eval
             .eval_function(typ, &[zero], &[])
             .map_err(|e| anyhow::anyhow!(e.to_string()));
@@ -1417,16 +1536,16 @@ pub(crate) fn normalize_allowed_values<'v>(
 }
 
 fn allowed_candidates<'v>(name: &str, allowed: Value<'v>) -> anyhow::Result<Vec<Value<'v>>> {
-    if let Some(list) = ListRef::from_value(allowed) {
-        return Ok(list.iter().collect());
+    if let Some(list) = StarlarkList::from_value(allowed) {
+        return Ok(list.values().collect());
     }
 
-    if let Some(tuple) = TupleRef::from_value(allowed) {
-        return Ok(tuple.iter().collect());
+    if let Some(tuple) = StarlarkTuple::from_value(allowed) {
+        return Ok(tuple.values().collect());
     }
 
-    if let Some(dict) = DictRef::from_value(allowed) {
-        return Ok(dict.iter().map(|(key, _)| key).collect());
+    if let Some(dict) = StarlarkDict::from_value(allowed) {
+        return Ok(dict.entries().map(|(key, _)| key).collect());
     }
 
     anyhow::bail!("config `{name}` expects `allowed` to be a list, tuple, or dict");
@@ -1509,9 +1628,9 @@ pub(crate) fn run_checks<'v>(
     value: Value<'v>,
 ) -> starlark::Result<()> {
     if let Some(checks_value) = checks {
-        if let Some(checks_list) = ListRef::from_value(checks_value) {
+        if let Some(checks_list) = StarlarkList::from_value(checks_value) {
             // It's a list - iterate through all check functions
-            for check_fn in checks_list.iter() {
+            for check_fn in checks_list.values() {
                 eval.eval_function(check_fn, &[value], &[])?;
             }
         } else {
@@ -1520,274 +1639,6 @@ pub(crate) fn run_checks<'v>(
         }
     }
     Ok(())
-}
-
-/// Callable wrapper for nets() method on modules
-#[derive(Clone, Debug, Trace, ProvidesStaticType, NoSerialize, Allocative, Freeze)]
-#[repr(C)]
-pub struct NetsCallable<'v> {
-    module: Value<'v>,
-}
-
-starlark_complex_value!(pub NetsCallable);
-
-impl<'v> std::fmt::Display for NetsCallable<'v> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Module.nets")
-    }
-}
-
-#[starlark_value(type = "function")]
-impl<'v> StarlarkValue<'v> for NetsCallable<'v> {
-    fn invoke(
-        &self,
-        _me: Value<'v>,
-        args: &Arguments<'v, '_>,
-        eval: &mut Evaluator<'v, '_, '_>,
-    ) -> starlark::Result<Value<'v>> {
-        // Nets method takes no arguments
-        if args.len()? != 0 {
-            return Err(starlark::Error::new_other(anyhow::anyhow!(
-                "nets() takes no arguments"
-            )));
-        }
-
-        let heap = eval.heap();
-
-        // Get the module and collect its components
-        let module_ref = downcast_frozen_module!(self.module);
-        let components = eval.collect_components(module_ref.path());
-
-        // Build reverse mapping: net_name -> list of (comp_path, pin_name) tuples
-        let mut net_to_ports: HashMap<String, Vec<Value<'v>>> = HashMap::new();
-
-        for (comp_path, component_val) in components.iter() {
-            if let Some(component) = component_val.downcast_ref::<FrozenComponentValue>() {
-                for (pin_name, net_val) in component.connections().iter() {
-                    if let Some(net) = net_val.downcast_ref::<NetValue<'_>>() {
-                        let port_tuple = heap.alloc((
-                            heap.alloc_str(comp_path.to_string().as_str()),
-                            heap.alloc_str(pin_name),
-                        ));
-                        net_to_ports
-                            .entry(net.name().to_string())
-                            .or_default()
-                            .push(port_tuple.to_value());
-                    }
-                }
-            }
-        }
-
-        // Convert to starlark dict format
-        let nets_dict: Vec<_> = net_to_ports
-            .into_iter()
-            .map(|(net_name, port_tuples)| {
-                (
-                    heap.alloc_str(&net_name).to_value(),
-                    heap.alloc(port_tuples),
-                )
-            })
-            .collect();
-
-        Ok(heap.alloc(AllocDict(nets_dict)))
-    }
-}
-
-/// Callable wrapper for components() method on modules
-#[derive(Clone, Debug, Trace, ProvidesStaticType, NoSerialize, Allocative, Freeze)]
-#[repr(C)]
-pub struct ComponentsCallable<'v> {
-    module: Value<'v>,
-}
-
-/// Callable wrapper for graph() method on modules
-#[derive(Clone, Debug, Trace, ProvidesStaticType, NoSerialize, Allocative, Freeze)]
-#[repr(C)]
-pub struct GraphCallable<'v> {
-    module: Value<'v>,
-}
-
-starlark_complex_value!(pub ComponentsCallable);
-starlark_complex_value!(pub GraphCallable);
-
-impl<'v> std::fmt::Display for ComponentsCallable<'v> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Module.components")
-    }
-}
-
-#[starlark_value(type = "function")]
-impl<'v> StarlarkValue<'v> for ComponentsCallable<'v> {
-    fn invoke(
-        &self,
-        _me: Value<'v>,
-        args: &Arguments<'v, '_>,
-        eval: &mut Evaluator<'v, '_, '_>,
-    ) -> starlark::Result<Value<'v>> {
-        // Components method takes no arguments
-        if args.len()? != 0 {
-            return Err(starlark::Error::new_other(anyhow::anyhow!(
-                "components() takes no arguments"
-            )));
-        }
-
-        let heap = eval.heap();
-
-        // Get the module and collect its components
-        let module_ref = downcast_frozen_module!(self.module);
-        let base_path = module_ref.path();
-        let components = eval.collect_components(base_path);
-
-        Ok(heap.alloc(AllocDict(
-            components
-                .iter()
-                .map(|(path, comp_val)| {
-                    let key = path.to_rel_string(base_path).unwrap_or_default();
-                    (heap.alloc_str(&key).to_value(), comp_val.to_value())
-                })
-                .collect::<Vec<_>>(),
-        )))
-    }
-}
-
-impl<'v> std::fmt::Display for GraphCallable<'v> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Module.graph")
-    }
-}
-
-#[starlark_value(type = "function")]
-impl<'v> StarlarkValue<'v> for GraphCallable<'v> {
-    fn invoke(
-        &self,
-        _me: Value<'v>,
-        args: &Arguments<'v, '_>,
-        eval: &mut Evaluator<'v, '_, '_>,
-    ) -> starlark::Result<Value<'v>> {
-        // Graph method takes no arguments
-        if args.len()? != 0 {
-            return Err(starlark::Error::new_other(anyhow::anyhow!(
-                "graph() takes no arguments"
-            )));
-        }
-
-        let heap = eval.heap();
-
-        // Get the module and collect its components
-        let module_ref = downcast_frozen_module!(self.module);
-        let components = eval.collect_components(module_ref.path());
-
-        // Collect all component connections to build nets using proper types
-        use crate::graph::PortPath;
-        let mut net_to_ports: HashMap<String, Vec<PortPath>> = HashMap::new();
-        let mut component_pins: HashMap<ModulePath, Vec<String>> = HashMap::new();
-
-        for (comp_path, component_val) in components.iter() {
-            if let Some(component) = component_val.downcast_ref::<FrozenComponentValue>() {
-                let mut pins = Vec::new();
-                for (pin_name, net_val) in component.connections().iter() {
-                    if let Some(net) = net_val.downcast_ref::<crate::NetValue>() {
-                        let port_path = PortPath::new(comp_path.clone(), pin_name.clone());
-                        pins.push(pin_name.clone());
-
-                        net_to_ports
-                            .entry(net.name().to_string())
-                            .or_default()
-                            .push(port_path);
-                    }
-                }
-                if !pins.is_empty() {
-                    component_pins.insert(comp_path.clone(), pins);
-                }
-            }
-        }
-
-        // Collect public nets from module signature (io() parameters)
-        let mut public_nets = HashSet::new();
-        for param in module_ref.signature().iter() {
-            if !param.is_config {
-                // This is an io() parameter - extract nets from it
-                if let Some(actual_value) = &param.actual_value {
-                    public_nets.extend(ModuleValue::<'v>::extract_nets_from_value(
-                        actual_value.to_value(),
-                    ));
-                }
-            }
-        }
-
-        // Build the CircuitGraph directly from the collected data
-        let graph = crate::graph::CircuitGraph::new(net_to_ports, component_pins, public_nets)
-            .map_err(|e| {
-                starlark::Error::new_other(anyhow::anyhow!("Failed to create circuit graph: {}", e))
-            })?;
-
-        // Create and return ModuleGraph object
-        let module_graph = ModuleGraphValue {
-            module: self.module.to_value(),
-            graph: Arc::new(graph),
-        };
-
-        Ok(heap.alloc_complex(module_graph))
-    }
-}
-
-/// ModuleType is used for type annotations (like ComponentType)
-#[derive(Debug, Trace, ProvidesStaticType, NoSerialize, Allocative, Freeze)]
-#[repr(C)]
-pub struct ModuleType;
-
-starlark_simple_value!(ModuleType);
-
-#[starlark_value(type = "Module")]
-impl<'v> StarlarkValue<'v> for ModuleType {
-    fn invoke(
-        &self,
-        _me: Value<'v>,
-        args: &Arguments<'v, '_>,
-        eval: &mut Evaluator<'v, '_, '_>,
-    ) -> starlark::Result<Value<'v>> {
-        // Extract path parameter - Module only takes one positional argument
-        let path = args.positional1(eval.heap())?;
-
-        let path = path
-            .unpack_str()
-            .ok_or_else(|| {
-                starlark::Error::new_other(anyhow::anyhow!("Module path must be a string"))
-            })?
-            .to_string();
-
-        // Get the parent context from the evaluator's ContextValue if available
-        let parent_context = eval.eval_context().expect("expected eval context");
-        let span = eval.call_stack_top_location().unwrap().resolve_span();
-        let frozen_module = parent_context.resolve_and_eval_module(&path, Some(span))?;
-        let mut params: Vec<String> = vec!["name".to_string(), "properties".to_string()];
-        let mut param_types: SmallMap<String, String> = SmallMap::new();
-
-        let extra = crate::lang::eval::frozen_context(&frozen_module);
-        for param in extra.module.signature().iter() {
-            params.push(param.name.clone());
-            param_types.insert(param.name.clone(), param.type_value.to_string());
-        }
-        let loader = ModuleLoader {
-            name: extra.module.path.name().clone(),
-            source_path: extra.module.source_path.clone(),
-            params,
-            param_types,
-            frozen_module,
-        };
-
-        Ok(eval.heap().alloc(loader))
-    }
-
-    fn eval_type(&self) -> Option<starlark::typing::Ty> {
-        Some(<ModuleValue as StarlarkValue>::get_type_starlark_repr())
-    }
-}
-
-impl std::fmt::Display for ModuleType {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "<Module>")
-    }
 }
 
 /// Legacy property keys used to mark a module DNP. The endorsed path is the
@@ -1824,10 +1675,13 @@ pub(crate) fn warn_legacy_module_dnp_add_property(eval: &Evaluator<'_, '_, '_>, 
     );
 }
 
-#[starlark_module]
 pub fn module_globals(builder: &mut GlobalsBuilder) {
-    const Module: ModuleType = ModuleType;
+    builder.type_symbol::<ModuleValue>();
+    module_global_fns(builder);
+}
 
+#[starlark_module]
+fn module_global_fns(builder: &mut GlobalsBuilder) {
     /// Declare a configuration value requirement. Works analogously to `io()` but typically
     /// used for primitive types coming from user configuration.
     fn config<'v>(
@@ -1839,8 +1693,8 @@ pub fn module_globals(builder: &mut GlobalsBuilder) {
 
     /// Deprecated. Record a path movement directive for refactoring support.
     fn moved<'v>(
-        #[starlark(require = pos)] old_path: String,
-        #[starlark(require = pos)] new_path: String,
+        #[starlark(require = pos)] old_path: &str,
+        #[starlark(require = pos)] new_path: &str,
         eval: &mut Evaluator<'v, '_, '_>,
     ) -> anyhow::Result<Value<'v>> {
         let (path, span) = eval
@@ -1858,7 +1712,7 @@ pub fn module_globals(builder: &mut GlobalsBuilder) {
             .with_call_stack(Some(eval.call_stack())),
         );
         if let Some(ctx) = eval.context_value() {
-            ctx.add_moved_directive(old_path, new_path, false);
+            ctx.add_moved_directive(old_path.to_owned(), new_path.to_owned(), false);
         }
         Ok(Value::new_none())
     }

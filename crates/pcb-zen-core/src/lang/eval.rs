@@ -1108,7 +1108,7 @@ impl EvalContext {
 
     fn initialize_context_value<'v>(&self, module: &Module<'v>) {
         let heap = module.heap();
-        let ctx_value = heap.alloc_complex(ContextValue::from_context(self));
+        let ctx_value = heap.alloc(ContextValue::from_context(self)).to_value();
         module.set_extra_value(ctx_value);
         let ctx_value = ctx_value
             .downcast_ref::<ContextValue>()
@@ -1117,7 +1117,7 @@ impl EvalContext {
         {
             let mut module_value = ctx_value.module_mut();
             for (name, json) in self.json_inputs.iter() {
-                module_value.add_input(name.clone(), heap.alloc(json));
+                module_value.add_input(name.clone(), heap.alloc(json).to_value());
             }
         }
 
@@ -1873,7 +1873,10 @@ mod tests {
             let library = Module::with_temp_heap(|module| {
                 module.set(
                     "witness",
-                    module.heap().alloc(HeapWitness { _owner: witness }),
+                    module
+                        .heap()
+                        .alloc(HeapWitness { _owner: witness })
+                        .to_value(),
                 );
                 module.freeze().unwrap()
             });

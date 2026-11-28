@@ -9,7 +9,7 @@ use starlark::typing::TyUserFields;
 use starlark::{
     any::ProvidesStaticType,
     collections::SmallMap,
-    environment::{Methods, MethodsBuilder},
+    environment::MethodsBuilder,
     eval::{Arguments, Evaluator, ParametersSpec, ParametersSpecParam},
     starlark_complex_value, starlark_module,
     typing::{ParamIsRequired, ParamSpec, Ty, TyCallable, TyStarlarkValue, TyUser, TyUserParams},
@@ -178,8 +178,6 @@ pub struct NetValue<'v> {
 
 starlark_complex_value!(pub NetValue);
 
-starlark::methods_static!(NET_METHODS = builtin_net_methods);
-
 impl<'v> std::fmt::Debug for NetValue<'v> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         // Use "Net" as struct name for backwards compatibility with old snapshots
@@ -201,38 +199,34 @@ impl<'v> std::fmt::Debug for NetValue<'v> {
     }
 }
 
-#[starlark_value(type = "Net")]
+#[starlark_value(type = "Net", methods = builtin_net_methods)]
 impl<'v> StarlarkValue<'v> for NetValue<'v> {
-    fn get_methods() -> Option<&'static Methods> {
-        Some(NET_METHODS.methods())
-    }
-
-    fn get_attr(&self, attribute: &str, heap: Heap<'v>) -> Option<Value<'v>> {
+    fn get_attr(this: &Self, attribute: &str, heap: Heap<'v>) -> Option<Value<'v>> {
         match attribute {
-            "NET" => Some(self.with_net_type("Net", heap)),
-            _ => self
+            "NET" => Some(this.with_net_type("Net", heap)),
+            _ => this
                 .properties
                 .get(attribute)
                 .map(|v| v.to_value())
                 .or_else(|| {
-                    self.is_builtin_optional_attr(attribute)
-                        .then(|| heap.alloc(starlark::values::none::NoneType))
+                    this.is_builtin_optional_attr(attribute)
+                        .then(|| heap.alloc(starlark::values::none::NoneType).to_value())
                 }),
         }
     }
 
-    fn has_attr(&self, attribute: &str, _heap: Heap<'v>) -> bool {
+    fn has_attr(this: &Self, attribute: &str, _heap: Heap<'v>) -> bool {
         attribute == "NET"
-            || self.properties.contains_key(attribute)
-            || self.is_builtin_optional_attr(attribute)
+            || this.properties.contains_key(attribute)
+            || this.is_builtin_optional_attr(attribute)
     }
 
-    fn dir_attr(&self) -> Vec<String> {
-        let mut attrs: Vec<String> = self.properties.keys().cloned().collect();
+    fn dir_attr(this: &Self) -> Vec<String> {
+        let mut attrs: Vec<String> = this.properties.keys().cloned().collect();
         if !attrs.iter().any(|existing| existing == "NET") {
             attrs.push("NET".to_string());
         }
-        for attr in self.builtin_optional_attrs() {
+        for attr in this.builtin_optional_attrs() {
             if !attrs.iter().any(|existing| existing == attr) {
                 attrs.push(attr.to_string());
             }
@@ -247,12 +241,12 @@ impl<'v> StarlarkValue<'v> for NetValue<'v> {
     }
 
     fn export_as(
-        &self,
+        this: &Self,
         variable_name: &str,
         eval: &mut Evaluator<'v, '_, '_>,
     ) -> starlark::Result<()> {
-        self.mark_bound();
-        self.infer_assignment_name(variable_name, eval)
+        this.mark_bound();
+        this.infer_assignment_name(variable_name, eval)
     }
 }
 
@@ -311,7 +305,7 @@ impl<'v> NetValue<'v> {
                 .collect(),
         };
         edit(&mut net);
-        heap.alloc(net)
+        heap.alloc(net).to_value()
     }
 
     pub(crate) fn mark_bound(&self) {
@@ -555,20 +549,23 @@ pub(crate) fn instantiate_not_connected<'v>(
         );
     }
 
-    Ok(eval.heap().alloc(NetValue {
-        net_id: generate_net_id(),
-        name: String::new(),
-        template_name: None,
-        original_name: None,
-        assignment_inferable: false,
-        was_bound: OnceLock::new(),
-        inferred_name: OnceLock::new(),
-        declaration_path,
-        declaration_span,
-        type_name: "Net".to_string(),
-        connection_intent: ConnectionIntent::Open,
-        properties: SmallMap::new(),
-    }))
+    Ok(eval
+        .heap()
+        .alloc(NetValue {
+            net_id: generate_net_id(),
+            name: String::new(),
+            template_name: None,
+            original_name: None,
+            assignment_inferable: false,
+            was_bound: OnceLock::new(),
+            inferred_name: OnceLock::new(),
+            declaration_path,
+            declaration_span,
+            type_name: "Net".to_string(),
+            connection_intent: ConnectionIntent::Open,
+            properties: SmallMap::new(),
+        })
+        .to_value())
 }
 
 /// A callable type constructor for creating typed nets
@@ -588,7 +585,6 @@ pub struct NetType<'v> {
 }
 
 starlark_complex_value!(pub NetType);
-starlark::methods_static!(NET_TYPE_METHODS = net_type_methods);
 
 impl<'v> NetType<'v> {
     /// Returns the instance type name (e.g., "Net", "Power", "Ground")
@@ -599,6 +595,37 @@ impl<'v> NetType<'v> {
     /// Returns the callable type name (e.g., "NetType", "PowerType", "GroundType")
     fn ty_name(&self) -> String {
         format!("{}Type", self.type_name)
+    }
+
+    fn eval_type_ty(&self) -> Option<Ty> {
+        let id = self.type_instance_id(PcbTypeIdDomain::Net);
+
+        // Build known fields from self.fields
+        // TODO(type-hints): Extract proper Ty from field specs instead of Ty::any()
+        let known_fields: SortedMap<String, Ty> = self
+            .fields
+            .keys()
+            .map(|field_name| (field_name.clone(), Ty::any()))
+            .collect();
+
+        Some(Ty::custom(
+            TyUser::new(
+                self.instance_ty_name(),
+                TyStarlarkValue::new::<NetValue>(),
+                id,
+                TyUserParams {
+                    matcher: Some(TypeMatcherFactory::new(NetTypeMatcher {
+                        type_name: self.type_name.clone(),
+                    })),
+                    fields: TyUserFields {
+                        known: known_fields,
+                        unknown: false,
+                    },
+                    ..TyUserParams::default()
+                },
+            )
+            .ok()?,
+        ))
     }
 }
 
@@ -760,21 +787,21 @@ impl<'v> NetType<'v> {
             && let Some(sym) = symbol_val.downcast_ref::<SymbolValue>()
         {
             if let Some(name) = sym.name() {
-                properties.insert("symbol_name".to_string(), heap.alloc_str(name).to_value());
+                properties.insert("symbol_name".to_string(), heap.alloc(name).to_value());
             }
             if let Some(path) = sym.source_uri() {
-                properties.insert("symbol_path".to_string(), heap.alloc_str(path).to_value());
+                properties.insert("symbol_path".to_string(), heap.alloc(path).to_value());
             }
             if let Some(version) = sym.source_format_version() {
                 properties.insert(
                     pcb_sch::ATTR_SYMBOL_FORMAT_VERSION.to_string(),
-                    heap.alloc(version),
+                    heap.alloc(version).to_value(),
                 );
             }
             if let Some(raw_sexp) = sym.raw_sexp() {
                 properties.insert(
                     "__symbol_value".to_string(),
-                    heap.alloc_str(raw_sexp).to_value(),
+                    heap.alloc(raw_sexp).to_value(),
                 );
             }
         }
@@ -802,20 +829,22 @@ impl<'v> NetType<'v> {
             net_name.clone()
         };
 
-        Ok(heap.alloc(NetValue {
-            net_id,
-            name: final_name,
-            template_name,
-            original_name,
-            assignment_inferable,
-            was_bound,
-            inferred_name: OnceLock::new(),
-            declaration_path,
-            declaration_span,
-            type_name: self.type_name.clone(),
-            connection_intent,
-            properties,
-        }))
+        Ok(heap
+            .alloc(NetValue {
+                net_id,
+                name: final_name,
+                template_name,
+                original_name,
+                assignment_inferable,
+                was_bound,
+                inferred_name: OnceLock::new(),
+                declaration_path,
+                declaration_span,
+                type_name: self.type_name.clone(),
+                connection_intent,
+                properties,
+            })
+            .to_value())
     }
 
     /// Get the unique TypeInstanceId for this NetType based on structural equivalence.
@@ -881,7 +910,7 @@ fn compile_field_type<'v>(
     heap: Heap<'v>,
 ) -> anyhow::Result<TypeCompiled<'v>> {
     if let Some(field_gen) = field_spec.downcast_ref::<Field<'v>>() {
-        Ok(TypeCompiled::from_ty(field_gen.typ.as_ty(), heap))
+        Ok(field_gen.typ)
     } else {
         TypeCompiled::new(field_spec, heap)
     }
@@ -987,17 +1016,16 @@ pub(crate) fn instantiate_generated_net<'v>(
     .into())
 }
 
-#[starlark_value(type = "NetType")]
+#[starlark_value(type = "NetType", methods = net_type_methods)]
 impl<'v> StarlarkValue<'v> for NetType<'v> {
     fn invoke(
-        &self,
-        _: Value<'v>,
+        this: &Self,
         args: &Arguments<'v, '_>,
         eval: &mut Evaluator<'v, '_, '_>,
     ) -> starlark::Result<Value<'v>> {
-        self.parameters_spec()
+        this.parameters_spec()
             .parser(args, eval, |param_parser, eval| {
-                let type_name = self.instance_ty_name();
+                let type_name = this.instance_ty_name();
 
                 // Parse arguments: positional value, name= keyword, and field values
                 let positional_value: Option<Value> = param_parser.next_opt()?;
@@ -1008,7 +1036,7 @@ impl<'v> StarlarkValue<'v> for NetType<'v> {
 
                 // Parse field values (all optional)
                 let mut field_values = SmallMap::new();
-                for field_name in self.fields.keys() {
+                for field_name in this.fields.keys() {
                     if let Some(field_val) = param_parser.next_opt::<Value>()? {
                         field_values.insert(field_name.clone(), field_val);
                     }
@@ -1053,7 +1081,7 @@ impl<'v> StarlarkValue<'v> for NetType<'v> {
                 let assignment_inferable =
                     explicit_name.is_none() && base_net.is_none_or(NetValue::is_open);
 
-                self.instantiate(
+                this.instantiate(
                     base_net,
                     explicit_name,
                     field_values,
@@ -1067,54 +1095,23 @@ impl<'v> StarlarkValue<'v> for NetType<'v> {
             })
     }
 
-    fn eval_type(&self) -> Option<Ty> {
-        let id = self.type_instance_id(PcbTypeIdDomain::Net);
-
-        // Build known fields from self.fields
-        // TODO(type-hints): Extract proper Ty from field specs instead of Ty::any()
-        let known_fields: SortedMap<String, Ty> = self
-            .fields
-            .keys()
-            .map(|field_name| (field_name.clone(), Ty::any()))
-            .collect();
-
-        Some(Ty::custom(
-            TyUser::new(
-                self.instance_ty_name(),
-                TyStarlarkValue::new::<NetValue>(),
-                id,
-                TyUserParams {
-                    matcher: Some(TypeMatcherFactory::new(NetTypeMatcher {
-                        type_name: self.type_name.clone(),
-                    })),
-                    fields: TyUserFields {
-                        known: known_fields,
-                        unknown: false,
-                    },
-                    ..TyUserParams::default()
-                },
-            )
-            .ok()?,
-        ))
+    fn eval_type(this: &Self) -> Option<Ty> {
+        this.eval_type_ty()
     }
 
-    fn typechecker_ty(&self) -> Option<Ty> {
+    fn typechecker_ty(this: &Self) -> Option<Ty> {
         Some(Ty::custom(
             TyUser::new(
-                self.ty_name(),
+                this.ty_name(),
                 TyStarlarkValue::new::<Self>(),
-                self.type_instance_id(PcbTypeIdDomain::NetType),
+                this.type_instance_id(PcbTypeIdDomain::NetType),
                 TyUserParams {
-                    callable: Some(TyCallable::new(self.param_spec(), self.eval_type()?)),
+                    callable: Some(TyCallable::new(this.param_spec(), this.eval_type_ty()?)),
                     ..TyUserParams::default()
                 },
             )
             .ok()?,
         ))
-    }
-
-    fn get_methods() -> Option<&'static Methods> {
-        Some(NET_TYPE_METHODS.methods())
     }
 }
 
@@ -1144,5 +1141,9 @@ struct NetTypeMatcher {
 impl TypeMatcher for NetTypeMatcher {
     fn matches(&self, value: Value) -> bool {
         net_matches_type_name(value, &self.type_name).unwrap_or(false)
+    }
+
+    fn is_stable(&self) -> bool {
+        true
     }
 }

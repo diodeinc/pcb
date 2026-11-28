@@ -9,10 +9,10 @@ use starlark::{
     any::ProvidesStaticType,
     collections::SmallMap,
     environment::GlobalsBuilder,
-    eval::{Arguments, Evaluator, ParametersSpec, ParametersSpecParam},
-    starlark_complex_value, starlark_module, starlark_simple_value,
+    eval::Evaluator,
+    starlark_complex_value,
     values::{
-        Freeze, NoSerialize, StarlarkValue, Trace, Value, dict::DictRef, list::ListRef,
+        Freeze, NoSerialize, StarlarkValue, Trace, Value, dict::StarlarkDict, list::StarlarkList,
         starlark_value,
     },
 };
@@ -46,7 +46,82 @@ impl<'v> std::fmt::Debug for SpiceModelValue<'v> {
 starlark_complex_value!(pub SpiceModelValue);
 
 #[starlark_value(type = "SpiceModel")]
-impl<'v> StarlarkValue<'v> for SpiceModelValue<'v> where Self: ProvidesStaticType<'v> {}
+impl<'v> StarlarkValue<'v> for SpiceModelValue<'v>
+where
+    Self: ProvidesStaticType<'v>,
+{
+    #[allow(non_snake_case)]
+    #[starlark(constructor)]
+    fn SpiceModel(
+        #[starlark(require = pos)] definition: Value<'v>,
+        #[starlark(require = pos)] name: Value<'v>,
+        nets: Value<'v>,
+        args: Value<'v>,
+        eval: &mut Evaluator<'v, '_, '_>,
+    ) -> starlark::Result<SpiceModelValue<'v>> {
+        let path = definition
+            .unpack_str()
+            .ok_or_else(|| starlark::Error::new_other(anyhow!("`path` must be a string")))?
+            .to_owned();
+
+        let name = name
+            .unpack_str()
+            .ok_or_else(|| starlark::Error::new_other(anyhow!("`name` must be a string")))?
+            .to_owned();
+
+        let inputs_list = StarlarkList::from_value(nets)
+            .ok_or_else(|| starlark::Error::new_other(anyhow!("`nets` must be a list of Net")))?;
+
+        let params_dict = StarlarkDict::from_value(args)
+            .ok_or_else(|| starlark::Error::new_other(anyhow!("`args` must be a map")))?;
+
+        let mut parsed_args: SmallMap<String, String> = SmallMap::new();
+        for (k_val, v_val) in params_dict.entries() {
+            let param_name = k_val
+                .unpack_str()
+                .ok_or_else(|| {
+                    starlark::Error::new_other(anyhow!("parameter names must be strings"))
+                })?
+                .to_owned();
+            let v_str = if let Some(s) = v_val.unpack_str() {
+                s.to_owned()
+            } else if let Some(pv) = v_val.downcast_ref::<PhysicalValue>() {
+                pv.to_spice_string()
+            } else {
+                return Err(starlark::Error::new_other(anyhow!(
+                    "parameter values must be a string or PhysicalValue"
+                )));
+            };
+            parsed_args.insert(param_name, v_str);
+        }
+
+        let mut parsed_nets: Vec<Value<'v>> = Vec::new();
+        for net_val in inputs_list.values() {
+            if net_val.get_type() != "Net" {
+                return Err(starlark::Error::new_other(anyhow!(format!(
+                    "Expected Net, got {}",
+                    net_val.get_type()
+                ))));
+            }
+            parsed_nets.push(net_val);
+        }
+
+        let eval_ctx = eval.eval_context().unwrap();
+        let current_file = eval_ctx
+            .source_path()
+            .ok_or_else(|| starlark::Error::new_other(anyhow!("No source path available")))?;
+        let (contents, circuit) =
+            resolve_spice_subcircuit(eval_ctx, Path::new(&current_file), &path, &name)?;
+        validate_spice_model(&circuit, parsed_nets.len(), &parsed_args)?;
+
+        Ok(SpiceModelValue {
+            definition: contents,
+            name,
+            nets: parsed_nets,
+            args: parsed_args,
+        })
+    }
+}
 
 impl<'v> std::fmt::Display for SpiceModelValue<'v> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -74,118 +149,6 @@ impl<'v> SpiceModelValue<'v> {
 
     pub fn definition(&self) -> &str {
         &self.definition
-    }
-}
-
-/// SpiceModelFactory is a value that represents a factory for a SpiceModel.
-#[derive(Debug, Trace, ProvidesStaticType, NoSerialize, Allocative, Freeze)]
-#[repr(C)]
-pub struct SpiceModelType;
-
-starlark_simple_value!(SpiceModelType);
-
-#[starlark_value(type = "SpiceModel")]
-impl<'v> StarlarkValue<'v> for SpiceModelType {
-    fn invoke(
-        &self,
-        _me: Value<'v>,
-        args: &Arguments<'v, '_>,
-        eval: &mut Evaluator<'v, '_, '_>,
-    ) -> starlark::Result<Value<'v>> {
-        let param_spec = ParametersSpec::new_parts(
-            "SpiceModel",
-            [
-                ("definition", ParametersSpecParam::<Value<'_>>::Required),
-                ("name", ParametersSpecParam::<Value<'_>>::Required),
-            ],
-            // Named parameters
-            [
-                ("nets", ParametersSpecParam::<Value<'_>>::Required),
-                ("args", ParametersSpecParam::<Value<'_>>::Required),
-            ],
-            false,
-            std::iter::empty::<(&str, ParametersSpecParam<_>)>(),
-            false,
-        );
-
-        let (path, name, nets, args) =
-            param_spec.parser(args, eval, |param_parser, _eval_ctx| {
-                let path_val: Value = param_parser.next()?;
-                let path = path_val
-                    .unpack_str()
-                    .ok_or_else(|| starlark::Error::new_other(anyhow!("`path` must be a string")))?
-                    .to_owned();
-
-                let name_val: Value = param_parser.next()?;
-                let name = name_val
-                    .unpack_str()
-                    .ok_or_else(|| starlark::Error::new_other(anyhow!("`name` must be a string")))?
-                    .to_owned();
-
-                let inputs_val: Value = param_parser.next()?;
-                let inputs_list = ListRef::from_value(inputs_val).ok_or_else(|| {
-                    starlark::Error::new_other(anyhow!("`nets` must be a list of Net"))
-                })?;
-
-                let params_val: Value = param_parser.next()?;
-                let params_dict = DictRef::from_value(params_val)
-                    .ok_or_else(|| starlark::Error::new_other(anyhow!("`args` must be a map")))?;
-
-                // Parse the parameters
-                let mut args: SmallMap<String, String> = SmallMap::new();
-                for (k_val, v_val) in params_dict.iter() {
-                    let param_name = k_val
-                        .unpack_str()
-                        .ok_or_else(|| {
-                            starlark::Error::new_other(anyhow!("parameter names must be strings"))
-                        })?
-                        .to_owned();
-                    let v_str = if let Some(s) = v_val.unpack_str() {
-                        s.to_owned()
-                    } else if let Some(pv) = v_val.downcast_ref::<PhysicalValue>() {
-                        pv.to_spice_string()
-                    } else {
-                        return Err(starlark::Error::new_other(anyhow!(
-                            "parameter values must be a string or PhysicalValue"
-                        )));
-                    };
-                    args.insert(param_name, v_str);
-                }
-
-                // Figure out the input nets
-                let mut nets: Vec<Value<'v>> = Vec::new();
-
-                for net_val in inputs_list.iter() {
-                    if net_val.get_type() != "Net" {
-                        return Err(starlark::Error::new_other(anyhow!(format!(
-                            "Expected Net, got {}",
-                            net_val.get_type()
-                        ))));
-                    }
-                    nets.push(net_val);
-                }
-
-                Ok((path, name, nets, args))
-            })?;
-
-        let eval_ctx = eval.eval_context().unwrap();
-        let current_file = eval_ctx
-            .source_path()
-            .ok_or_else(|| starlark::Error::new_other(anyhow!("No source path available")))?;
-        let (contents, circuit) =
-            resolve_spice_subcircuit(eval_ctx, Path::new(&current_file), &path, &name)?;
-        validate_spice_model(&circuit, nets.len(), &args)?;
-
-        Ok(eval.heap().alloc_complex(SpiceModelValue {
-            definition: contents,
-            name,
-            nets,
-            args,
-        }))
-    }
-
-    fn eval_type(&self) -> Option<starlark::typing::Ty> {
-        Some(<SpiceModelType as StarlarkValue>::get_type_starlark_repr())
     }
 }
 
@@ -360,13 +323,6 @@ fn get_sub_circuit(s: &str, name: &str) -> anyhow::Result<SubCircuit> {
     Ok(circuit)
 }
 
-impl std::fmt::Display for SpiceModelType {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "<SpiceModel>")
-    }
-}
-
-#[starlark_module]
 pub(crate) fn model_globals(builder: &mut GlobalsBuilder) {
-    const SpiceModel: SpiceModelType = SpiceModelType;
+    builder.type_symbol::<SpiceModelValue>();
 }

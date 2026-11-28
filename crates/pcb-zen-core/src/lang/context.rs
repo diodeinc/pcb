@@ -8,7 +8,10 @@ use starlark::{
     any::ProvidesStaticType,
     codemap::ResolvedSpan,
     eval::CallStack,
-    values::{Freeze, FreezeResult, Freezer, StarlarkValue, Trace, Value, starlark_value},
+    values::{
+        Freeze, FreezeResult, Freezer, StarlarkRepresentations, StarlarkType, StarlarkValue, Trace,
+        Value, ValueTyped, starlark_value,
+    },
 };
 
 use starlark::collections::SmallMap;
@@ -126,12 +129,23 @@ impl Display for FrozenContextValue<'_> {
     }
 }
 
-#[starlark_value(type = "ContextValue")]
-impl<'v> StarlarkValue<'v> for ContextValue<'v> {}
+#[derive(Debug, Clone, Copy, StarlarkRepresentations)]
+pub enum ContextView<'v> {
+    Mutable(ValueTyped<'v, ContextValue<'v>>),
+    Frozen(ValueTyped<'v, FrozenContextValue<'v>>),
+}
 
-#[starlark_value(type = "FrozenContextValue", frozen_vtable)]
+#[starlark_value(type = "ContextValue")]
+impl<'v> StarlarkType<'v> for ContextView<'v> {}
+
+#[starlark_value(alloc = complex)]
+impl<'v> StarlarkValue<'v> for ContextValue<'v> {
+    type Type = ContextView<'v>;
+}
+
+#[starlark_value(alloc = frozen)]
 impl<'v> StarlarkValue<'v> for FrozenContextValue<'v> {
-    type Canonical = ContextValue<'v>;
+    type Type = ContextView<'v>;
 }
 
 impl FrozenContextValue<'_> {

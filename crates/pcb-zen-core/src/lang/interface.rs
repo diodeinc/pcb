@@ -7,8 +7,8 @@ use starlark::starlark_complex_value;
 use starlark::starlark_module;
 use starlark::values::typing::TypeInstanceId;
 use starlark::values::{
-    AllocFrozenValue, AllocValue, Freeze, FreezeResult, Freezer, FrozenHeap, Heap, NoSerialize,
-    ProvidesStaticType, StarlarkValue, Trace, Value, starlark_value,
+    Freeze, FreezeResult, Freezer, Heap, NoSerialize, ProvidesStaticType, StarlarkValue, Trace,
+    Value, ValueTyped, dict::StarlarkDict, starlark_value,
 };
 
 use std::collections::HashMap;
@@ -139,23 +139,25 @@ fn clone_net_template<'v>(
         net_name
     };
 
-    let cloned_net = heap.alloc(NetValue {
-        net_id: cloned_net.id(),
-        name: final_name,
-        template_name: cloned_net.template_name_opt().map(str::to_owned),
-        original_name: cloned_net.original_name_opt().map(|s| s.to_owned()),
-        assignment_inferable: prefix.assignment_inferable,
-        was_bound: cloned_net.cloned_bound_marker(),
-        inferred_name: OnceLock::new(),
-        declaration_path: cloned_net
-            .declaration_path()
-            .unwrap_or_default()
-            .to_string(),
-        declaration_span: cloned_net.declaration_span(),
-        type_name: cloned_net.type_name.clone(),
-        connection_intent: cloned_net.connection_intent,
-        properties: cloned_net.properties().clone(),
-    });
+    let cloned_net = heap
+        .alloc(NetValue {
+            net_id: cloned_net.id(),
+            name: final_name,
+            template_name: cloned_net.template_name_opt().map(str::to_owned),
+            original_name: cloned_net.original_name_opt().map(|s| s.to_owned()),
+            assignment_inferable: prefix.assignment_inferable,
+            was_bound: cloned_net.cloned_bound_marker(),
+            inferred_name: OnceLock::new(),
+            declaration_path: cloned_net
+                .declaration_path()
+                .unwrap_or_default()
+                .to_string(),
+            declaration_span: cloned_net.declaration_span(),
+            type_name: cloned_net.type_name.clone(),
+            connection_intent: cloned_net.connection_intent,
+            properties: cloned_net.properties().clone(),
+        })
+        .to_value();
     cloned_nets.insert(source_id, cloned_net);
     Ok(cloned_net)
 }
@@ -259,12 +261,14 @@ fn clone_interface_template<'v>(
             );
         };
 
-        Ok(heap.alloc(InterfaceValue {
-            fields,
-            generated_fields,
-            instance_root_name,
-            factory: factory_val,
-        }))
+        Ok(heap
+            .alloc(InterfaceValue {
+                fields,
+                generated_fields,
+                instance_root_name,
+                factory: factory_val,
+            })
+            .to_value())
     }
 
     let mut cloned_nets = HashMap::new();
@@ -359,12 +363,14 @@ fn create_interface_instance<'v>(
     apply_pair_impedance(&mut fields, heap);
 
     // Create the interface instance
-    let interface_instance = heap.alloc(InterfaceValue {
-        fields,
-        generated_fields,
-        instance_root_name: (!prefix.assignment_inferable).then(|| prefix.new_style.clone()),
-        factory: factory_value,
-    });
+    let interface_instance = heap
+        .alloc(InterfaceValue {
+            fields,
+            generated_fields,
+            instance_root_name: (!prefix.assignment_inferable).then(|| prefix.new_style.clone()),
+            factory: factory_value,
+        })
+        .to_value();
 
     // Execute __post_init__ if present
     if let Some(post_init_fn) = factory.post_init_fn.as_ref() {
@@ -433,17 +439,7 @@ pub struct InterfaceFactory<'v> {
     param_spec: ParametersSpec<Value<'v>>,
 }
 
-impl<'v> AllocValue<'v> for InterfaceFactory<'v> {
-    fn alloc_value(self, heap: Heap<'v>) -> Value<'v> {
-        heap.alloc_complex(self)
-    }
-}
-
-impl<'fv> AllocFrozenValue<'fv> for InterfaceFactory<'fv> {
-    fn alloc_frozen_value(self, heap: FrozenHeap<'fv>) -> Value<'fv> {
-        heap.alloc_simple(self)
-    }
-}
+starlark_complex_value!(pub InterfaceFactory);
 
 impl<'v> Freeze<'v> for InterfaceFactory<'v> {
     type Frozen<'fv> = InterfaceFactory<'fv>;
@@ -458,21 +454,18 @@ impl<'v> Freeze<'v> for InterfaceFactory<'v> {
     }
 }
 
-#[starlark_value(type = "InterfaceFactory", frozen_vtable)]
+#[starlark_value(type = "InterfaceFactory")]
 impl<'v> StarlarkValue<'v> for InterfaceFactory<'v> {
-    type Canonical = Self;
-
     fn invoke(
-        &self,
-        _me: Value<'v>,
+        this: ValueTyped<'v, Self>,
         args: &Arguments<'v, '_>,
         eval: &mut Evaluator<'v, '_, '_>,
     ) -> starlark::Result<Value<'v>> {
         // Collect provided `name` (optional) and field values using the cached parameter spec.
-        let mut provided_values = SmallMap::with_capacity(self.fields.len());
+        let mut provided_values = SmallMap::with_capacity(this.fields.len());
         let mut instance_name_opt: Option<String> = None;
 
-        self.param_spec.parser(args, eval, |param_parser, _extra| {
+        this.param_spec.parser(args, eval, |param_parser, _extra| {
             // First optional positional/named `name` parameter.
             if let Some(name_val) = param_parser.next_opt::<Value<'v>>()? {
                 let name_str = name_val.unpack_str().ok_or_else(|| {
@@ -486,7 +479,7 @@ impl<'v> StarlarkValue<'v> for InterfaceFactory<'v> {
             }
 
             // Then the field values in the order of `fields`.
-            for (fld_name, _) in self.fields.iter() {
+            for (fld_name, _) in this.fields.iter() {
                 if let Some(v) = param_parser.next_opt()? {
                     provided_values.insert(fld_name.clone(), v);
                 }
@@ -501,10 +494,18 @@ impl<'v> StarlarkValue<'v> for InterfaceFactory<'v> {
             InstancePrefix::empty()
         };
         // Normal instantiation - always register nets
-        create_interface_instance(self, _me, provided_values, &prefix, true, eval.heap(), eval)
+        create_interface_instance(
+            &this,
+            this.to_value(),
+            provided_values,
+            &prefix,
+            true,
+            eval.heap(),
+            eval,
+        )
     }
 
-    fn eval_type(&self) -> Option<starlark::typing::Ty> {
+    fn eval_type(_this: &Self) -> Option<starlark::typing::Ty> {
         // An instance created by this factory evaluates to `InterfaceValue`,
         // so expose that as the type annotation for static/runtime checks.
         // This mirrors how `NetType` maps to `NetValue`.
@@ -512,21 +513,21 @@ impl<'v> StarlarkValue<'v> for InterfaceFactory<'v> {
     }
 
     fn export_as(
-        &self,
+        this: &Self,
         variable_name: &str,
         _eval: &mut Evaluator<'v, '_, '_>,
     ) -> starlark::Result<()> {
-        self.interface_type_data.get_or_init(|| {
+        this.interface_type_data.get_or_init(|| {
             Arc::new(InterfaceTypeData {
                 name: variable_name.to_owned(),
-                id: self.id,
+                id: this.id,
             })
         });
         Ok(())
     }
 
-    fn dir_attr(&self) -> Vec<String> {
-        self.fields.iter().map(|(k, _)| k.clone()).collect()
+    fn dir_attr(this: &Self) -> Vec<String> {
+        this.fields.iter().map(|(k, _)| k.clone()).collect()
     }
 }
 
@@ -580,15 +581,25 @@ starlark_complex_value!(pub InterfaceValue);
 
 #[starlark_value(type = "InterfaceValue")]
 impl<'v> StarlarkValue<'v> for InterfaceValue<'v> {
-    fn get_attr(&self, attr: &str, _heap: Heap<'v>) -> Option<Value<'v>> {
-        self.fields.get(attr).map(|v| v.to_value())
+    fn get_attr(this: &Self, attr: &str, _heap: Heap<'v>) -> Option<Value<'v>> {
+        this.fields.get(attr).map(|v| v.to_value())
     }
 
-    fn dir_attr(&self) -> Vec<String> {
-        self.fields.keys().cloned().collect()
+    fn dir_attr(this: &Self) -> Vec<String> {
+        this.fields.keys().cloned().collect()
     }
 
     fn export_as(
+        this: &Self,
+        variable_name: &str,
+        eval: &mut Evaluator<'v, '_, '_>,
+    ) -> starlark::Result<()> {
+        this.export_as_inner(variable_name, eval)
+    }
+}
+
+impl<'v> InterfaceValue<'v> {
+    fn export_as_inner(
         &self,
         variable_name: &str,
         eval: &mut Evaluator<'v, '_, '_>,
@@ -615,7 +626,7 @@ impl<'v> StarlarkValue<'v> for InterfaceValue<'v> {
                 };
                 net.infer_assignment_name(&inferred_name, eval)?;
             } else if let Some(interface) = field_value.downcast_ref::<InterfaceValue<'v>>() {
-                interface.export_as(variable_name, eval)?;
+                interface.export_as_inner(variable_name, eval)?;
             }
         }
 
@@ -665,7 +676,7 @@ impl<'v> InterfaceValue<'v> {
 #[starlark_module]
 pub(crate) fn interface_globals(builder: &mut GlobalsBuilder) {
     fn interface<'v>(
-        #[starlark(kwargs)] kwargs: SmallMap<String, Value<'v>>,
+        #[starlark(kwargs)] kwargs: StarlarkDict<'v>,
         eval: &mut Evaluator<'v, '_, '_>,
     ) -> anyhow::Result<Value<'v>> {
         let heap = eval.heap();
@@ -673,7 +684,10 @@ pub(crate) fn interface_globals(builder: &mut GlobalsBuilder) {
         let mut post_init_fn = None;
 
         // Process field specifications and validate reserved names
-        for (name, v) in &kwargs {
+        for (name_val, v) in kwargs.entries() {
+            let name = name_val
+                .unpack_str()
+                .ok_or_else(|| anyhow::anyhow!("Interface kwargs keys must be strings"))?;
             if name == "__post_init__" {
                 // Handle __post_init__ as direct function assignment
                 post_init_fn = Some(v.to_value());
@@ -701,7 +715,7 @@ pub(crate) fn interface_globals(builder: &mut GlobalsBuilder) {
                     {
                         unregister_template_owned_nets(field_value, ctx);
                     }
-                    fields.insert(name.clone(), field_value);
+                    fields.insert(name.to_owned(), field_value);
                 } else {
                     return Err(anyhow::anyhow!(
                         "Interface field `{}` must be Net type, Net instance, Interface type, Interface instance, or  field() specification, got `{}`",
@@ -730,13 +744,15 @@ pub(crate) fn interface_globals(builder: &mut GlobalsBuilder) {
         let id =
             TypeInstanceId::from_identity(PcbTypeIdDomain::Interface, &(call_site, field_names));
 
-        let factory = heap.alloc(InterfaceFactory {
-            id,
-            interface_type_data: OnceLock::new(),
-            fields,
-            post_init_fn,
-            param_spec,
-        });
+        let factory = heap
+            .alloc(InterfaceFactory {
+                id,
+                interface_type_data: OnceLock::new(),
+                fields,
+                post_init_fn,
+                param_spec,
+            })
+            .to_value();
 
         // TODO: Add validation to ensure interfaces are assigned to variables
         // For now, anonymous interfaces will be caught when first used

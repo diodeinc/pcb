@@ -3,13 +3,14 @@ use pcb_sch::physical::PcbTypeIdDomain;
 use serde::{Deserialize, Serialize};
 use starlark::{
     any::ProvidesStaticType,
-    environment::{Methods, MethodsBuilder},
+    environment::MethodsBuilder,
     eval::{Arguments, Evaluator},
     starlark_module, starlark_simple_value,
     typing::{ParamIsRequired, ParamSpec, Ty, TyCallable, TyStarlarkValue, TyUser, TyUserParams},
     values::{
-        Freeze, Heap, StarlarkValue, Value,
+        Freeze, Heap, StarlarkValue, Value, ValueTyped,
         function::FUNCTION_TYPE,
+        list::AllocList,
         starlark_value,
         typing::{TypeInstanceId, TypeMatcher, TypeMatcherDyn, TypeMatcherFactory},
     },
@@ -41,6 +42,10 @@ impl TypeMatcher for EnumTypeMatcher {
             .downcast_ref::<EnumValue>()
             .is_some_and(|v| v.r#type == self.enum_type)
     }
+
+    fn is_stable(&self) -> bool {
+        true
+    }
 }
 
 #[derive(
@@ -61,7 +66,6 @@ pub struct EnumType {
 }
 
 starlark_simple_value!(EnumType);
-starlark::methods_static!(ENUM_TYPE_METHODS = enum_type_methods);
 
 impl fmt::Display for EnumType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -123,65 +127,8 @@ impl EnumType {
             )))
         }
     }
-}
 
-#[starlark_value(type = FUNCTION_TYPE)]
-impl<'v> StarlarkValue<'v> for EnumType {
-    fn write_hash(&self, hasher: &mut StarlarkHasher) -> starlark::Result<()> {
-        std::hash::Hash::hash(self, hasher);
-        Ok(())
-    }
-
-    fn invoke(
-        &self,
-        _me: Value<'v>,
-        args: &Arguments<'v, '_>,
-        eval: &mut Evaluator<'v, '_, '_>,
-    ) -> starlark::Result<Value<'v>> {
-        args.no_named_args()?;
-        let val = args.positional1(eval.heap())?;
-        let val_str = val.unpack_str().ok_or_else(|| {
-            starlark::Error::new_other(anyhow::anyhow!("Enum variant must be a string"))
-        })?;
-        Ok(eval.heap().alloc(self.construct(val_str)?))
-    }
-
-    fn length(&self) -> starlark::Result<i32> {
-        Ok(self.variants.len() as i32)
-    }
-
-    fn at(&self, index: Value, heap: Heap<'v>) -> starlark::Result<Value<'v>> {
-        let i = index.unpack_i32().ok_or_else(|| {
-            starlark::Error::new_other(anyhow::anyhow!("Index must be an integer"))
-        })?;
-        Ok(heap.alloc(self.get_by_index(i)?))
-    }
-
-    unsafe fn iterate(&self, me: Value<'v>, _heap: Heap<'v>) -> starlark::Result<Value<'v>> {
-        Ok(me)
-    }
-
-    unsafe fn iter_size_hint(&self, index: usize) -> (usize, Option<usize>) {
-        let rem = self.variants.len().saturating_sub(index);
-        (rem, Some(rem))
-    }
-
-    unsafe fn iter_next(&self, index: usize, heap: Heap<'v>) -> Option<Value<'v>> {
-        (index < self.variants.len()).then(|| {
-            heap.alloc(EnumValue {
-                r#type: self.clone(),
-                index: index as i32,
-            })
-        })
-    }
-
-    unsafe fn iter_stop(&self) {}
-
-    fn get_methods() -> Option<&'static Methods> {
-        Some(ENUM_TYPE_METHODS.methods())
-    }
-
-    fn eval_type(&self) -> Option<Ty> {
+    fn eval_type_ty(&self) -> Option<Ty> {
         Some(Ty::custom(
             TyUser::new(
                 "enum".to_owned(),
@@ -197,15 +144,72 @@ impl<'v> StarlarkValue<'v> for EnumType {
             .ok()?,
         ))
     }
+}
 
-    fn typechecker_ty(&self) -> Option<Ty> {
+#[starlark_value(type = FUNCTION_TYPE, methods = enum_type_methods)]
+impl<'v> StarlarkValue<'v> for EnumType {
+    fn write_hash(this: &Self, hasher: &mut StarlarkHasher) -> starlark::Result<()> {
+        std::hash::Hash::hash(this, hasher);
+        Ok(())
+    }
+
+    fn invoke(
+        this: &Self,
+        args: &Arguments<'v, '_>,
+        eval: &mut Evaluator<'v, '_, '_>,
+    ) -> starlark::Result<Value<'v>> {
+        args.no_named_args()?;
+        let val = args.positional1(eval.heap())?;
+        let val_str = val.unpack_str().ok_or_else(|| {
+            starlark::Error::new_other(anyhow::anyhow!("Enum variant must be a string"))
+        })?;
+        Ok(eval.heap().alloc(this.construct(val_str)?).to_value())
+    }
+
+    fn length(this: &Self) -> starlark::Result<i32> {
+        Ok(this.variants.len() as i32)
+    }
+
+    fn at(this: &Self, index: Value, heap: Heap<'v>) -> starlark::Result<Value<'v>> {
+        let i = index.unpack_i32().ok_or_else(|| {
+            starlark::Error::new_other(anyhow::anyhow!("Index must be an integer"))
+        })?;
+        Ok(heap.alloc(this.get_by_index(i)?).to_value())
+    }
+
+    unsafe fn iterate(this: ValueTyped<'v, Self>, _heap: Heap<'v>) -> starlark::Result<Value<'v>> {
+        Ok(this.to_value())
+    }
+
+    unsafe fn iter_size_hint(this: &Self, index: usize) -> (usize, Option<usize>) {
+        let rem = this.variants.len().saturating_sub(index);
+        (rem, Some(rem))
+    }
+
+    unsafe fn iter_next(this: &Self, index: usize, heap: Heap<'v>) -> Option<Value<'v>> {
+        (index < this.variants.len()).then(|| {
+            heap.alloc(EnumValue {
+                r#type: this.clone(),
+                index: index as i32,
+            })
+            .to_value()
+        })
+    }
+
+    unsafe fn iter_stop(_this: &Self) {}
+
+    fn eval_type(this: &Self) -> Option<Ty> {
+        this.eval_type_ty()
+    }
+
+    fn typechecker_ty(this: &Self) -> Option<Ty> {
         Some(Ty::custom(
             TyUser::new(
                 "EnumType".to_owned(),
                 TyStarlarkValue::new::<EnumType>(),
-                self.type_instance_id(PcbTypeIdDomain::EnumType),
+                this.type_instance_id(PcbTypeIdDomain::EnumType),
                 TyUserParams {
-                    callable: Some(TyCallable::new(self.param_spec(), self.eval_type()?)),
+                    callable: Some(TyCallable::new(this.param_spec(), this.eval_type_ty()?)),
                     ..TyUserParams::default()
                 },
             )
@@ -219,6 +223,7 @@ fn enum_type_methods(builder: &mut MethodsBuilder) {
     #[starlark(attribute)]
     fn r#type(this: Value) -> starlark::Result<&'static str> {
         // Return the string "enum" as the type name
+        let _ = this;
         Ok("enum")
     }
 
@@ -233,10 +238,11 @@ fn enum_type_methods(builder: &mut MethodsBuilder) {
                     r#type: enum_type.clone(),
                     index: i as i32,
                 })
+                .to_value()
             })
             .collect();
 
-        Ok(heap.alloc(variants))
+        Ok(heap.alloc(AllocList(variants)).to_value())
     }
 }
 
@@ -259,7 +265,6 @@ pub struct EnumValue {
 }
 
 starlark_simple_value!(EnumValue);
-starlark::methods_static!(ENUM_VALUE_METHODS = enum_value_methods);
 
 impl fmt::Display for EnumValue {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -273,20 +278,20 @@ impl EnumValue {
     }
 }
 
-#[starlark_value(type = "enum")]
+#[starlark_value(type = "enum", methods = enum_value_methods)]
 impl<'v> StarlarkValue<'v> for EnumValue {
-    fn write_hash(&self, hasher: &mut StarlarkHasher) -> starlark::Result<()> {
-        std::hash::Hash::hash(self, hasher);
+    fn write_hash(this: &Self, hasher: &mut StarlarkHasher) -> starlark::Result<()> {
+        std::hash::Hash::hash(this, hasher);
         Ok(())
     }
 
-    fn equals(&self, other: Value<'v>) -> starlark::Result<bool> {
-        Ok(other.downcast_ref::<EnumValue>() == Some(self))
+    fn equals(this: &Self, other: Value<'v>) -> starlark::Result<bool> {
+        Ok(other.downcast_ref::<EnumValue>() == Some(this))
     }
 
-    fn compare(&self, other: Value<'v>) -> starlark::Result<std::cmp::Ordering> {
+    fn compare(this: &Self, other: Value<'v>) -> starlark::Result<std::cmp::Ordering> {
         match other.downcast_ref::<EnumValue>() {
-            Some(other) if self.r#type == other.r#type => Ok(self.index.cmp(&other.index)),
+            Some(other) if this.r#type == other.r#type => Ok(this.index.cmp(&other.index)),
             Some(_) => Err(starlark::Error::new_other(anyhow::anyhow!(
                 "Cannot compare enum values from different enum types"
             ))),
@@ -296,16 +301,16 @@ impl<'v> StarlarkValue<'v> for EnumValue {
         }
     }
 
-    fn typechecker_ty(&self) -> Option<Ty> {
-        self.r#type.eval_type()
+    fn typechecker_ty(this: &Self) -> Option<Ty> {
+        this.r#type.eval_type_ty()
     }
 
-    fn length(&self) -> starlark::Result<i32> {
-        Ok(self.value().len() as i32)
+    fn length(this: &Self) -> starlark::Result<i32> {
+        Ok(this.value().len() as i32)
     }
 
-    fn at(&self, index: Value<'v>, heap: Heap<'v>) -> starlark::Result<Value<'v>> {
-        let s = self.value();
+    fn at(this: &Self, index: Value<'v>, heap: Heap<'v>) -> starlark::Result<Value<'v>> {
+        let s = this.value();
         let i = index.unpack_i32().ok_or_else(|| {
             starlark::Error::new_other(anyhow::anyhow!("Index must be an integer"))
         })?;
@@ -324,23 +329,19 @@ impl<'v> StarlarkValue<'v> for EnumValue {
         let ch = s.chars().nth(actual_index as usize).ok_or_else(|| {
             starlark::Error::new_other(anyhow::anyhow!("Invalid character index"))
         })?;
-        Ok(heap.alloc(ch.to_string()))
+        Ok(heap.alloc(ch.to_string()).to_value())
     }
 
-    fn add(&self, other: Value<'v>, heap: Heap<'v>) -> Option<starlark::Result<Value<'v>>> {
+    fn add(this: &Self, other: Value<'v>, heap: Heap<'v>) -> Option<starlark::Result<Value<'v>>> {
         other
             .unpack_str()
-            .map(|s| Ok(heap.alloc(format!("{}{}", self.value(), s))))
+            .map(|s| Ok(heap.alloc(format!("{}{}", this.value(), s)).to_value()))
     }
 
-    fn radd(&self, other: Value<'v>, heap: Heap<'v>) -> Option<starlark::Result<Value<'v>>> {
+    fn radd(this: &Self, other: Value<'v>, heap: Heap<'v>) -> Option<starlark::Result<Value<'v>>> {
         other
             .unpack_str()
-            .map(|s| Ok(heap.alloc(format!("{}{}", s, self.value()))))
-    }
-
-    fn get_methods() -> Option<&'static Methods> {
-        Some(ENUM_VALUE_METHODS.methods())
+            .map(|s| Ok(heap.alloc(format!("{}{}", s, this.value())).to_value()))
     }
 }
 

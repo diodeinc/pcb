@@ -30,7 +30,7 @@ pub(crate) fn file_globals(builder: &mut GlobalsBuilder) {
     /// The path is resolved relative to the current file, just like load() statements.
     /// If the path cannot be resolved or doesn't exist, an error is raised.
     fn File<'v>(
-        #[starlark(require = pos)] path: String,
+        #[starlark(require = pos)] path: &str,
         eval: &mut Evaluator<'v, '_, '_>,
     ) -> anyhow::Result<Value<'v>> {
         let eval_context = eval
@@ -45,12 +45,12 @@ pub(crate) fn file_globals(builder: &mut GlobalsBuilder) {
 
         let resolved_path = eval_context
             .get_config()
-            .resolve_path(&path, current_file)
+            .resolve_path(path, current_file)
             .map_err(|e| anyhow::anyhow!("Failed to resolve file path '{}': {}", path, e))?;
 
         let stable_str = stable_path_string(resolution, &resolved_path);
 
-        Ok(eval.heap().alloc_str(&stable_str).to_value())
+        Ok(eval.heap().alloc(stable_str).to_value())
     }
 
     /// Resolve a file or directory path using the load resolver and return a stable path string.
@@ -62,7 +62,7 @@ pub(crate) fn file_globals(builder: &mut GlobalsBuilder) {
     ///   allow_not_exist: Optional boolean (default: false). If true, allows non-existent paths.
     ///                     Can only be used with Path LoadSpecs, not Package/GitHub/GitLab specs.
     fn Path<'v>(
-        #[starlark(require = pos)] path: String,
+        #[starlark(require = pos)] path: &str,
         #[starlark(require = named, default = false)] allow_not_exist: bool,
         eval: &mut Evaluator<'v, '_, '_>,
     ) -> anyhow::Result<Value<'v>> {
@@ -76,7 +76,7 @@ pub(crate) fn file_globals(builder: &mut GlobalsBuilder) {
 
         let resolution = eval_context.resolution();
 
-        let mut load_spec = LoadSpec::parse(&path)
+        let mut load_spec = LoadSpec::parse(path)
             .ok_or_else(|| anyhow::anyhow!("Invalid load path spec: {}", path))?;
 
         if allow_not_exist {
@@ -98,6 +98,6 @@ pub(crate) fn file_globals(builder: &mut GlobalsBuilder) {
 
         let stable_str = stable_path_string(resolution, &resolved_path);
 
-        Ok(eval.heap().alloc_str(&stable_str).to_value())
+        Ok(eval.heap().alloc(stable_str).to_value())
     }
 }

@@ -48,6 +48,20 @@ use crate::exported::Symbol;
 use crate::loaded::AstModuleLoadedSymbols;
 use crate::loaded::LoadedSymbol;
 
+/// Converts an LSP column, counted in UTF-16 code units, into a byte offset within `line`.
+///
+/// A column past the end of the line maps to the end of the line.
+pub(crate) fn utf16_column_to_byte_offset(line: &str, column: u32) -> usize {
+    let mut units = 0;
+    for (offset, c) in line.char_indices() {
+        if units >= column {
+            return offset;
+        }
+        units += c.len_utf16() as u32;
+    }
+    line.len()
+}
+
 /// The location of a definition for a given identifier. See [`AstModule::find_definition_at_location`].
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub(crate) enum IdentifierDefinition {
@@ -251,7 +265,8 @@ impl LspModule {
             }
             Some(line_span) => line_span,
         };
-        let current_pos = std::cmp::min(line_span.begin() + col, line_span.end());
+        let line_text = self.ast.codemap().source_span(line_span);
+        let current_pos = line_span.begin() + utf16_column_to_byte_offset(line_text, col) as u32;
 
         // Finalize the results after recursing down from and back up to the top level scope.
         match Self::find_definition_in_scope(&scope, current_pos) {
@@ -1310,6 +1325,30 @@ mod tests {
         assert_eq!(expected_baz, find_definition("baz_click"));
         assert_eq!(expected_quz, find_definition("quz_click"));
 
+        Ok(())
+    }
+
+    #[test]
+    fn find_definition_after_non_ascii_uses_utf16_column() -> anyhow::Result<()> {
+        let ast = AstModule::parse(
+            "non_ascii.star",
+            "x = 1\ny = (\"10kΩ\", x)\n".to_owned(),
+            &starlark::syntax::Dialect::AllOptionsInternal,
+        )
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+        let module = LspModule::new(ast);
+        // Line 1: `y = ("10kΩ", x)` — `x` starts at UTF-16 column 13 (byte offset 15 because `Ω` is 3 bytes / 1 UTF-16 unit).
+        let def = module.find_definition_at_location(1, 13);
+        match def {
+            Definition::Identifier(IdentifierDefinition::Location {
+                name, destination, ..
+            }) => {
+                assert_eq!(name, "x");
+                assert_eq!(destination.begin.line, 0);
+                assert_eq!(destination.begin.column, 0);
+            }
+            other => panic!("expected local definition for `x`, got {other:?}"),
+        }
         Ok(())
     }
 }

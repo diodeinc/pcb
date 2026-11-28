@@ -1,7 +1,7 @@
 use crate::graph::{CircuitGraph, FactorId, PortId, PortPath};
 use crate::lang::module::ModulePath;
 
-use starlark::values::{Heap, Value, tuple::TupleRef};
+use starlark::values::{Heap, Value, tuple::StarlarkTuple};
 use std::collections::{HashMap, HashSet};
 
 impl CircuitGraph {
@@ -26,7 +26,7 @@ impl CircuitGraph {
             )))
         }
         // Check if it's a tuple (component, pin)
-        else if let Some(tuple_ref) = TupleRef::from_value(label) {
+        else if let Some(tuple_ref) = StarlarkTuple::from_value(label) {
             if tuple_ref.len() != 2 {
                 return Err(starlark::Error::new_other(anyhow::anyhow!(
                     "Port tuple must have exactly 2 elements: (component, pin)"
@@ -78,8 +78,9 @@ impl CircuitGraph {
             let pin_name = &port_path_obj.pin;
 
             // Add port tuple
-            let port_tuple =
-                heap.alloc((heap.alloc_str(&component_path), heap.alloc_str(pin_name)));
+            let port_tuple = heap
+                .alloc((heap.alloc(component_path), heap.alloc(pin_name.as_str())))
+                .to_value();
             ports.push(port_tuple);
         }
 
@@ -104,7 +105,7 @@ impl CircuitGraph {
         // Build nets list from factors (only net factors)
         for &factor_id in factors {
             if let crate::graph::FactorType::Net(net_name) = self.factor_type(factor_id) {
-                path_nets.push(heap.alloc_str(net_name).to_value());
+                path_nets.push(heap.alloc(net_name.as_str()).to_value());
             }
         }
 
@@ -115,6 +116,6 @@ impl CircuitGraph {
             nets: path_nets,
         };
 
-        Ok(heap.alloc_complex(path_value))
+        Ok(heap.alloc(path_value).to_value())
     }
 }
