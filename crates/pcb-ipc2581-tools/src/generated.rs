@@ -1,7 +1,6 @@
 //! Serialization of generated IPC-2581 layer features, shared by the
 //! board-array and fab-panel panelizers.
 
-use crate::copper_balance::{BalanceVoidSet, BalanceVoidTemplate};
 use anyhow::{Result, bail};
 use ipc2581::XmlWriter;
 use ipc2581::types::{
@@ -12,11 +11,7 @@ use ipc2581::types::{
 use ipc2581::write;
 use pcb_ir::import::ipc2581::{
     ARRAY_SEPARATION_ATTRIBUTE_NAME, ARRAY_SEPARATION_MOUSE_BITE_VALUE,
-    COPPER_BALANCE_ATTRIBUTE_NAME, COPPER_BALANCE_LATTICE_ATTRIBUTE_NAME,
-    COPPER_BALANCE_LATTICE_ORIGIN_X_ATTRIBUTE_NAME, COPPER_BALANCE_LATTICE_ORIGIN_Y_ATTRIBUTE_NAME,
-    COPPER_BALANCE_LATTICE_PITCH_ATTRIBUTE_NAME, COPPER_BALANCE_LATTICE_VALUE,
-    COPPER_BALANCE_VOID_CORNER_RADIUS_ATTRIBUTE_NAME, COPPER_BALANCE_VOID_RADIUS_ATTRIBUTE_NAME,
-    CopperBalanceKind,
+    COPPER_BALANCE_ATTRIBUTE_NAME, CopperBalanceKind,
 };
 
 /// Only board-array tooling generates named holes today; the prefix stays
@@ -35,8 +30,6 @@ pub(crate) struct GeneratedLayerFeature {
     pub mouse_bites: bool,
     pub spec_refs: Vec<String>,
     pub features: Vec<SetFeature>,
-    /// One exact rounded-hex radius class on its declared lattice.
-    pub void_set: Option<BalanceVoidSet>,
 }
 
 /// Sequential names for generated holes, unique within one Step.
@@ -59,7 +52,7 @@ pub(crate) fn write_generated_layer_feature(
     layer_feature: &GeneratedLayerFeature,
     names: &mut GeneratedNameState,
 ) -> Result<()> {
-    if layer_feature.features.is_empty() && layer_feature.void_set.is_none() {
+    if layer_feature.features.is_empty() {
         return Ok(());
     }
 
@@ -84,55 +77,10 @@ pub(crate) fn write_generated_layer_feature(
             ARRAY_SEPARATION_MOUSE_BITE_VALUE,
         );
     }
-    if let Some(void_set) = &layer_feature.void_set {
-        write_nonstandard_attribute(
-            writer,
-            COPPER_BALANCE_LATTICE_ATTRIBUTE_NAME,
-            "STRING",
-            COPPER_BALANCE_LATTICE_VALUE,
-        );
-        for (name, value) in [
-            (
-                COPPER_BALANCE_LATTICE_ORIGIN_X_ATTRIBUTE_NAME,
-                void_set.lattice.origin.x,
-            ),
-            (
-                COPPER_BALANCE_LATTICE_ORIGIN_Y_ATTRIBUTE_NAME,
-                void_set.lattice.origin.y,
-            ),
-            (
-                COPPER_BALANCE_LATTICE_PITCH_ATTRIBUTE_NAME,
-                void_set.lattice.pitch_mm,
-            ),
-            (
-                COPPER_BALANCE_VOID_RADIUS_ATTRIBUTE_NAME,
-                void_set.radius_mm,
-            ),
-            (
-                COPPER_BALANCE_VOID_CORNER_RADIUS_ATTRIBUTE_NAME,
-                void_set.corner_radius_mm,
-            ),
-        ] {
-            write_double_attribute(writer, name, value);
-        }
-    }
     for spec_ref in &layer_feature.spec_refs {
         write::spec_ref(writer, spec_ref);
     }
     write_set_features(writer, units, &layer_feature.features, names)?;
-    if let Some(void_set) = &layer_feature.void_set {
-        writer.start_element("Features", &[]);
-        // Keep even a one-site radius class as an explicit placement group;
-        // the identity Xform is the IPC marker that distinguishes shared
-        // local geometry from a translated singleton primitive.
-        writer.empty_element("Xform", &[("rotation", "0")]);
-        for site in &void_set.sites {
-            let center = void_set.lattice.center(*site);
-            write::location(writer, "Location", center.x, center.y, units);
-        }
-        writer.empty_element("UserPrimitiveRef", &[("id", void_set.template.as_str())]);
-        writer.end_element("Features");
-    }
     writer.end_element("Set");
     writer.end_element("LayerFeature");
     Ok(())
@@ -183,74 +131,12 @@ fn write_set_features(
     Ok(())
 }
 
-/// Splice shared void templates into the document's `DictionaryUser`,
-/// creating the dictionary in schema position when absent.
-pub(crate) fn user_dictionary_edit(
-    doc: &ipc2581::edit::Doc<'_>,
-    units: Units,
-    templates: &[BalanceVoidTemplate],
-) -> Result<Option<ipc2581::edit::Edit>> {
-    if templates.is_empty() {
-        return Ok(None);
-    }
-    let root = doc.root()?;
-    let content = doc
-        .child(root, "Content")
-        .ok_or_else(|| anyhow::anyhow!("IPC-2581 document has no Content section"))?;
-    if let Some(dictionary) = doc.child(content, "DictionaryUser") {
-        // An existing dictionary's declared units govern its entries; the
-        // parser defaults an absent attribute to millimeters.
-        let dictionary_units = match doc.attr(dictionary, "units") {
-            Some("INCH") => Units::Inch,
-            Some("MICRON") => Units::Micron,
-            Some("MILS") => Units::Mils,
-            _ => Units::Millimeter,
-        };
-        let mut writer = XmlWriter::new();
-        write_user_dictionary_entries(&mut writer, dictionary_units, templates);
-        return Ok(Some(doc.append_inside(dictionary, writer.into_string())));
-    }
-    let mut writer = XmlWriter::new();
-    write_user_dictionary_entries(&mut writer, units, templates);
-    let entries = writer.into_string();
-    let mut container = XmlWriter::new();
-    container.start_element("DictionaryUser", &[("units", units_attr(units))]);
-    container.raw(&entries);
-    container.end_element("DictionaryUser");
-    let xml = container.into_string();
-    Ok(Some(
-        match doc
-            .children(content)
-            .into_iter()
-            .find(|child| doc.name(*child) == "DictionaryFirmware")
-        {
-            Some(firmware) => doc.insert_before(firmware, xml),
-            None => doc.append_inside(content, xml),
-        },
-    ))
-}
-
 pub(crate) fn units_attr(units: Units) -> &'static str {
     match units {
         Units::Millimeter => "MILLIMETER",
         Units::Inch => "INCH",
         Units::Micron => "MICRON",
         Units::Mils => "MILS",
-    }
-}
-
-/// Serialize shared void templates as `DictionaryUser` entries.
-fn write_user_dictionary_entries(
-    writer: &mut XmlWriter,
-    units: Units,
-    templates: &[BalanceVoidTemplate],
-) {
-    for template in templates {
-        writer.start_element("EntryUser", &[("id", template.id.as_str())]);
-        writer.start_element("UserSpecial", &[]);
-        write::contour(writer, units, &template.contour);
-        writer.end_element("UserSpecial");
-        writer.end_element("EntryUser");
     }
 }
 

@@ -19,7 +19,7 @@ use pcb_ir::geom::{Affine2, ContourSet, Resolution};
 use pcb_ir::import::ipc2581::{ImportedDesign, LayerId, import_design};
 
 use crate::copper_balance::{
-    BalanceVoidTemplate, CERTIFICATE_AREA_TOLERANCE_MM2, CopperBalancePlan, PreparedCopperLayer,
+    CERTIFICATE_AREA_TOLERANCE_MM2, CopperBalancePlan, PreparedCopperLayer,
     physical_copper_stack_weights, solve_copper_balance,
 };
 use crate::generated::GeneratedLayerFeature;
@@ -230,26 +230,12 @@ pub(crate) fn prepared_layer(
     })
 }
 
-/// A plan's generated feature sets, layer by layer, and the void templates
-/// they reference, each once.
-pub(crate) fn generated_features(
-    plan: CopperBalancePlan,
-) -> (Vec<BalanceVoidTemplate>, Vec<GeneratedLayerFeature>) {
-    let mut templates: Vec<BalanceVoidTemplate> = Vec::new();
-    let features = plan
-        .layers
+/// A plan's generated feature sets, layer by layer.
+pub(crate) fn generated_features(plan: CopperBalancePlan) -> Vec<GeneratedLayerFeature> {
+    plan.layers
         .into_iter()
-        .flat_map(|layer| {
-            let (layer_templates, features) = layer.features.into_layer_features(&layer.layer_name);
-            for template in layer_templates {
-                if !templates.iter().any(|entry| entry.id == template.id) {
-                    templates.push(template);
-                }
-            }
-            features
-        })
-        .collect();
-    (templates, features)
+        .flat_map(|layer| layer.features.into_layer_features(&layer.layer_name))
+        .collect()
 }
 
 /// One ECAD layer's `ArraySupport` view plus its physical-obstacle policy.

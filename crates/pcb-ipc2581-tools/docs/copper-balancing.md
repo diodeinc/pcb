@@ -83,15 +83,18 @@ For optimizer details, see the owning
 
 ## Generated geometry
 
-Perforated fill uses a triangular lattice of rounded-hexagonal voids. Pitch and
-maximum radius constrain the minimum inter-void copper web; edge candidates
-that cannot contain the minimum disk are rejected. A positive boundary web
-restores material outside the voidable region. Repeated voids share IPC instances.
+Perforated fill lowers the solved triangular-lattice void field directly to a
+dark-only hexagonal honeycomb web of round-capped stroked polylines: one
+perimeter trace along the safe-region boundary plus shared Voronoi cell walls
+quantized to a small ladder of standard widths and chained by width. Walls are
+clipped strictly inside the safe region, dangling interior stubs are pruned, and
+any rim wall enclosing a void narrower than `minimum_partial_void_inradius_mm`
+is removed so no copper or void slivers survive at boundaries.
 
-Gerber export resolves the lattice to dark-only geometry: interior cells use
-shared `cell - void` ring flashes, while boundary cells become region geometry.
-This avoids relying on repeated clear objects composited over underlying copper
-in CAM importers.
+Both IPC-2581 (`diode.copper_balance="web"` in one positive `<Set>`) and Gerber
+X2 (`%TA.AperFunction,CopperBalancing*%` standard circular `C` apertures with
+chained `D01` draws) represent the exact same stroked geometry—dark-only, with
+no regions, aperture macros, aperture blocks, or clear polarity.
 
 ## Pass-specific inputs
 

@@ -338,7 +338,7 @@ pub fn create_fab_panel(
         &shared_stackup_layers,
         spec,
     )?;
-    let (templates, balance_features, copper_balance) = if balance_copper {
+    let (balance_features, copper_balance) = if balance_copper {
         let parsed = Ipc2581::parse(&provisional)
             .context("Failed to parse provisional IPC-2581 fabrication panel")?;
         let balance = balance::generate_automatic_fab_panel_copper_balance(
@@ -347,14 +347,13 @@ pub fn create_fab_panel(
             resolution.tolerance_mm,
         )?;
         let report = balance.report();
-        let (templates, features) =
-            crate::commands::board_array::balance::generated_features(balance);
-        (templates, features, Some(report))
+        let features = crate::commands::board_array::balance::generated_features(balance);
+        (features, Some(report))
     } else {
-        (Vec::new(), Vec::new(), None)
+        (Vec::new(), None)
     };
 
-    let xml = xml::write_fab_panel_xml(&provisional, first.units, &balance_features, &templates)?;
+    let xml = xml::write_fab_panel_xml(&provisional, first.units, &balance_features)?;
     Ok(PanelCreation {
         xml,
         copper_balance,

@@ -604,7 +604,8 @@ impl SiteTable {
     }
 
     fn slot(&self, site: DenseCopperLatticeSite) -> Option<usize> {
-        let (column, row) = (site.column - self.first.column, site.row - self.first.row);
+        let column = site.column.checked_sub(self.first.column)?;
+        let row = site.row.checked_sub(self.first.row)?;
         ((0..self.columns).contains(&column) && (0..self.rows).contains(&row))
             .then(|| (column * self.rows + row) as usize)
     }

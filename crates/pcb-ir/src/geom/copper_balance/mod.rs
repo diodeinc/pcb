@@ -10,8 +10,10 @@ use rayon::prelude::*;
 
 mod lattice;
 mod spatial;
+mod web;
 
 pub use lattice::{ROUNDED_HEXAGON_CORNER_RADIUS_RATIO, rounded_hexagonal_void};
+pub use web::HoneycombPolyline;
 
 use lattice::{LatticeCandidates, ROUNDED_HEXAGON_AREA_FACTOR, SiteTable};
 use spatial::{
@@ -365,6 +367,9 @@ pub struct DenseCopperBalanceResult {
     /// The one emitted form of the edge voids, computed once at solve time
     /// so density accounting and emission read the same geometry.
     pub edge_void_emission: EdgeVoidEmission,
+    /// Sliver-free dark-only honeycomb web strokes emitted for perforated
+    /// layers. Empty for `None` and `Solid` modes.
+    pub web: Vec<HoneycombPolyline>,
 }
 
 /// Edge voids resolved to their emitted form: voids whose circumscribed
@@ -504,7 +509,7 @@ fn uniform_copper_balance(
     // projection, so achieved density is truthful to the output.
     let edge_void_emission =
         EdgeVoidEmission::build_emission(lattice, voidable, &edge_voids, profile)?;
-    let generated_area_mm2 = match best.mode {
+    let mut generated_area_mm2 = match best.mode {
         DenseCopperBalanceMode::None => 0.0,
         DenseCopperBalanceMode::Solid => usable_area_mm2,
         DenseCopperBalanceMode::Perforated { .. } => {
@@ -516,6 +521,38 @@ fn uniform_copper_balance(
             (usable_area_mm2 - full_void_area_mm2 - edge_void_emission.region.area()).max(0.0)
         }
     };
+    let mut web = Vec::new();
+    // The stroked honeycomb web can reach thinner minimum coverage than the
+    // rounded-void projection (`min_copper_web_mm` vs `max_void_radius_mm`).
+    // Check a `None` selection near that crossover before stack-moment
+    // settlement so mirror layers balance against the actual emitted copper.
+    if best.mode == DenseCopperBalanceMode::None && !usable.is_empty() {
+        let min_web_fraction = profile.min_copper_web_mm
+            * (2.0 * profile.pitch_mm - profile.min_copper_web_mm)
+            / profile.pitch_mm.powi(2);
+        if desired_added_area_mm2 > 0.45 * min_web_fraction * usable_area_mm2 {
+            let built = web::build_honeycomb_web(
+                &usable,
+                lattice.lattice,
+                &[],
+                &[],
+                profile.max_void_radius_mm,
+                desired_added_area_mm2,
+                profile,
+            )?;
+            let web_err = (built.area_mm2 - desired_added_area_mm2).abs();
+            if built.area_mm2 > 0.0
+                && web_err < desired_added_area_mm2.abs()
+                && web_err < (usable_area_mm2 - desired_added_area_mm2).abs()
+            {
+                best.mode = DenseCopperBalanceMode::Perforated {
+                    void_radius_mm: profile.max_void_radius_mm,
+                };
+                generated_area_mm2 = built.area_mm2;
+                web = built.polylines;
+            }
+        }
+    }
     let achieved_density =
         (existing_copper_area_mm2 + generated_area_mm2) / density_domain_area_mm2;
     let solution = DenseCopperBalanceSolution {
@@ -535,7 +572,68 @@ fn uniform_copper_balance(
         full_voids,
         edge_voids,
         edge_void_emission,
+        web,
     })
+}
+
+/// Populate `result.web` with the sliver-free all-lines honeycomb strokes for a
+/// perforated layer and update `solution` area/density accounting to match the
+/// emitted strokes.
+fn finalize_perforated_web(
+    mut result: DenseCopperBalanceResult,
+    sites: &[DenseCopperLatticeSite],
+    smooth_squared_radii: &[f64],
+    layer: SpatialCopperBalanceLayerRequest<'_>,
+    profile: DenseCopperBalanceProfile,
+    area_shift_mm2: f64,
+) -> Result<DenseCopperBalanceResult, AccuracyError> {
+    let DenseCopperBalanceMode::Perforated { void_radius_mm } = result.solution.mode else {
+        return Ok(result);
+    };
+    let promoted_web = !result.web.is_empty();
+    if promoted_web && area_shift_mm2 <= 1e-6 {
+        return Ok(result);
+    }
+    let desired = result.solution.desired_added_area_mm2;
+    // Preserve stack-moment area shifts on weighed layers; on unweighed layers
+    // saturated at the legacy rounded-void floor, let the thinner stroked web
+    // calibrate all the way down to `desired`.
+    let target_area_mm2 = if promoted_web {
+        (result.solution.generated_area_mm2 + area_shift_mm2).min(result.usable.area())
+    } else if layer.stack_weight_mm2 == 0.0 {
+        result.solution.generated_area_mm2.min(desired.max(0.0))
+    } else {
+        result.solution.generated_area_mm2
+    };
+    let built = web::build_honeycomb_web(
+        &result.usable,
+        result.lattice,
+        sites,
+        smooth_squared_radii,
+        void_radius_mm,
+        target_area_mm2,
+        profile,
+    )?;
+    if built.polylines.is_empty()
+        || (layer.stack_weight_mm2 == 0.0 && (built.area_mm2 - desired).abs() > desired.abs())
+    {
+        result.web.clear();
+        result.full_voids.clear();
+        result.edge_voids.clear();
+        result.solution.mode = DenseCopperBalanceMode::None;
+        result.solution.generated_area_mm2 = 0.0;
+        result.solution.achieved_density = result.solution.initial_density;
+        result.solution.residual_error =
+            (result.solution.initial_density - layer.target_density).abs();
+        return Ok(result);
+    }
+    let achieved_density =
+        (layer.existing_copper.area() + built.area_mm2) / layer.density_domain.area();
+    result.web = built.polylines;
+    result.solution.generated_area_mm2 = built.area_mm2;
+    result.solution.achieved_density = achieved_density;
+    result.solution.residual_error = (achieved_density - layer.target_density).abs();
+    Ok(result)
 }
 
 /// Distribute each layer's already-selected copper area in space.
@@ -634,8 +732,14 @@ pub fn generate_spatial_dense_copper_balance(
         })
         .collect::<Vec<_>>();
     if region_active_sites.iter().all(Vec::is_empty) {
+        let layers = map_layers(
+            uniform.into_iter().zip(request.layers.iter()),
+            |(result, layer)| finalize_perforated_web(result, &[], &[], *layer, profile, 0.0),
+        )
+        .into_iter()
+        .collect::<Result<Vec<_>, _>>()?;
         return Ok(SpatialCopperBalance {
-            layers: uniform,
+            layers,
             moment_field: None,
         });
     }
@@ -681,10 +785,12 @@ pub fn generate_spatial_dense_copper_balance(
         .iter()
         .enumerate()
         .map(|(layer_index, result)| match result.solution.mode {
-            DenseCopperBalanceMode::Perforated { void_radius_mm } => {
+            DenseCopperBalanceMode::Perforated { void_radius_mm }
+                if !result.full_voids.is_empty() =>
+            {
                 vec![void_radius_mm.powi(2); region_active_sites[layer_regions[layer_index]].len()]
             }
-            DenseCopperBalanceMode::None | DenseCopperBalanceMode::Solid => Vec::new(),
+            _ => Vec::new(),
         })
         .collect::<Vec<Vec<f64>>>();
     let cell_area_mm2 = SQRT_3 * profile.pitch_mm.powi(2) / 2.0;
@@ -693,21 +799,9 @@ pub fn generate_spatial_dense_copper_balance(
     // no moment to report and none to flatten, and saying it is zero would
     // claim we looked.
     let stack_is_weighed = normalized_stack_weights.iter().any(|weight| *weight != 0.0);
-    // Where each layer's copper area lands is settled once, here, rather than
-    // argued against the local term on every iteration: the moment is linear
-    // in the copper each layer carries, so what flattens it is a closed form,
-    // and the iteration below is left to the local density term alone.
-    //
-    // How far each layer may step, as copper area over the lattice it actually
-    // controls, so the bound is the density step between a board and the frame
-    // beside it and a layer that took no lattice brings nothing to the trade.
-    let slack_areas_mm2 = squared_radii
-        .iter()
-        .map(|radii| profile.stack_flex_density * radii.len() as f64 * cell_area_mm2)
-        .collect::<Vec<_>>();
-    // The moment the uniform selection carries, and the most those steps can
-    // move it. All-zero weights leave both at zero and every layer on its own
-    // density.
+    // The moment the uniform selection carries, and the most each layer's step
+    // can move it. All-zero weights leave both at zero and every layer on its
+    // own density.
     let moment_mm4 = uniform
         .iter()
         .zip(request.layers)
@@ -716,6 +810,50 @@ pub fn generate_spatial_dense_copper_balance(
             weight * (layer.existing_copper.area() + result.solution.generated_area_mm2)
         })
         .sum::<f64>();
+    // Where each layer's copper area lands is settled once, here, rather than
+    // argued against the local term on every iteration: the moment is linear
+    // in the copper each layer carries, so what flattens it is a closed form,
+    // and the iteration below is left to the local density term alone.
+    //
+    // How far each layer may step, as copper area over the lattice it actually
+    // controls, so the bound is the density step between a board and the frame
+    // beside it and a layer that took no lattice brings nothing to the trade.
+    // A promoted minimum-width web can only widen (when `moment_mm4 * weight < 0`),
+    // never thin below `min_copper_web_mm`.
+    let (lower_r2, upper_r2) = profile.void_area_bounds();
+    let slack_areas_mm2 = uniform
+        .iter()
+        .enumerate()
+        .map(|(layer_index, result)| {
+            let active_count = region_active_sites[layer_regions[layer_index]].len();
+            let flex_area = profile.stack_flex_density * active_count as f64 * cell_area_mm2;
+            let weight = normalized_stack_weights[layer_index];
+            let wants_more_copper = moment_mm4 * weight < 0.0;
+            let wants_less_copper = moment_mm4 * weight > 0.0;
+            if !squared_radii[layer_index].is_empty() {
+                let headroom = if wants_more_copper {
+                    ROUNDED_HEXAGON_AREA_FACTOR
+                        * squared_radii[layer_index]
+                            .iter()
+                            .map(|&r2| (r2 - lower_r2).max(0.0))
+                            .sum::<f64>()
+                } else if wants_less_copper {
+                    ROUNDED_HEXAGON_AREA_FACTOR
+                        * squared_radii[layer_index]
+                            .iter()
+                            .map(|&r2| (upper_r2 - r2).max(0.0))
+                            .sum::<f64>()
+                } else {
+                    flex_area
+                };
+                flex_area.min(headroom)
+            } else if !result.web.is_empty() && active_count > 0 && wants_more_copper {
+                flex_area.min((result.usable.area() - result.solution.generated_area_mm2).max(0.0))
+            } else {
+                0.0
+            }
+        })
+        .collect::<Vec<_>>();
     // Shares are weighted by lever arm against the longest one, so the layer
     // with the most leverage spends its whole step and the others spend in
     // proportion. A layer the stackup gave no weight does not move, and none
@@ -730,14 +868,16 @@ pub fn generate_spatial_dense_copper_balance(
         .map(|(weight, slack)| weight * share(*weight) * slack)
         .sum::<f64>();
     let spend = (-moment_mm4).clamp(-reach_mm4, reach_mm4) / reach_mm4.max(f64::MIN_POSITIVE);
+    let area_shifts_mm2 = normalized_stack_weights
+        .iter()
+        .zip(&slack_areas_mm2)
+        .map(|(weight, slack)| spend * share(*weight) * slack)
+        .collect::<Vec<_>>();
     // Void area moves opposite to copper area.
     let pinned_sums = squared_radii
         .iter()
-        .zip(&normalized_stack_weights)
-        .zip(&slack_areas_mm2)
-        .map(|((radii, weight), slack)| {
-            radii.iter().sum::<f64>() - spend * share(*weight) * slack / ROUNDED_HEXAGON_AREA_FACTOR
-        })
+        .zip(&area_shifts_mm2)
+        .map(|(radii, shift)| radii.iter().sum::<f64>() - shift / ROUNDED_HEXAGON_AREA_FACTOR)
         .collect::<Vec<_>>();
     let void_fraction_per_radius_squared = ROUNDED_HEXAGON_AREA_FACTOR / cell_area_mm2;
     // Nothing couples the layers once the settlement has pinned their areas,
@@ -751,15 +891,23 @@ pub fn generate_spatial_dense_copper_balance(
         |(layer_index, (baseline, squared_radii))| {
             let available = &region_available_density[layer_regions[layer_index]];
             let partial_void = &partial_void_density[layer_index];
+            let uniform_web_fill = (matches!(
+                baseline.solution.mode,
+                DenseCopperBalanceMode::Perforated { .. }
+            ) && baseline.full_voids.is_empty())
+            .then(|| {
+                baseline.solution.generated_area_mm2 / baseline.usable.area().max(f64::MIN_POSITIVE)
+            });
             let base_coverage = fixed_density[layer_index]
                 .iter()
                 .enumerate()
                 .map(|(site, fixed)| match baseline.solution.mode {
                     DenseCopperBalanceMode::None => *fixed,
                     DenseCopperBalanceMode::Solid => fixed + available[site],
-                    DenseCopperBalanceMode::Perforated { .. } => {
-                        fixed + available[site] - partial_void[site]
-                    }
+                    DenseCopperBalanceMode::Perforated { .. } => match uniform_web_fill {
+                        Some(fill) => fixed + fill * available[site],
+                        None => fixed + available[site] - partial_void[site],
+                    },
                 })
                 .collect::<Vec<_>>();
             let model = LayerDensityModel {
@@ -778,26 +926,65 @@ pub fn generate_spatial_dense_copper_balance(
                 profile.void_area_bounds(),
                 pinned_sums[layer_index],
             );
+            let full_sites = &region_lattices[layer_regions[layer_index]].full_sites;
+            let baseline_mode = baseline.solution.mode;
+            let area_shift_mm2 = area_shifts_mm2[layer_index];
             let result = if squared_radii.is_empty() {
-                baseline
+                finalize_perforated_web(
+                    baseline,
+                    &[],
+                    &[],
+                    request.layers[layer_index],
+                    profile,
+                    area_shift_mm2,
+                )?
             } else {
-                spatial_result_from_squared_radii(
-                    &region_lattices[layer_regions[layer_index]].full_sites,
+                let result = spatial_result_from_squared_radii(
+                    full_sites,
                     &squared_radii,
                     baseline,
                     request.layers[layer_index],
                     profile,
-                )
+                );
+                finalize_perforated_web(
+                    result,
+                    full_sites,
+                    &squared_radii,
+                    request.layers[layer_index],
+                    profile,
+                    0.0,
+                )?
             };
-            let emitted = result
-                .full_voids
-                .iter()
-                .map(|void| void.radius_mm.powi(2))
-                .collect::<Vec<_>>();
-            let achieved_density = model.density(&emitted);
-            (result, initial_density, achieved_density)
+            let achieved_density = if matches!(
+                (baseline_mode, result.solution.mode),
+                (
+                    DenseCopperBalanceMode::Perforated { .. },
+                    DenseCopperBalanceMode::None
+                )
+            ) {
+                scales[0].smooth(&fixed_density[layer_index])
+            } else if uniform_web_fill.is_some() && area_shift_mm2 > 1e-6 {
+                let fill = result.solution.generated_area_mm2
+                    / result.usable.area().max(f64::MIN_POSITIVE);
+                let coverage: Vec<f64> = fixed_density[layer_index]
+                    .iter()
+                    .zip(available)
+                    .map(|(fixed, avail)| fixed + fill * avail)
+                    .collect();
+                scales[0].smooth(&coverage)
+            } else {
+                let emitted = result
+                    .full_voids
+                    .iter()
+                    .map(|void| void.radius_mm.powi(2))
+                    .collect::<Vec<_>>();
+                model.density(&emitted)
+            };
+            Ok::<_, AccuracyError>((result, initial_density, achieved_density))
         },
-    );
+    )
+    .into_iter()
+    .collect::<Result<Vec<_>, _>>()?;
 
     // Mean and RMS of the panel's copper moment about its mid-plane, before
     // and after, so the summary can say what the solve bought.
