@@ -7,6 +7,7 @@ use pcb_sexpr::formatter::{FormatMode, prettify};
 use pcb_ui::prelude::*;
 use pcb_zen::file_extensions;
 use similar::TextDiff;
+use std::collections::HashSet;
 use std::fs;
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
@@ -14,10 +15,9 @@ use std::path::{Path, PathBuf};
 #[derive(Args, Debug, Default, Clone)]
 #[command(about = "Format .zen files")]
 pub struct FmtArgs {
-    /// .zen file or directory to format. Defaults to current directory.
-    /// If this is an explicit KiCad S-expression file path, format only that file.
+    /// .zen files, KiCad S-expression files, or directories to format. Defaults to current directory.
     #[arg(value_name = "PATH", value_hint = clap::ValueHint::AnyPath)]
-    pub path: Option<PathBuf>,
+    pub paths: Vec<PathBuf>,
 
     /// When formatting directories, include which file types to format.
     #[arg(long, value_enum, default_value_t = FmtInclude::Zen)]
@@ -190,9 +190,6 @@ fn format_target_file(formatter: &RuffFormatter, target: &FmtTarget, op: FmtOp) 
 
 fn explicit_fmt_target(path: &Path) -> Result<Option<FmtTarget>> {
     if let Some(mode) = infer_kicad_mode(path) {
-        if !path.exists() {
-            anyhow::bail!("File not found: {}", path.display());
-        }
         if !path.is_file() {
             anyhow::bail!("Expected a file path, got: {}", path.display());
         }
@@ -203,7 +200,7 @@ fn explicit_fmt_target(path: &Path) -> Result<Option<FmtTarget>> {
         }));
     }
 
-    if path.exists() && path.is_file() && file_extensions::is_starlark_file(path.extension()) {
+    if path.is_file() && file_extensions::is_starlark_file(path.extension()) {
         return Ok(Some(FmtTarget::Zen(path.to_path_buf())));
     }
 
@@ -265,21 +262,40 @@ fn collect_fmt_targets(paths: &[PathBuf], include: FmtInclude) -> Result<Vec<Fmt
 }
 
 fn resolve_fmt_targets(args: &FmtArgs) -> Result<Vec<FmtTarget>> {
-    if let Some(path) = args.path.as_ref()
-        && let Some(target) = explicit_fmt_target(path)?
-    {
-        return Ok(vec![target]);
+    let mut targets = Vec::new();
+    let mut walk_paths = Vec::new();
+
+    for path in &args.paths {
+        if !path.exists() {
+            anyhow::bail!("File not found: {}", path.display());
+        }
+        if let Some(target) = explicit_fmt_target(path)? {
+            targets.push(target);
+        } else {
+            walk_paths.push(path.clone());
+        }
     }
 
-    let paths: Vec<PathBuf> = args.path.clone().into_iter().collect();
-    let targets = collect_fmt_targets(&paths, args.include)?;
+    if args.paths.is_empty() || !walk_paths.is_empty() {
+        targets.extend(collect_fmt_targets(&walk_paths, args.include)?);
+    }
+
+    let mut seen = HashSet::new();
+    targets.retain(|target| {
+        let key = target
+            .path()
+            .canonicalize()
+            .unwrap_or_else(|_| target.path().to_path_buf());
+        seen.insert(key)
+    });
+    targets.sort_by(|a, b| a.path().cmp(b.path()));
 
     if targets.is_empty() {
-        let root_display = if paths.is_empty() {
+        let root_display = if args.paths.is_empty() {
             let cwd = std::env::current_dir()?;
             cwd.canonicalize().unwrap_or(cwd).display().to_string()
         } else {
-            paths
+            args.paths
                 .iter()
                 .map(|p| p.display().to_string())
                 .collect::<Vec<_>>()
@@ -371,8 +387,17 @@ pub fn execute(args: FmtArgs) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{FormatMode, infer_kicad_mode};
+    use super::{FmtArgs, FmtInclude, FormatMode, execute, infer_kicad_mode, resolve_fmt_targets};
+    use clap::Parser;
+    use std::fs;
     use std::path::Path;
+    use tempfile::tempdir;
+
+    #[derive(Parser)]
+    struct TestCli {
+        #[command(flatten)]
+        fmt: FmtArgs,
+    }
 
     #[test]
     fn infer_kicad_mode_for_library_table_files() {
@@ -411,5 +436,71 @@ mod tests {
         assert_eq!(infer_kicad_mode(Path::new("layout.kicad_pro")), None);
         assert_eq!(infer_kicad_mode(Path::new("layout.kicad_prl")), None);
         assert_eq!(infer_kicad_mode(Path::new("main.zen")), None);
+    }
+
+    #[test]
+    fn cli_parses_multiple_paths() {
+        let parsed = TestCli::try_parse_from(["fmt", "a.zen", "b.zen", "board.kicad_pcb"]).unwrap();
+        assert_eq!(
+            parsed.fmt.paths,
+            vec![
+                Path::new("a.zen").to_path_buf(),
+                Path::new("b.zen").to_path_buf(),
+                Path::new("board.kicad_pcb").to_path_buf(),
+            ]
+        );
+    }
+
+    #[test]
+    fn resolve_and_execute_multiple_paths_deduplicates_and_rejects_missing() {
+        let dir = tempdir().unwrap();
+        let a = dir.path().join("a.zen");
+        let b = dir.path().join("b.zen");
+        let pcb = dir.path().join("board.kicad_pcb");
+        fs::write(&a, "x=1\n").unwrap();
+        fs::write(&b, "y=2\n").unwrap();
+        fs::write(&pcb, "(kicad_pcb (version 20240108))\n").unwrap();
+
+        // Overlapping directory + explicit file + duplicate explicit file deduplicates cleanly.
+        let targets = resolve_fmt_targets(&FmtArgs {
+            paths: vec![dir.path().to_path_buf(), a.clone(), a.clone(), pcb.clone()],
+            include: FmtInclude::Zen,
+            check: false,
+            diff: false,
+        })
+        .unwrap();
+        let resolved: Vec<_> = targets.iter().map(|t| t.path().to_path_buf()).collect();
+        assert_eq!(resolved, vec![a.clone(), b.clone(), pcb.clone()]);
+
+        // --check fails before formatting and write mode formats both .zen files.
+        let check_args = FmtArgs {
+            paths: vec![a.clone(), b.clone()],
+            include: FmtInclude::Zen,
+            check: true,
+            diff: false,
+        };
+        assert!(execute(check_args.clone()).is_err());
+
+        execute(FmtArgs {
+            paths: vec![a.clone(), b.clone()],
+            include: FmtInclude::Zen,
+            check: false,
+            diff: false,
+        })
+        .unwrap();
+        assert_eq!(fs::read_to_string(&a).unwrap(), "x = 1\n");
+        assert_eq!(fs::read_to_string(&b).unwrap(), "y = 2\n");
+        execute(check_args).unwrap();
+
+        // Missing path errors immediately even alongside a valid path.
+        let missing = dir.path().join("nope.zen");
+        let err = resolve_fmt_targets(&FmtArgs {
+            paths: vec![a, missing],
+            include: FmtInclude::Zen,
+            check: false,
+            diff: false,
+        })
+        .unwrap_err();
+        assert!(err.to_string().contains("File not found"));
     }
 }
