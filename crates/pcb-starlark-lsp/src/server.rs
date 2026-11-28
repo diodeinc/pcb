@@ -2598,6 +2598,58 @@ mod tests {
     }
 
     #[test]
+    fn load_symbol_completion_after_emoji_preserves_quotes() -> anyhow::Result<()> {
+        if is_wasm() {
+            return Ok(());
+        }
+
+        let exported_uri = temp_file_uri("😀.star");
+        let main_uri = temp_file_uri("emoji_load.star");
+        let source = "load(\"😀.star\", \"ans\")\nx = ans\n";
+
+        let mut server = TestServer::new()?;
+        server.open_file(exported_uri, "answer = 42\n".to_owned())?;
+        server.open_file(main_uri.clone(), source.to_owned())?;
+
+        // UTF-16 offset of `a` in `"ans"` after the 2-unit surrogate pair `😀`.
+        let cursor_col = "load(\"😀.star\", \"".encode_utf16().count() as u32;
+        let completion = server.new_request::<Completion>(CompletionParams {
+            text_document_position: TextDocumentPositionParams {
+                text_document: TextDocumentIdentifier {
+                    uri: protocol_uri(&main_uri),
+                },
+                position: Position::new(0, cursor_col),
+            },
+            work_done_progress_params: Default::default(),
+            partial_result_params: Default::default(),
+            context: None,
+        });
+        let completion_id = server.send_request(completion)?;
+        let CompletionResponse::Array(items) = server.get_response(completion_id)? else {
+            anyhow::bail!("expected an array completion response");
+        };
+
+        let answer_item = items
+            .into_iter()
+            .find(|item| item.label == "answer")
+            .ok_or_else(|| anyhow::anyhow!("expected `answer` completion item"))?;
+        let Some(lsp_types::CompletionTextEdit::Edit(edit)) = answer_item.text_edit else {
+            anyhow::bail!("expected text_edit on completion item");
+        };
+
+        // Apply the LSP UTF-16 TextEdit directly to the first line.
+        let line = source.lines().next().unwrap();
+        let start =
+            crate::definition::utf16_column_to_byte_offset(line, edit.range.start.character);
+        let end = crate::definition::utf16_column_to_byte_offset(line, edit.range.end.character);
+        let mut edited = line.to_owned();
+        edited.replace_range(start..end, &edit.new_text);
+        assert_eq!(edited, "load(\"😀.star\", \"answer\")");
+
+        Ok(())
+    }
+
+    #[test]
     fn sends_empty_goto_definition_on_non_access_symbol() -> anyhow::Result<()> {
         if is_wasm() {
             return Ok(());

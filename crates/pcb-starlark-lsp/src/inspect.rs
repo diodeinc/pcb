@@ -17,6 +17,7 @@
 
 use starlark::codemap::CodeMap;
 use starlark::codemap::Pos;
+use starlark::codemap::ResolvedPos;
 use starlark::codemap::ResolvedSpan;
 use starlark::codemap::Span;
 use starlark::syntax::AstModule;
@@ -100,11 +101,30 @@ impl AstModuleInspect for AstModule {
             position: Pos,
             stmt: Visit<AstNoPayload>,
         ) -> Option<AutocompleteType> {
-            // Utility function to get the span of a string literal without the quotes.
+            fn resolve_pos_utf16(codemap: &CodeMap, pos: Pos) -> ResolvedPos {
+                let line = codemap.find_line(pos);
+                let line_span = codemap.line_span(line);
+                let line_text = codemap.source_span(line_span);
+                let byte_offset = pos.get().saturating_sub(line_span.begin().get()) as usize;
+                let prefix = line_text.get(..byte_offset).unwrap_or(line_text);
+                ResolvedPos {
+                    line,
+                    column: prefix.encode_utf16().count(),
+                }
+            }
+
+            fn resolve_span_utf16(codemap: &CodeMap, span: Span) -> ResolvedSpan {
+                ResolvedSpan {
+                    begin: resolve_pos_utf16(codemap, span.begin()),
+                    end: resolve_pos_utf16(codemap, span.end()),
+                }
+            }
+
+            // Utility function to get the UTF-16 span of a string literal without the quotes.
             fn string_span_without_quotes(codemap: &CodeMap, span: Span) -> ResolvedSpan {
-                let mut span = codemap.resolve_span(span);
+                let mut span = resolve_span_utf16(codemap, span);
                 span.begin.column += 1;
-                span.end.column -= 1;
+                span.end.column = span.end.column.saturating_sub(1);
                 span
             }
 
@@ -251,7 +271,7 @@ impl AstModuleInspect for AstModule {
                                 if arg_name.span.contains(position) {
                                     return Some(AutocompleteType::Parameter {
                                         function_name: name.to_string(),
-                                        function_name_span: codemap.resolve_span(name.span),
+                                        function_name_span: resolve_span_utf16(codemap, name.span),
                                         previously_used_named_parameters:
                                             get_previously_used_argument_names(),
                                     });
@@ -272,7 +292,9 @@ impl AstModuleInspect for AstModule {
                                         // Typing a literal, might be meant as a parameter name.
                                         Some(AutocompleteType::Parameter {
                                             function_name: name.to_string(),
-                                            function_name_span: codemap.resolve_span(name.span),
+                                            function_name_span: resolve_span_utf16(
+                                                codemap, name.span,
+                                            ),
                                             previously_used_named_parameters:
                                                 get_previously_used_argument_names(),
                                         })
@@ -299,7 +321,7 @@ impl AstModuleInspect for AstModule {
                     return Some(if span.end() != position {
                         AutocompleteType::Parameter {
                             function_name: name.to_string(),
-                            function_name_span: codemap.resolve_span(name.span),
+                            function_name_span: resolve_span_utf16(codemap, name.span),
                             previously_used_named_parameters: get_previously_used_argument_names(),
                         }
                     } else {
