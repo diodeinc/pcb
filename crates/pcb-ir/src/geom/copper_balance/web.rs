@@ -1279,4 +1279,83 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn fill_selection_uses_thinner_stroked_web_at_low_density_crossover() {
+        let safe = rect(0.0, 0.0, 40.0, 40.0);
+
+        // At 14.6% on a broad gutter, the 0.20 mm honeycomb web (~27.4%) is
+        // strictly closer to target than bare copper (0%), even though the
+        // legacy rounded-hex model (~31.8%) would have chosen `None`.
+        let crossover = solve_single_layer(&safe, 0.146);
+        assert!(matches!(
+            crossover.solution.mode,
+            crate::geom::copper_balance::DenseCopperBalanceMode::Perforated { .. }
+        ));
+        assert!(crossover.solution.residual_error < 0.146);
+        assert_web_clean(&safe, &crossover);
+
+        // Between the stroked floor (~27.4%) and the legacy floor (~31.8%),
+        // an unweighed layer calibrates down to the requested density.
+        let low_band = solve_single_layer(&safe, 0.29);
+        assert!(matches!(
+            low_band.solution.mode,
+            crate::geom::copper_balance::DenseCopperBalanceMode::Perforated { .. }
+        ));
+        assert!(
+            low_band.solution.residual_error < 0.015,
+            "expected ~0.29, got {:.4}",
+            low_band.solution.achieved_density
+        );
+        assert_web_clean(&safe, &low_band);
+
+        // Far below half the minimum web coverage still stays bare.
+        let bare = solve_single_layer(&safe, 0.10);
+        assert!(matches!(
+            bare.solution.mode,
+            crate::geom::copper_balance::DenseCopperBalanceMode::None
+        ));
+        assert!(bare.web.is_empty());
+
+        // On a weighed stackup, crossover promotion happens before stack-moment
+        // settlement so the mirror layer shifts toward the promoted web's
+        // actual copper rather than away from it.
+        let panel = rect(0.0, 0.0, 40.0, 40.0);
+        let existing_l1 = rect(0.0, 0.0, 10.0, 40.0); // 25% fixed copper
+        let safe_l1 = rect(10.0, 0.0, 40.0, 40.0); // 75% usable; desired +15% = 20% of usable
+        let empty = ContourSet::empty(safe.resolution);
+        let weighted = crate::geom::copper_balance::generate_spatial_dense_copper_balance(
+            DenseCopperBalanceProfile::V1,
+            crate::geom::copper_balance::SpatialCopperBalanceRequest {
+                panel_region: &panel,
+                lattice_origin: Point::ZERO,
+                layers: &[
+                    crate::geom::copper_balance::SpatialCopperBalanceLayerRequest {
+                        density_domain: &panel,
+                        existing_copper: &existing_l1,
+                        safe_region: &safe_l1,
+                        target_density: 0.36, // desired +11% of panel = 14.7% of usable
+                        stack_weight_mm2: 1.0,
+                    },
+                    crate::geom::copper_balance::SpatialCopperBalanceLayerRequest {
+                        density_domain: &panel,
+                        existing_copper: &empty,
+                        safe_region: &panel,
+                        target_density: 0.36,
+                        stack_weight_mm2: -1.0,
+                    },
+                ],
+            },
+        )
+        .unwrap();
+        assert!(matches!(
+            weighted.layers[0].solution.mode,
+            crate::geom::copper_balance::DenseCopperBalanceMode::Perforated { .. }
+        ));
+        let field = weighted.moment_field.expect("weighed stackup");
+        assert!(
+            field.achieved_rms <= field.initial_rms + 1e-6,
+            "stack moment worsened: {field:?}"
+        );
+    }
 }
